@@ -1,0 +1,456 @@
+suite: TLS configuration for Redis
+
+# Tests cover the tri-state tls.enabled logic:
+#   1. external=false, tls.enabled unset  -> TLS disabled
+#   2. external=true,  tls.enabled unset  -> TLS enabled (inherits external)
+#   3. external=true,  tls.enabled=false  -> TLS disabled (explicit overrides)
+#   4. external=false, tls.enabled=true   -> TLS enabled (explicit overrides)
+# Plus authClients propagation, SAN coverage and dashboard RBAC.
+
+release:
+  name: my-redis
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.com
+
+tests:
+  # ------------------------------------------------------------------
+  # Case 1: external=false, tls.enabled unset -> no TLS resources
+  # ------------------------------------------------------------------
+  - it: "certmanager.yaml renders no documents when external=false and tls.enabled is unset"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "redisfailover.yaml does not have spec.tls when external=false and tls.enabled is unset"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: false
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  - it: "dashboard-resourcemap.yaml does not list TLS secrets when external=false and tls.enabled is unset"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: false
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-tls"
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-cert"
+
+  # ------------------------------------------------------------------
+  # Case 2: external=true, tls.enabled unset -> TLS enabled via external
+  # ------------------------------------------------------------------
+  - it: "certmanager.yaml renders 4 documents when external=true and tls.enabled is unset"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "first document is a selfsigned Issuer when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: my-redis-selfsigned
+      - exists:
+          path: spec.selfSigned
+
+  - it: "second document is the CA Certificate when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: my-redis-ca
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretName
+          value: my-redis-ca-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: my-redis-selfsigned
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: "third document is the CA Issuer when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Issuer
+      - equal:
+          path: metadata.name
+          value: my-redis-ca
+      - equal:
+          path: spec.ca.secretName
+          value: my-redis-ca-tls
+
+  - it: "fourth document is the leaf Certificate when TLS enabled via external"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: kind
+          value: Certificate
+      - equal:
+          path: metadata.name
+          value: my-redis-tls
+      - equal:
+          path: spec.secretName
+          value: my-redis-tls
+      - equal:
+          path: spec.isCA
+          value: false
+      - equal:
+          path: spec.issuerRef.name
+          value: my-redis-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+
+  - it: "leaf Certificate usages include digital signature for ECDSA TLS handshake"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: "digital signature"
+      - contains:
+          path: spec.usages
+          content: "server auth"
+      - contains:
+          path: spec.usages
+          content: "client auth"
+      - contains:
+          path: spec.usages
+          content: "key encipherment"
+
+  - it: "leaf Certificate SAN list covers all four redis-operator service names with all DNS variants"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "localhost"
+      # Redis (headless) service
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis"
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cluster.local"
+      # Redis master service
+      - contains:
+          path: spec.dnsNames
+          content: "rfrm-my-redis"
+      - contains:
+          path: spec.dnsNames
+          content: "rfrm-my-redis.tenant-test.svc.cluster.local"
+      # Redis slaves service
+      - contains:
+          path: spec.dnsNames
+          content: "rfrs-my-redis"
+      - contains:
+          path: spec.dnsNames
+          content: "rfrs-my-redis.tenant-test.svc.cluster.local"
+      # Sentinel service
+      - contains:
+          path: spec.dnsNames
+          content: "rfs-my-redis"
+      - contains:
+          path: spec.dnsNames
+          content: "rfs-my-redis.tenant-test.svc.cluster.local"
+
+  - it: "leaf Certificate SAN list includes wildcard for per-pod headless DNS"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.rfr-my-redis"
+      - contains:
+          path: spec.dnsNames
+          content: "*.rfr-my-redis.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.rfr-my-redis.tenant-test.svc.cluster.local"
+
+  - it: "leaf Certificate SAN list includes external tenant hostname when external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-redis.example.com"
+
+  - it: "redisfailover.yaml passes TLS settings to the operator when external=true"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.authClients
+          value: "no"
+      - equal:
+          path: spec.tls.certificateSecret.secretName
+          value: my-redis-tls
+
+  - it: "dashboard-resourcemap.yaml grants only the CA-only secret in RBAC when external=true and authClients defaults to no"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      # CA-only secret (ca.crt, no key) is always granted when TLS is on.
+      - contains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-cert"
+      # CA private-key secret is never granted to tenants.
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-tls"
+      # Leaf secret is withheld unless clients must authenticate.
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-tls"
+
+  - it: "dashboard-resourcemap.yaml also grants the leaf TLS secret in RBAC when authClients=yes"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+      tls:
+        authClients: "yes"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-cert"
+      # Clients reuse the leaf secret as their client identity when authClients=yes.
+      - contains:
+          path: rules[1].resourceNames
+          content: "my-redis-tls"
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-tls"
+
+  # ------------------------------------------------------------------
+  # Case 3: external=true, tls.enabled=false -> TLS explicitly off
+  # ------------------------------------------------------------------
+  - it: "certmanager.yaml renders no documents when tls.enabled=false overrides external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "redisfailover.yaml has no spec.tls when tls.enabled=false overrides external=true"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  # ------------------------------------------------------------------
+  # Case 4: external=false, tls.enabled=true -> TLS explicitly on
+  # ------------------------------------------------------------------
+  - it: "certmanager.yaml renders 4 documents when tls.enabled=true overrides external=false"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "redisfailover.yaml has spec.tls.enabled=true when tls.enabled=true overrides external=false"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+
+  - it: "leaf Certificate SAN list omits external hostname when external=false"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis.example.com"
+
+  # ------------------------------------------------------------------
+  # authClients propagation
+  # ------------------------------------------------------------------
+  - it: "redisfailover.yaml passes tls.authClients=yes to spec.tls.authClients"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      tls:
+        enabled: true
+        authClients: "yes"
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.tls.authClients
+          value: "yes"
+
+  - it: "redisfailover.yaml passes tls.authClients=optional to spec.tls.authClients"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      tls:
+        enabled: true
+        authClients: "optional"
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.tls.authClients
+          value: "optional"
+
+  # ------------------------------------------------------------------
+  # Cluster domain customization
+  # ------------------------------------------------------------------
+  - it: "leaf Certificate SAN list honours a custom cluster domain"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: my.cluster.local
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.my.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "rfrm-my-redis.tenant-test.svc.my.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "rfs-my-redis.tenant-test.svc.my.cluster.local"
+      - contains:
+          path: spec.dnsNames
+          content: "*.rfr-my-redis.tenant-test.svc.my.cluster.local"

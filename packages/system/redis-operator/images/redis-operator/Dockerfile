@@ -1,20 +1,19 @@
-FROM golang:1.20 AS builder
+FROM golang:1.26.3-alpine3.23 AS builder
 
-ARG VERSION=v1.3.0-rc1
+ARG VERSION=v1.4.1-rc1
 
 ARG TARGETOS
 ARG TARGETARCH
 
 WORKDIR /workspace
 
-RUN curl -sSL https://github.com/spotahome/redis-operator/archive/refs/tags/${VERSION}.tar.gz | tar -xzvf- --strip=1
+RUN apk --no-cache add bash curl tar
 
-COPY patches /patches
-RUN git apply /patches/*.diff
+RUN curl -sSL https://github.com/cozystack/redis-operator/archive/refs/tags/${VERSION}.tar.gz | tar -xzvf- --strip=1
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH VERSION=$VERSION ./scripts/build.sh
 
-FROM alpine:latest
+FROM alpine:3.23
 RUN apk --no-cache add \
   ca-certificates
 COPY --from=builder /workspace/bin/redis-operator /usr/local/bin
@@ -24,4 +23,3 @@ RUN addgroup -g 1000 rf && \
 USER rf
 
 ENTRYPOINT ["/usr/local/bin/redis-operator"]
-

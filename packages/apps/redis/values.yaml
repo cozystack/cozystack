@@ -74,6 +74,22 @@ storageClass: ""
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+##
+## @section TLS parameters
+##
+
+## @enum {string} AuthClients - Values accepted by the Redis `tls-auth-clients` directive.
+## @value no
+## @value optional
+## @value yes
+
+## @typedef {struct} TLS - TLS configuration.
+## @field {*bool} enabled - Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
+## @field {AuthClients} [authClients] - Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.
+
+## @param {TLS} [tls] - TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
+tls: {}
+
 ## @enum {string} Version
 ## @value v8
 ## @value v7

@@ -19,3 +19,4 @@ spec:
       install:
         namespace: cozy-redis-operator
         releaseName: redis-operator
+        upgradeCRDs: CreateReplace
