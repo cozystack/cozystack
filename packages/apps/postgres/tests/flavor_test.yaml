@@ -1,0 +1,80 @@
+suite: image flavor selection
+
+# Locks in the `flavor` enum -> image mapping. The cluster and the
+# post-install init Job must always agree on the image so that the Job's
+# psql is wire-compatible with the running cluster; the helper
+# `postgres.imageName` is shared between both templates for that reason.
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+
+tests:
+  - it: defaults to the standard postgresql image
+    set:
+      version: v17
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:17.7
+
+  - it: explicit flavor=postgresql resolves to the standard image
+    set:
+      version: v17
+      flavor: postgresql
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:17.7
+
+  - it: flavor=postgis switches the Cluster image to the postgis variant
+    set:
+      version: v17
+      flavor: postgis
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgis:17.7-3.5
+
+  - it: flavor=postgis switches the init Job image to the postgis variant
+    set:
+      version: v17
+      flavor: postgis
+    templates:
+      - templates/init-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cloudnative-pg/postgis:17.7-3.5
+
+  - it: flavor=postgis fails for a PostgreSQL version with no postgis tag
+    set:
+      version: v18
+      flavor: postgis
+    templates:
+      - templates/init-job.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "PostgreSQL version v18 is not supported by the postgis flavor, allowed versions are [v13 v14 v15 v16 v17]"

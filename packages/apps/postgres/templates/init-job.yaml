@@ -29,7 +29,7 @@ spec:
       restartPolicy: Never
       containers:
       - name: postgres
-        image: ghcr.io/cloudnative-pg/postgresql:{{ include "postgres.versionMap" $ | trimPrefix "v" }}
+        image: {{ include "postgres.imageName" $ }}
         command:
         - bash
         - /scripts/init.sh

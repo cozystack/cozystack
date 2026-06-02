@@ -18,22 +18,11 @@ together rather than picking one:
 
 | Layer                                    | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Configured via                                                                                                                                |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Archive plumbing** (chart, legacy)     | Renders `spec.backup.barmanObjectStore` on the cnpg.io Cluster from helm-install onwards. CNPG starts postgres with `archive_command=barman-cloud-wal-archive`, every WAL switch ships to object storage, and any backup driver gets a complete WAL chain to start replay from. Renders only when `backup.enabled=true`, `useSystemBucket=false`, `destinationPath` is non-empty, AND inline-or-external creds are supplied. **Skipped in the platform `useSystemBucket=true` mode** — the CNPG backup driver SSA-patches `barmanObjectStore` onto the live Cluster at first BackupJob time; until that first BackupJob fires, `archive_command` is not active and WAL accumulates on the PVC. Fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. | Legacy: `backup.enabled=true` plus `backup.destinationPath`, `backup.endpointURL`, and either `backup.s3AccessKey`+`backup.s3SecretKey` or `backup.s3CredentialsSecret`. Platform: `backup.enabled=true` plus `backup.useSystemBucket=true` — no S3 fields. |
+| **Archive plumbing** (chart)             | Renders `spec.backup.barmanObjectStore` on the cnpg.io Cluster from helm-install onwards. CNPG starts postgres with `archive_command=barman-cloud-wal-archive`, every WAL switch ships to object storage, and any backup driver gets a complete WAL chain to start replay from.                                                                                                                                                                                                                                                                                          | `backup.enabled=true` plus `backup.destinationPath`, `backup.endpointURL`, `backup.s3CredentialsSecret`, `backup.endpointCA`                  |
 | **Backup orchestration** (recommended)   | Drives ad-hoc and scheduled backups, retention, and restores from `backups.cozystack.io` resources that can span multiple Postgres apps in a tenant. The driver SSA-merges its own `barmanObjectStore` shape over the chart's with `ForceOwnership` (so compression / serverName / target settings flow from the strategy template); chart-managed values cover the same destination so there is no tug-of-war on the live Cluster.                                                                                                                                       | `strategy.backups.cozystack.io/CNPG` + `BackupClass` + `Plan` (recurring) or `BackupJob` (ad-hoc), restores via `RestoreJob`                  |
 | Legacy chart-emitted scheduled backup    | The chart can also emit a `cnpg.io/ScheduledBackup` directly. Superseded by the BackupClass + Plan path, kept around for clusters that did not migrate. **Off by default** - rendered only when both `backup.enabled` and `backup.schedule` are non-empty. With `backup.schedule=""` the archive plumbing still runs; only the chart-emitted scheduled backup is silent.                                                                                                                                                                                                  | `backup.enabled=true` plus `backup.schedule` (CNPG 6-field cron, e.g. `"0 2 * * * *"`)                                                        |
 
-The **canonical setup** depends on whether the cluster ships the platform `cozy-default` BackupClass.
-
-**Platform-managed flow (recommended for new clusters)** — opt in via `backup.useSystemBucket: true` and reference `cozy-default` from BackupJob/Plan/RestoreJob. The chart leaves S3 coordinates blank; the CNPG driver SSA-patches `barmanObjectStore` from the platform-managed bucket coordinates at first BackupJob time.
-
-```yaml
-spec:
-  backup:
-    enabled: true
-    useSystemBucket: true        # platform projects cozy-backups-creds + driver SSA-patches barmanObjectStore
-```
-
-**Legacy chart-managed flow** — for clusters that pre-date the platform BackupClass or use a tuned non-default bucket. Provide all S3 coordinates inline (or via `s3CredentialsSecret.name`); `barmanObjectStore` renders from helm-install onwards.
+The **canonical setup** for tenant-managed backups is therefore:
 
 ```yaml
 spec:
@@ -169,39 +158,33 @@ See:
 
 - <https://cloudnative-pg.io/documentation/1.15/rolling_update/#manual-updates-supervised>
 
-> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+### How to enable PostGIS
 
-### TLS for server connections
+Set `flavor: postgis` to bootstrap the cluster from the CloudNativePG
+PostGIS image (`ghcr.io/cloudnative-pg/postgis`) instead of the standard
+PostgreSQL image. The variant ships PostGIS and its companion extensions
+(`postgis_topology`, `postgis_raster`, `pgrouting`,
+`address_standardizer`) precompiled, so they can be activated per
+database via `databases.<name>.extensions`:
 
-CNPG manages the cert chain end-to-end. The operator auto-generates a self-signed CA, signs server, client, and replication leaf certs from it, and rotates them as needed. The chart does not render any cert-manager `Issuer`/`Certificate` objects — that path is mutually exclusive with the operator-managed chain on the CNPG admission webhook.
-
-What the chart contributes: when TLS is on and `external: true`, the chart sets `spec.certificates.serverAltDNSNames` on the CNPG Cluster CR to inject the external hostname `<release>.<_namespace.host>` into the auto-generated server certificate's SAN list. CNPG's default SAN coverage already includes the three built-in ClusterIP services (`-rw`, `-r`, `-ro`) across the four DNS forms (`<svc>`, `<svc>.<ns>`, `<svc>.<ns>.svc`, `<svc>.<ns>.svc.<cluster-domain>`); only the external hostname needs to be added.
-
-The tri-state `tls.enabled` controls whether the chart injects `serverAltDNSNames`:
-
-- `tls.enabled: null` (the default) — TLS posture inherits from `external`. When `external: true`, the chart injects the external hostname into the operator-managed cert.
-- `tls.enabled: true` with `external: true` — same effect as the default.
-- `tls.enabled: true` with `external: false` — no `serverAltDNSNames` injection is needed (there is no external hostname to add); CNPG's auto-generated cert covers internal services.
-- `tls.enabled: false` — the chart skips `serverAltDNSNames` injection. **Note:** CNPG keeps its built-in TLS on the wire regardless of this flag; this toggle only controls whether the external hostname is added to the cert. To force PostgreSQL to drop TLS entirely you would need to set `postgresql.parameters.ssl = "off"` at the CNPG layer, which is out of scope for this flag.
-
-**Retrieving the CA bundle** for client verification:
-
-CNPG bundles the CA certificate in every user-credentials Secret it creates under the key `ca.crt`. Retrieve it from the `<release>-credentials` Secret, which is already accessible to tenants via the dashboard RBAC:
-
-```bash
-kubectl --context <ctx> --namespace <tenant> \
-  get secret <release>-credentials \
-  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```yaml
+spec:
+  flavor: postgis
+  version: v17
+  databases:
+    gis:
+      extensions:
+        - postgis
+        - postgis_topology
 ```
 
-**Connecting with full verification** (psql example):
-
-```bash
-psql "host=<host> port=5432 dbname=app user=app \
-  sslmode=verify-full sslrootcert=ca.crt"
-```
-
-For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved to `ca.crt`. Without it, use `sslmode=require` (encrypts but does not verify the server certificate).
+`flavor` is a bootstrap-time choice. Switching it on an existing release
+swaps the cluster image and CNPG will fail to restart the existing pods
+if the on-disk format does not match — plan a fresh release (or set
+`bootstrap.enabled: true` with `bootstrap.oldName` and
+`bootstrap.recoveryTime` to bootstrap from a backup) when changing
+`flavor`. PostgreSQL v18 is not yet covered by the PostGIS image; pick
+a version in `[v13, v17]` when `flavor: postgis`.
 
 ## Parameters
 
@@ -222,10 +205,11 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### TLS configuration
 
-| Name          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type     | Value  |
-| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`         | TLS configuration for server connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `object` | `{}`   |
-| `tls.enabled` | Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer. | `*bool`  | `null` |
+| Name          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Type     | Value        |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------ |
+| `tls`         | TLS configuration for server connections.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `object` | `{}`         |
+| `tls.enabled` | Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer. | `*bool`  | `null`       |
+| `flavor`      | PostgreSQL image flavor. `postgresql` (default) uses the standard CloudNativePG image. `postgis` switches to the CloudNativePG PostGIS image, which ships PostGIS and companion extensions (postgis_topology, postgis_raster, pgrouting, address_standardizer) precompiled. Declare the needed extensions in `databases.<name>.extensions` to enable them per database.                                                                                                                                                                                                                                                                                    | `string` | `postgresql` |
 
 
 ### Application-specific parameters
