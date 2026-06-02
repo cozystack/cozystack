@@ -170,10 +170,16 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 	nsList := &corev1.NamespaceList{}
 
+	// For a SendInitialEvents (WatchList) request, ask the backing watch for
+	// bookmarks — the apiserver omits them by default, which would leave the
+	// terminating initial-events-end bookmark with no reliable trigger.
+	sendInitialEvents := opts.SendInitialEvents != nil && *opts.SendInitialEvents
+
 	// Build upstream watch options with field and label selectors
 	rawOpts := &metav1.ListOptions{
-		Watch:           true,
-		ResourceVersion: opts.ResourceVersion,
+		Watch:               true,
+		ResourceVersion:     opts.ResourceVersion,
+		AllowWatchBookmarks: sendInitialEvents,
 	}
 	if opts.FieldSelector != nil {
 		rawOpts.FieldSelector = opts.FieldSelector.String()
@@ -195,26 +201,44 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 		}
 	}
 
+	// Emit the initial-events-end bookmark after the initial ADDED events so
+	// client-go reflectors reach HasSynced.
+	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, opts.ResourceVersion, func() runtime.Object {
+		return &corev1alpha1.TenantNamespace{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+				Kind:       "TenantNamespace",
+			},
+		}
+	})
+
 	events := make(chan watch.Event)
 	pw := watch.NewProxyWatcher(events)
 
 	go func() {
 		defer pw.Stop()
+		defer nsWatch.Stop()
+
+		// send forwards an event, returning false if the watch or context ended.
+		send := func(ev watch.Event) bool {
+			select {
+			case events <- ev:
+				return true
+			case <-pw.StopChan():
+				return false
+			case <-ctx.Done():
+				return false
+			}
+		}
 
 		for ev := range nsWatch.ResultChan() {
 			// Handle bookmark events
 			if ev.Type == watch.Bookmark {
 				if ns, ok := ev.Object.(*corev1.Namespace); ok {
-					out := &corev1alpha1.TenantNamespace{
-						TypeMeta: metav1.TypeMeta{
-							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
-							Kind:       "TenantNamespace",
-						},
-						ObjectMeta: metav1.ObjectMeta{
-							ResourceVersion: ns.ResourceVersion,
-						},
+					bookmark, _ := bookmarker.OnBackingBookmark(ns.ResourceVersion)
+					if !send(bookmark) {
+						return
 					}
-					events <- watch.Event{Type: watch.Bookmark, Object: out}
 				}
 				continue
 			}
@@ -223,6 +247,7 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 			if !ok || !strings.HasPrefix(ns.Name, prefix) {
 				continue
 			}
+			bookmarker.Observe(ns.ResourceVersion)
 
 			// Apply defensive filtering for field and label selectors
 			if opts.FieldSelector != nil {
@@ -274,7 +299,21 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 			}
 			// When startingRV == 0, always send ADDED events (client wants full state)
 
-			events <- watch.Event{Type: ev.Type, Object: out}
+			// Emit the initial-events-end bookmark before the first live event.
+			if bookmark, ok := bookmarker.BeforeLiveEvent(ev.Type); ok {
+				if !send(bookmark) {
+					return
+				}
+			}
+
+			if !send(watch.Event{Type: ev.Type, Object: out}) {
+				return
+			}
+		}
+
+		// Backing watcher closed: flush the terminating bookmark if still pending.
+		if bookmark, ok := bookmarker.OnClose(); ok {
+			send(bookmark)
 		}
 	}()
 
