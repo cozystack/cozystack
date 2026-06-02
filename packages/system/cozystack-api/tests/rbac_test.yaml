@@ -23,3 +23,12 @@ tests:
             apiGroups: ["backups.cozystack.io"]
             resources: ["backupclasses", "plans", "backups"]
             verbs: ["get", "watch", "list"]
+
+  - it: does not grant objectstorage.k8s.io bucketclasses (no provider reads it)
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["objectstorage.k8s.io"]
+            resources: ["bucketclasses"]
+            verbs: ["get", "watch", "list"]
