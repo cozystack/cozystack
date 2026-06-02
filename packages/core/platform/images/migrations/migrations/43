@@ -1,0 +1,47 @@
+#!/bin/sh
+# Migration 43 --> 44
+# Adopt existing Cluster/seaweedfs-db resources into the new seaweedfs-db
+# HelmRelease introduced in this release.
+#
+# Pre-split, the CNPG Cluster lived inside the seaweedfs-system Helm release.
+# Splitting moves it to a new release named seaweedfs-db. We rewrite the
+# helm ownership annotations so Helm adopts the existing Cluster instead of
+# erroring on the next reconcile, and stamp helm.sh/resource-policy: keep
+# so the seaweedfs-system upgrade (which no longer renders the Cluster) does
+# not delete it during the transition.
+
+set -euo pipefail
+
+# Iterate every namespace that has a Cluster named "seaweedfs-db".
+for ns in $(kubectl get cluster.postgresql.cnpg.io -A \
+              -o jsonpath='{range .items[?(@.metadata.name=="seaweedfs-db")]}{.metadata.namespace}{"\n"}{end}'); do
+  current=$(kubectl get cluster.postgresql.cnpg.io seaweedfs-db -n "$ns" \
+    -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+  if [ "$current" = "seaweedfs-system" ]; then
+    echo "Re-annotating Cluster/seaweedfs-db in $ns: seaweedfs-system -> seaweedfs-db"
+    kubectl annotate cluster.postgresql.cnpg.io seaweedfs-db -n "$ns" \
+      meta.helm.sh/release-name=seaweedfs-db \
+      helm.sh/resource-policy=keep \
+      --overwrite
+    # release-namespace stays the same (tenant namespace, e.g. tenant-root)
+  fi
+done
+
+# Stamp version.
+# Mirror migration 42's labeled manifest. A label-less apply by the same field
+# manager (kubectl create | kubectl apply) would strip the
+# platform.cozystack.io/no-delete label migration 42 added, dropping
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy. templates/cozystack-version.yaml only re-renders the
+# labeled ConfigMap on first install, so the label must be carried inline here.
+kubectl apply --filename - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "44"
+EOF

@@ -26,7 +26,7 @@ dump_diagnostics() {
 # resource, so poll for existence first.
 wait_etcd_hr_ready() {
   timeout 60 sh -ec 'until kubectl -n tenant-test get hr/etcd >/dev/null 2>&1; do sleep 2; done'
-  kubectl -n tenant-test wait hr/etcd --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr/etcd --timeout=5m --for=condition=ready
 }
 
 @test "Create Etcd" {

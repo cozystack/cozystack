@@ -30,7 +30,7 @@ EOF
   # kicks in (kubectl wait errors immediately if the object does not exist yet).
   timeout 60 sh -ec "until kubectl -n tenant-test get hr mongodb-$name >/dev/null 2>&1; do sleep 2; done"
   # Wait for HelmRelease
-  kubectl -n tenant-test wait hr mongodb-$name --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr mongodb-$name --timeout=5m --for=condition=ready
   # Wait for MongoDB service (port 27017)
   timeout 120 sh -ec "until kubectl -n tenant-test get svc mongodb-$name-rs0 -o jsonpath='{.spec.ports[0].port}' | grep -q '27017'; do sleep 10; done"
   # Wait for endpoints

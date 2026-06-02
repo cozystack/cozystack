@@ -12,3 +12,11 @@ flux-operator:
     requests:
       cpu: 100m
       memory: 350Mi
+  # Flux Status Web UI is opt-in. Override `web.enabled: true` (and configure
+  # `web.config` / `web.configSecretName` / `web.ingress` as needed) to enable.
+  # The upstream chart's NetworkPolicy is suppressed because Cozystack ships a
+  # CiliumClusterwideNetworkPolicy that already restricts ports 8080/8081/9080.
+  web:
+    enabled: false
+    networkPolicy:
+      create: false

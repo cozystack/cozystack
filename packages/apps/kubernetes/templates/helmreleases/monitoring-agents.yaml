@@ -28,14 +28,9 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
   - name: {{ .Release.Name }}-cozy-victoria-metrics-operator
     namespace: {{ .Release.Namespace }}
   - name: {{ .Release.Name }}-vertical-pod-autoscaler-crds

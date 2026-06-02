@@ -2,6 +2,19 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: tenant
+  annotations:
+    # Tenant charts install a serial chain of child HelmReleases (seaweedfs,
+    # monitoring, etcd, ingress). The seaweedfs subtree alone is now
+    # seaweedfs-db -> seaweedfs-system -> seaweedfs (~5 min wall-clock for
+    # CNPG bootstrap + master quorum). Flux helm-controller's default 5m
+    # wait budget on the parent tenant HR fires before children reach Ready,
+    # which rolls back the children and starts an oscillation loop. This
+    # override is applied by cozystack-api to the HelmRelease
+    # Spec.Install.Timeout and Spec.Upgrade.Timeout for sub-tenants.
+    # tenant-root uses a static HR defined in
+    # packages/system/cozystack-basics/templates/tenant-root.yaml; its
+    # timeout is set there directly. Keep the two values aligned.
+    release.cozystack.io/helm-install-timeout: "15m"
 spec:
   application:
     kind: Tenant

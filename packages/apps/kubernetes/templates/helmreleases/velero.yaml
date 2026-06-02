@@ -26,7 +26,6 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   {{- with .Values.addons.velero.valuesOverride }}
@@ -35,10 +34,6 @@ spec:
   {{- end }}
 
   dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
 {{- end }}

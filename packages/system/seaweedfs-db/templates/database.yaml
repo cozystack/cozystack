@@ -17,12 +17,7 @@ spec:
   monitoring:
     enablePodMonitor: true
   resources:
-    limits:
-      cpu: "1"
-      memory: 2048Mi
-    requests:
-      cpu: 100m
-      memory: 512Mi
+    {{- toYaml .Values.db.resources | nindent 4 }}
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"

@@ -1,0 +1,62 @@
+suite: seaweedfs-db CNPG Cluster
+
+# Baseline render cover for the chart introduced by the seaweedfs split. The
+# split moved the filer metadata Cluster into its own release; this pins the
+# shape (instances from db.replicas, configurable storage, the fresh-install
+# image default, and the apiserver-allow label) so a regression in the new
+# chart is caught before it reaches a tenant's metadata database.
+
+templates:
+  - templates/database.yaml
+
+tests:
+  - it: renders a CNPG Cluster named seaweedfs-db
+    release:
+      name: seaweedfs-db
+      namespace: cozy-seaweedfs
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Cluster
+      - equal:
+          path: metadata.name
+          value: seaweedfs-db
+
+  - it: instances and storage follow db values
+    release:
+      name: seaweedfs-db
+      namespace: cozy-seaweedfs
+    set:
+      db:
+        replicas: 3
+        size: 25Gi
+        storageClass: replicated
+    asserts:
+      - equal:
+          path: spec.instances
+          value: 3
+      - equal:
+          path: spec.storage.size
+          value: 25Gi
+      - equal:
+          path: spec.storage.storageClass
+          value: replicated
+
+  - it: fresh install pins the default postgres 17.7 image
+    release:
+      name: seaweedfs-db
+      namespace: cozy-seaweedfs
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie
+
+  - it: carries the apiserver-allow inherited label
+    release:
+      name: seaweedfs-db
+      namespace: cozy-seaweedfs
+    asserts:
+      - equal:
+          path: spec.inheritedMetadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"

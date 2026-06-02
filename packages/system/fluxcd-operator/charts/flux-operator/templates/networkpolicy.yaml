@@ -1,0 +1,32 @@
+{{- if and .Values.web.enabled .Values.web.networkPolicy.create }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "flux-operator.fullname" . }}-web
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "flux-operator.labels" . | nindent 4 }}
+    {{- with .Values.commonLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.commonAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  policyTypes:
+    - Ingress
+  podSelector:
+    matchLabels:
+      {{- include "flux-operator.selectorLabels" . | nindent 6 }}
+  ingress:
+    - from:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9080
+        {{- if .Values.serviceMonitor.create }}
+        - protocol: TCP
+          port: 8080
+        {{- end }}
+{{- end }}

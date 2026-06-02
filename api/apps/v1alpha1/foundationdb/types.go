@@ -39,7 +39,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	CustomParameters []string `json:"customParameters,omitempty"`
 	// Container image deployment type.
-	// +kubebuilder:default:="unified"
+	// +kubebuilder:default:="split"
 	ImageType ImageType `json:"imageType"`
 	// Security context for containers.
 	// +kubebuilder:default:={}

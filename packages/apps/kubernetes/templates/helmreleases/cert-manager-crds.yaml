@@ -26,7 +26,6 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   {{- if .Values.addons.certManager.valuesOverride }}
@@ -36,11 +35,6 @@ spec:
     valuesKey: values
   {{- end }}
 
-  dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
 {{- if .Values.addons.certManager.valuesOverride }}
 ---
 apiVersion: v1

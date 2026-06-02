@@ -184,20 +184,41 @@ The following instancetype resources are provided by Cozystack:
 Name | vCPUs | Memory
 -----|-------|-------
 cx1.2xlarge  |  8  |  16Gi
+cx1.2xlarge1gi  |  8  |  16Gi
 cx1.4xlarge  |  16  |  32Gi
+cx1.4xlarge1gi  |  16  |  32Gi
 cx1.8xlarge  |  32  |  64Gi
+cx1.8xlarge1gi  |  32  |  64Gi
 cx1.large  |  2  |  4Gi
+cx1.large1gi  |  2  |  4Gi
 cx1.medium  |  1  |  2Gi
+cx1.medium1gi  |  1  |  2Gi
 cx1.xlarge  |  4  |  8Gi
+cx1.xlarge1gi  |  4  |  8Gi
+d1.2xlarge  |  8  |  32Gi
+d1.2xmedium  |  2  |  4Gi
+d1.4xlarge  |  16  |  64Gi
+d1.8xlarge  |  32  |  128Gi
+d1.large  |  2  |  8Gi
+d1.medium  |  1  |  4Gi
+d1.micro  |  1  |  1Gi
+d1.nano  |  1  |  512Mi
+d1.small  |  1  |  2Gi
+d1.xlarge  |  4  |  16Gi
 gn1.2xlarge  |  8  |  32Gi
 gn1.4xlarge  |  16  |  64Gi
 gn1.8xlarge  |  32  |  128Gi
 gn1.xlarge  |  4  |  16Gi
 m1.2xlarge  |  8  |  64Gi
+m1.2xlarge1gi  |  8  |  64Gi
 m1.4xlarge  |  16  |  128Gi
+m1.4xlarge1gi  |  16  |  128Gi
 m1.8xlarge  |  32  |  256Gi
+m1.8xlarge1gi  |  32  |  256Gi
 m1.large  |  2  |  16Gi
+m1.large1gi  |  2  |  16Gi
 m1.xlarge  |  4  |  32Gi
+m1.xlarge1gi  |  4  |  32Gi
 n1.2xlarge  |  16  |  32Gi
 n1.4xlarge  |  32  |  64Gi
 n1.8xlarge  |  64  |  128Gi
@@ -237,23 +258,26 @@ The following preference resources are provided by Cozystack:
 Name | Guest OS
 -----|---------
 alpine | Alpine
-centos.7 | CentOS 7
-centos.7.desktop | CentOS 7
 centos.stream10 | CentOS Stream 10
 centos.stream10.desktop | CentOS Stream 10
-centos.stream8 | CentOS Stream 8
-centos.stream8.desktop | CentOS Stream 8
-centos.stream8.dpdk | CentOS Stream 8
 centos.stream9 | CentOS Stream 9
 centos.stream9.desktop | CentOS Stream 9
 centos.stream9.dpdk | CentOS Stream 9
 cirros | Cirros
+debian | Debian
 fedora | Fedora (amd64)
 fedora.arm64 | Fedora (arm64)
+fedora.s390x | Fedora (s390x)
+legacy | Legacy Guest
+linux | Linux Guest
+linux.efi | Linux EFI Guest
+linux.virtiotransitional | Linux Virtio Transitional Guest
 opensuse.leap | OpenSUSE Leap
 opensuse.tumbleweed | OpenSUSE Tumbleweed
-rhel.10 | Red Hat Enterprise Linux 10 Beta (amd64)
-rhel.10.arm64 | Red Hat Enterprise Linux 10 Beta (arm64)
+oraclelinux | Oracle Linux
+rhel.10 | Red Hat Enterprise Linux 10 (amd64)
+rhel.10.arm64 | Red Hat Enterprise Linux 10 (arm64)
+rhel.10.s390x | Red Hat Enterprise Linux 10 (s390x)
 rhel.7 | Red Hat Enterprise Linux 7
 rhel.7.desktop | Red Hat Enterprise Linux 7
 rhel.8 | Red Hat Enterprise Linux 8
@@ -264,12 +288,15 @@ rhel.9.arm64 | Red Hat Enterprise Linux 9 (arm64)
 rhel.9.desktop | Red Hat Enterprise Linux 9 Desktop (amd64)
 rhel.9.dpdk | Red Hat Enterprise Linux 9 DPDK (amd64)
 rhel.9.realtime | Red Hat Enterprise Linux 9 Realtime (amd64)
+rhel.9.s390x | Red Hat Enterprise Linux 9 (s390x)
 sles | SUSE Linux Enterprise Server
 ubuntu | Ubuntu
 windows.10 | Microsoft Windows 10
 windows.10.virtio | Microsoft Windows 10 (virtio)
 windows.11 | Microsoft Windows 11
 windows.11.virtio | Microsoft Windows 11 (virtio)
+windows.2k12 | Microsoft Windows Server 2012/2012 R2
+windows.2k12.virtio | Microsoft Windows Server 2012/2012 R2 (virtio)
 windows.2k16 | Microsoft Windows Server 2016
 windows.2k16.virtio | Microsoft Windows Server 2016 (virtio)
 windows.2k19 | Microsoft Windows Server 2019
@@ -278,3 +305,9 @@ windows.2k22 | Microsoft Windows Server 2022
 windows.2k22.virtio | Microsoft Windows Server 2022 (virtio)
 windows.2k25 | Microsoft Windows Server 2025
 windows.2k25.virtio | Microsoft Windows Server 2025 (virtio)
+windows.2k3 | Microsoft Windows Server 2003
+windows.2k8 | Microsoft Windows Server 2008/2008 R2
+windows.2k8.virtio | Microsoft Windows Server 2008/2008 R2 (virtio)
+windows.7 | Microsoft Windows 7
+windows.7.virtio | Microsoft Windows 7 (virtio)
+windows.xp | Microsoft Windows XP
