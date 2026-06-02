@@ -91,6 +91,29 @@ topologySpreadPolicy: "soft"
 version: v2
 
 ##
+## @section TLS configuration
+##
+
+## @typedef {struct} TLS - HTTP-layer TLS configuration for OpenSearch and Dashboards.
+## @field {*bool} enabled - Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+##   NOTE: Transport mTLS between nodes is always active and is managed by the opster
+##   operator (tls.transport.generate: true). Setting enabled: false here does NOT
+##   disable transport mTLS — the OpenSearch security plugin requires it unconditionally.
+##
+## KNOWN LIMITATION: When chart-managed HTTP TLS is enabled, the opensearch-operator's
+## securityadmin job authenticates with an admin certificate signed by the operator's
+## transport CA, but connects to the HTTP endpoint whose trust anchor is this chart's
+## cert-manager CA (<release>-http-ca). These two CAs do not share a trust bundle, so
+## securityadmin cannot verify the HTTP TLS chain. As a result, security configuration
+## stored in the <release>-security-config Secret (users, roles, audit policies) may not
+## apply or refresh automatically. Workaround: reconcile security configuration manually,
+## or set tls.enabled: false (operator-managed HTTP TLS mode), especially when external: true,
+## until upstream adds merged CA support.
+
+## @param {TLS} tls - HTTP-layer TLS configuration.
+tls: {}
+
+##
 ## @section Image configuration
 ##
 

@@ -20,6 +20,14 @@
 | `version`              | OpenSearch major version to deploy.                                                                                               | `string`   | `v2`        |
 
 
+### TLS configuration
+
+| Name          | Description                                                                                                                                     | Type     | Value  |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`         | HTTP-layer TLS configuration.                                                                                                                   | `object` | `{}`   |
+| `tls.enabled` | Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override. | `*bool`  | `null` |
+
+
 ### Image configuration
 
 | Name                | Description                            | Type     | Value |
