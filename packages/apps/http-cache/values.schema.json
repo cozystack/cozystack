@@ -25,7 +25,10 @@
           "rule": "self == oldSelf",
           "message": "storageClass is immutable"
         }
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
     },
     "external": {
       "description": "Enable external access from outside the cluster.",

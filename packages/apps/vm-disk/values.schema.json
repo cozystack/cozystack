@@ -42,7 +42,10 @@
           "properties": {
             "name": {
               "description": "Name of the image to use.",
-              "type": "string"
+              "type": "string",
+              "x-cozystack-options": {
+                "source": "image"
+              }
             }
           }
         },
@@ -80,7 +83,10 @@
           "rule": "self == oldSelf",
           "message": "storageClass is immutable"
         }
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
     }
   }
 }

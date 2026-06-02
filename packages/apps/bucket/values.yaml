@@ -2,6 +2,7 @@
 locking: false
 
 ## @param {string} [storagePool] - Selects a specific BucketClass by storage pool name.
+## @x-cozystack-options {source: storagepool}
 storagePool: ""
 
 ## @typedef {struct} User - Bucket user configuration.

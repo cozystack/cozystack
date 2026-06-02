@@ -44,6 +44,7 @@ rules:
   resources:
   - tenantmodules
   - tenantsecrets
+  - options
   verbs: ["get", "list", "watch"]
 ---
 # == view cluster role ==
@@ -118,6 +119,11 @@ rules:
   resources:
   - workloadmonitors
   - workloads
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - options
   verbs: ["get", "list", "watch"]
 ---
 # == use cluster role ==

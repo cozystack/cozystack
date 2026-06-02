@@ -46,74 +46,18 @@
     "instanceType": {
       "description": "Virtual Machine instance type.",
       "type": "string",
-      "default": "u1.medium"
+      "default": "u1.medium",
+      "x-cozystack-options": {
+        "source": "instancetype"
+      }
     },
     "instanceProfile": {
       "description": "Virtual Machine preferences profile.",
       "type": "string",
       "default": "ubuntu",
-      "enum": [
-        "alpine",
-        "centos.7",
-        "centos.7.desktop",
-        "centos.stream10",
-        "centos.stream10.desktop",
-        "centos.stream8",
-        "centos.stream8.desktop",
-        "centos.stream8.dpdk",
-        "centos.stream9",
-        "centos.stream9.desktop",
-        "centos.stream9.dpdk",
-        "cirros",
-        "debian",
-        "fedora",
-        "fedora.arm64",
-        "fedora.s390x",
-        "legacy",
-        "linux",
-        "linux.efi",
-        "linux.virtiotransitional",
-        "opensuse.leap",
-        "opensuse.tumbleweed",
-        "oraclelinux",
-        "rhel.10",
-        "rhel.10.arm64",
-        "rhel.10.s390x",
-        "rhel.7",
-        "rhel.7.desktop",
-        "rhel.8",
-        "rhel.8.desktop",
-        "rhel.8.dpdk",
-        "rhel.9",
-        "rhel.9.arm64",
-        "rhel.9.desktop",
-        "rhel.9.dpdk",
-        "rhel.9.realtime",
-        "rhel.9.s390x",
-        "sles",
-        "ubuntu",
-        "windows.10",
-        "windows.10.virtio",
-        "windows.11",
-        "windows.11.virtio",
-        "windows.2k12",
-        "windows.2k12.virtio",
-        "windows.2k16",
-        "windows.2k16.virtio",
-        "windows.2k19",
-        "windows.2k19.virtio",
-        "windows.2k22",
-        "windows.2k22.virtio",
-        "windows.2k25",
-        "windows.2k25.virtio",
-        "windows.2k3",
-        "windows.2k8",
-        "windows.2k8.virtio",
-        "windows.7",
-        "windows.7.virtio",
-        "windows.xp",
-        ""
-      ]
+      "x-cozystack-options": {
+        "source": "instanceprofile"
+      }
     },
     "disks": {
       "description": "List of disks to attach.",
@@ -131,7 +75,10 @@
           },
           "name": {
             "description": "Disk name.",
-            "type": "string"
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "vmdisk"
+            }
           }
         }
       }
@@ -145,7 +92,10 @@
         "properties": {
           "name": {
             "description": "Network attachment name.",
-            "type": "string"
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "network"
+            }
           }
         }
       }
@@ -159,7 +109,10 @@
         "properties": {
           "name": {
             "description": "Network attachment name.",
-            "type": "string"
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "network"
+            }
           }
         }
       }
@@ -176,7 +129,10 @@
         "properties": {
           "name": {
             "description": "The name of the GPU resource to attach.",
-            "type": "string"
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "gpu"
+            }
           }
         }
       }

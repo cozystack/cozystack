@@ -61,6 +61,8 @@ spec:
                   kind:
                     description: Kind is the type of resource being referenced
                     type: string
+                    x-cozystack-options:
+                      source: appkind
                   name:
                     description: Name is the name of resource being referenced
                     type: string
@@ -77,6 +79,8 @@ spec:
                   This field is immutable once the BackupJob is created.
                 minLength: 1
                 type: string
+                x-cozystack-options:
+                  source: backupclass
                 x-kubernetes-validations:
                 - message: backupClassName is immutable
                   rule: self == oldSelf
@@ -94,6 +98,8 @@ spec:
                       almost certainly wrong.
                       More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
                     type: string
+                    x-cozystack-options:
+                      source: plan
                 type: object
                 x-kubernetes-map-type: atomic
             required:

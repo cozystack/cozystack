@@ -103,6 +103,7 @@ topics: []
 ## @field {quantity} size - Persistent Volume size for Kafka.
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
 ## @immutable
+## @x-cozystack-options {source: storageclass}
 
 ## @param {Kafka} kafka - Kafka configuration.
 kafka:
@@ -123,6 +124,7 @@ kafka:
 ## @field {quantity} size - Persistent Volume size for ZooKeeper.
 ## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
 ## @immutable
+## @x-cozystack-options {source: storageclass}
 
 ## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
 zookeeper:

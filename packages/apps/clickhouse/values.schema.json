@@ -122,7 +122,10 @@
           "rule": "self == oldSelf",
           "message": "storageClass is immutable"
         }
-      ]
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
     },
     "logStorageSize": {
       "description": "Size of Persistent Volume for logs.",

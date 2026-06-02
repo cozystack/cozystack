@@ -102,6 +102,21 @@ mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
 
+# controller-gen cannot emit the x-cozystack-options vendor extension that the
+# dashboard reads to render dropdowns from live cluster state. Re-apply it to
+# the backup CRDs. Targets are per-CRD (the same field is a dropdown in one
+# kind but free-text in another); keep them in sync with the Option providers
+# in pkg/registry/core/option/providers.go.
+inject_cozystack_options() {
+  local file="${BACKUPS_CORE_CRDDIR}/$1"
+  awk -v TARGETS="$2" -f "${SCRIPT_ROOT}/hack/inject-cozystack-options.awk" "${file}" > "${file}.tmp"
+  mv "${file}.tmp" "${file}"
+}
+inject_cozystack_options backups.cozystack.io_backupjobs.yaml "applicationRef:kind:appkind planRef:name:plan spec:backupClassName:backupclass"
+inject_cozystack_options backups.cozystack.io_backups.yaml "applicationRef:kind:appkind"
+inject_cozystack_options backups.cozystack.io_plans.yaml "applicationRef:kind:appkind spec:backupClassName:backupclass"
+inject_cozystack_options backups.cozystack.io_restorejobs.yaml "backupRef:name:backup targetApplicationRef:kind:appkind"
+
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
 
 # Tidy dependencies for standalone api/apps/v1alpha1 submodule

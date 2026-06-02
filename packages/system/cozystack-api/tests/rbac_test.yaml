@@ -1,0 +1,34 @@
+suite: cozystack-api ClusterRole grants Option provider sources
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: cozystack-api
+  namespace: cozy-system
+
+# The Option (dropdown) providers run with the cozystack-api ServiceAccount's
+# privileged client, so every GVR a provider lists must be granted on this
+# ClusterRole. The plan/backup providers list namespaced plans/backups in the
+# backups.cozystack.io group; without read access there the apiserver returns
+# forbidden and List silently drops those dropdowns (Get returns 500). The
+# bare cozystack.io grant does NOT cover backups.cozystack.io — RBAC matches
+# the API group string exactly.
+
+tests:
+  - it: grants read on backups.cozystack.io plans and backups for the plan/backup providers
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["backups.cozystack.io"]
+            resources: ["backupclasses", "plans", "backups"]
+            verbs: ["get", "watch", "list"]
+
+  - it: does not grant objectstorage.k8s.io bucketclasses (no provider reads it)
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["objectstorage.k8s.io"]
+            resources: ["bucketclasses"]
+            verbs: ["get", "watch", "list"]

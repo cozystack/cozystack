@@ -177,7 +177,10 @@
               "rule": "self == oldSelf",
               "message": "storageClass is immutable"
             }
-          ]
+          ],
+          "x-cozystack-options": {
+            "source": "storageclass"
+          }
         }
       }
     },
@@ -307,7 +310,10 @@
               "rule": "self == oldSelf",
               "message": "storageClass is immutable"
             }
-          ]
+          ],
+          "x-cozystack-options": {
+            "source": "storageclass"
+          }
         }
       }
     }

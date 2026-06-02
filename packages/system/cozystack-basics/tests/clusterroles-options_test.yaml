@@ -1,0 +1,25 @@
+suite: cozystack-basics tenant ClusterRoles grant read on core.cozystack.io options
+
+templates:
+  - templates/clusterroles.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# The dashboard's dynamic dropdowns (x-cozystack-options) read the virtual
+# core.cozystack.io/options resource. The tenant view aggregation must grant
+# read on it so every access level from view upward can populate dropdowns;
+# the apiserver-side grant is moot for human tenants without this.
+tests:
+  - it: cozy:tenant:view:base grants read on core.cozystack.io options
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["core.cozystack.io"]
+            resources: ["options"]
+            verbs: ["get", "list", "watch"]
