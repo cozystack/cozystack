@@ -44,7 +44,7 @@ rules:
   resources: ["storageclasses"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["backups.cozystack.io"]
-  resources: ["backupclasses"]
+  resources: ["backupclasses", "plans", "backups"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["apps.cozystack.io"]
   resources: ["vmdisks"]
