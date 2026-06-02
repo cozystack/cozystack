@@ -153,6 +153,11 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 					return
 				}
 			}
+		} else {
+			// One-shot watch: log so an operator can tell "no options" apart
+			// from "every provider failed" (e.g. broken RBAC) instead of seeing
+			// a silently empty stream.
+			logProviderError("watch", err)
 		}
 		<-ctx.Done()
 	}()
