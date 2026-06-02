@@ -47,7 +47,7 @@ var (
 	gvrVMDisks      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "vmdisks"}
 	gvrPlans        = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "plans"}
 	gvrBackups      = schema.GroupVersionResource{Group: "backups.cozystack.io", Version: "v1alpha1", Resource: "backups"}
-	gvrAppDefs      = schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
+	gvrAppDefs      = schema.GroupVersionResource{Group: "cozystack.io", Version: "v1alpha1", Resource: "applicationdefinitions"}
 )
 
 const defaultStorageClassAnnotation = "storageclass.kubernetes.io/is-default-class"

@@ -140,6 +140,18 @@ func TestAppKindProviderDedupesAndSorts(t *testing.T) {
 	}
 }
 
+func TestAppKindProviderUsesApplicationDefinitionCRDGroup(t *testing.T) {
+	// ApplicationDefinition is served from the cozystack.io group (Cluster-scoped) —
+	// see packages/system/application-definition-crd. Querying any other group makes
+	// the appkind dropdown silently empty in every cluster. The fake dynamic client
+	// in the other appkind test cannot catch a wrong group: it is built from
+	// gvrAppDefs itself, so it stays self-consistent with whatever group is set.
+	if gvrAppDefs.Group != "cozystack.io" || gvrAppDefs.Resource != "applicationdefinitions" {
+		t.Fatalf("appkind must list cozystack.io/applicationdefinitions, got %s/%s",
+			gvrAppDefs.Group, gvrAppDefs.Resource)
+	}
+}
+
 func TestRESTListExposesNewSources(t *testing.T) {
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), listKinds())
 	r := NewREST(DefaultProviders(dyn))
