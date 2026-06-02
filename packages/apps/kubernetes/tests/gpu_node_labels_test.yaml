@@ -1,0 +1,77 @@
+suite: GPU node-group kubelet node-labels tests
+
+templates:
+  - templates/cluster.yaml
+
+# The KubeadmConfigTemplate for the first nodeGroup is rendered at
+# document index 4 within cluster.yaml. The kubelet args live at:
+# spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs
+# GPU node-groups must register their nodes with gpu=on so HAMi's
+# hami-device-plugin DaemonSet (nodeSelector gpu=on) schedules.
+
+tests:
+  - it: labels GPU node-groups with gpu=on
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: nvidia.com/GH200
+          kubelet: {}
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.node-labels
+          value: "gpu=on"
+        documentIndex: 4
+
+  - it: does not label non-GPU node-groups with gpu=on
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kubelet: {}
+    asserts:
+      - isKind:
+          of: KubeadmConfigTemplate
+        documentIndex: 4
+      - notExists:
+          path: spec.template.spec.joinConfiguration.nodeRegistration.kubeletExtraArgs.node-labels
+        documentIndex: 4
