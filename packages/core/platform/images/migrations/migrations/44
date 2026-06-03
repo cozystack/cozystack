@@ -1,0 +1,41 @@
+#!/bin/sh
+# Migration 44 --> 45
+# Tenant Flux sharding: the hand-rolled flux-tenants helm-controller shard is
+# replaced by operator-managed helm-controller-shard<i> Deployments
+# (flux-shard-operator). The operator itself drains and deletes flux-tenants
+# at runtime once no HelmRelease carries sharding.fluxcd.io/key=tenants; this
+# migration only removes a leftover Deployment defensively, and only when that
+# guard is already satisfied — flux-tenants must keep reconciling any
+# HelmRelease still on the legacy bucket.
+
+set -euo pipefail
+
+if kubectl get deployment flux-tenants -n cozy-fluxcd >/dev/null 2>&1; then
+  remaining=$(kubectl get helmreleases.helm.toolkit.fluxcd.io -A \
+    -l sharding.fluxcd.io/key=tenants -o name | head -n 1)
+  if [ -z "$remaining" ]; then
+    echo "No HelmReleases left on the legacy tenants shard; removing flux-tenants Deployment"
+    kubectl delete deployment flux-tenants -n cozy-fluxcd --ignore-not-found=true
+  else
+    echo "HelmReleases still carry sharding.fluxcd.io/key=tenants; leaving flux-tenants in place (flux-shard-operator retires it after the backfill drains)"
+  fi
+fi
+
+# Stamp version.
+# Mirror migration 43's labeled manifest. A label-less apply by the same field
+# manager would strip the platform.cozystack.io/no-delete label, dropping
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy. templates/cozystack-version.yaml only re-renders
+# the labeled ConfigMap on first install, so the label must be carried inline
+# here.
+kubectl apply --filename - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "45"
+EOF
