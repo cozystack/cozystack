@@ -7,9 +7,9 @@ bareNamespace: false
 cozystackOperator:
   # Deployment variant: talos, generic, hosted
   variant: talos
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.4.0-rc.2@sha256:54f6013f97e9b9f028ba1c99f6b315119c0c1b16ab4ba042fab14ee3c4789e17
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.5.0-rc.1@sha256:04b86205fa90d7cf6c6f24ee55381143fd7d55eee20eef38b49da73dd7a5e912
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:c950daef3c15108ebab4e31a3c04ec7c0800ec97da807236c164f444743f8347'
+  platformSourceRef: 'digest=sha256:e9bb49e9b60c13aff10393a204ee7569dd59cd0eafef67605f8a725ce6a54621'
   # When non-empty, overrides the operator's --helmrelease-interval flag
   # (operator default: 5m). E2E sets this to 30s; production should leave empty.
   helmReleaseInterval: ""
