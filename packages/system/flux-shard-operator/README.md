@@ -23,12 +23,16 @@ System (non-tenant) HelmReleases are untouched: flux-aio keeps reconciling every
 | `fluxShardOperator.image`             | Container image                                                                          | `ghcr.io/cozystack/cozystack/flux-shard-operator:*`  |
 | `fluxShardOperator.debug`             | Enable debug logging                                                                     | `false`                                              |
 | `fluxShardOperator.replicas`          | Operator replica count                                                                   | `2`                                                  |
-| `fluxShardOperator.shardCount`        | Number of helm-controller shards                                                         | `1`                                                  |
+| `fluxShardOperator.shardCount`        | Number of helm-controller shards: `auto` sizes from the HelmRelease count, an integer pins it | `auto`                                          |
 | `fluxShardOperator.rebalanceThreshold`| Load spread ratio above which tenants are rebalanced                                     | `0.25`                                               |
 | `fluxShardOperator.pinnedTenants`     | Map of tenant namespace to shard, pins heavy tenants to dedicated shards                 | `{}`                                                 |
 | `fluxShardOperator.shard.concurrent`  | `--concurrent` of each shard helm-controller                                             | `5`                                                  |
 | `fluxShardOperator.shard.resources`   | Resources of each shard helm-controller (empty values inherit flux-aio)                  | `{requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 1Gi}}` |
 
+## Autosizing
+
+With `shardCount: auto` (the default) the operator drives the shard count from the tenant HelmRelease count: `K = clamp(ceil(H/100), 1, min(16, T))`, applied with hysteresis anchored on the currently provisioned shards (scale up eagerly once a shard runs >120 HR, scale down lazily only under 60 HR/shard) so K does not flap around sizing boundaries. The ~100 HR/shard target leaves headroom for existing tenants growing their HelmRelease count without an immediate reshard. Set an integer to pin the count explicitly.
+
 ## Telemetry
 
-The operator exports `cozy_flux_shard_load`, `cozy_flux_shard_tenants`, `cozy_flux_shard_helmreleases`, `cozy_flux_shard_pending_moves`, `cozy_flux_shard_moves_total` and `cozy_flux_shard_recommended_count` (the autosizing recommendation `K = clamp(ceil(H/150), 1, min(16, T))`; v1 surfaces it only, raising `shardCount` stays an operator decision).
+The operator exports `cozy_flux_shard_load`, `cozy_flux_shard_tenants`, `cozy_flux_shard_helmreleases`, `cozy_flux_shard_pending_moves`, `cozy_flux_shard_moves_total` and `cozy_flux_shard_recommended_count` (the raw autosizing recommendation before hysteresis).

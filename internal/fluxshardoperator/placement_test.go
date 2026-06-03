@@ -205,9 +205,9 @@ func TestRecommendedShardCount(t *testing.T) {
 	cases := []struct {
 		hrs, tenants, want int
 	}{
-		{15, 3, 1},    // small cluster
-		{81, 13, 1},   // C5 anchor: comfortable on one shard
-		{946, 128, 7}, // C1 anchor: ceil(946/150) = 7
+		{15, 3, 1},     // small cluster
+		{81, 13, 1},    // C5 anchor: comfortable on one shard
+		{946, 128, 10}, // C1 anchor: ceil(946/100) = 10
 		{5000, 128, 16},
 		{500, 2, 2}, // capped by tenant count
 		{0, 0, 1},
@@ -215,6 +215,49 @@ func TestRecommendedShardCount(t *testing.T) {
 	for _, c := range cases {
 		if got := RecommendedShardCount(c.hrs, c.tenants); got != c.want {
 			t.Errorf("RecommendedShardCount(%d, %d) = %d, want %d", c.hrs, c.tenants, got, c.want)
+		}
+	}
+}
+
+func TestEffectiveShardCount(t *testing.T) {
+	explicit := &Config{ShardCount: 7}
+	if got := explicit.EffectiveShardCount(5000, 128, 2); got != 7 {
+		t.Fatalf("explicit shard count must win, got %d", got)
+	}
+
+	auto := &Config{AutoShardCount: true}
+	cases := []struct {
+		desc                  string
+		hrs, tenants, current int
+		want                  int
+	}{
+		{"fresh install goes straight to the recommendation", 250, 10, 0, 3},
+		{"stable at the recommendation", 150, 10, 2, 2},
+		{"holds below the scale-up threshold", 110, 10, 1, 1}, // 110/1 <= 120
+		{"scales up eagerly past the threshold", 130, 10, 1, 2},
+		{"holds above the scale-down threshold", 110, 10, 2, 2},          // 55*2: desired 2 == current
+		{"holds while shards are moderately underloaded", 130, 10, 2, 2}, // desired 2 == current
+		{"scales down lazily when well under target", 90, 10, 2, 1},      // 45/shard < 60
+		{"keeps current when underloaded but above floor", 99, 10, 1, 1},
+	}
+	for _, c := range cases {
+		if got := auto.EffectiveShardCount(c.hrs, c.tenants, c.current); got != c.want {
+			t.Errorf("%s: EffectiveShardCount(%d, %d, %d) = %d, want %d",
+				c.desc, c.hrs, c.tenants, c.current, got, c.want)
+		}
+	}
+}
+
+func TestParseShardCount(t *testing.T) {
+	if _, auto, err := ParseShardCount("auto"); err != nil || !auto {
+		t.Fatalf("auto must parse: auto=%v err=%v", auto, err)
+	}
+	if n, auto, err := ParseShardCount("7"); err != nil || auto || n != 7 {
+		t.Fatalf("explicit count must parse: n=%d auto=%v err=%v", n, auto, err)
+	}
+	for _, bad := range []string{"", "0", "-1", "many"} {
+		if _, _, err := ParseShardCount(bad); err == nil {
+			t.Errorf("ParseShardCount(%q) must fail", bad)
 		}
 	}
 }

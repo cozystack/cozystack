@@ -66,7 +66,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var fluxNamespace string
-	var shardCount int
+	var shardCount string
 	var shardConcurrent int
 	var rebalanceThreshold float64
 	var pinnedTenants string
@@ -85,8 +85,10 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&fluxNamespace, "flux-namespace", "cozy-fluxcd",
 		"Namespace of the flux-aio Deployment and the shard Deployments.")
-	flag.IntVar(&shardCount, "shard-count", 1,
-		"Number of helm-controller shards to provision and distribute tenants over.")
+	flag.StringVar(&shardCount, "shard-count", fso.ShardCountAuto,
+		"Number of helm-controller shards to provision and distribute tenants over: "+
+			"\"auto\" (default) sizes from the tenant HelmRelease count with hysteresis, "+
+			"or a positive integer pins it explicitly.")
 	flag.IntVar(&shardConcurrent, "shard-concurrent", 5,
 		"Value of --concurrent for each shard helm-controller.")
 	flag.Float64Var(&rebalanceThreshold, "rebalance-threshold", 0.25,
@@ -114,6 +116,11 @@ func main() {
 		setupLog.Error(err, "invalid --pinned-tenants")
 		os.Exit(1)
 	}
+	explicitShards, autoShards, err := fso.ParseShardCount(shardCount)
+	if err != nil {
+		setupLog.Error(err, "invalid --shard-count")
+		os.Exit(1)
+	}
 	shardResources, err := parseShardResources(shardCPURequest, shardCPULimit, shardMemoryRequest, shardMemoryLimit)
 	if err != nil {
 		setupLog.Error(err, "invalid shard resources")
@@ -121,7 +128,8 @@ func main() {
 	}
 	cfg := &fso.Config{
 		FluxNamespace:      fluxNamespace,
-		ShardCount:         shardCount,
+		ShardCount:         explicitShards,
+		AutoShardCount:     autoShards,
 		ShardConcurrent:    shardConcurrent,
 		RebalanceThreshold: rebalanceThreshold,
 		PinnedTenants:      pinned,

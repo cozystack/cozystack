@@ -84,7 +84,12 @@ func (r *ShardSetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctr
 		return ctrl.Result{}, fmt.Errorf("getting flux Deployment: %w", err)
 	}
 
-	for i := 0; i < r.Config.ShardCount; i++ {
+	shardCount, err := r.effectiveShardCount(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	for i := 0; i < shardCount; i++ {
 		desired, err := BuildShardDeployment(flux, i, r.Config)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -96,7 +101,7 @@ func (r *ShardSetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctr
 
 	blocked := false
 
-	pruneBlocked, err := r.pruneExtraShards(ctx)
+	pruneBlocked, err := r.pruneExtraShards(ctx, shardCount)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -114,10 +119,44 @@ func (r *ShardSetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctr
 	return ctrl.Result{}, nil
 }
 
-// pruneExtraShards deletes operator-managed shard Deployments beyond
-// ShardCount once no HelmRelease points at them anymore. Returns true while a
-// drain is still in progress.
-func (r *ShardSetReconciler) pruneExtraShards(ctx context.Context) (bool, error) {
+// effectiveShardCount resolves the shard count for this sync: the configured
+// value, or in auto mode the recommendation with hysteresis anchored on the
+// currently provisioned shards (see Config.EffectiveShardCount).
+func (r *ShardSetReconciler) effectiveShardCount(ctx context.Context) (int, error) {
+	if !r.Config.AutoShardCount {
+		return r.Config.EffectiveShardCount(0, 0, 0), nil
+	}
+
+	hrs := HelmReleaseMetaList()
+	if err := r.List(ctx, hrs, client.HasLabels{ShardKeyLabel}); err != nil {
+		return 0, fmt.Errorf("listing HelmReleases: %w", err)
+	}
+	tenants := map[string]struct{}{}
+	for i := range hrs.Items {
+		if tenantNS, ok := TenantNamespaceForHR(&hrs.Items[i]); ok {
+			tenants[tenantNS] = struct{}{}
+		}
+	}
+
+	deps := &appsv1.DeploymentList{}
+	if err := r.List(ctx, deps, client.InNamespace(r.Config.FluxNamespace),
+		client.MatchingLabels{ManagedByLabel: ManagedByValue}); err != nil {
+		return 0, fmt.Errorf("listing shard Deployments: %w", err)
+	}
+	current := 0
+	for i := range deps.Items {
+		if idx, ok := ParseShardDeploymentIndex(deps.Items[i].Name); ok && idx+1 > current {
+			current = idx + 1
+		}
+	}
+
+	return r.Config.EffectiveShardCount(len(hrs.Items), len(tenants), current), nil
+}
+
+// pruneExtraShards deletes operator-managed shard Deployments beyond the
+// effective shard count once no HelmRelease points at them anymore. Returns
+// true while a drain is still in progress.
+func (r *ShardSetReconciler) pruneExtraShards(ctx context.Context, shardCount int) (bool, error) {
 	logger := log.FromContext(ctx)
 
 	deps := &appsv1.DeploymentList{}
@@ -130,7 +169,7 @@ func (r *ShardSetReconciler) pruneExtraShards(ctx context.Context) (bool, error)
 	for i := range deps.Items {
 		dep := &deps.Items[i]
 		idx, ok := ParseShardDeploymentIndex(dep.Name)
-		if !ok || idx < r.Config.ShardCount {
+		if !ok || idx < shardCount {
 			continue
 		}
 		drained, err := r.drained(ctx, ShardName(idx))

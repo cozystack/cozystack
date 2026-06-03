@@ -58,15 +58,22 @@ const (
 	shardDeploymentPrefix = "helm-controller-"
 )
 
+// ShardCountAuto is the --shard-count value that enables automatic sizing
+// from the tenant HelmRelease count.
+const ShardCountAuto = "auto"
+
 // Config carries the operator-wide settings shared by the placement
 // controller, the shard provisioner and the admission webhook.
 type Config struct {
 	// FluxNamespace is the namespace the flux-aio Deployment and the shard
 	// Deployments live in.
 	FluxNamespace string
-	// ShardCount is the number of helm-controller shards to provision and
-	// distribute tenants over.
+	// ShardCount is the explicit number of helm-controller shards to provision
+	// and distribute tenants over. Ignored when AutoShardCount is set.
 	ShardCount int
+	// AutoShardCount sizes the shard count automatically from the tenant
+	// HelmRelease count (see Config.EffectiveShardCount).
+	AutoShardCount bool
 	// ShardConcurrent is the --concurrent value for each shard.
 	ShardConcurrent int
 	// RebalanceThreshold is the (maxLoad-minLoad)/avgLoad ratio above which the
@@ -113,6 +120,19 @@ func ParseShardDeploymentIndex(name string) (int, bool) {
 		return 0, false
 	}
 	return ParseShardIndex(rest)
+}
+
+// ParseShardCount parses the --shard-count flag value: "auto" enables
+// automatic sizing, otherwise a positive integer is an explicit shard count.
+func ParseShardCount(s string) (count int, auto bool, err error) {
+	if strings.EqualFold(strings.TrimSpace(s), ShardCountAuto) {
+		return 0, true, nil
+	}
+	n, convErr := strconv.Atoi(strings.TrimSpace(s))
+	if convErr != nil || n < 1 {
+		return 0, false, fmt.Errorf("invalid shard count %q: must be %q or a positive integer", s, ShardCountAuto)
+	}
+	return n, false, nil
 }
 
 // ParsePinnedTenants parses the --pinned-tenants flag value

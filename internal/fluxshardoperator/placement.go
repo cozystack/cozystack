@@ -195,19 +195,27 @@ func abs(v int) int {
 	return v
 }
 
-// RecommendedShardCount surfaces the autosizing recommendation from the
-// design plan: K = clamp(ceil(H / hrTarget), 1, min(maxShards, T)). v1 only
-// reports it (metrics); enforcement is a later step.
+// Autosizing parameters: shards are sized by HelmRelease count, capped by
+// tenant count (more shards than tenants is useless). The 100 HR/shard target
+// leaves headroom for tenants growing their HelmRelease count without an
+// immediate reshard. Hysteresis keeps K stable around the boundaries: scale up
+// eagerly once a shard runs 20% over target, scale down lazily only when
+// shards run at well under half the target.
+const (
+	hrTargetPerShard  = 100
+	maxAutoShards     = 16
+	scaleUpPerShard   = hrTargetPerShard * 1.2
+	scaleDownPerShard = hrTargetPerShard * 0.6
+)
+
+// RecommendedShardCount is the raw autosizing formula:
+// K = clamp(ceil(H / hrTargetPerShard), 1, min(maxAutoShards, T)).
 func RecommendedShardCount(helmReleases, tenants int) int {
-	const (
-		hrTarget  = 150
-		maxShards = 16
-	)
-	k := (helmReleases + hrTarget - 1) / hrTarget
+	k := (helmReleases + hrTargetPerShard - 1) / hrTargetPerShard
 	if k < 1 {
 		k = 1
 	}
-	limit := maxShards
+	limit := maxAutoShards
 	if tenants > 0 && tenants < limit {
 		limit = tenants
 	}
@@ -215,4 +223,32 @@ func RecommendedShardCount(helmReleases, tenants int) int {
 		k = limit
 	}
 	return k
+}
+
+// EffectiveShardCount resolves the shard count for this sync. Explicit
+// configuration wins; in auto mode the recommendation is applied with
+// hysteresis anchored on the currently provisioned shard count, so K does not
+// flap when the HelmRelease count hovers around a sizing boundary. A
+// structurally over-provisioned tail (more shards than tenants after tenant
+// deletions) is left alone until the load condition triggers — idle shards
+// watch zero objects and cost next to nothing.
+func (c *Config) EffectiveShardCount(helmReleases, tenants, currentShards int) int {
+	if !c.AutoShardCount {
+		if c.ShardCount < 1 {
+			return 1
+		}
+		return c.ShardCount
+	}
+	desired := RecommendedShardCount(helmReleases, tenants)
+	if currentShards < 1 || desired == currentShards {
+		return max(desired, currentShards)
+	}
+	perShard := float64(helmReleases) / float64(currentShards)
+	if desired > currentShards && perShard > scaleUpPerShard {
+		return desired
+	}
+	if desired < currentShards && perShard < scaleDownPerShard {
+		return desired
+	}
+	return currentShards
 }

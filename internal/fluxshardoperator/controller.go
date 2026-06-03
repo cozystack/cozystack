@@ -136,9 +136,15 @@ func (r *PlacementReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		totalHRs += v.info.Weight
 	}
 
+	readyShards, currentShards, err := r.observeShards(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	shardCount := r.Config.EffectiveShardCount(totalHRs, len(views), currentShards)
+
 	desired := ComputePlacement(PlacementInput{
 		Tenants:            tenants,
-		ShardCount:         r.Config.ShardCount,
+		ShardCount:         shardCount,
 		Pinned:             r.Config.PinnedTenants,
 		RebalanceThreshold: r.Config.RebalanceThreshold,
 		CanRebalance: func(tenant string) bool {
@@ -146,14 +152,9 @@ func (r *PlacementReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		},
 	})
 
-	readyShards, err := r.readyShards(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
 	pending, errs := r.apply(ctx, views, desired, readyShards)
 
-	r.report(views, desired, totalHRs, pending)
+	r.report(views, desired, shardCount, totalHRs, pending)
 	r.pruneCooldowns(views)
 
 	if len(errs) > 0 {
@@ -238,23 +239,28 @@ func majorityShard(hrs []*metav1.PartialObjectMetadata) string {
 	return ShardName(best)
 }
 
-// readyShards reports which shard Deployments currently have a ready replica.
-// Reassignments only target ready shards, so a backfill can never hand
-// tenants to a shard whose helm-controller is not actually running (e.g.
+// observeShards reports which shard Deployments currently have a ready
+// replica, and how many shards are provisioned (the auto-sizing hysteresis
+// anchor). Reassignments only target ready shards, so a backfill can never
+// hand tenants to a shard whose helm-controller is not actually running (e.g.
 // crashlooping after a bad clone) — the safe-online-migration guarantee.
-func (r *PlacementReconciler) readyShards(ctx context.Context) (map[string]bool, error) {
+func (r *PlacementReconciler) observeShards(ctx context.Context) (map[string]bool, int, error) {
 	deps := &appsv1.DeploymentList{}
 	if err := r.List(ctx, deps, client.InNamespace(r.Config.FluxNamespace),
 		client.MatchingLabels{ManagedByLabel: ManagedByValue}); err != nil {
-		return nil, fmt.Errorf("listing shard Deployments: %w", err)
+		return nil, 0, fmt.Errorf("listing shard Deployments: %w", err)
 	}
 	ready := map[string]bool{}
+	count := 0
 	for i := range deps.Items {
 		if idx, ok := ParseShardDeploymentIndex(deps.Items[i].Name); ok {
 			ready[ShardName(idx)] = deps.Items[i].Status.ReadyReplicas > 0
+			if idx+1 > count {
+				count = idx + 1
+			}
 		}
 	}
-	return ready, nil
+	return ready, count, nil
 }
 
 // apply pushes the desired assignment out, pacing tenant reassignments and
@@ -332,10 +338,10 @@ func (r *PlacementReconciler) patchLabel(ctx context.Context, gvk schema.GroupVe
 }
 
 // report refreshes the telemetry gauges.
-func (r *PlacementReconciler) report(views map[string]*tenantView, desired map[string]string, totalHRs, pending int) {
+func (r *PlacementReconciler) report(views map[string]*tenantView, desired map[string]string, shardCount, totalHRs, pending int) {
 	shardLoadGauge.Reset()
 	load := map[string]int{}
-	for i := 0; i < r.Config.ShardCount; i++ {
+	for i := 0; i < shardCount; i++ {
 		load[ShardName(i)] = 0
 	}
 	for tenantNS, shard := range desired {

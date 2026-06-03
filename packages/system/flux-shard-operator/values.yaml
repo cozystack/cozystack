@@ -3,8 +3,10 @@ fluxShardOperator:
   debug: false
   replicas: 2
   ## Number of helm-controller shards to provision and distribute tenants
-  ## over. Ship at 1 (≈ today's single tenant shard), raise gradually.
-  shardCount: 1
+  ## over. "auto" (default) sizes from the tenant HelmRelease count
+  ## (~100 HR per shard, capped by tenant count, with hysteresis); set a
+  ## positive integer to pin it explicitly, e.g. shardCount: 7.
+  shardCount: auto
   ## Load spread ratio (maxLoad-minLoad)/avgLoad above which tenants are
   ## rebalanced between shards.
   rebalanceThreshold: 0.25
