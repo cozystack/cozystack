@@ -26,8 +26,8 @@ include ../../../hack/package.mk
 # and update both lines below; resolve the new image digest with
 #   crane digest ghcr.io/lexfrei/ouroboros:<new-tag>
 # and update values.yaml.
-OUROBOROS_CHART_VERSION ?= 0.7.2
-OUROBOROS_CHART_DIGEST ?= sha256:c67315551196a766aeb97cee6065083a5f4d78b67ab0377e25257e61d4615a43
+OUROBOROS_CHART_VERSION ?= 0.8.0
+OUROBOROS_CHART_DIGEST ?= sha256:b57255ef65a8eace361bf0e4eb93637e6a45315bc7744746b2e16ffa5bdd3744
 
 test:
 	helm unittest .
