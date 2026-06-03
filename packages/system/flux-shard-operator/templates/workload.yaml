@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: flux-shard-operator
+  labels:
+    app: flux-shard-operator
+spec:
+  replicas: {{ .Values.fluxShardOperator.replicas }}
+  selector:
+    matchLabels:
+      app: flux-shard-operator
+  template:
+    metadata:
+      labels:
+        app: flux-shard-operator
+    spec:
+      serviceAccountName: flux-shard-operator
+      tolerations:
+      - operator: Exists
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: flux-shard-operator
+      containers:
+      - name: flux-shard-operator
+        image: "{{ .Values.fluxShardOperator.image }}"
+        args:
+        - --leader-elect
+        - --flux-namespace={{ .Release.Namespace }}
+        - --shard-count={{ .Values.fluxShardOperator.shardCount }}
+        - --shard-concurrent={{ .Values.fluxShardOperator.shard.concurrent }}
+        - --rebalance-threshold={{ .Values.fluxShardOperator.rebalanceThreshold }}
+        {{- $pins := list }}
+        {{- range $tenant, $shard := .Values.fluxShardOperator.pinnedTenants }}
+        {{- $pins = append $pins (printf "%s=%s" $tenant $shard) }}
+        {{- end }}
+        {{- with $pins }}
+        - --pinned-tenants={{ join "," . }}
+        {{- end }}
+        {{- with .Values.fluxShardOperator.shard.resources }}
+        {{- with .requests }}
+        {{- with .cpu }}
+        - --shard-cpu-request={{ . }}
+        {{- end }}
+        {{- with .memory }}
+        - --shard-memory-request={{ . }}
+        {{- end }}
+        {{- end }}
+        {{- with .limits }}
+        {{- with .cpu }}
+        - --shard-cpu-limit={{ . }}
+        {{- end }}
+        {{- with .memory }}
+        - --shard-memory-limit={{ . }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.fluxShardOperator.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        ports:
+        - name: webhook
+          containerPort: 9443
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+        volumeMounts:
+          - name: webhook-certs
+            mountPath: /tmp/k8s-webhook-server/serving-certs
+            readOnly: true
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: flux-shard-operator-cert
+            defaultMode: 0400

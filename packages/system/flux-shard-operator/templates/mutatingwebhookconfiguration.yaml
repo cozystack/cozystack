@@ -1,0 +1,35 @@
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: flux-shard-operator
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/flux-shard-operator
+webhooks:
+  - name: flux-shard.cozystack.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    # The webhook only removes the handoff gap for newborn HelmReleases; its
+    # outage must degrade gracefully to the catch-all path (the placement
+    # controller relabels stragglers), never block creation.
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+    clientConfig:
+      service:
+        name: flux-shard-operator
+        namespace: {{ .Release.Namespace }}
+        path: /mutate-helmrelease-shard
+    rules:
+      # CREATE only: helm-controller status patches are a firehose, UPDATE is
+      # never intercepted.
+      - operations: ["CREATE"]
+        apiGroups: ["helm.toolkit.fluxcd.io"]
+        apiVersions: ["v2"]
+        resources: ["helmreleases"]
+    objectSelector:
+      matchExpressions:
+        # Every tenant HelmRelease is born with the legacy single-bucket value
+        # (stamped by ApplicationDefinition release.labels and chart
+        # templates); the webhook rewrites it to the tenant's shard.
+        - key: sharding.fluxcd.io/key
+          operator: In
+          values: ["tenants"]
