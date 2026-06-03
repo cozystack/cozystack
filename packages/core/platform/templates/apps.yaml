@@ -77,6 +77,10 @@ stringData:
       */}}
       expose-ingress: {{ .Values.publishing.ingressName | quote }}
       expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
+      {{- /* Host PROXY-protocol switch. extra/ingress reads this and applies
+             use-proxy-protocol to the external-facing ingress (the namespace
+             named by expose-ingress), keeping it host-scoped like expose-external-ips. */}}
+      proxy-protocol: {{ .Values.publishing.proxyProtocol | default false | quote }}
       gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
       gateway-attached-namespaces: {{ .Values.gateway.attachedNamespaces | default (list) | join "," | quote }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}

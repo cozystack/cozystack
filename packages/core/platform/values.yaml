@@ -103,14 +103,17 @@ publishing:
   # there). The flag does not cascade into tenants on its own.
   #
   # DISABLE PATH: flipping this back from true to false has TWO
-  # asymmetric effects. ingress-nginx side: the next reconcile re-emits
-  # cozystack.ingress-application without the use-proxy-protocol /
-  # real-ip-header / enable-real-ip overrides (cozystack deliberately
-  # never set use-forwarded-headers or compute-full-forwarded-for here
-  # — those would allow any upstream proxy to spoof X-Forwarded-For
-  # without a paired proxy-real-ip-cidr — see bundles/system.yaml),
-  # so ingress-nginx
-  # stops accepting PROXY-protocol headers. If the upstream L4 LB is
+  # asymmetric effects. ingress-nginx side: the switch travels through
+  # _cluster.proxy-protocol in the cozystack-values Secret, so the next
+  # reconcile re-renders the host ingress-nginx (extra/ingress) without
+  # the use-proxy-protocol / real-ip-header / enable-real-ip keys
+  # (cozystack deliberately never sets use-forwarded-headers or
+  # compute-full-forwarded-for — those would allow any upstream proxy
+  # to spoof X-Forwarded-For without a paired proxy-real-ip-cidr — see
+  # the rationale in extra/ingress/templates/nginx-ingress.yaml). The
+  # cozystack.ingress-application Package stays the bare default
+  # throughout; the keys never ride on it. ingress-nginx then stops
+  # accepting PROXY-protocol headers. If the upstream L4 LB is
   # still prepending PROXY frames at that moment, every external
   # request to ingress-nginx breaks until the LB is also reconfigured
   # — flip the LB OFF FIRST, then flip this flag. ouroboros side:
@@ -128,7 +131,7 @@ publishing:
   # or adds the package name to bundles.disabledPackages. THAT is the
   # path that triggers the chart's pre-delete Helm hook
   # (charts/ouroboros/templates/coredns-cleanup-hook.yaml, vendored at
-  # 0.7.0) — the hook quiesces the controller, sed-strips the
+  # 0.8.0) — the hook quiesces the controller, sed-strips the
   # BEGIN/END block from the live kube-system/coredns Corefile, and
   # restores the cleaned ConfigMap via kubectl replace. The hook is
   # automatic; operators do NOT need to run a manual sed recipe in
@@ -173,7 +176,7 @@ publishing:
   # Package CR on the cluster. An operator who manually
   # `kubectl delete package cozystack.ouroboros` before flipping the
   # flag back bypasses the check entirely (the lookup returns nil, the
-  # render proceeds). In the chart 0.7.0 that path is mostly safe —
+  # render proceeds). In the chart 0.8.0 that path is mostly safe —
   # `kubectl delete package` triggers helm uninstall and the chart's
   # pre-delete hook patches the Corefile automatically. The hole is
   # the rare case where the hook itself fails (controller pod stuck,

@@ -108,7 +108,13 @@ tests:
           path: spec.components.ouroboros.values.ouroboros.proxy.target.serviceName
           value: foo-ingress-controller
 
-  - it: injects three PROXY-protocol nginx config keys into ingress-application when proxyProtocol is true (use-proxy-protocol, real-ip-header, enable-real-ip)
+  - it: leaves cozystack.ingress-application as the bare default Package when proxyProtocol is true
+    # The host PROXY-protocol config does NOT ride on the ingress-application
+    # Package's component values — the ingress-system / ingress components have
+    # no install: block, so PackageReconciler drops component values for them.
+    # The switch is delivered via _cluster.proxy-protocol in the cozystack-values
+    # Secret instead (see apps_proxy_protocol_wiring_test.yaml), so this Package
+    # stays the bare default regardless of proxyProtocol.
     set:
       bundles:
         system:
@@ -121,26 +127,13 @@ tests:
       value: cozystack.ingress-application
     asserts:
       - equal:
-          path: spec.components.ingress-system.values.ingress-nginx.controller.config.use-proxy-protocol
-          value: "true"
+          path: kind
+          value: Package
       - equal:
-          path: spec.components.ingress-system.values.ingress-nginx.controller.config.real-ip-header
-          value: proxy_protocol
-      - equal:
-          path: spec.components.ingress-system.values.ingress-nginx.controller.config.enable-real-ip
-          value: "true"
-      # use-forwarded-headers + compute-full-forwarded-for are
-      # deliberately NOT injected. Without a paired proxy-real-ip-cidr
-      # they let clients spoof X-Forwarded-For; with PROXY-protocol
-      # the L4 proxy header is already the source of truth for
-      # $remote_addr, so the X-Forwarded-* headers from the LB hop
-      # are redundant. Operators with a downstream proxy that adds
-      # X-Forwarded-* legitimately can layer them in via Package
-      # values override with the matching CIDR.
+          path: spec.variant
+          value: default
       - notExists:
-          path: spec.components.ingress-system.values.ingress-nginx.controller.config.use-forwarded-headers
-      - notExists:
-          path: spec.components.ingress-system.values.ingress-nginx.controller.config.compute-full-forwarded-for
+          path: spec.components
 
   - it: bundles.disabledPackages suppresses cozystack.ouroboros even when proxyProtocol is true
     set:
