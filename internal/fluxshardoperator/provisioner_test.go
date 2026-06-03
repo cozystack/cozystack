@@ -56,6 +56,10 @@ func fluxAIODeployment() *appsv1.Deployment {
 							Env: []corev1.EnvVar{
 								{Name: "SOURCE_CONTROLLER_LOCALHOST", Value: "localhost:9790"},
 								{Name: "SOURCE_WATCHER_LOCALHOST", Value: "localhost:9691"},
+								// Injected by the installer into hostNetwork
+								// workloads (Talos KubePrism endpoint).
+								{Name: "KUBERNETES_SERVICE_HOST", Value: "localhost"},
+								{Name: "KUBERNETES_SERVICE_PORT", Value: "7445"},
 								{Name: "RUNTIME_NAMESPACE", ValueFrom: &corev1.EnvVarSource{
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 								}},
@@ -142,8 +146,13 @@ func TestBuildShardDeployment(t *testing.T) {
 	}
 
 	for _, e := range hc.Env {
-		if e.Name == "SOURCE_CONTROLLER_LOCALHOST" || e.Name == "SOURCE_WATCHER_LOCALHOST" {
+		switch e.Name {
+		case "SOURCE_CONTROLLER_LOCALHOST", "SOURCE_WATCHER_LOCALHOST":
 			t.Fatalf("localhost cross-container env leaked through: %s", e.Name)
+		case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
+			// A non-hostNetwork pod dialing the node-local KubePrism endpoint
+			// crashloops on "dial tcp [::1]:7445: connect: connection refused".
+			t.Fatalf("node-local apiserver endpoint env leaked through: %s", e.Name)
 		}
 	}
 	envNames := make([]string, 0, len(hc.Env))

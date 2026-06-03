@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -75,7 +76,18 @@ func (r *PlacementReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Named("flux-shard-placement").
 		WatchesMetadata(HelmReleaseMeta(), toSingleton, builder.WithPredicates(metadataChanged())).
 		WatchesMetadata(NamespaceMeta(), toSingleton, builder.WithPredicates(tenantNamespace(), metadataChanged())).
+		// Shard Deployment readiness gates reassignments; react to it directly
+		// instead of waiting for the next requeue.
+		Watches(&appsv1.Deployment{}, toSingleton, builder.WithPredicates(r.shardDeployment())).
 		Complete(r)
+}
+
+// shardDeployment passes operator-managed shard Deployments.
+func (r *PlacementReconciler) shardDeployment() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
+		return obj.GetNamespace() == r.Config.FluxNamespace &&
+			obj.GetLabels()[ManagedByLabel] == ManagedByValue
+	})
 }
 
 // metadataChanged ignores updates that change neither labels nor deletion
@@ -134,7 +146,12 @@ func (r *PlacementReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ct
 		},
 	})
 
-	pending, errs := r.apply(ctx, views, desired)
+	readyShards, err := r.readyShards(ctx)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	pending, errs := r.apply(ctx, views, desired, readyShards)
 
 	r.report(views, desired, totalHRs, pending)
 	r.pruneCooldowns(views)
@@ -221,10 +238,30 @@ func majorityShard(hrs []*metav1.PartialObjectMetadata) string {
 	return ShardName(best)
 }
 
+// readyShards reports which shard Deployments currently have a ready replica.
+// Reassignments only target ready shards, so a backfill can never hand
+// tenants to a shard whose helm-controller is not actually running (e.g.
+// crashlooping after a bad clone) — the safe-online-migration guarantee.
+func (r *PlacementReconciler) readyShards(ctx context.Context) (map[string]bool, error) {
+	deps := &appsv1.DeploymentList{}
+	if err := r.List(ctx, deps, client.InNamespace(r.Config.FluxNamespace),
+		client.MatchingLabels{ManagedByLabel: ManagedByValue}); err != nil {
+		return nil, fmt.Errorf("listing shard Deployments: %w", err)
+	}
+	ready := map[string]bool{}
+	for i := range deps.Items {
+		if idx, ok := ParseShardDeploymentIndex(deps.Items[i].Name); ok {
+			ready[ShardName(idx)] = deps.Items[i].Status.ReadyReplicas > 0
+		}
+	}
+	return ready, nil
+}
+
 // apply pushes the desired assignment out, pacing tenant reassignments and
-// self-healing label stragglers without limit. Returns the number of
-// reassignments deferred to the next batch.
-func (r *PlacementReconciler) apply(ctx context.Context, views map[string]*tenantView, desired map[string]string) (int, []error) {
+// self-healing label stragglers without limit. Reassignments whose target
+// shard is not ready are deferred. Returns the number of reassignments left
+// for the next batch.
+func (r *PlacementReconciler) apply(ctx context.Context, views map[string]*tenantView, desired map[string]string, readyShards map[string]bool) (int, []error) {
 	logger := log.FromContext(ctx)
 
 	names := make([]string, 0, len(views))
@@ -243,7 +280,7 @@ func (r *PlacementReconciler) apply(ctx context.Context, views map[string]*tenan
 			continue
 		}
 		if v.info.Current != target {
-			if budget == 0 {
+			if budget == 0 || !readyShards[target] {
 				pending++
 				continue
 			}

@@ -244,7 +244,15 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 
 	env := make([]corev1.EnvVar, 0, len(hc.Env))
 	for _, e := range hc.Env {
-		if e.Name == "SOURCE_CONTROLLER_LOCALHOST" || e.Name == "SOURCE_WATCHER_LOCALHOST" {
+		switch e.Name {
+		// Localhost cross-container wiring of the all-in-one pod.
+		case "SOURCE_CONTROLLER_LOCALHOST", "SOURCE_WATCHER_LOCALHOST":
+			continue
+		// The installer injects the node-local apiserver endpoint (e.g. Talos
+		// KubePrism localhost:7445) into hostNetwork workloads
+		// (internal/fluxinstall injectKubernetesServiceEnv). The sanitised pod
+		// is not hostNetwork, so it must fall back to the in-cluster defaults.
+		case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
 			continue
 		}
 		env = append(env, e)
