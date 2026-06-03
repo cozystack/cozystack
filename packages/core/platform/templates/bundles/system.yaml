@@ -157,7 +157,22 @@
        CrashLoop the controller on WaitForCacheSync against missing
        GVRs. Operators on hosts that do install Gateway-API CRDs out
        of band can enable it via the standard Package values override. */ -}}
-{{include "cozystack.platform.package.default" (list "cozystack.ouroboros" $) }}
+{{- /* Point the ouroboros proxy at the HOST ingress-nginx Service. The
+       wrapper chart default (cozy-ingress-nginx / ingress-nginx-controller)
+       describes a managed Kubernetes tenant cluster, NOT the host: on the
+       host, extra/ingress deploys ingress-nginx into the root tenant
+       namespace (publishing.ingressName, default tenant-root) with
+       fullnameOverride <short>-ingress, yielding the controller Service
+       <short>-ingress-controller (e.g. root-ingress-controller). Derive
+       namespace + serviceName from publishing.ingressName so a non-default
+       ingress name still resolves; mirror the trimPrefix "tenant-"
+       transform extra/ingress applies to .Release.Namespace. */ -}}
+{{- $ingressNs := .Values.publishing.ingressName | default "tenant-root" -}}
+{{- $ingressSvc := printf "%s-ingress-controller" (trimPrefix "tenant-" $ingressNs) -}}
+{{- $ouroborosTarget := dict "namespace" $ingressNs "serviceName" $ingressSvc -}}
+{{- $ouroborosValues := dict "ouroboros" (dict "proxy" (dict "target" $ouroborosTarget)) -}}
+{{- $ouroborosComponents := dict "ouroboros" (dict "values" $ouroborosValues) -}}
+{{include "cozystack.platform.package" (list "cozystack.ouroboros" "default" $ $ouroborosComponents) }}
 {{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}

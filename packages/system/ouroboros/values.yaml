@@ -30,14 +30,26 @@ ouroboros:
     # this field for tenants that DO install Gateway-API.
   proxy:
     target:
-      # cozystack deploys ingress-nginx into cozy-ingress-nginx in both
-      # the host control plane and every tenant control plane (the tenant
-      # HelmRelease sets fullnameOverride: ingress-nginx + targetNamespace:
-      # cozy-ingress-nginx). Override the chart-default `ingress-nginx`
-      # namespace; the chart-default serviceName matches as-is. Leaving
-      # `host:` empty (chart-default) tells the proxy to compose the
-      # backend host at runtime as
+      # Tenant-cluster fallback default. A managed Kubernetes tenant
+      # cluster deploys ingress-nginx into cozy-ingress-nginx (its
+      # HelmRelease sets fullnameOverride: ingress-nginx +
+      # targetNamespace: cozy-ingress-nginx), so overriding the
+      # chart-default `ingress-nginx` namespace to cozy-ingress-nginx
+      # matches there; the chart-default serviceName lines up as-is.
+      #
+      # The HOST is different: extra/ingress deploys ingress-nginx into
+      # the root tenant namespace (publishing.ingressName, default
+      # tenant-root) as <short>-ingress-controller (e.g.
+      # root-ingress-controller), NOT cozy-ingress-nginx. The host
+      # platform bundle (core/platform templates/bundles/system.yaml)
+      # therefore overrides proxy.target.{namespace,serviceName} when it
+      # emits cozystack.ouroboros, derived from publishing.ingressName.
+      # This default is never effective on the host once that override
+      # lands.
+      #
+      # Leaving `host:` empty (chart-default) tells the proxy to compose
+      # the backend host at runtime as
       # `<serviceName>.<namespace>.svc.<auto-detected-cluster-domain>`,
-      # which works on cozy.local (cozystack tenants), cluster.local
-      # (kubeadm), or any other domain without operator override.
+      # which works on cozy.local (cozystack), cluster.local (kubeadm),
+      # or any other domain without operator override.
       namespace: cozy-ingress-nginx
