@@ -4,6 +4,7 @@
 {{- $harborHost := .Values.host | default (printf "%s.%s" .Release.Name $host) }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- if not $gateway }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -16,16 +17,21 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-send-timeout: "900"
     nginx.ingress.kubernetes.io/ssl-redirect: "true"
     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+    {{- if not $wildcardSecret }}
     {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- end }}
 spec:
   ingressClassName: {{ $ingress }}
+  {{- if not $wildcardSecret }}
   tls:
     - hosts:
         - {{ $harborHost | quote }}
       secretName: {{ .Release.Name }}-ingress-tls
+  {{- end }}
   rules:
     - host: {{ $harborHost | quote }}
       http:

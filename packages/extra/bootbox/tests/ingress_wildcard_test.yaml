@@ -1,0 +1,72 @@
+suite: bootbox ingress wildcard mode drops per-host ACME
+templates:
+  - templates/matchbox/ingress.yaml
+
+release:
+  name: bootbox
+  namespace: tenant-root
+
+# bootbox deploys into tenant-root and uses the publishing tenant's
+# ingress controller (_namespace.ingress), so in wildcard mode it must
+# also stop minting its own per-host ACME cert. The cert-manager + http01
+# annotations and the tls block are dropped. bootbox's only other
+# annotation (whitelist-source-range) is conditional, so the annotations
+# block must collapse entirely when wildcard is set and no whitelist is
+# configured.
+
+tests:
+  - it: collapses the annotations block and drops tls when wildcard set and no whitelist
+    set:
+      whitelistHTTP: false
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations
+      - notExists:
+          path: spec.tls
+
+  - it: keeps cert-manager annotation and tls block without wildcard secret
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: bootbox-tls
+
+  - it: keeps whitelist annotation but drops cert-manager when wildcard set with whitelist
+    set:
+      whitelistHTTP: true
+      whitelist:
+        - "192.0.2.0/24"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - equal:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/whitelist-source-range"]
+          value: "192.0.2.0/24"
+      - notExists:
+          path: spec.tls

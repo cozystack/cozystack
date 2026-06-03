@@ -1,0 +1,50 @@
+suite: bucket ingress wildcard mode drops per-host ACME
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: bucket
+  namespace: tenant-root
+
+# bucket gates its Ingress on an empty _namespace.gateway. In wildcard
+# mode the cert-manager + http01 annotations and the tls block are
+# dropped; the other nginx annotations stay so the annotations map is
+# never empty.
+
+tests:
+  - it: drops cert-manager annotation and tls block when wildcard secret is set
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - notExists:
+          path: spec.tls
+      - exists:
+          path: metadata.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+
+  - it: keeps cert-manager annotation and tls block without wildcard secret
+    set:
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - exists:
+          path: spec.tls[0].secretName

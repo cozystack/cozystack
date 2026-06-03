@@ -1,0 +1,56 @@
+suite: seaweedfs S3 ingress wildcard mode drops per-host ACME
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+# seaweedfs.yaml renders a HelmRelease whose values carry the inline
+# S3 ingress (spec.values.seaweedfs.s3.ingress). documentSelector
+# targets that HelmRelease (the template also emits WorkloadMonitor
+# docs). In wildcard mode the cert-manager + http01 annotations and the
+# tls block are dropped; the other nginx annotations stay.
+
+tests:
+  - it: drops cert-manager annotation and tls block when wildcard secret is set
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      topology: Simple
+      replicationFactor: 2
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - notExists:
+          path: spec.values.seaweedfs.s3.ingress.annotations["cert-manager.io/cluster-issuer"]
+      - notExists:
+          path: spec.values.seaweedfs.s3.ingress.tls
+      - exists:
+          path: spec.values.seaweedfs.s3.ingress.annotations["nginx.ingress.kubernetes.io/proxy-body-size"]
+
+  - it: keeps cert-manager annotation and tls block without wildcard secret
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    set:
+      topology: Simple
+      replicationFactor: 2
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    asserts:
+      - equal:
+          path: spec.values.seaweedfs.s3.ingress.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - exists:
+          path: spec.values.seaweedfs.s3.ingress.tls[0].secretName

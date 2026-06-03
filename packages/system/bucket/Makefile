@@ -8,6 +8,9 @@ include ../../../hack/package.mk
 update:
 	@echo Nothing to update
 
+test:
+	helm unittest .
+
 image: image-s3manager
 
 image-s3manager:

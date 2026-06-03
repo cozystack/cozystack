@@ -1,0 +1,51 @@
+suite: grafana ingress wildcard mode drops per-host ACME
+templates:
+  - templates/grafana/grafana.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# grafana exposes its ingress inside the Grafana CR's spec.ingress.
+# Issue #2812 names grafana explicitly in its acceptance criteria, so
+# this is the load-bearing acceptance test for the ingress-nginx path.
+# In wildcard mode the whole spec.ingress.metadata block (its only
+# content was the cert-manager annotations) and the tls block are
+# dropped; nginx serves the default SSL cert.
+
+tests:
+  - it: drops cert-manager metadata and tls block when wildcard secret is set
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+        wildcard-secret-name: wildcard-tls
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: kind
+          value: Grafana
+      - notExists:
+          path: spec.ingress.metadata
+      - notExists:
+          path: spec.ingress.spec.tls
+
+  - it: keeps cert-manager metadata and tls block without wildcard secret
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: spec.ingress.metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.ingress.spec.tls[0].secretName
+          value: grafana-ingress-tls

@@ -1,0 +1,54 @@
+suite: alerta ingress wildcard mode drops per-host ACME
+templates:
+  - templates/alerta/alerta.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# alerta.yaml renders several documents; documentSelector targets the
+# Ingress. In wildcard mode the cert-manager annotations block (the
+# Ingress carries only the labels otherwise) and the tls block are
+# dropped.
+
+tests:
+  - it: drops cert-manager annotations and tls block when wildcard secret is set
+    documentSelector:
+      path: kind
+      value: Ingress
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+        wildcard-secret-name: wildcard-tls
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - notExists:
+          path: metadata.annotations
+      - notExists:
+          path: spec.tls
+
+  - it: keeps cert-manager annotations and tls block without wildcard secret
+    documentSelector:
+      path: kind
+      value: Ingress
+    set:
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: alerta-tls

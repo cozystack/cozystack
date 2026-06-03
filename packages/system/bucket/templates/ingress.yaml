@@ -3,6 +3,7 @@
 {{- $gateway := .Values._namespace.gateway | default "" }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- if not $gateway }}
 
 apiVersion: networking.k8s.io/v1
@@ -13,16 +14,21 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-body-size: "0"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "99999"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "99999"
+    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+    {{- if not $wildcardSecret }}
     {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- end }}
 spec:
   ingressClassName: {{ $ingress }}
+  {{- if not $wildcardSecret }}
   tls:
     - hosts:
         - "{{ .Values.bucketName }}.{{ $host }}"
       secretName: {{ .Values.bucketName }}-ui-tls
+  {{- end }}
   rules:
   - host: {{ .Values.bucketName }}.{{ $host }}
     http:
