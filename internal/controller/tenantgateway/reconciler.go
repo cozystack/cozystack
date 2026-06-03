@@ -55,6 +55,24 @@ func gatewayCertificateName(tgw *gatewayv1alpha1.TenantGateway) string {
 	return tgw.Name + "-gateway-tls"
 }
 
+// wildcardListenerCertName returns the Secret name the wildcard, apex,
+// and per-child-apex HTTPS listeners reference. In DNS-01 mode this is
+// the controller-minted cert (gatewayCertificateName); in
+// existingSecret mode it is the operator-supplied Secret named in
+// Spec.WildcardSecretRef. Returns an error when existingSecret mode is
+// missing the reference — a misconfiguration that must surface as a
+// failed reconcile rather than a Gateway pointing at a nonexistent
+// Secret.
+func wildcardListenerCertName(tgw *gatewayv1alpha1.TenantGateway) (string, error) {
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
+		if tgw.Spec.WildcardSecretRef == nil || tgw.Spec.WildcardSecretRef.Name == "" {
+			return "", fmt.Errorf("certMode=existingSecret requires spec.wildcardSecretRef.name to be set")
+		}
+		return tgw.Spec.WildcardSecretRef.Name, nil
+	}
+	return gatewayCertificateName(tgw), nil
+}
+
 // gatewayIssuerName returns the per-tenant ACME Issuer name. The
 // Issuer lives in the same namespace as the TenantGateway and is
 // referenced by every Certificate this controller renders.
@@ -262,7 +280,9 @@ func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gate
 // through at runtime but no listener would accept it (no matching
 // hostname), so Accepted stays False indefinitely.
 func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) (map[string][]routeRef, error) {
-	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
+	// DNS-01 and existingSecret both serve every hostname off a single
+	// wildcard listener, so neither needs per-host listeners or claims.
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
 		return nil, nil
 	}
 
@@ -577,6 +597,31 @@ func labelsEqual(a, b map[string]string) bool {
 
 func (r *Reconciler) reconcileIssuer(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
 	logger := log.FromContext(ctx)
+
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
+		// existingSecret mode references an operator-supplied Secret and
+		// mints no ACME Issuer. Delete any owned Issuer left from a
+		// previous http01/dns01 phase so the mode switch doesn't leak
+		// ACME machinery. Same ownership-guarded cleanup contract as
+		// reconcileWildcardCertificate's HTTP-01 branch.
+		stale := &cmv1.Issuer{}
+		err := r.Get(ctx, types.NamespacedName{Namespace: tgw.Namespace, Name: gatewayIssuerName(tgw)}, stale)
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("get Issuer for cleanup: %w", err)
+		}
+		if !ownedByTenantGateway(stale.OwnerReferences, tgw) {
+			return nil
+		}
+		if err := r.Delete(ctx, stale); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale Issuer %s: %w", stale.Name, err)
+		}
+		logger.V(1).Info("deleted stale Issuer after switch to existingSecret", "name", stale.Name)
+		return nil
+	}
+
 	desired, err := r.renderIssuer(tgw)
 	if err != nil {
 		return fmt.Errorf("render Issuer: %w", err)
@@ -717,8 +762,14 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
 	}
 
-	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 {
-		certName := gatewayCertificateName(tgw)
+	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
+		// Both modes serve the apex and every subdomain off a single
+		// wildcard cert. The only difference is the Secret name: DNS-01
+		// mints it; existingSecret references the operator-supplied one.
+		certName, err := wildcardListenerCertName(tgw)
+		if err != nil {
+			return nil, err
+		}
 		wildcardHost := gatewayv1.Hostname("*." + tgw.Spec.Apex)
 		apexHost := gatewayv1.Hostname(tgw.Spec.Apex)
 		listeners = append(listeners,
