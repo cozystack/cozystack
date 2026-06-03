@@ -24,6 +24,17 @@ stringData:
       solver: {{ .Values.publishing.certificates.solver | quote }}
       issuer-name: {{ .Values.publishing.certificates.issuerName | quote }}
       {{- /*
+        Operator-supplied wildcard mode. Only the Secret NAME rides this
+        channel — never the cert/key material (unlike a private key, the
+        name is not sensitive). When set, the ingress flow points the
+        root ingress controller's --default-ssl-certificate at it and
+        drops per-host ACME, and the gateway chart switches the
+        TenantGateway to certMode=existingSecret. The Secret itself must
+        be pre-created by the operator in the publishing namespace
+        (tenant-root). Empty string = ACME issuance as before.
+      */}}
+      wildcard-secret-name: {{ .Values.publishing.certificates.wildcardSecretName | default "" | quote }}
+      {{- /*
         DNS-01 solver wiring. Read only when solver=dns01, but the
         keys are written unconditionally so a render-time switch from
         http01 to dns01 doesn't require chart redeploy of every

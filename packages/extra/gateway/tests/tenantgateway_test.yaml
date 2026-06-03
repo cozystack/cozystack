@@ -274,3 +274,77 @@ tests:
             - api
             - vm-exportproxy
             - cdi-uploadproxy
+
+  - it: wildcard-secret-name switches to certMode=existingSecret with wildcardSecretRef
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        wildcard-secret-name: wildcard-tls
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: existingSecret
+      - equal:
+          path: spec.wildcardSecretRef.name
+          value: wildcard-tls
+      - notExists:
+          path: spec.dns01
+      - notExists:
+          path: spec.issuerName
+
+  - it: wildcard-secret-name takes precedence over solver=dns01
+    set:
+      _cluster:
+        solver: dns01
+        dns01-provider: cloudflare
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        wildcard-secret-name: wildcard-tls
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: existingSecret
+      - equal:
+          path: spec.wildcardSecretRef.name
+          value: wildcard-tls
+      - notExists:
+          path: spec.dns01
+
+  - it: wildcard mode skips ACME validations (custom issuer-name ignored)
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: my-custom-ca
+        wildcard-secret-name: wildcard-tls
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.certMode
+          value: existingSecret
+      - notExists:
+          path: spec.issuerName
+
+  - it: tlsPassthroughServices still render in wildcard mode
+    set:
+      _cluster:
+        solver: http01
+        expose-ingress: tenant-root
+        issuer-name: letsencrypt-prod
+        wildcard-secret-name: wildcard-tls
+      _namespace:
+        host: example.org
+    asserts:
+      - equal:
+          path: spec.tlsPassthroughServices
+          value:
+            - api
+            - vm-exportproxy
+            - cdi-uploadproxy
