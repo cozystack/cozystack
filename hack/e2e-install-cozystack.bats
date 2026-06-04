@@ -109,7 +109,12 @@ EOF
   # signal for "all platform HRs have been emitted" without hard-coding the
   # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
   sleep 5
-  kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
+  # Pacing only (|| true): a backgrounded fan-out's exit codes are discarded
+  # by a bare POSIX `wait`, which let permanently-failing HRs ship green
+  # (#2822). A single kubectl wait names every HR that timed out in the
+  # trace; the authoritative pass/fail gate is the outcome-based re-list
+  # below, which also covers HRs created after this snapshot.
+  kubectl wait hr --all -A --timeout=15m --for=condition=ready || true
 
   echo "Waiting for post-install-prep to complete"
   if ! wait $POST_PREP_PID; then
@@ -119,10 +124,20 @@ EOF
   fi
   cat /tmp/post-install-prep.log
 
-  # Fail the test if any HelmRelease is not Ready
-  if kubectl get hr -A | grep -v " True " | grep -v NAME; then
+  # Fail the test if any HelmRelease is not Ready. Re-list rather than trust
+  # the wait above so late-created HRs are gated too; the brief retry absorbs
+  # momentary Unknown flaps from helm-controller drift reconciles.
+  if ! timeout 120 sh -ec 'while kubectl get hr -A --no-headers | grep -v " True " | grep -q .; do sleep 5; done'; then
     kubectl get hr -A
+    # kubectl's STATUS column truncates long messages; dump the full Ready
+    # condition per non-ready HR so the real error (e.g. a rejected CRD) is
+    # visible in the test output instead of only inside the cozyreport.
+    kubectl get hr -A --no-headers | grep -v " True " | while read -r ns name rest; do
+      echo "--- Non-ready HelmRelease: $ns/$name" >&2
+      kubectl get hr -n "$ns" "$name" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' >&2
+    done
     echo "Some HelmReleases failed to reconcile" >&2
+    exit 1
   fi
 }
 
