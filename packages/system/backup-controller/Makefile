@@ -4,6 +4,9 @@ NAMESPACE=cozy-backup-controller
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 image: image-backup-controller
 
 image-backup-controller:

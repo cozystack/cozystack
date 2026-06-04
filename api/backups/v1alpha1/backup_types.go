@@ -112,6 +112,7 @@ type BackupStatus struct {
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
+// +kubebuilder:metadata:annotations={"options.cozystack.io/source.applicationRef.kind=appkind"}
 
 // Backup represents a single backup artifact for a given application.
 type Backup struct {
