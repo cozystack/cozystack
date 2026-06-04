@@ -29,8 +29,8 @@ The two-step dance exists because `kubectl wait` fails immediately when the obje
       metadata:
         name: postgres-test
       status:
-        (conditions[?type == 'Ready'])[0]:
-          status: "True"
+        (conditions[?type == 'Ready']):
+        - status: "True"
 ```
 
 What this buys us:
