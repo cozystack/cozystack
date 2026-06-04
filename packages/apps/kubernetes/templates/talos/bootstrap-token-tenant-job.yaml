@@ -38,11 +38,14 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
-  # backoffLimit + restartPolicy: OnFailure gives the Job up to 6 attempts at
+  # backoffLimit + restartPolicy: OnFailure gives the Job up to 11 attempts at
   # the tenant apiserver with exponential backoff (capped at 6 min between
-  # restarts). Worst case ~10 min, after which Flux surfaces the failure
-  # instead of accumulating retries silently for hours.
-  backoffLimit: 5
+  # restarts). Worst case ~15 min, aligned with the chart's HR install timeout
+  # (release.cozystack.io/helm-install-timeout: 15m on the cozyrds entry) so
+  # the Job either succeeds within the HR window or fails the chart upgrade
+  # loudly, instead of letting Helm mark the install "successful" while the
+  # bootstrap-token Secret never lands in the tenant kube-system.
+  backoffLimit: 10
   ttlSecondsAfterFinished: 600
   template:
     spec:

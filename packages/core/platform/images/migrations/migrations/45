@@ -25,6 +25,7 @@ DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 FAILURES=0
 PATCHED=0
 SKIPPED=0
+FAILED_TENANTS=""
 
 OLD_VERSION="v1.30"
 NEW_VERSION="v1.31"
@@ -54,6 +55,7 @@ bump_version() {
   else
     echo "WARN: failed to patch kubernetes $ns/$name: ${kubectl_err:-unknown error}" >&2
     FAILURES=$((FAILURES + 1))
+    FAILED_TENANTS="${FAILED_TENANTS}${FAILED_TENANTS:+,}${ns}/${name}"
   fi
 }
 
@@ -87,10 +89,24 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$FAILURES" -gt 0 ]; then
-  echo "WARN: $FAILURES patch(es) failed; leaving CURRENT_VERSION at 44 for retry on next upgrade."
+  echo "WARN: $FAILURES patch(es) failed; leaving CURRENT_VERSION at 45 for retry on next upgrade."
+  echo "WARN: failed tenants: $FAILED_TENANTS" >&2
+  # Surface the failure list as an annotation on the cozystack-version
+  # ConfigMap so operators see "which tenants are stuck at v1.30" via
+  # `kubectl describe cm -n cozy-system cozystack-version` without having
+  # to grep migration Job logs (the Job exits 0 to allow retry, which
+  # otherwise hides this state behind a green Job status).
+  kubectl annotate configmap --namespace cozy-system cozystack-version \
+    "cozystack.io/migration-45-failed-tenants=$FAILED_TENANTS" \
+    --overwrite >/dev/null 2>&1 || true
   exit 0
 fi
 
+# Clear any annotation left by a previous partial-failure run, so a clean
+# success doesn't leave stale "failed tenants" data on the ConfigMap.
+kubectl annotate configmap --namespace cozy-system cozystack-version \
+  "cozystack.io/migration-45-failed-tenants-" >/dev/null 2>&1 || true
+
 kubectl create configmap --namespace cozy-system cozystack-version \
-  --from-literal version=45 --dry-run=client --output yaml \
+  --from-literal version=46 --dry-run=client --output yaml \
   | kubectl apply --filename -

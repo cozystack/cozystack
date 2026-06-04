@@ -188,6 +188,16 @@ func (o *CozyServerOptions) Complete() error {
 			)
 		}
 		release.HelmInstallTimeout = d
+		disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
+			crd.Annotations[config.HelmInstallDisableWaitAnnotation],
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"ApplicationDefinition %q has invalid %s annotation: %w",
+				crd.Name, config.HelmInstallDisableWaitAnnotation, err,
+			)
+		}
+		release.HelmInstallDisableWait = disableWait
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
 				Kind:          crd.Spec.Application.Kind,

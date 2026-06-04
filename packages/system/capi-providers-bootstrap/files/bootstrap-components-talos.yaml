@@ -570,6 +570,14 @@ rules:
   - patch
   - update
 ---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  labels:
+    cluster.x-k8s.io/provider: bootstrap-talos
+  name: cabpt-manager
+  namespace: cabpt-system
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
@@ -583,7 +591,7 @@ roleRef:
   name: cabpt-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: cabpt-manager
   namespace: cabpt-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -598,7 +606,7 @@ roleRef:
   name: cabpt-manager-role
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: cabpt-manager
   namespace: cabpt-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -613,7 +621,7 @@ roleRef:
   name: cabpt-proxy-role
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: cabpt-manager
   namespace: cabpt-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -628,7 +636,7 @@ roleRef:
   name: cabpt-talosconfig-editor-role
 subjects:
 - kind: ServiceAccount
-  name: default
+  name: cabpt-manager
   namespace: cabpt-system
 ---
 apiVersion: v1
@@ -732,6 +740,7 @@ spec:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: cert
           readOnly: true
+      serviceAccountName: cabpt-manager
       terminationGracePeriodSeconds: 10
       volumes:
       - name: cert

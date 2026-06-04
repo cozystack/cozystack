@@ -273,16 +273,19 @@ spec:
               JSON
               )"
 
-              # Patch the Talos PKI Certificate (covers the trustd / apid
-              # sidecar TLS endpoint at https://<ClusterIP>:50001) with the
-              # live Service ClusterIP. Without this, Talos workers cannot
-              # complete the TLS handshake to apid and the boot loop stalls
-              # at "service apid to be up".
-              kubectl -n "$NS" patch certificate "${RELEASE}-talos-tls-cert" --type=merge --patch "$(
-                cat <<JSON
-              {"spec":{"ipAddresses":["${SVC_IP}"]}}
-              JSON
-              )"
+              # Talos workers dial the apiserver Service via the DNS name
+              # (${RELEASE}.${NS}.svc) instead of the live ClusterIP, with
+              # machine.network.extraHostEntries injecting the IP into the
+              # worker's /etc/hosts. This avoids a TLS race against the
+              # csr-signer sidecar: the Talos PKI Certificate is issued
+              # with DNS SANs at chart render time and never needs to be
+              # patched after the Service ClusterIP becomes known. The
+              # apiserver Kubernetes TLS cert (handled by KCP certSANs above)
+              # auto-reloads on Kamaji reissue, but the csr-signer container
+              # loads its TLS cert once at startup and does not watch the
+              # file — so any in-place cert rotation leaves it serving the
+              # original (no-IP-SAN) cert until the Kamaji pod restarts.
+              # Routing through DNS sidesteps the whole problem.
 
               KCP_UID=$(kubectl -n "$NS" get kamajicontrolplane "$RELEASE" -o jsonpath='{.metadata.uid}')
 
@@ -313,6 +316,12 @@ spec:
                       machine:
                         type: worker
                         token: ${TALOS_TOKEN}
+                        network:
+                          extraHostEntries:
+                            - ip: ${SVC_IP}
+                              aliases:
+                                - ${RELEASE}.${NS}.svc
+                                - ${RELEASE}.${NS}.svc.{{ $dnsDomain }}
                         ca:
                           crt: ${TALOS_CA_B64}
                         kubelet:
@@ -351,7 +360,7 @@ spec:
                         id: ${CLUSTER_ID}
                         secret: ${CLUSTER_SECRET}
                         controlPlane:
-                          endpoint: https://${SVC_IP}:6443
+                          endpoint: https://${RELEASE}.${NS}.svc:6443
                         clusterName: ${RELEASE}
                         network:
                           dnsDomain: {{ $dnsDomain }}
@@ -374,8 +383,8 @@ spec:
           resources:
             requests:
               cpu: 10m
-              memory: 32Mi
+              memory: 64Mi
             limits:
               cpu: 100m
-              memory: 64Mi
+              memory: 256Mi
 {{- end }}
