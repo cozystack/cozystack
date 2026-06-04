@@ -1,0 +1,27 @@
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Configuration
+metadata:
+  name: cozystack-e2e
+spec:
+  # All app tests run against the pre-existing tenant-test namespace
+  # (created by hack/e2e-install-cozystack.bats), matching the BATS suite.
+  # Chainsaw only deletes namespaces it created itself, so tenant-test is safe.
+  namespace:
+    name: tenant-test
+  # Run tests sequentially, matching the current BATS behavior. The bucket
+  # test uses a fixed local port-forward port, so parallelism is unsafe
+  # until ports are made dynamic.
+  execution:
+    parallel: 1
+  timeouts:
+    apply: 1m
+    assert: 5m
+    delete: 2m
+    cleanup: 2m
+    error: 5m
+    exec: 5m
+  cleanup:
+    skipDelete: false
+  report:
+    format: XML
+    name: chainsaw-report
