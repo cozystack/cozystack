@@ -100,6 +100,7 @@ type BackupJobStatus struct {
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
+// +kubebuilder:metadata:annotations={"options.cozystack.io/source.applicationRef.kind=appkind","options.cozystack.io/source.planRef.name=plan","options.cozystack.io/source.backupClassName=backupclass"}
 
 // BackupJob represents a single execution of a backup.
 // It is typically created by a Plan controller when a schedule fires.
