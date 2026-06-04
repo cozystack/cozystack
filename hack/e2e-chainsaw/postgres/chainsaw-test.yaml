@@ -37,8 +37,8 @@ spec:
             name: postgres-test
           status:
             # JMESPath filter: condition order in the array does not matter
-            (conditions[?type == 'Ready'])[0]:
-              status: "True"
+            (conditions[?type == 'Ready']):
+            - status: "True"
 
   - name: wait-init-job-complete
     try:
@@ -50,8 +50,8 @@ spec:
           metadata:
             name: postgres-test-init-job
           status:
-            (conditions[?type == 'Complete'])[0]:
-              status: "True"
+            (conditions[?type == 'Complete']):
+            - status: "True"
 
   - name: verify-services-and-endpoints
     try:

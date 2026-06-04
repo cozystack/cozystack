@@ -34,8 +34,8 @@ spec:
           metadata:
             name: bucket-test
           status:
-            (conditions[?type == 'Ready'])[0]:
-              status: "True"
+            (conditions[?type == 'Ready']):
+            - status: "True"
     # Replaces `until kubectl get ...` + `kubectl wait --for=jsonpath=...`
     # pairs: one assert handles both existence and the status field.
     - assert:
