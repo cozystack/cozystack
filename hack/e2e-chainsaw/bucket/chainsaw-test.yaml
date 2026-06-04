@@ -1,0 +1,116 @@
+# Chainsaw port of hack/e2e-apps/bucket.bats ("Create and Verify Seeweedfs Bucket").
+#
+# The declarative half (resource readiness) becomes assert operations; the
+# imperative half (S3 access checks with mc through a port-forward) stays a
+# single script step, since a port-forward cannot span chainsaw operations.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: bucket
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: bucket-test
+  - describe:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: BucketClaim
+      name: bucket-test
+  steps:
+  - name: create-bucket
+    try:
+    - apply:
+        file: bucket.yaml
+
+  - name: wait-bucket-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-test
+          status:
+            (conditions[?type == 'Ready'])[0]:
+              status: "True"
+    # Replaces `until kubectl get ...` + `kubectl wait --for=jsonpath=...`
+    # pairs: one assert handles both existence and the status field.
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-test
+          status:
+            bucketReady: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-test-admin
+          status:
+            accessGranted: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-test-viewer
+          status:
+            accessGranted: true
+
+  - name: verify-s3-access
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          workdir=$(mktemp -d)
+          trap 'kill $pf_pid 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          # Extract credentials for both users
+          kubectl -n "$NAMESPACE" get secret bucket-test-admin \
+            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/admin.json"
+          kubectl -n "$NAMESPACE" get secret bucket-test-viewer \
+            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/viewer.json"
+          ADMIN_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/admin.json")
+          ADMIN_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/admin.json")
+          VIEWER_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/viewer.json")
+          VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/viewer.json")
+          BUCKET_NAME=$(jq -r '.spec.bucketName' "$workdir/admin.json")
+
+          # Port-forward to the S3 endpoint; cleaned up by the trap
+          kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
+          pf_pid=$!
+          timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+
+          mc alias set rw-user https://localhost:8333 "$ADMIN_ACCESS_KEY" "$ADMIN_SECRET_KEY" --insecure
+          mc alias set ro-user https://localhost:8333 "$VIEWER_ACCESS_KEY" "$VIEWER_SECRET_KEY" --insecure
+
+          # Admin (readwrite) can upload, list, download
+          echo "readwrite test" > "$workdir/rw-test.txt"
+          mc cp --insecure "$workdir/rw-test.txt" "rw-user/$BUCKET_NAME/rw-test.txt"
+          mc ls --insecure "rw-user/$BUCKET_NAME/rw-test.txt"
+          mc cp --insecure "rw-user/$BUCKET_NAME/rw-test.txt" "$workdir/rw-test-download.txt"
+
+          # Viewer (readonly) can list and download
+          mc ls --insecure "ro-user/$BUCKET_NAME/rw-test.txt"
+          mc cp --insecure "ro-user/$BUCKET_NAME/rw-test.txt" "$workdir/ro-test-download.txt"
+
+          # Viewer cannot upload — must fail with Access Denied
+          echo "readonly test" > "$workdir/ro-test.txt"
+          if mc cp --insecure "$workdir/ro-test.txt" "ro-user/$BUCKET_NAME/ro-test.txt"; then
+            echo "ERROR: readonly user was able to upload" >&2
+            exit 1
+          fi
+
+          # Remove the test object so bucket cleanup is not blocked
+          mc rm --insecure "rw-user/$BUCKET_NAME/rw-test.txt"
+        check:
+          ($error == null): true
+# The Bucket CR was applied by chainsaw and is deleted automatically during
+# cleanup — no explicit teardown step needed.
