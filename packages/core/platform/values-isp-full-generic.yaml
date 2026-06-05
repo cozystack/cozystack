@@ -11,5 +11,4 @@ bundles:
   naas:
     enabled: true
   enabledPackages:
-    - cozystack.velero
     - cozystack.backupstrategy-controller

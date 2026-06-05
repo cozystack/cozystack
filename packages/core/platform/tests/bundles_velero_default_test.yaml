@@ -1,0 +1,45 @@
+suite: velero installed by default (backupstrategy-controller hard dependency)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # backupstrategy-controller is a default package and its PackageSource
+  # declares dependsOn: cozystack.velero. If velero is optional and not
+  # enabled, the backupstrategy-controller Package stays
+  # DependenciesNotReady forever and the cozystack-platform HelmRelease
+  # never becomes Ready. Guard against velero regressing to optional.
+  - it: emits the cozystack.velero Package by default (no enabledPackages)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.velero
+          any: true
+
+  - it: keeps the disabledPackages opt-out working for cozystack.velero
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        disabledPackages:
+          - cozystack.velero
+          - cozystack.backupstrategy-controller
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.velero
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.backupstrategy-controller
+        not: true
