@@ -105,8 +105,13 @@ controller:
     # alpine-based kubectl: needs a shell so the wrapper script can run.
     # rancher/kubectl is FROM scratch and StartErrors without /bin/sh.
     # alpine/kubectl is multi-arch and busybox-derived (sh + sed + kubectl).
-    repository: alpine/kubectl
-    # renovate: datasource=docker depName=alpine/kubectl
+    # Pulled via mirror.gcr.io (Google's read-only mirror for a curated set of
+    # popular Docker Hub images) to sidestep anonymous Docker Hub rate-limits on
+    # shared CI/runner IP ranges. alpine/kubectl is on the mirror's curated
+    # list; very recently cut tags may take a short window to propagate, so a
+    # Renovate-cut bump to a brand-new tag may temporarily render an image
+    # reference that 404s on pull until Google's mirror picks it up.
+    repository: mirror.gcr.io/alpine/kubectl
     tag: "1.36.0"
     pullPolicy: IfNotPresent
   # -- Informer resync period. Doubles as the worst-case event-to-reconcile
@@ -230,8 +235,13 @@ externalDns:
     # rancher/kubectl is FROM scratch with no /bin/sh — the wrapper script
     # would StartError immediately. alpine/kubectl is multi-arch and has
     # /bin/sh + kubectl + grep, which is everything the hook needs.
-    repository: alpine/kubectl
-    # renovate: datasource=docker depName=alpine/kubectl
+    # Pulled via mirror.gcr.io (Google's read-only mirror for a curated set of
+    # popular Docker Hub images) to sidestep anonymous Docker Hub rate-limits on
+    # shared CI/runner IP ranges. alpine/kubectl is on the mirror's curated
+    # list; very recently cut tags may take a short window to propagate, so a
+    # Renovate-cut bump to a brand-new tag may temporarily render an image
+    # reference that 404s on pull until Google's mirror picks it up.
+    repository: mirror.gcr.io/alpine/kubectl
     tag: "1.36.0"
     pullPolicy: IfNotPresent
 
