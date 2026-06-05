@@ -1,11 +1,15 @@
 global:
-  enableSecurity: true
-  serviceAccountName: "tenant-foo-seaweedfs"
-  extraEnvironmentVars:
-    WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
-    WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
-  monitoring:
-    enabled: true
+  # App-specific globals were namespaced under global.seaweedfs in chart 4.18
+  # (upstream commit moving global.* -> global.seaweedfs.* to avoid polluting the
+  # shared global namespace when the chart is used as a subchart).
+  seaweedfs:
+    enableSecurity: true
+    serviceAccountName: "tenant-foo-seaweedfs"
+    extraEnvironmentVars:
+      WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
+      WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
+    monitoring:
+      enabled: true
 seaweedfs:
   master:
     volumeSizeLimitMB: 30000
@@ -86,6 +90,10 @@ seaweedfs:
     enabled: true
     replicas: 2
     port: 8333
+    # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
+    # (replaces the former s3-traffic-distribution.patch); the chart gates the
+    # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
+    trafficDistribution: PreferClose
     extraArgs:
       - -idleTimeout=60
     enableAuth: false

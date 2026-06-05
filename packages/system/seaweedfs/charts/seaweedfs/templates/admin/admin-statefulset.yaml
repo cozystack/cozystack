@@ -1,11 +1,15 @@
+{{- include "seaweedfs.compat" . -}}
 {{- if .Values.admin.enabled }}
-{{- if and (not .Values.admin.masters) (not .Values.global.masterServer) (not .Values.master.enabled) }}
-{{- fail "admin.masters or global.masterServer must be set if master.enabled is false" -}}
+{{- if gt (.Values.admin.replicas | int) 1 }}
+{{- fail "admin.replicas must be 0 or 1" -}}
+{{- end }}
+{{- if and (not .Values.admin.masters) (not .Values.global.seaweedfs.masterServer) (not .Values.master.enabled) }}
+{{- fail "admin.masters or global.seaweedfs.masterServer must be set if master.enabled is false" -}}
 {{- end }}
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: {{ template "seaweedfs.name" . }}-admin
+  name: {{ include "seaweedfs.componentName" (list . "admin") }}
   namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
@@ -18,7 +22,7 @@ metadata:
     {{- toYaml .Values.admin.annotations | nindent 4 }}
 {{- end }}
 spec:
-  serviceName: {{ template "seaweedfs.name" . }}-admin
+  serviceName: {{ include "seaweedfs.componentName" (list . "admin") }}
   podManagementPolicy: {{ .Values.admin.podManagementPolicy }}
   replicas: {{ .Values.admin.replicas }}
   selector:
@@ -47,7 +51,7 @@ spec:
       {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
-      restartPolicy: {{ default .Values.global.restartPolicy .Values.admin.restartPolicy }}
+      restartPolicy: {{ default .Values.global.seaweedfs.restartPolicy .Values.admin.restartPolicy }}
       {{- if .Values.admin.affinity }}
       affinity:
         {{ tpl .Values.admin.affinity . | nindent 8 | trim }}
@@ -78,24 +82,28 @@ spec:
       {{- end }}
       containers:
         - name: seaweedfs
-          image: {{ template "admin.image" . }}
-          imagePullPolicy: {{ default "IfNotPresent" .Values.global.imagePullPolicy }}
+          image: {{ template "seaweedfs.admin.image" . }}
+          imagePullPolicy: {{ default "IfNotPresent" .Values.global.seaweedfs.imagePullPolicy }}
           {{- $adminAuthEnabled := or .Values.admin.secret.existingSecret .Values.admin.secret.adminPassword }}
+          {{- $urlPrefix := .Values.admin.urlPrefix }}
+          {{- if and (not $urlPrefix) .Values.admin.ingress.enabled (ne .Values.admin.ingress.path "/") }}
+          {{- $urlPrefix = trimSuffix "/" .Values.admin.ingress.path }}
+          {{- end }}
           {{- if and .Values.admin.secret.existingSecret (not .Values.admin.secret.userKey) -}}
           {{-   fail "admin.secret.userKey must be set when admin.secret.existingSecret is provided" -}}
           {{- end -}}
           {{- if and .Values.admin.secret.existingSecret (not .Values.admin.secret.pwKey) -}}
           {{-   fail "admin.secret.pwKey must be set when admin.secret.existingSecret is provided" -}}
           {{- end -}}
-          {{- $adminSecretName := .Values.admin.secret.existingSecret | default (printf "%s-admin-secret" (include "seaweedfs.name" .)) }}
+          {{- $adminSecretName := .Values.admin.secret.existingSecret | default (printf "%s-admin-secret" (include "seaweedfs.fullname" .)) }}
           env:
             {{- if $adminAuthEnabled }}
-            - name: SEAWEEDFS_ADMIN_USER
+            - name: WEED_ADMIN_USER
               valueFrom:
                 secretKeyRef:
                   name: {{ $adminSecretName }}
                   key: {{ if .Values.admin.secret.existingSecret }}{{ .Values.admin.secret.userKey }}{{ else }}adminUser{{ end }}
-            - name: SEAWEEDFS_ADMIN_PASSWORD
+            - name: WEED_ADMIN_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ $adminSecretName }}
@@ -114,27 +122,25 @@ spec:
                 fieldRef:
                   fieldPath: metadata.namespace
             - name: SEAWEEDFS_FULLNAME
-              value: "{{ template "seaweedfs.name" . }}"
-            {{- if .Values.admin.extraEnvironmentVars }}
-            {{- range $key, $value := .Values.admin.extraEnvironmentVars }}
+              value: "{{ include "seaweedfs.fullname" . }}"
+            {{- $mergedExtraEnvironmentVars := dict }}
+            {{- include "seaweedfs.mergeExtraEnvironmentVars" (dict "global" .Values.global.seaweedfs "component" .Values.admin "target" $mergedExtraEnvironmentVars) }}
+            {{- range $key := keys $mergedExtraEnvironmentVars | sortAlpha }}
+            {{- $value := index $mergedExtraEnvironmentVars $key }}
             - name: {{ $key }}
             {{- if kindIs "string" $value }}
-              value: {{ $value | quote }}
+              value: {{ tpl $value $ | quote }}
             {{- else }}
               valueFrom:
                 {{ toYaml $value | nindent 16 | trim }}
             {{- end -}}
             {{- end }}
-            {{- end }}
-            {{- if .Values.global.extraEnvironmentVars }}
-            {{- range $key, $value := .Values.global.extraEnvironmentVars }}
+            {{- $secretExtraEnvironmentVars := .Values.admin.secretExtraEnvironmentVars }}
+            {{- if $secretExtraEnvironmentVars }}
+            {{- range $key := keys $secretExtraEnvironmentVars | sortAlpha }}
+            {{- $value := index $secretExtraEnvironmentVars $key }}
             - name: {{ $key }}
-            {{- if kindIs "string" $value }}
-              value: {{ $value | quote }}
-            {{- else }}
-              valueFrom:
-                {{ toYaml $value | nindent 16 | trim }}
-            {{- end -}}
+              valueFrom: {{ toYaml $value | nindent 16 }}
             {{- end }}
             {{- end }}
           command:
@@ -150,7 +156,7 @@ spec:
               {{- if .Values.admin.loggingOverrideLevel }}
               -v={{ .Values.admin.loggingOverrideLevel }} \
               {{- else }}
-              -v={{ .Values.global.loggingLevel }} \
+              -v={{ .Values.global.seaweedfs.loggingLevel }} \
               {{- end }}
               admin \
               -port={{ .Values.admin.port }} \
@@ -160,16 +166,15 @@ spec:
               {{- else if .Values.admin.dataDir }}
               -dataDir={{ .Values.admin.dataDir }} \
               {{- end }}
-              {{- if $adminAuthEnabled }}
-              -adminUser="${SEAWEEDFS_ADMIN_USER}" \
-              -adminPassword="${SEAWEEDFS_ADMIN_PASSWORD}" \
-              {{- end }}
               {{- if .Values.admin.masters }}
-              -masters={{ .Values.admin.masters }}{{- if .Values.admin.extraArgs }} \{{ end }}
-              {{- else if .Values.global.masterServer }}
-              -masters={{ .Values.global.masterServer }}{{- if .Values.admin.extraArgs }} \{{ end }}
+              -masters={{ .Values.admin.masters }}{{- if or $urlPrefix .Values.admin.extraArgs }} \{{ end }}
+              {{- else if .Values.global.seaweedfs.masterServer }}
+              -masters={{ .Values.global.seaweedfs.masterServer }}{{- if or $urlPrefix .Values.admin.extraArgs }} \{{ end }}
               {{- else }}
-              -masters={{ range $index := until (.Values.master.replicas | int) }}${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}{{ if lt $index (sub ($.Values.master.replicas | int) 1) }},{{ end }}{{ end }}{{- if .Values.admin.extraArgs }} \{{ end }}
+              -masters={{ range $index := until (.Values.master.replicas | int) }}${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}{{ if lt $index (sub ($.Values.master.replicas | int) 1) }},{{ end }}{{ end }}{{- if or $urlPrefix .Values.admin.extraArgs }} \{{ end }}
+              {{- end }}
+              {{- if $urlPrefix }}
+              -urlPrefix={{ $urlPrefix }}{{- if .Values.admin.extraArgs }} \{{ end }}
               {{- end }}
               {{- range $index, $arg := .Values.admin.extraArgs }}
               {{ $arg }}{{- if lt $index (sub (len $.Values.admin.extraArgs) 1) }} \{{ end }}
@@ -183,11 +188,13 @@ spec:
             - name: admin-logs
               mountPath: /logs
             {{- end }}
-            {{- if .Values.global.enableSecurity }}
+            {{- if include "seaweedfs.securityConfigEnabled" . }}
             - name: security-config
               readOnly: true
               mountPath: /etc/seaweedfs/security.toml
               subPath: security.toml
+            {{- end }}
+            {{- if .Values.global.seaweedfs.enableSecurity }}
             - name: ca-cert
               readOnly: true
               mountPath: /usr/local/share/ca-certificates/ca/
@@ -213,14 +220,10 @@ spec:
               name: http
             - containerPort: {{ .Values.admin.grpcPort }}
               name: grpc
-            {{- if .Values.admin.metricsPort }}
-            - containerPort: {{ .Values.admin.metricsPort }}
-              name: metrics
-            {{- end }}
           {{- if .Values.admin.readinessProbe.enabled }}
           readinessProbe:
             httpGet:
-              path: {{ .Values.admin.readinessProbe.httpGet.path }}
+              path: {{ if $urlPrefix }}{{ $urlPrefix }}{{ end }}{{ .Values.admin.readinessProbe.httpGet.path }}
               port: http
               scheme: {{ .Values.admin.readinessProbe.httpGet.scheme }}
             initialDelaySeconds: {{ .Values.admin.readinessProbe.initialDelaySeconds }}
@@ -232,7 +235,7 @@ spec:
           {{- if .Values.admin.livenessProbe.enabled }}
           livenessProbe:
             httpGet:
-              path: {{ .Values.admin.livenessProbe.httpGet.path }}
+              path: {{ if $urlPrefix }}{{ $urlPrefix }}{{ end }}{{ .Values.admin.livenessProbe.httpGet.path }}
               port: http
               scheme: {{ .Values.admin.livenessProbe.httpGet.scheme }}
             initialDelaySeconds: {{ .Values.admin.livenessProbe.initialDelaySeconds }}
@@ -249,7 +252,7 @@ spec:
           securityContext: {{- omit .Values.admin.containerSecurityContext "enabled" | toYaml | nindent 12 }}
           {{- end }}
       {{- if .Values.admin.sidecars }}
-      {{- include "common.tplvalues.render" (dict "value" .Values.admin.sidecars "context" $) | nindent 8 }}
+      {{- include "seaweedfs.tplvalues.render" (dict "value" .Values.admin.sidecars "context" $) | nindent 8 }}
       {{- end }}
       volumes:
         {{- if eq .Values.admin.data.type "hostPath" }}
@@ -282,35 +285,37 @@ spec:
           persistentVolumeClaim:
             claimName: {{ .Values.admin.logs.claimName }}
         {{- end }}
-        {{- if .Values.global.enableSecurity }}
+        {{- if include "seaweedfs.securityConfigEnabled" . }}
         - name: security-config
           configMap:
-            name: {{ template "seaweedfs.name" . }}-security-config
+            name: {{ include "seaweedfs.fullname" . }}-security-config
+        {{- end }}
+        {{- if .Values.global.seaweedfs.enableSecurity }}
         - name: ca-cert
           secret:
-            secretName: {{ template "seaweedfs.name" . }}-ca-cert
+            secretName: {{ include "seaweedfs.fullname" . }}-ca-cert
         - name: master-cert
           secret:
-            secretName: {{ template "seaweedfs.name" . }}-master-cert
+            secretName: {{ include "seaweedfs.fullname" . }}-master-cert
         - name: volume-cert
           secret:
-            secretName: {{ template "seaweedfs.name" . }}-volume-cert
+            secretName: {{ include "seaweedfs.fullname" . }}-volume-cert
         - name: filer-cert
           secret:
-            secretName: {{ template "seaweedfs.name" . }}-filer-cert
+            secretName: {{ include "seaweedfs.fullname" . }}-filer-cert
         - name: client-cert
           secret:
-            secretName: {{ template "seaweedfs.name" . }}-client-cert
+            secretName: {{ include "seaweedfs.fullname" . }}-client-cert
         - name: admin-cert
           secret:
-            secretName: {{ template "seaweedfs.name" . }}-admin-cert
+            secretName: {{ include "seaweedfs.fullname" . }}-admin-cert
         {{- end }}
         {{ tpl .Values.admin.extraVolumes . | indent 8 | trim }}
       {{- if .Values.admin.nodeSelector }}
       nodeSelector:
         {{ tpl .Values.admin.nodeSelector . | indent 8 | trim }}
       {{- end }}
-  {{- $pvc_exists := include "admin.pvc_exists" . -}}
+  {{- $pvc_exists := include "seaweedfs.admin.pvc_exists" . -}}
   {{- if $pvc_exists }}
   volumeClaimTemplates:
     {{- if eq .Values.admin.data.type "persistentVolumeClaim" }}
