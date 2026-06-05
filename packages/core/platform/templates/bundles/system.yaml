@@ -196,6 +196,11 @@
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
+{{- /* velero must be a default package: backupstrategy-controller (default)
+hard-depends on cozystack.velero, so an optional velero leaves the
+backupstrategy-controller Package permanently DependenciesNotReady and the
+cozystack-platform HelmRelease never becomes Ready. */}}
+{{include "cozystack.platform.package.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.metrics-server" $) }}
 {{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
@@ -214,7 +219,6 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
