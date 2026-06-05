@@ -3,6 +3,9 @@ export NAME=seaweedfs-system
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	mkdir -p charts
