@@ -289,6 +289,15 @@ jobs:
               echo "::group::Diagnostics for $app"
               docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
               docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+              # COSI state at the moment of failure — the CRDs ship no printer
+              # columns, so pull the readiness fields explicitly (cozyreport
+              # captures the same at end-of-job, but bucket states move between
+              # a test failing and the report being taken).
+              docker exec "$SANDBOX_NAME" sh -c '
+                kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
+                kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
+                kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
+              ' || true
               echo "::endgroup::"
             fi
           done
