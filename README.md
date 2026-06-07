@@ -20,7 +20,7 @@ Database-as-a-Service, virtual machines, load balancers, HTTP caching services, 
 
 Use Cozystack to build your own cloud or provide a cost-effective development environment.  
 
-![Cozystack user interface](https://cozystack.io/img/screenshot-dark.png)
+![Cozystack user interface](https://cozystack.io/img/carousel/1.png)
 
 ## Use-Cases
 
