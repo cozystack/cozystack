@@ -1,0 +1,29 @@
+suite: cozystack-basics tenant dashboard Role grants read on cozy-public resources
+
+templates:
+  - templates/dashboard-role.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# The vm-disk source image dropdown lists PersistentVolumeClaims in cozy-public
+# (the vm-default-images-* golden images). The console issues that list as the
+# tenant identity (e.g. the tenant-root ServiceAccount), so the cozy:tenant:dashboard
+# Role must grant read on PVCs; otherwise the browser gets 403 and the dropdown
+# is empty even though the images exist.
+tests:
+  - it: cozy:tenant:dashboard grants read on persistentvolumeclaims in cozy-public
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:dashboard
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-public
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "watch"]
