@@ -1,0 +1,62 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, off-peak and offset from the other Monday cron jobs
+    # (scorecard 06:00, labels 04:17, stale 04:37).
+    - cron: '27 3 * * 1'
+
+# Default to read-only; the analyze job opts into security-events: write.
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      # Upload CodeQL results to the code-scanning dashboard.
+      security-events: write
+      # Check out the repository.
+      contents: read
+      # Read workflow run metadata (required by codeql-action on private
+      # repos; harmless on a public repo).
+      actions: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # build-mode "none" extracts Go source without compiling it, so the
+          # job can never fail on the monorepo's generated files, build tags,
+          # or the api/apps/v1alpha1 submodule. It still produces real alerts
+          # and satisfies the OpenSSF Scorecard SAST check. Switch to
+          # "autobuild" later if deeper, build-aware analysis is wanted.
+          - language: go
+            build-mode: none
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
+        with:
+          category: "/language:${{ matrix.language }}"
