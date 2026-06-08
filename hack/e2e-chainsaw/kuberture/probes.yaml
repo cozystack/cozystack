@@ -1,0 +1,82 @@
+# external-dns probe SA/RBAC + two single-shot probe Pods, each with a distinct
+# --annotation-prefix (the upstream Split Horizon DNS pattern). external-dns
+# 0.20 initialises its informer cache cluster-wide before applying --namespace,
+# so the probe needs a ClusterRole, not a namespaced Role.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuberture-e2e-edns-probe
+  namespace: cozy-kuberture
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuberture-e2e-edns-probe
+rules:
+  - apiGroups: [""]
+    resources: ["services", "endpoints", "pods", "nodes", "namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuberture-e2e-edns-probe
+subjects:
+  - kind: ServiceAccount
+    name: kuberture-e2e-edns-probe
+    namespace: cozy-kuberture
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuberture-e2e-edns-probe
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kuberture-e2e-edns-public
+  namespace: cozy-kuberture
+spec:
+  serviceAccountName: kuberture-e2e-edns-probe
+  restartPolicy: Never
+  containers:
+    - name: edns
+      image: registry.k8s.io/external-dns/external-dns:v0.20.0
+      args:
+        - --source=service
+        - --namespace=cozy-kuberture
+        - --provider=inmemory
+        - --inmemory-zone=cozystack.test
+        - --registry=noop
+        - --once
+        - --interval=10s
+        - --annotation-prefix=external-dns.alpha.kubernetes.io/
+        - --domain-filter=cozystack.test
+        - --log-level=info
+        - --log-format=text
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: kuberture-e2e-edns-internal
+  namespace: cozy-kuberture
+spec:
+  serviceAccountName: kuberture-e2e-edns-probe
+  restartPolicy: Never
+  containers:
+    - name: edns
+      image: registry.k8s.io/external-dns/external-dns:v0.20.0
+      args:
+        - --source=service
+        - --namespace=cozy-kuberture
+        - --provider=inmemory
+        - --inmemory-zone=cozystack.test
+        - --registry=noop
+        - --once
+        - --interval=10s
+        - --annotation-prefix=kuberture-e2e-internal-dns.io/
+        - --domain-filter=cozystack.test
+        - --log-level=info
+        - --log-format=text

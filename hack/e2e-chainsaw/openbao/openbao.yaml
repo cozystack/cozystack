@@ -1,0 +1,12 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: OpenBAO
+metadata:
+  name: test
+spec:
+  replicas: 1
+  size: 10Gi
+  storageClass: ""
+  resourcesPreset: "small"
+  resources: {}
+  external: false
+  ui: true

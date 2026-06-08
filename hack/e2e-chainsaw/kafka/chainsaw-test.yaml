@@ -1,0 +1,115 @@
+# Chainsaw port of hack/e2e-apps/kafka.bats ("Create Kafka").
+#
+# The final step replaces the BATS check that Strimzi reclaims the ZooKeeper
+# PVCs on delete: instead of a manual kubectl delete, an explicit delete of the
+# Kafka CR followed by `error` ops asserts both PVCs disappear (a regression in
+# the operator's deleteClaim handling would leave them behind).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kafka
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: kafka-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=kafka-test
+      tail: 50
+  steps:
+  - name: create-kafka
+    try:
+    - apply:
+        file: kafka.yaml
+
+  - name: wait-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kafka-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Kafka
+          metadata:
+            name: test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-zookeeper
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-kafka-test-zookeeper-0
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-kafka-test-zookeeper-1
+          status:
+            phase: Bound
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: kafka-test-zookeeper-client
+          spec:
+            (ports[0].port): 2181
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: kafka-test-zookeeper-nodes
+          spec:
+            (ports[*].port): [2181, 2888, 3888]
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: kafka-test-zookeeper-nodes
+          (subsets[0].addresses[0].ip != null): true
+
+  - name: verify-pvc-reclaim-on-delete
+    try:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Kafka
+          name: test
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-kafka-test-zookeeper-0
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-kafka-test-zookeeper-1

@@ -1,0 +1,107 @@
+# Chainsaw port of hack/e2e-apps/external-dns.bats. Two scenarios, each a
+# separate Test: the inmemory provider, and a custom annotationPrefix. The
+# externaldns chart names its HelmReleases after the CR directly (<name> and
+# <name>-system), not with an app-type prefix.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: external-dns-inmemory
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: test-system
+  - podLogs:
+      selector: app.kubernetes.io/instance=test-system
+      tail: 50
+  steps:
+  - name: create-externaldns
+    try:
+    - apply:
+        file: externaldns-inmemory.yaml
+  - name: wait-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: test-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            labels:
+              app.kubernetes.io/instance: test-system
+          status:
+            readyReplicas: 1
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: external-dns-prefix
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: test-prefix-system
+  - podLogs:
+      selector: app.kubernetes.io/instance=test-prefix-system
+      tail: 50
+  steps:
+  - name: create-externaldns
+    try:
+    - apply:
+        file: externaldns-prefix.yaml
+  - name: wait-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: test-prefix
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: test-prefix-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            labels:
+              app.kubernetes.io/instance: test-prefix-system
+          status:
+            readyReplicas: 1

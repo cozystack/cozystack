@@ -319,10 +319,17 @@ jobs:
           cd /tmp/$SANDBOX_NAME
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
-      # Run E2E tests. With `full-e2e` label the selector is skipped, its
-      # outputs are empty, the != 'true' guard lets this step run, and the
-      # full bats list is used. Without the label, the selector decides;
-      # an empty selection (docs-only) skips this step entirely.
+      # ▸ Run E2E tests (Chainsaw, scoped by Test Impact Analysis)
+      #
+      #   The "Select E2E tests" step above picks the suites impacted by the PR
+      #   diff. With the `full-e2e` label that step is skipped, SELECTED_APPS is
+      #   empty, and we fall back to the whole suite; an empty selection on a
+      #   docs-only PR skips this step entirely (the skip != 'true' guard).
+      #
+      #   Chainsaw discovers each named suite under hack/e2e-chainsaw/ and polls
+      #   every assertion to its own timeout, so the old per-app 3-retry loop is
+      #   gone — a failure is reported as a structured assertion diff, with
+      #   cluster-state diagnostics dumped below on a non-zero exit.
       - name: Run E2E tests
         id: e2e_tests
         if: ${{ steps.select.outputs.skip != 'true' }}
@@ -332,40 +339,50 @@ jobs:
         run: |
           cd /tmp/$SANDBOX_NAME
           if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
-            apps_list=$(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1)
+            suites=""        # empty => test-chainsaw runs the whole suite
+            echo "Running full chainsaw suite"
           else
-            apps_list="$SELECTED_APPS"
+            suites="$SELECTED_APPS"
+            echo "Running selected chainsaw suites: $suites"
           fi
-          failed_tests=""
-          for app in $apps_list; do
-            echo "::group::Testing $app"
-            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
-              echo "::endgroup::"
-              echo "✅ Test $app completed successfully"
-            else
-              echo "::endgroup::"
-              echo "❌ Test $app failed (no retry — see diagnostics below)"
-              failed_tests="$failed_tests $app"
-              echo "::group::Diagnostics for $app"
-              docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
-              docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
-              # COSI state at the moment of failure — the CRDs ship no printer
-              # columns, so pull the readiness fields explicitly (cozyreport
-              # captures the same at end-of-job, but bucket states move between
-              # a test failing and the report being taken).
-              docker exec "$SANDBOX_NAME" sh -c '
-                kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
-                kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
-                kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
-              ' || true
-              echo "::endgroup::"
-            fi
-          done
-          if [ -n "$failed_tests" ]; then
-            echo "❌ Failed tests:$failed_tests"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            # COSI state at the moment of failure — the CRDs ship no printer
+            # columns, so pull the readiness fields explicitly (cozyreport
+            # captures the same at end-of-job, but bucket states move between
+            # a test failing and the report being taken).
+            echo "::group::Diagnostics: COSI bucket state"
+            docker exec "$SANDBOX_NAME" sh -c '
+              kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
+              kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
+              kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
+            ' || true
+            echo "::endgroup::"
             exit 1
           fi
-          echo "✅ All E2E tests passed"
+          echo "✅ All selected E2E tests passed"
+
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chainsaw-report
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          if-no-files-found: ignore
 
       # ▸ Collect debug information (always runs)
       - name: Collect report

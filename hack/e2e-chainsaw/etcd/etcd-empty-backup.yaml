@@ -1,0 +1,12 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Etcd
+metadata:
+  name: etcd
+spec:
+  size: 1Gi
+  replicas: 3
+  storageClass: ""
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  backup: {}
