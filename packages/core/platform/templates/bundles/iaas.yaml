@@ -35,6 +35,18 @@
 {{- end -}}
 {{- if $gpuEnabled }}
 {{- $_ := set $kubevirtValues "extraFeatureGates" (list "HostDevices") -}}
+{{- /*
+  Each .Values.gpu access is fully parenthesized — (((.Values.gpu).x).y) —
+  on purpose. Parenthesizing makes the field walk nil-safe: an operator may
+  null out the whole gpu block (gpu: null) or leave a sub-key blank
+  (permittedHostDevices: with no value parses to null), and Helm's
+  null-deletes-key coalescing then drops it from .Values. A bare
+  .Values.gpu.permittedHostDevices.pciHostDevices walk panics with
+  "nil pointer evaluating interface {}.permittedHostDevices" on the first
+  nil hop; the parenthesized form yields an invalid Value that `default`
+  absorbs instead. Do NOT flatten these into a bare dotted path — the
+  null-gpu cases in tests/bundles_gpu_kubevirt_wiring_test.yaml pin it.
+*/ -}}
 {{- $userPci := default (list) (((.Values.gpu).permittedHostDevices).pciHostDevices) -}}
 {{- $userMdev := default (list) (((.Values.gpu).permittedHostDevices).mediatedDevices) -}}
 {{- $userMdevConfig := default (dict) (.Values.gpu).mediatedDevicesConfiguration -}}

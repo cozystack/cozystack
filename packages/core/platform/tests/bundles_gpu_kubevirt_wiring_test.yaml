@@ -539,3 +539,69 @@ tests:
           path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
       - notExists:
           path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: renders the passthrough wiring without a nil-pointer error when the whole gpu block is set to null and gpu-operator is enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+
+  - it: renders the vgpu wiring without a nil-pointer error when the whole gpu block is set to null and gpu-operator runs in the vgpu variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+
+  - it: renders without a nil-pointer error when gpu sub-keys are empty (null) YAML keys
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        permittedHostDevices: null
+        mediatedDevicesConfiguration: null
+        vgpuDeviceManager: null
+        vgpuManager: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
