@@ -140,6 +140,60 @@ subjects:
     name: {{ .Release.Name }}-talos-reconcile
     namespace: {{ .Release.Namespace }}
 ---
+{{- /* Cluster-scoped read on the management CoreDNS Service so the hook
+       can look up its ClusterIP at runtime and inject it into the worker
+       machineconfig as a host-level nameserver. Tenant workers run as
+       KubeVirt VMs inside the management pod network; tenant in-cluster
+       pods still use kubelet --cluster-dns (tenant CoreDNS) via
+       dnsPolicy: ClusterFirst, but the worker host itself (kubelet's
+       mount syscall path, image pulls) consults /etc/resolv.conf which
+       Talos populates from machine.network.nameservers. Without
+       management CoreDNS as host resolver, mounting NFS from
+       kubevirt-csi (linstor-csi-nfs.cozy-linstor.svc) fails with
+       NXDOMAIN.
+
+       Ubuntu+kubeadm workers in main inherit pod DNS via cloud-init
+       and got management CoreDNS for free; Talos reads only what is
+       in machineconfig, so the chart has to plumb it explicitly.
+
+       resourceNames pins the grant to the single well-known Service
+       name kube-dns — cluster-wide get on services scoped to that
+       single name is functionally a single-resource permission. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-talos-reconcile-coredns
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["services"]
+    resourceNames: ["kube-dns"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-talos-reconcile-coredns
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Release.Namespace }}-{{ .Release.Name }}-talos-reconcile-coredns
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-talos-reconcile
+    namespace: {{ .Release.Namespace }}
+---
 {{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
 {{- $talosVersion := $.Values.talos.version }}
 {{- $podCIDR := "10.243.0.0/16" }}
@@ -247,21 +301,22 @@ spec:
             - sh
             - -ec
             - |
-              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA"
+              echo "[$(date -u +%H:%M:%S)] talos-reconcile/${GROUP_NAME}: waiting for Service ClusterIP, Talos CA, K8s CA, management CoreDNS"
               for i in $(seq 1 120); do
                 SVC_IP=$(kubectl -n "$NS" get svc "$RELEASE" -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
                 TALOS_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-talos-ca" -o jsonpath='{.data.tls\.crt}' 2>/dev/null || true)
                 K8S_CA_B64=$(kubectl -n "$NS" get secret "${RELEASE}-ca" -o jsonpath='{.data.ca\.crt}' 2>/dev/null || true)
-                if [ -n "$SVC_IP" ] && [ -n "$TALOS_CA_B64" ] && [ -n "$K8S_CA_B64" ]; then
+                COREDNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+                if [ -n "$SVC_IP" ] && [ -n "$TALOS_CA_B64" ] && [ -n "$K8S_CA_B64" ] && [ -n "$COREDNS_IP" ]; then
                   break
                 fi
                 sleep 5
               done
-              if [ -z "$SVC_IP" ] || [ -z "$TALOS_CA_B64" ] || [ -z "$K8S_CA_B64" ]; then
-                echo "[$(date -u +%H:%M:%S)] timed out waiting for lookup inputs (svc='$SVC_IP' talos-ca=$([ -n "$TALOS_CA_B64" ] && echo ok) k8s-ca=$([ -n "$K8S_CA_B64" ] && echo ok))"
+              if [ -z "$SVC_IP" ] || [ -z "$TALOS_CA_B64" ] || [ -z "$K8S_CA_B64" ] || [ -z "$COREDNS_IP" ]; then
+                echo "[$(date -u +%H:%M:%S)] timed out waiting for lookup inputs (svc='$SVC_IP' talos-ca=$([ -n "$TALOS_CA_B64" ] && echo ok) k8s-ca=$([ -n "$K8S_CA_B64" ] && echo ok) coredns='$COREDNS_IP')"
                 exit 1
               fi
-              echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP})"
+              echo "[$(date -u +%H:%M:%S)] inputs ready (svc=${SVC_IP} coredns=${COREDNS_IP})"
 
               # Patch KamajiControlPlane.spec.network.certSANs so the apiserver
               # TLS cert covers the live Service ClusterIP that Talos workers
@@ -317,6 +372,20 @@ spec:
                         type: worker
                         token: ${TALOS_TOKEN}
                         network:
+                          # Management CoreDNS as the worker's host
+                          # resolver. Tenant in-cluster pods are not
+                          # affected: dnsPolicy: ClusterFirst routes
+                          # them through kubelet --cluster-dns (tenant
+                          # CoreDNS). This nameserver covers host-side
+                          # paths only — kubelet's NFS mount syscall
+                          # (e.g. kubevirt-csi's linstor-csi-nfs.cozy-
+                          # linstor.svc), image pulls, and pods that
+                          # opt out of cluster DNS. Mirrors what
+                          # Ubuntu+kubeadm workers got for free from
+                          # cloud-init pod DNS inheritance in the
+                          # pre-Talos chart.
+                          nameservers:
+                            - ${COREDNS_IP}
                           extraHostEntries:
                             - ip: ${SVC_IP}
                               aliases:
