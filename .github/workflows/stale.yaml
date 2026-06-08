@@ -5,10 +5,9 @@ on:
     - cron: '37 4 * * *'  # daily at 04:37 UTC
   workflow_dispatch:
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
 permissions:
   contents: read
-  issues: write
-  pull-requests: write
 
 concurrency:
   group: stale
@@ -17,8 +16,11 @@ concurrency:
 jobs:
   stale:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
     steps:
-      - uses: actions/stale@v10
+      - uses: actions/stale@eb5cf3af3ac0a1aa4c9c45633dd1ae542a27a899 # v10
         with:
           stale-issue-label: lifecycle/stale
           stale-pr-label: lifecycle/stale
