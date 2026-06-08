@@ -36,19 +36,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # build-mode "none" extracts Go source without compiling it, so the
-          # job can never fail on the monorepo's generated files, build tags,
-          # or the api/apps/v1alpha1 submodule. It still produces real alerts
-          # and satisfies the OpenSSF Scorecard SAST check. Switch to
-          # "autobuild" later if deeper, build-aware analysis is wanted.
+          # Go only supports "autobuild" or "manual" (not "none"). autobuild
+          # runs the Go build the same way `go build ./...` does — the repo
+          # already compiles cleanly there, including the committed generated
+          # files. setup-go below pins the toolchain to the go.mod version so
+          # autobuild does not fall back to whatever Go the runner ships.
           - language: go
-            build-mode: none
+            build-mode: autobuild
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: false
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
