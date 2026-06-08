@@ -100,7 +100,7 @@ If you opt out of bundle management and hand-craft a `cozystack.gpu-operator` Pa
 
 - `developerConfiguration.featureGates` gets `HostDevices` appended (current KubeVirt splits this from the `GPU` gate; the admission webhook rejects `spec.template.spec.domain.devices.hostDevices` without it).
 - `permittedHostDevices.pciHostDevices` is filled from `packages/core/platform/files/gpu-passthrough-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: default` (the package default). The table covers Hopper (H100/H200), Ada Lovelace (L4/L40/L40S), Ampere (A100 PCIe/SXM, A40, A30, A10), Turing (T4), Volta (V100/V100S). All entries carry `externalResourceProvider: true` because the resource names come from `nvidia-sandbox-device-plugin`, not from KubeVirt's in-tree device plugin.
-- `permittedHostDevices.mediatedDevices` and `mediatedDevicesConfiguration` are filled from `packages/core/platform/files/gpu-vgpu-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: vgpu`. The starter set covers Pascal–Ampere mdev profiles (A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q) — the same family range as the upstream `vgpu-device-manager` walks `/sys/class/mdev_bus/` for. Ada Lovelace / Blackwell SR-IOV vGPU is out of scope for the chart's default list; advertise those VFs via the user-override hook below.
+- `permittedHostDevices.mediatedDevices` is filled from `packages/core/platform/files/gpu-vgpu-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: vgpu`. This list only EXPOSES, by profile name (`mdevNameSelector`), mdevs that the GPU Operator's vGPU Device Manager CREATES on the node; the platform does not ship a numeric `mediatedDevicesConfiguration` default (those `nvidia-NNN` type ids are per-SKU/driver sysfs indices with no portable value — set `.gpu.mediatedDevicesConfiguration` yourself, with host-verified ids, only if you want KubeVirt rather than the Device Manager to create mdevs). The starter set covers Pascal–Ampere mdev profiles (A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q) — the same family range as the upstream `vgpu-device-manager` walks `/sys/class/mdev_bus/` for. Ada Lovelace / Blackwell SR-IOV vGPU is out of scope for the chart's default list; advertise those VFs via the user-override hook below.
 
 ### Extending or replacing the default table
 
@@ -121,12 +121,7 @@ gpu:
       # kubevirt/kubevirt#16890, virt-handler's in-tree device plugin
       # advertises the resource directly, no sandbox plugin in the loop.
     mediatedDevices: []
-  # mediatedDevicesConfiguration drives the per-node vGPU profile
-  # auto-creation loop in vgpu mode. Helm's mergeOverwrite applies — a
-  # user-supplied top-level key (mediatedDeviceTypes,
-  # nodeMediatedDeviceTypes) REPLACES the platform default for that key
-  # rather than appending. Combine with replaceDefaults: true when both
-  # this and permittedHostDevices.mediatedDevices should be wiped together.
+  # mediatedDevicesConfiguration makes KubeVirt itself create mdevs (vgpu mode). No platform default: mdev creation is normally delegated to the vGPU Device Manager (name-based), and these mediatedDeviceTypes are host/driver-specific nvidia-NNN sysfs indices (look yours up via /sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name). Set this only to opt into KubeVirt-driven creation; mergeOverwrite REPLACES a supplied top-level key wholesale.
   mediatedDevicesConfiguration: {}
   # Wipe the platform defaults entirely and ship only the cluster's
   # curated lists. Useful for non-NVIDIA-only clusters and strict
@@ -138,7 +133,7 @@ gpu:
 
 ### Notes on `nvidia-sandbox-device-plugin` resource names
 
-The `resourceName` strings in `gpu-passthrough-defaults.yaml` follow what `nvidia-sandbox-device-plugin` v25.x generates: a slug of `<arch>_<model>_<form>_<mem>` (e.g. `nvidia.com/GH100_H200_SXM_141GB`). If the plugin version drifts that convention, your node will publish a different name — check with `kubectl describe node <node> | grep nvidia.com/` and override via `.gpu.permittedHostDevices.pciHostDevices` (or wipe the table with `replaceDefaults: true` and curate it yourself). PCI vendor:device IDs themselves are stable across driver versions.
+The `resourceName` strings in `gpu-passthrough-defaults.yaml` are what `nvidia-sandbox-device-plugin` (`nvcr.io/nvidia/kubevirt-gpu-device-plugin`) advertises: it derives each slug mechanically from the device's PCI-IDs database name by uppercasing it, turning `/`, `.` and whitespace into `_`, and stripping the remaining non-alphanumerics (the `[` / `]`). So `TU104GL [Tesla T4]` becomes `nvidia.com/TU104GL_TESLA_T4` and `GA100GL [A30 PCIe]` becomes `nvidia.com/GA100GL_A30_PCIE` — the slug carries every token the PCI-IDs string holds (the `GL` die suffix, the `Tesla` brand on Turing/Volta, form factor, memory), not a tidy `<arch>_<model>`. The names track the pci.ids snapshot bundled in the plugin image, so a different plugin build can publish a different string — check with `kubectl describe node <node> | grep nvidia.com/` and override via `.gpu.permittedHostDevices.pciHostDevices` (or wipe the table with `replaceDefaults: true` and curate it yourself). PCI vendor:device IDs themselves are stable across driver versions.
 
 ### SR-IOV PF vs VF (Ada Lovelace and newer)
 

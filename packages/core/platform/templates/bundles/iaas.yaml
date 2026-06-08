@@ -55,11 +55,21 @@
   pciHostDevices applies in both variants — passthrough (vfio-pci, whole
   GPU) and post-kubevirt#16890 SR-IOV vGPU VFs (Ada Lovelace / Blackwell
   with the vGPU 17/20 driver branch) both advertise via pciHostDevices.
-  mediatedDevices and mediatedDevicesConfiguration are vgpu-only: they
-  drive the pre-#16890 mdev path (Pascal–Ampere). Emitting them in the
-  passthrough variant would carry vGPU-only configuration into a CR that
-  has no vGPU manager deployed — a footgun for operators who keep a
-  shared gpu values block and flip the variant back to default.
+  mediatedDevices is vgpu-only: it EXPOSES, by stable profile name
+  (mdevNameSelector), the mdev devices the GPU Operator's vGPU Device
+  Manager creates on the node. Emitting it in the passthrough variant
+  would carry vGPU-only configuration into a CR that has no vGPU manager
+  deployed — a footgun for operators who keep a shared gpu values block
+  and flip the variant back to default.
+
+  mediatedDevicesConfiguration is intentionally NOT defaulted. Its
+  mediatedDeviceTypes entries are numeric nvidia-NNN ids that make
+  KubeVirt itself create mdevs — but those ids are per-(SKU, driver)
+  sysfs indices with no portable value, and mdev creation is already
+  handled by the vGPU Device Manager (name-based). It is therefore
+  emitted only from the .gpu.mediatedDevicesConfiguration override, for
+  operators who deliberately want KubeVirt to drive creation with
+  host-verified type ids.
 */ -}}
 {{- $pci := list -}}
 {{- $mdev := list -}}
@@ -72,18 +82,18 @@
 {{- $pci = concat $pci $userPci -}}
 {{- else -}}
 {{- /*
-  vgpu defaults table is only useful when nvidia-vgpu-device-manager is
-  actually deployed — without it, /sys/class/mdev_bus/ stays empty and
-  the rendered mediated resources can never become allocatable.
-  Suppress the platform mdev defaults when vgpuDeviceManager.enabled is
-  false (the case on Ada Lovelace / Blackwell SR-IOV); the operator can
-  still set their own mediated entries via .gpu.permittedHostDevices.
+  The mediatedDevices defaults name the mdev profiles the vGPU Device
+  Manager creates; they are only useful when that DaemonSet is actually
+  deployed — without it, /sys/class/mdev_bus/ stays empty and the
+  rendered mediated resources can never become allocatable. Suppress the
+  platform mdev defaults when vgpuDeviceManager.enabled is false (the
+  case on Ada Lovelace / Blackwell SR-IOV); the operator can still set
+  their own mediated entries via .gpu.permittedHostDevices.
 */ -}}
 {{- $deviceManagerOn := default false (((.Values.gpu).vgpuDeviceManager).enabled) -}}
 {{- if and (not $replace) $deviceManagerOn -}}
 {{- $vgpuDefaults := $.Files.Get "files/gpu-vgpu-defaults.yaml" | fromYaml -}}
 {{- $mdev = concat $mdev $vgpuDefaults.permittedHostDevices.mediatedDevices -}}
-{{- $mdevConfig = $vgpuDefaults.mediatedDevicesConfiguration -}}
 {{- end -}}
 {{- $pci = concat $pci $userPci -}}
 {{- $mdev = concat $mdev $userMdev -}}

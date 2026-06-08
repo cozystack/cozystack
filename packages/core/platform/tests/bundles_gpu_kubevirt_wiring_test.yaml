@@ -95,7 +95,7 @@ tests:
           path: spec.variant
           value: vgpu
 
-  - it: wires HostDevices gate plus NVIDIA mediatedDevices and mediatedDevicesConfiguration when gpu-operator runs in vgpu variant and gpu.vgpuDeviceManager.enabled is true (Pascal-Ampere mdev path)
+  - it: exposes NVIDIA mediatedDevices by name in vgpu variant when gpu.vgpuDeviceManager.enabled is true, and does NOT default a numeric mediatedDevicesConfiguration (mdev creation is delegated to the vGPU Device Manager)
     set:
       bundles:
         system:
@@ -120,8 +120,11 @@ tests:
           path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
       - notExists:
           path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
-      - exists:
-          path: spec.components.kubevirt.values.mediatedDevicesConfiguration.mediatedDeviceTypes
+      # No numeric mediatedDeviceTypes is shipped by default — those ids are
+      # per-(SKU, driver) sysfs indices, and the vGPU Device Manager already
+      # creates the mdevs by name.
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
 
   - it: suppresses the NVIDIA mdev defaults in vgpu variant when gpu.vgpuDeviceManager.enabled is false (default — Ada Lovelace SR-IOV path), so KubeVirt does not advertise resources that no daemon can ever create
     set:
@@ -665,3 +668,36 @@ tests:
             pciVendorSelector: "10DE:1DB1"
             resourceName: nvidia.com/GV100_V100_SXM2_32GB
             externalResourceProvider: true
+
+  - it: still forwards a user-supplied gpu.mediatedDevicesConfiguration into the CR in vgpu mode (the override escape hatch survives the name-based default), alongside the name-based mediatedDevices defaults
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuDeviceManager:
+          enabled: true
+        mediatedDevicesConfiguration:
+          mediatedDeviceTypes:
+          - nvidia-473
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      # name-based exposure defaults still flow in...
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+          content:
+            mdevNameSelector: NVIDIA A100-40C
+            resourceName: nvidia.com/A100-40C
+            externalResourceProvider: true
+      # ...and the operator's explicit numeric config is honoured.
+      - contains:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration.mediatedDeviceTypes
+          content: nvidia-473

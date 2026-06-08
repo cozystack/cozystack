@@ -348,13 +348,17 @@ gpu:
     #     resourceName: nvidia.com/A100-40C
     #     externalResourceProvider: true
     mediatedDevices: []
-  # mediatedDevicesConfiguration drives the vGPU profile auto-creation loop
-  # (vgpu variant only). Helm's mergeOverwrite semantics apply: a top-level
-  # key the user supplies REPLACES the platform-default value for that key
-  # rather than appending — so user mediatedDeviceTypes: [...] overrides the
-  # platform's eight defaults entirely. Combine with replaceDefaults: true
-  # when both this and permittedHostDevices.mediatedDevices should be wiped
-  # together. Shape matches KubeVirt's MediatedDevicesConfiguration:
+  # mediatedDevicesConfiguration makes KubeVirt itself create mdevs on the
+  # node (vgpu variant only). The platform ships NO default here: mdev
+  # creation is delegated to the GPU Operator's vGPU Device Manager
+  # (name-based), and the mediatedDeviceTypes ids below are numeric
+  # nvidia-NNN sysfs indices that vary per GPU SKU and driver branch — no
+  # value is portable, so look yours up on the host
+  # (/sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name) before setting
+  # it. Supplying it opts into KubeVirt-driven creation on top of the
+  # Device Manager. Helm's mergeOverwrite semantics apply: a top-level key
+  # you supply REPLACES that key wholesale rather than appending. Shape
+  # matches KubeVirt's MediatedDevicesConfiguration:
   #   mediatedDeviceTypes:
   #     - nvidia-740
   #   nodeMediatedDeviceTypes:
@@ -389,10 +393,10 @@ gpu:
   # DaemonSet crash-loops with "no parent devices found". Flip to true
   # on Pascal–Ampere clusters; leave false on Ada/Blackwell and supply
   # SR-IOV VFs via .gpu.permittedHostDevices.pciHostDevices instead.
-  # When true the platform also lets the default mediatedDevices /
-  # mediatedDevicesConfiguration table from
-  # files/gpu-vgpu-defaults.yaml flow into the KubeVirt CR; when false
-  # those defaults are suppressed (advertising mediated resources that
-  # nothing can ever allocate is a worse footgun than missing entries).
+  # When true the platform also lets the default name-based mediatedDevices
+  # exposure list from files/gpu-vgpu-defaults.yaml flow into the KubeVirt
+  # CR; when false those defaults are suppressed (advertising mediated
+  # resources that nothing can ever allocate is a worse footgun than
+  # missing entries).
   vgpuDeviceManager:
     enabled: false

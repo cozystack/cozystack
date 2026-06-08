@@ -1,14 +1,32 @@
-# NVIDIA vGPU profiles commonly exposed by nvidia-vgpu-manager in vGPU
-# mode. Used by bundles/iaas.yaml when bundles.iaas.gpuOperatorVariant=vgpu
-# and cozystack.gpu-operator is in bundles.enabledPackages. Auto-injected
-# into the KubeVirt CR at spec.configuration.permittedHostDevices.mediatedDevices
-# and spec.configuration.mediatedDevicesConfiguration.
+# NVIDIA vGPU profiles to EXPOSE to VMs in vGPU mode. Used by
+# bundles/iaas.yaml when bundles.iaas.gpuOperatorVariant=vgpu and
+# cozystack.gpu-operator is in bundles.enabledPackages. Auto-injected
+# into the KubeVirt CR at spec.configuration.permittedHostDevices.mediatedDevices.
 #
-# The profiles below cover the 24Q (3D-optimised) and 48Q (datacenter
-# whole-card) splits on the GPU families cozystack supports for vGPU
-# (Ampere and earlier — Ada Lovelace and Blackwell use per-VF NVIDIA
-# sysfs and are out of scope for the chart's vGPU defaults; see
-# system/gpu-operator/values-vgpu.yaml).
+# Division of labour: the GPU Operator's vGPU Device Manager CREATES the
+# mdev devices on each node from a name-based profile config; KubeVirt
+# only EXPOSES the already-created mdevs to VMs, matched by profile name
+# via mdevNameSelector. This file therefore carries only the name-based
+# exposure list — it does NOT ship a mediatedDevicesConfiguration block.
+# That block's mediatedDeviceTypes are numeric nvidia-NNN ids that make
+# KubeVirt itself create mdevs, but those ids are per-(SKU, driver) sysfs
+# indices with no portable value, and would duplicate the Device
+# Manager. Operators who deliberately want KubeVirt to drive creation set
+# host-verified ids via .Values.gpu.mediatedDevicesConfiguration instead.
+#
+# mdevNameSelector must match the on-host profile name the driver exposes
+# under /sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name — which is
+# driver-branch-dependent ("NVIDIA A100-40C" on the vGPU 13+/AIE branch,
+# "GRID A100-40C" on older GRID drivers). The profiles below cover the
+# 24Q/48Q and whole-card C splits on the families cozystack supports for
+# vGPU (Ampere and earlier — Ada Lovelace and Blackwell use per-VF NVIDIA
+# sysfs and are out of scope; see system/gpu-operator/values-vgpu.yaml).
+# Verify against the live node and override via
+# .Values.gpu.permittedHostDevices / .Values.gpu.replaceDefaults if your
+# driver exposes different names:
+#
+#   for t in /sys/bus/pci/devices/<BDF>/mdev_supported_types/*; do \
+#     echo "$(basename "$t") -> $(cat "$t"/name)"; done
 #
 # externalResourceProvider: true is mandatory — the mediated devices are
 # published by the vGPU Manager DaemonSet, not by KubeVirt itself.
@@ -38,18 +56,3 @@ permittedHostDevices:
   - mdevNameSelector: NVIDIA T4-16Q
     resourceName: nvidia.com/T4-16Q
     externalResourceProvider: true
-mediatedDevicesConfiguration:
-  # mediatedDeviceTypes lists the vGPU profile IDs the operator may
-  # auto-create per-node from the underlying physical GPUs. Numeric IDs
-  # are the NVIDIA-published vGPU type numbers (see GRID/vGPU release
-  # notes for the full mapping); listing one whole-card type per GPU
-  # family keeps the default deterministic.
-  mediatedDeviceTypes:
-  - nvidia-559    # A100-40C
-  - nvidia-560    # A100-80C
-  - nvidia-558    # A40-48Q
-  - nvidia-555    # A40-24Q
-  - nvidia-453    # A30-24C
-  - nvidia-471    # A10-24Q
-  - nvidia-413    # V100D-32C
-  - nvidia-232    # T4-16Q
