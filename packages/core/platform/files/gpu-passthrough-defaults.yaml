@@ -4,12 +4,23 @@
 # the KubeVirt CR at spec.configuration.permittedHostDevices.pciHostDevices.
 #
 # PCI vendor:device pairs are stable vendor-assigned identifiers under the
-# PCI-SIG-administered namespace and do not drift across driver versions. The resourceName strings mirror what
-# nvidia-sandbox-device-plugin auto-generates as of v25.x: a slug of
-# <ARCH>_<MODEL>_<FORM>_<MEM>. If your cluster's plugin emits something
-# different (kubectl describe node | grep nvidia.com/), extend or replace
-# the list at the platform values level via .Values.gpu.permittedHostDevices
-# / .Values.gpu.replaceDefaults.
+# PCI-SIG-administered namespace and do not drift across driver versions.
+#
+# The resourceName is what nvidia-sandbox-device-plugin
+# (nvcr.io/nvidia/kubevirt-gpu-device-plugin, the image shipped by the
+# gpu-operator package) advertises on the node. The plugin derives it
+# mechanically from the device's PCI-IDs database name: uppercase the
+# name, turn "/", "." and whitespace into "_", then strip the remaining
+# non-alphanumerics (the "[" / "]" around the model). So
+# "TU104GL [Tesla T4]" becomes nvidia.com/TU104GL_TESLA_T4 and
+# "GA100GL [A30 PCIe]" becomes nvidia.com/GA100GL_A30_PCIE — the slug
+# carries every token the PCI-IDs string holds (die suffix "GL", the
+# "Tesla" brand on Turing/Volta, form factor, memory), not a tidy
+# <arch>_<model>. The names here track the pci.ids snapshot bundled in
+# the plugin image; a different plugin build can emit a different string.
+# Always confirm against the live node (kubectl describe node <node> |
+# grep nvidia.com/) and extend or replace via .Values.gpu.permittedHostDevices
+# / .Values.gpu.replaceDefaults when it differs.
 #
 # externalResourceProvider: true is mandatory here — the resource is
 # published by the sandbox-device-plugin DaemonSet, not by KubeVirt itself.
@@ -22,10 +33,10 @@ pciHostDevices:
   resourceName: nvidia.com/GH100_H100_SXM5_80GB
   externalResourceProvider: true
 - pciVendorSelector: "10DE:2331"
-  resourceName: nvidia.com/GH100_H100_PCIE_80GB
+  resourceName: nvidia.com/GH100_H100_PCIE
   externalResourceProvider: true
 - pciVendorSelector: "10DE:2321"
-  resourceName: nvidia.com/GH100_H100_NVL_94GB
+  resourceName: nvidia.com/GH100_H100L_94GB
   externalResourceProvider: true
 # Ada Lovelace (datacenter SKUs)
 - pciVendorSelector: "10DE:26B9"
@@ -51,7 +62,7 @@ pciHostDevices:
   resourceName: nvidia.com/GA100_A100_PCIE_40GB
   externalResourceProvider: true
 - pciVendorSelector: "10DE:20B7"
-  resourceName: nvidia.com/GA100_A30
+  resourceName: nvidia.com/GA100GL_A30_PCIE
   externalResourceProvider: true
 - pciVendorSelector: "10DE:2235"
   resourceName: nvidia.com/GA102GL_A40
@@ -61,15 +72,18 @@ pciHostDevices:
   externalResourceProvider: true
 # Turing
 - pciVendorSelector: "10DE:1EB8"
-  resourceName: nvidia.com/TU104GL_T4
+  resourceName: nvidia.com/TU104GL_TESLA_T4
   externalResourceProvider: true
 # Volta
 - pciVendorSelector: "10DE:1DB1"
-  resourceName: nvidia.com/GV100_V100_SXM2_32GB
+  resourceName: nvidia.com/GV100GL_TESLA_V100_SXM2_16GB
+  externalResourceProvider: true
+- pciVendorSelector: "10DE:1DB5"
+  resourceName: nvidia.com/GV100GL_TESLA_V100_SXM2_32GB
   externalResourceProvider: true
 - pciVendorSelector: "10DE:1DB4"
-  resourceName: nvidia.com/GV100_V100_PCIE_16GB
+  resourceName: nvidia.com/GV100GL_TESLA_V100_PCIE_16GB
   externalResourceProvider: true
 - pciVendorSelector: "10DE:1DF6"
-  resourceName: nvidia.com/GV100_V100S_PCIE_32GB
+  resourceName: nvidia.com/GV100GL_TESLA_V100S_PCIE_32GB
   externalResourceProvider: true
