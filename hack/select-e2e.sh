@@ -1,32 +1,35 @@
 #!/bin/sh
-# Read a list of changed files (one per line) and emit space-separated app
-# names whose bats files in hack/e2e-apps/ should run.
+# Read a list of changed files (one per line) and emit space-separated suite
+# names whose Chainsaw suites under hack/e2e-chainsaw/ should run.
 #
 # Usage: hack/select-e2e.sh <changed-files> [<sources-dir>]
 # Defaults: sources-dir = packages/core/platform/sources
 #
 # Output:
-#   - empty       no E2E impact (docs / dashboards / *.md only)
-#   - <app names> selected per the PackageSource dependency graph
-#   - full list   any path that affects all tests, OR an unrecognised
-#                 packages/* path, OR a per-app source whose graph has
-#                 no *-application descendants (conservative fallback)
+#   - empty         no E2E impact (docs / dashboards / *.md only)
+#   - <suite names> selected per the PackageSource dependency graph
+#   - full list     any path that affects all tests, OR an unrecognised
+#                   packages/* path, OR a per-app source whose graph has
+#                   no *-application descendants (conservative fallback)
 set -eu
 
 CHANGED="${1:?missing changed-files arg}"
 SOURCES_DIR="${2:-packages/core/platform/sources}"
 
-# Anything matching this pattern triggers the full bats suite. Per-app bats
-# (hack/e2e-apps/<name>.bats) are matched BEFORE this so editing one bats
-# file doesn't escalate to the full suite.
-full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|hack/[^/]+\.sh$|hack/[^/]+\.bats$|hack/e2e-apps/[^/]+\.sh$|Makefile$|\.github/workflows/pull-requests\.yaml$)'
+# Anything matching this pattern triggers the full Chainsaw suite. Per-suite
+# edits (hack/e2e-chainsaw/<name>/...) are matched BEFORE this so editing one
+# suite doesn't escalate to the full suite; the shared _lib helpers and the
+# .chainsaw.yaml config affect every suite and DO escalate (handled inline).
+full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|hack/[^/]+\.sh$|hack/[^/]+\.bats$|Makefile$|\.github/workflows/pull-requests\.yaml$)'
 
-# All known per-app bats files
-all_apps=$(ls hack/e2e-apps/*.bats 2>/dev/null | xargs -n1 basename | sed 's/\.bats$//')
+# All known Chainsaw suites: every dir under hack/e2e-chainsaw/ holding a
+# chainsaw-test.yaml (this excludes _lib/ and the top-level config files).
+all_apps=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml 2>/dev/null \
+  | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort)
 
-# PackageSource name -> bats name(s). Most *-application sources map by
-# stripping the suffix; explicit overrides for the few that don't.
-app_to_bats() {
+# PackageSource name -> Chainsaw suite name(s). Most *-application sources map
+# by stripping the suffix; explicit overrides for the few that don't.
+src_to_suites() {
   case "$1" in
     postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
@@ -63,13 +66,19 @@ while IFS= read -r file; do
     continue
   fi
 
-  # 2. Per-app bats first — editing one bats file selects only that app.
-  if echo "$file" | grep -qE '^hack/e2e-apps/[^/]+\.bats$'; then
-    app=$(basename "$file" .bats)
-    selected_apps="$selected_apps $app"
-    trigger_any=1
-    continue
-  fi
+  # 2. Chainsaw edits. A per-suite file selects only that suite; the shared
+  #    _lib helpers and the .chainsaw.yaml config affect every suite, so they
+  #    escalate to the full run.
+  case "$file" in
+    hack/e2e-chainsaw/_lib/*|hack/e2e-chainsaw/.chainsaw.yaml)
+      trigger_full=1
+      continue ;;
+    hack/e2e-chainsaw/*/*)
+      app=$(echo "$file" | sed -nE 's,^hack/e2e-chainsaw/([^/]+)/.*,\1,p')
+      selected_apps="$selected_apps $app"
+      trigger_any=1
+      continue ;;
+  esac
 
   # 3. Full-suite trigger
   if echo "$file" | grep -qE "$full_suite_pattern"; then
@@ -116,20 +125,20 @@ while :; do
   all_sources="$all_sources $new"
 done
 
-# Filter to *-application sources, then map to bats names.
+# Filter to *-application sources, then map to Chainsaw suite names.
 final=""
 for s in $all_sources; do
   app=${s#cozystack.}
   case "$app" in
-    *-application) final="$final $(app_to_bats "$app")" ;;
+    *-application) final="$final $(src_to_suites "$app")" ;;
     external-dns) final="$final external-dns" ;;
   esac
 done
 
-# Add directly-selected apps from per-app bats edits.
+# Add directly-selected suites from per-suite edits.
 final="$final $selected_apps"
 
-# Deduplicate; intersect with available bats files.
+# Deduplicate; intersect with available Chainsaw suites.
 final_apps=$(echo "$final" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
   if echo "$all_apps" | grep -Fxq "$app"; then
     echo "$app"

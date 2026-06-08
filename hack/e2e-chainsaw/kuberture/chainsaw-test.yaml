@@ -1,0 +1,151 @@
+# Chainsaw port of hack/e2e-apps/kuberture.bats. The kuberture addon publishes
+# the default/kubernetes EndpointSlice as annotated headless Services for
+# multiple external-dns instances. Resource readiness is declarative; the
+# annotation-shape checks and the split-horizon log assertions stay scripts.
+#
+# Everything is applied by chainsaw (the cluster-scoped Package, the cluster
+# RBAC, the probe Pods), so cleanup is automatic — no inlined teardown.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kuberture
+spec:
+  catch:
+  - events:
+      namespace: cozy-kuberture
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: kuberture
+      namespace: cozy-kuberture
+  - podLogs:
+      namespace: cozy-kuberture
+      selector: app.kubernetes.io/name=kuberture
+      tail: 100
+  steps:
+  - name: create-package
+    try:
+    - apply:
+        file: package.yaml
+
+  - name: wait-kuberture-ready
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: cozy-kuberture
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kuberture
+            namespace: cozy-kuberture
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: kuberture
+            namespace: cozy-kuberture
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+
+  - name: wait-output-services
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: kuberture-e2e-public
+            namespace: cozy-kuberture
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: kuberture-e2e-internal
+            namespace: cozy-kuberture
+
+  - name: assert-annotation-shape
+    try:
+    - script:
+        content: |
+          set -eu
+          pub_host=kuberture-e2e-public.cozystack.test
+          int_host=kuberture-e2e-internal.cozystack.test
+          pub_prefix=external-dns.alpha.kubernetes.io/
+          int_prefix=kuberture-e2e-internal-dns.io/
+
+          pub_json=$(kubectl -n cozy-kuberture get service kuberture-e2e-public -o json)
+          int_json=$(kubectl -n cozy-kuberture get service kuberture-e2e-internal -o json)
+
+          # Both Services must be headless.
+          test "$(echo "$pub_json" | jq -r '.spec.clusterIP')" = "None"
+          test "$(echo "$int_json" | jq -r '.spec.clusterIP')" = "None"
+
+          # hostname/ttl carry the configured per-output values.
+          test "$(echo "$pub_json" | jq -r --arg k "${pub_prefix}hostname" '.metadata.annotations[$k]')" = "$pub_host"
+          test "$(echo "$int_json" | jq -r --arg k "${int_prefix}hostname" '.metadata.annotations[$k]')" = "$int_host"
+          test "$(echo "$pub_json" | jq -r --arg k "${pub_prefix}ttl" '.metadata.annotations[$k]')" = "60"
+          test "$(echo "$int_json" | jq -r --arg k "${int_prefix}ttl" '.metadata.annotations[$k]')" = "300"
+
+          # target is populated from the EndpointSlice (value is cluster-specific).
+          test -n "$(echo "$pub_json" | jq -r --arg k "${pub_prefix}target" '.metadata.annotations[$k] // ""')"
+          test -n "$(echo "$int_json" | jq -r --arg k "${int_prefix}target" '.metadata.annotations[$k] // ""')"
+
+          # Per-output isolation: neither Service carries the other prefix.
+          test "$(echo "$pub_json" | jq -r --arg k "${int_prefix}hostname" '.metadata.annotations[$k] // "absent"')" = "absent"
+          test "$(echo "$int_json" | jq -r --arg k "${pub_prefix}hostname" '.metadata.annotations[$k] // "absent"')" = "absent"
+        check:
+          ($error == null): true
+
+  - name: split-horizon-routing-proof
+    try:
+    - apply:
+        file: probes.yaml
+    - script:
+        timeout: 4m
+        content: |
+          set -eu
+          for probe in public internal; do
+            deadline=$(( $(date +%s) + 180 ))
+            until kubectl -n cozy-kuberture get pod "kuberture-e2e-edns-${probe}" \
+                -o jsonpath='{.status.phase}' 2>/dev/null | grep -Eq '^(Succeeded|Failed)$'; do
+              [ "$(date +%s)" -ge "$deadline" ] && break
+              sleep 3
+            done
+            phase=$(kubectl -n cozy-kuberture get pod "kuberture-e2e-edns-${probe}" -o jsonpath='{.status.phase}')
+            if [ "$phase" != "Succeeded" ]; then
+              echo "==== probe ${probe} failed: phase=${phase} ===="
+              kubectl -n cozy-kuberture describe pod "kuberture-e2e-edns-${probe}" || true
+              kubectl -n cozy-kuberture logs "pod/kuberture-e2e-edns-${probe}" || true
+              exit 1
+            fi
+          done
+
+          pub_host=kuberture-e2e-public.cozystack.test
+          int_host=kuberture-e2e-internal.cozystack.test
+          pub_logs=$(kubectl -n cozy-kuberture logs pod/kuberture-e2e-edns-public)
+          int_logs=$(kubectl -n cozy-kuberture logs pod/kuberture-e2e-edns-internal)
+
+          # The default-prefix probe sees only the public hostname; the internal-
+          # prefix probe sees only the internal hostname.
+          echo "$pub_logs" | grep -Fq "$pub_host"
+          ! echo "$pub_logs" | grep -Fq "$int_host"
+          echo "$int_logs" | grep -Fq "$int_host"
+          ! echo "$int_logs" | grep -Fq "$pub_host"
+        check:
+          ($error == null): true

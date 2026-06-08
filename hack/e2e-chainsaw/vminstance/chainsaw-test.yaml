@@ -1,0 +1,137 @@
+# Chainsaw port of hack/e2e-apps/vminstance.bats. Two scenarios: a standalone
+# VMDisk, and a VMInstance booting from its own VMDisk. Both download the Ubuntu
+# noble cloud image, so the readiness timeouts are generous. Chainsaw deletes
+# the VMDisk/VMInstance CRs it applied at cleanup.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: vmdisk
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: vm-disk-test
+  steps:
+  - name: create-vmdisk
+    try:
+    - apply:
+        file: vmdisk.yaml
+  - name: wait-vmdisk-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-disk-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-test
+          status:
+            phase: Bound
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: vminstance
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: vm-instance-test
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      name: vm-instance-test
+  steps:
+  - name: create-vmdisk
+    try:
+    - apply:
+        file: vmdisk-vmi.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            phase: Bound
+  - name: create-vminstance
+    try:
+    - apply:
+        file: vminstance.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-instance-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+  - name: wait-vm-running
+    try:
+    # Nested KubeVirt startup (virt-launcher + libvirt + cloud-init DHCP) takes
+    # 30-60s; allow a generous bound for the IP to appear, then VM Ready.
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachineInstance
+          metadata:
+            name: vm-instance-test
+          (status.interfaces[0].ipAddress != null): true
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: vm-instance-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"

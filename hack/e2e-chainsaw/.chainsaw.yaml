@@ -16,8 +16,11 @@ spec:
   timeouts:
     apply: 1m
     assert: 5m
-    delete: 2m
-    cleanup: 2m
+    # delete/cleanup are generous: finalizer-draining CRs (VMDisk, FoundationDB,
+    # Tenant child namespaces) can take minutes to fully reclaim their backing
+    # resources, and Chainsaw waits for the delete to complete during cleanup.
+    delete: 5m
+    cleanup: 5m
     error: 5m
     exec: 5m
   cleanup:

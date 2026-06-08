@@ -1,0 +1,64 @@
+# Chainsaw port of hack/e2e-apps/qdrant.bats ("Create Qdrant").
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: qdrant
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: qdrant-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=qdrant-test
+      tail: 50
+  steps:
+  - name: create-qdrant
+    try:
+    - apply:
+        file: qdrant.yaml
+
+  - name: wait-helmreleases-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: qdrant-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: qdrant-test-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-statefulset-and-storage
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: qdrant-test
+          status:
+            readyReplicas: 1
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: qdrant-storage-qdrant-test-0
+          status:
+            phase: Bound

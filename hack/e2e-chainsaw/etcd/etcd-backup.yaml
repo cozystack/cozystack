@@ -1,0 +1,26 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Etcd
+metadata:
+  name: etcd
+spec:
+  size: 1Gi
+  replicas: 3
+  storageClass: ""
+  resources:
+    cpu: 100m
+    memory: 128Mi
+  backup:
+    enabled: true
+    # Schedule far in the future so no Jobs fire during the test window; the
+    # endpoint intentionally resolves nowhere — this only checks that the chart
+    # renders EtcdBackupSchedule/Secret and the operator materializes a CronJob,
+    # not that backups reach S3.
+    schedule: "0 0 1 1 *"
+    destinationPath: "s3://test-bucket/etcd-backups/"
+    endpointURL: "http://no-such-endpoint.invalid:9000"
+    region: "us-east-1"
+    forcePathStyle: true
+    s3AccessKey: "e2e-access-key"
+    s3SecretKey: "e2e-secret-key"
+    successfulJobsHistoryLimit: 1
+    failedJobsHistoryLimit: 1

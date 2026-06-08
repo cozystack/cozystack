@@ -1,0 +1,192 @@
+# Chainsaw port of hack/e2e-apps/etcd.bats. Three scenarios as separate Tests.
+#
+# The etcd chart pins the Helm release name to 'etcd'
+# (packages/extra/etcd/templates/check-release-name.yaml), so every scenario
+# applies an Etcd with metadata.name: etcd. Chainsaw deletes the Etcd CR it
+# applied (and waits) at cleanup, but the operator-created HelmRelease, S3
+# secret and EtcdBackupSchedule tear down asynchronously after that — so each
+# Test opens with `error` ops that wait for those leftovers to clear before
+# applying its own singleton, mirroring the BATS setup() waits.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-basic
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  - describe:
+      apiVersion: etcd.aenix.io/v1alpha1
+      kind: EtcdCluster
+      name: etcd
+  steps:
+  - name: ensure-clean
+    try:
+    - error:
+        timeout: 2m
+        resource: {apiVersion: helm.toolkit.fluxcd.io/v2, kind: HelmRelease, metadata: {name: etcd}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+  - name: create-etcd
+    try:
+    - apply:
+        file: etcd-basic.yaml
+  - name: wait-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: etcd.aenix.io/v1alpha1
+          kind: EtcdCluster
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-empty-backup
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  steps:
+  - name: ensure-clean
+    try:
+    - error:
+        timeout: 2m
+        resource: {apiVersion: helm.toolkit.fluxcd.io/v2, kind: HelmRelease, metadata: {name: etcd}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+  - name: create-etcd
+    try:
+    - apply:
+        file: etcd-empty-backup.yaml
+  - name: wait-ready-and-assert-no-backup
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # With backup disabled, neither the schedule nor the secret should exist.
+    - error:
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+    - error:
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-backup-schedule
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  - describe:
+      apiVersion: etcd.aenix.io/v1alpha1
+      kind: EtcdBackupSchedule
+      name: etcd
+  steps:
+  - name: ensure-clean
+    try:
+    - error:
+        timeout: 2m
+        resource: {apiVersion: helm.toolkit.fluxcd.io/v2, kind: HelmRelease, metadata: {name: etcd}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+  - name: create-etcd
+    try:
+    - apply:
+        file: etcd-backup.yaml
+  - name: wait-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: etcd.aenix.io/v1alpha1
+          kind: EtcdCluster
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+  - name: verify-backup-resources
+    try:
+    # Region field must propagate to the EtcdBackupSchedule.
+    - assert:
+        resource:
+          apiVersion: etcd.aenix.io/v1alpha1
+          kind: EtcdBackupSchedule
+          metadata:
+            name: etcd
+          spec:
+            destination:
+              s3:
+                region: us-east-1
+    # The S3 secret carries the access key (base64 of "e2e-access-key").
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: etcd-s3-creds
+          data:
+            AWS_ACCESS_KEY_ID: ZTJlLWFjY2Vzcy1rZXk=
+    # The operator generates a CronJob from the EtcdBackupSchedule.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: CronJob
+          metadata:
+            labels:
+              etcd.aenix.io/etcdbackupschedule-name: etcd

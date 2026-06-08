@@ -1,0 +1,89 @@
+# Chainsaw port of hack/e2e-apps/mariadb.bats ("Create DB MariaDB").
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mariadb
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mariadb-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=mariadb-test
+      tail: 50
+  steps:
+  - name: create-mariadb
+    try:
+    - apply:
+        file: mariadb.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mariadb-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-service-and-statefulset
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-test
+          spec:
+            (ports[0].port): 3306
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-test
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: mariadb-test
+          status:
+            replicas: 2
+
+  - name: verify-metrics
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-test-metrics
+          spec:
+            (ports[0].port): 9104
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-test-metrics
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mariadb-test-metrics
+          status:
+            replicas: 1
