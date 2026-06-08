@@ -1,6 +1,6 @@
 module github.com/cozystack/cozystack/api/apps/v1alpha1
 
-go 1.26.2
+go 1.26.4
 
 require k8s.io/apimachinery v0.36.0
 
