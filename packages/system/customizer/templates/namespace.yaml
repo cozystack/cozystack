@@ -1,0 +1,10 @@
+{{- range .Values.rbac.ownedNamespaces }}
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ . }}
+  labels:
+    app.kubernetes.io/managed-by: cozystack
+    cozystack.io/customizer-owned: "true"
+{{- end }}

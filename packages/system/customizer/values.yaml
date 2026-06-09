@@ -1,0 +1,34 @@
+source:
+  # https://github.com/myorg/cozystack-customizer or ssh://... — required when enabled.
+  url: ""
+  ref:
+    branch: main
+  # Secret in {{ .Release.Namespace }} with git credentials. Admin pre-creates;
+  # this chart does not generate it (the platform must never own admin credentials).
+  secretRef: ""
+  interval: 1m
+
+kustomization:
+  # Path inside the customizer repo that the Kustomization reconciles.
+  path: ""
+  interval: 5m
+  prune: true
+  wait: true
+  # decryption block per https://fluxcd.io/flux/components/kustomize/kustomizations/#decryption
+  decryption: {}
+  # SSA strategy applied to customizer-rendered manifests. Default Merge for
+  # safety (kustomize-controller will still force-transfer ownership on
+  # overlapping fields — Flux SSA conflict detection cannot catch this; the
+  # planned admission webhook on packages.cozystack.io is the enforcement
+  # path — but Merge avoids cleanup-side surprises). Set to Override only
+  # once admins are confident no chart-managed field will be claimed by
+  # their manifests.
+  ssaStrategy: Merge
+
+rbac:
+  # Namespaces in which the customizer SA is bound to cluster-admin (full
+  # mutate within these namespaces). cozy-customizer is the chart-created
+  # default — the admin's own playground for bring-your-own HelmReleases,
+  # NetworkPolicies, etc.
+  ownedNamespaces:
+    - cozy-customizer

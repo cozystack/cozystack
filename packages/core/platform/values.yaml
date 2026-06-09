@@ -310,3 +310,27 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
+# Admin-facing GitOps customizer (cozystack.customizer).
+# When enabled, a Flux GitRepository + Kustomization in cozy-system reconciles
+# an admin-owned git repo of cluster customizations using a curated
+# ServiceAccount. The admin pre-creates the git auth Secret named by
+# source.secretRef in cozy-system before enabling.
+#
+# Risk callout: as of MVP there is no admission webhook on packages.cozystack.io.
+# Customizer manifests can silently claim chart-owned fields on Package CRs
+# (kustomize-controller force-transfers ownership unconditionally). Treat the
+# field-ownership contract in operations/customizer as advisory until the
+# webhook lands. Review customizer patches accordingly.
+customizer:
+  enabled: false
+  source:
+    url: ""
+    ref:
+      branch: main
+    secretRef: ""
+  kustomization:
+    path: ""
+    ssaStrategy: Merge
+  rbac:
+    ownedNamespaces:
+      - cozy-customizer

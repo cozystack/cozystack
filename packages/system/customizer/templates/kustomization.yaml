@@ -1,0 +1,33 @@
+{{- if not .Values.kustomization.path -}}
+{{- fail "customizer: kustomization.path is required when the package is enabled" -}}
+{{- end -}}
+---
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: cozystack-customizer
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    # kustomize-controller hardcodes client.ForceOwnership on Apply, so this
+    # annotation does NOT block silent field-ownership transfer. Merge is
+    # still preferred over Override because the cleanup pass is less
+    # aggressive (auto-clears fewer foreign managers). The actual contract
+    # enforcement is a follow-up admission webhook on packages.cozystack.io.
+    kustomize.toolkit.fluxcd.io/ssa: {{ .Values.kustomization.ssaStrategy }}
+spec:
+  interval: {{ .Values.kustomization.interval }}
+  path: {{ .Values.kustomization.path | quote }}
+  prune: {{ .Values.kustomization.prune }}
+  wait: {{ .Values.kustomization.wait }}
+  sourceRef:
+    kind: GitRepository
+    name: cozystack-customizer-config
+  serviceAccountName: cozystack-customizer
+  {{- with .Values.kustomization.decryption }}
+  decryption:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  healthChecks:
+    - apiVersion: cozystack.io/v1alpha1
+      kind: Package
+      name: cozystack.cozystack-platform

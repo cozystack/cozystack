@@ -1,0 +1,29 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozystack-customizer
+rules:
+  # Patch Package CRs — but not delete them. Deletion of a platform Package
+  # would tear down its HelmReleases and leave the bundle in a partial state.
+  # Use bundles.disabledPackages on cozystack.cozystack-platform to disable.
+  - apiGroups: ["cozystack.io"]
+    resources: ["packages"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  # Admins can author their own PackageSources (custom OCI/Git chart sources).
+  - apiGroups: ["cozystack.io"]
+    resources: ["packagesources"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Read-only visibility on platform HelmReleases.
+  - apiGroups: ["helm.toolkit.fluxcd.io"]
+    resources: ["helmreleases"]
+    verbs: ["get", "list", "watch"]
+  # Keycloak: declarative realm / client / user management when keycloak is enabled.
+  - apiGroups: ["k8s.keycloak.org"]
+    resources: ["keycloakrealmimports", "keycloaks", "keycloakusers"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Source-controller objects so admins can declare additional GitRepositories /
+  # OCIRepositories (their own chart registry).
+  - apiGroups: ["source.toolkit.fluxcd.io"]
+    resources: ["*"]
+    verbs: ["*"]
