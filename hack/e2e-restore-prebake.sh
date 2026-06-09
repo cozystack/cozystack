@@ -1,0 +1,115 @@
+#!/bin/sh
+# Restore the Cozystack e2e sandbox from a prebake archive and apply the
+# PR-specific diff via helm upgrade installer. Designed to run inside
+# the sandbox container after `make -C packages/core/testing apply` has
+# booted it.
+#
+# Prerequisites:
+#   - /workspace/prebake.tar.zst staged by the caller
+#   - Bridge/tap config NOT yet applied (this script sets them up,
+#     mirroring hack/e2e-prepare-cluster.bats)
+#
+# On success: the cluster mirrors the PR's working-tree state and is
+# ready for the e2e test suite. On failure: prints non-ready
+# HelmRelease conditions and exits non-zero so the caller can teardown
+# + collect diagnostics.
+set -eux
+
+cd /workspace
+
+apt-get update -qq >/dev/null 2>&1 || true
+apt-get install -y -q zstd >/dev/null 2>&1 || true
+
+echo "::group::Extract prebake archive"
+mkdir -p _restored
+tar -I zstd -xf prebake.tar.zst -C _restored
+ls -lh _restored/
+echo "::endgroup::"
+
+echo "::group::Restore credentials"
+cp _restored/talosconfig talosconfig
+cp _restored/kubeconfig kubeconfig
+echo "::endgroup::"
+
+echo "::group::Restore disk layout (system+seed+data per node)"
+# QEMU drive order must match the fresh-install layout — system=vda,
+# seed=vdb, data=vdc — because LINSTOR's storage pool is provisioned
+# against /dev/vdc explicitly (see hack/e2e-post-install-prep.sh).
+for i in 1 2 3; do
+  mkdir -p "srv${i}"
+  mv "_restored/srv${i}-system.qcow2" "srv${i}/system.qcow2"
+  mv "_restored/srv${i}-data.qcow2"   "srv${i}/data.qcow2"
+  mv "_restored/srv${i}-seed.img"     "srv${i}/seed.img"
+done
+echo "::endgroup::"
+
+echo "::group::Set up host networking (cozy-br0 + iptables + tap devs)"
+# Mirrors the "Prepare networking and masquerading" + "Create tap devices"
+# tests in hack/e2e-prepare-cluster.bats. Idempotent so it can recover
+# from a partially-initialised sandbox.
+ip link del cozy-br0 2>/dev/null || true
+ip link add cozy-br0 type bridge
+ip link set cozy-br0 up
+ip address add 192.168.123.1/24 dev cozy-br0
+iptables -t nat -D POSTROUTING -s 192.168.123.0/24 ! -d 192.168.123.0/24 -j MASQUERADE 2>/dev/null || true
+iptables -t nat -A POSTROUTING -s 192.168.123.0/24 ! -d 192.168.123.0/24 -j MASQUERADE
+for i in 1 2 3; do
+  ip link del "cozy-srv${i}" 2>/dev/null || true
+  ip tuntap add dev "cozy-srv${i}" mode tap
+  ip link set "cozy-srv${i}" up
+  ip link set "cozy-srv${i}" master cozy-br0
+done
+echo "::endgroup::"
+
+echo "::group::Boot QEMU VMs from snapshot"
+for i in 1 2 3; do
+  qemu-system-x86_64 -machine type=pc,accel=kvm -cpu host -smp 8 -m 24576 \
+    -device virtio-net,netdev=net0,mac="52:54:00:12:34:5${i}" \
+    -netdev "tap,id=net0,ifname=cozy-srv${i},script=no,downscript=no" \
+    -drive "file=srv${i}/system.qcow2,if=virtio,format=qcow2" \
+    -drive "file=srv${i}/seed.img,if=virtio,format=raw" \
+    -drive "file=srv${i}/data.qcow2,if=virtio,format=qcow2" \
+    -display none -daemonize -pidfile "srv${i}/qemu.pid"
+done
+sleep 5
+echo "::endgroup::"
+
+echo "::group::Wait for Talos API + Kubernetes nodes Ready"
+timeout 60 sh -ec 'until nc -nz 192.168.123.11 50000 && nc -nz 192.168.123.12 50000 && nc -nz 192.168.123.13 50000; do sleep 1; done'
+timeout 180 sh -ec 'until [ $(kubectl get node --no-headers 2>/dev/null | grep -c " Ready ") -eq 3 ]; do sleep 5; kubectl get nodes 2>&1 | head -5; done'
+echo "Cluster ready after restore"
+kubectl get nodes
+echo "::endgroup::"
+
+echo "::group::Apply PR diff via helm upgrade installer"
+# The PR's packages/core/installer/values.yaml has its operator image
+# and platformSourceUrl/platformSourceRef patched to point at the PR's
+# build outputs. Upgrading the installer chart restarts the operator
+# pod with new args, which on startup replaces the in-cluster
+# OCIRepository resource. Flux source-controller then pulls the
+# PR-version of cozystack-packages, the operator reconciles Package
+# CRs against the new artifact, and helm-controller upgrades every
+# HelmRelease whose values diverged from the snapshot.
+helm upgrade installer packages/core/installer \
+  --install --namespace cozy-system \
+  --set cozystackOperator.helmReleaseInterval=30s \
+  --wait --timeout 5m
+echo "::endgroup::"
+
+echo "::group::Force flux source reconcile (skip 5-min poll interval)"
+flux reconcile source oci cozystack-platform -n cozy-system
+echo "::endgroup::"
+
+echo "::group::Wait HelmReleases to converge to PR values"
+if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
+  kubectl get hr -A || true
+  kubectl get hr -A --no-headers | awk '$4 != "True" { print }' | while read -r ns name _; do
+    echo "--- Non-ready HelmRelease: ${ns}/${name}"
+    kubectl get hr -n "${ns}" "${name}" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' || true
+  done
+  echo "Some HelmReleases failed to reconcile after PR-diff apply" >&2
+  exit 1
+fi
+echo "::endgroup::"
+
+echo "Prebake restore + PR-diff apply complete"
