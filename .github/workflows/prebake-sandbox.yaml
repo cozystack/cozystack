@@ -67,8 +67,23 @@ jobs:
             curl -sSL https://fluxcd.io/install.sh | sudo bash
           fi
 
-      - name: Build Talos image
-        run: make -C packages/core/talos talos-nocloud
+      # Prefer the cached Talos image published by talos-publish.yaml so
+      # the snapshot binds to exactly the image PR builds also pull from
+      # ghcr. Falls back to a local rebuild when the cache is empty
+      # (fresh repo, GHCR outage, or first prebake before talos-publish
+      # has populated `:latest`).
+      - name: Download cached Talos image (or build)
+        run: |
+          mkdir -p _out/assets
+          if flux pull artifact \
+              oci://ghcr.io/cozystack/cozystack-talos:latest \
+              --output=_out/assets; then
+            ls -lh _out/assets/nocloud-amd64.raw.xz
+            echo "Using cached Talos image from ghcr"
+          else
+            echo "Cached Talos image unreachable, building from source"
+            make -C packages/core/talos talos-nocloud
+          fi
 
       - name: Set sandbox ID
         run: |
