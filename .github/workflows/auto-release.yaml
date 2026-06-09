@@ -60,12 +60,30 @@ jobs:
             execSync('git config --unset-all http.https://github.com/.extraheader || true', { encoding: 'utf8' });
 
             // Get all release-X.Y branches
-            const branches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
+            const allBranches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
               .split('\n')
               .filter(b => b.trim())
               .filter(b => /^release-\d+\.\d+$/.test(b));
-            
-            console.log(`Found ${branches.length} release branches: ${branches.join(', ')}`);
+
+            // Only auto-patch-release the N newest minor lines. Older lines are
+            // EOL: we don't want stray patch tags (and broken release PRs) cut
+            // on them. The window slides automatically as new release-X.Y
+            // branches are created — once release-1.5 exists the window becomes
+            // {1.5, 1.4} and the trailing line retires on its own.
+            const SUPPORTED_LINE_COUNT = 2;
+            const lineNum = b => {
+              const [maj, min] = b.replace('release-', '').split('.').map(Number);
+              return maj * 1000 + min;
+            };
+            const branches = [...allBranches]
+              .sort((a, b) => lineNum(b) - lineNum(a))
+              .slice(0, SUPPORTED_LINE_COUNT);
+
+            const skipped = allBranches.filter(b => !branches.includes(b)).sort();
+            console.log(`Found ${allBranches.length} release branches; auto-releasing the ${SUPPORTED_LINE_COUNT} newest: ${branches.join(', ')}`);
+            if (skipped.length) {
+              console.log(`Skipping ${skipped.length} EOL release branches: ${skipped.join(', ')}`);
+            }
             
             // Get all published releases (not draft)
             const allReleases = await github.rest.repos.listReleases({
