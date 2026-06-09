@@ -8,7 +8,7 @@ prerequisite hand-off ends at "tenants can author `BackupJob` /
 ## 1. Install the operator + driver
 
 - `packages/system/etcd-operator` ships the upstream `etcd-operator`
-  (CRDs: `EtcdCluster`, `EtcdBackup`, `EtcdBackupSchedule`).
+  (CRDs: `EtcdCluster`, `EtcdMember`, `EtcdSnapshot`).
 - `packages/system/backupstrategy-controller` ships the
   `strategy.backups.cozystack.io/v1alpha1` API and the controllers that
   dispatch `BackupJob` / `RestoreJob` to the per-app driver. The

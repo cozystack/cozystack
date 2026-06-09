@@ -21,7 +21,7 @@ namespace) and `targetApplicationRef` is a same-namespace reference.
    `helm.toolkit.fluxcd.io/v2 HelmRelease "etcd"` stops Flux from
    re-rendering the chart while the driver mutates the live cluster.
 2. **Snapshot the chart-rendered EtcdCluster spec.** The driver reads
-   the live `etcd.aenix.io/EtcdCluster "etcd"` spec and stashes it on
+   the live `etcd-operator.cozystack.io/EtcdCluster "etcd"` spec and stashes it on
    `RestoreJob.status.conditions[EtcdClusterSpecCaptured].message`.
    This makes the destructive flow controller-crash-safe: a restart
    between "snapshot taken" and "cluster recreated" still has the spec
@@ -36,7 +36,7 @@ namespace) and `targetApplicationRef` is a same-namespace reference.
    destination from the `Backup` artefact, then `Create`s the new CR.
    The etcd-operator picks it up and bootstraps from the S3 snapshot.
 6. **Wait for `Ready=True`.** The driver polls the new
-   `EtcdCluster.status.conditions[Ready]`.
+   `EtcdCluster.status.conditions[Available]`.
 7. **Resume the HelmRelease.** With the cluster Ready, Flux can
    reconcile chart drift safely. Helm's next apply will remove the
    `bootstrap` block on the live CR; the operator only consults

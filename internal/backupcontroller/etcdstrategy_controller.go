@@ -35,7 +35,7 @@ const (
 	// etcdAppKind is the apps.cozystack.io Kind the driver claims.
 	etcdAppKind = "Etcd"
 
-	// etcdClusterName is the singleton etcd.aenix.io/EtcdCluster name the
+	// etcdClusterName is the singleton etcd-operator.cozystack.io/EtcdCluster name the
 	// chart renders (templates/etcd-cluster.yaml sets metadata.name: etcd
 	// regardless of the application name). The chart additionally pins the
 	// Helm release name to "etcd" via templates/check-release-name.yaml -
@@ -47,6 +47,12 @@ const (
 	// restore path reads these to feed
 	// EtcdCluster.spec.bootstrap.restore.source.s3 on the re-created
 	// EtcdCluster.
+	//
+	// These are opaque cozystack-internal label keys on the Backup CR, NOT
+	// operator API. They intentionally keep the legacy "etcd.aenix.io/"
+	// prefix across the v1alpha2 migration so Backup artefacts taken before
+	// the migration still decode on the restore path; renaming them would
+	// silently strand pre-migration backups.
 	etcdBackupBucketKey         = "etcd.aenix.io/bucket"
 	etcdBackupEndpointKey       = "etcd.aenix.io/endpoint"
 	etcdBackupKeyKey            = "etcd.aenix.io/key"
@@ -68,7 +74,7 @@ const (
 	etcdDefaultBackupDeadline = 20 * time.Minute
 
 	// Wall-clock cap on a RestoreJob waiting for the new EtcdCluster to
-	// reach Ready. Includes EtcdCluster deletion drain, PVC garbage
+	// become Available. Includes EtcdCluster deletion drain, PVC garbage
 	// collection, fresh PVC provisioning, snapshot download, etcd boot,
 	// peer/client TLS handshake, and member election. 30m matches the
 	// CNPG/Velero pattern and gives slow CSI provisioners headroom.
@@ -204,13 +210,13 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 	}
 
 	// EtcdCluster is the chart-rendered, singleton-named CR. Defer the
-	// EtcdBackup creation until the cluster reports Ready - the operator
+	// EtcdBackup creation until the cluster reports Available - the operator
 	// otherwise materialises a Job that fails immediately because there
 	// are no etcd members to snapshot.
 	//
-	// Wait-budget: the cluster-Ready wait shares the same wall-clock cap
+	// Wait-budget: the cluster-Available wait shares the same wall-clock cap
 	// (etcdDefaultBackupDeadline) as the operator-side EtcdBackup wait.
-	// Without this gate, a BackupJob against a never-Ready EtcdCluster
+	// Without this gate, a BackupJob against a never-Available EtcdCluster
 	// (broken etcd, deleted source app, stuck PVC provisioner) requeues
 	// forever and the tenant gets no terminal signal. Mirror the same
 	// deadline check the post-EtcdBackup-created path uses (line ~286)
@@ -220,22 +226,22 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 		if apierrors.IsNotFound(err) {
 			if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > etcdDefaultBackupDeadline {
 				return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-					"etcd.aenix.io/EtcdCluster %s/%s did not appear within %s (deploy the source Etcd application before requesting the backup)",
+					"etcd-operator.cozystack.io/EtcdCluster %s/%s did not appear within %s (deploy the source Etcd application before requesting the backup)",
 					j.Namespace, etcdClusterName, etcdDefaultBackupDeadline))
 			}
 			return r.requeueBackupJobWithReason(ctx, j, "EtcdClusterNotReady",
-				fmt.Sprintf("waiting for etcd.aenix.io/EtcdCluster %s/%s to exist", j.Namespace, etcdClusterName))
+				fmt.Sprintf("waiting for etcd-operator.cozystack.io/EtcdCluster %s/%s to exist", j.Namespace, etcdClusterName))
 		}
 		return ctrl.Result{}, err
 	}
 	if !etcdClusterReady(cluster) {
 		if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > etcdDefaultBackupDeadline {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"etcd.aenix.io/EtcdCluster %s/%s did not reach Ready within %s (current Ready condition: %s)",
+				"etcd-operator.cozystack.io/EtcdCluster %s/%s did not become Available within %s (current Available condition: %s)",
 				j.Namespace, etcdClusterName, etcdDefaultBackupDeadline, etcdClusterReadyReason(cluster)))
 		}
 		return r.requeueBackupJobWithReason(ctx, j, "EtcdClusterNotReady",
-			fmt.Sprintf("waiting for etcd.aenix.io/EtcdCluster %s/%s to become Ready", j.Namespace, etcdClusterName))
+			fmt.Sprintf("waiting for etcd-operator.cozystack.io/EtcdCluster %s/%s to become Available", j.Namespace, etcdClusterName))
 	}
 
 	// Intentionally skip a pre-flight Secret existence check for the
@@ -258,9 +264,9 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 	// pathological stuck case and flips the job Failed with a clear
 	// message.
 
-	eb, err := r.ensureEtcdBackup(ctx, j, rendered)
+	eb, err := r.ensureEtcdSnapshot(ctx, j, rendered)
 	if err != nil {
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure etcd.aenix.io/EtcdBackup: %v", err))
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to ensure etcd-operator.cozystack.io/EtcdSnapshot: %v", err))
 	}
 
 	if j.Status.Phase != backupsv1alpha1.BackupJobPhaseRunning {
@@ -287,7 +293,7 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 			Type:    "Ready",
 			Status:  metav1.ConditionTrue,
 			Reason:  "BackupCompleted",
-			Message: "etcd.aenix.io/EtcdBackup reached phase=Complete",
+			Message: "etcd-operator.cozystack.io/EtcdSnapshot reached phase=Complete",
 		})
 		if err := r.Status().Update(ctx, j); err != nil {
 			return ctrl.Result{}, err
@@ -296,18 +302,18 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 
 	case etcdtypes.BackupPhaseFailed:
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-			"etcd.aenix.io/EtcdBackup %s/%s reached phase=Failed (%s)",
-			eb.Namespace, eb.Name, latestEtcdBackupConditionMessage(eb)))
+			"etcd-operator.cozystack.io/EtcdSnapshot %s/%s reached phase=Failed (%s)",
+			eb.Namespace, eb.Name, latestEtcdSnapshotConditionMessage(eb)))
 
 	default:
 		// Pending / Started / empty: still waiting on the operator.
 		if j.Status.StartedAt != nil && time.Since(j.Status.StartedAt.Time) > etcdDefaultBackupDeadline {
 			return r.markBackupJobFailed(ctx, j, fmt.Sprintf(
-				"etcd.aenix.io/EtcdBackup %s/%s did not reach phase=Complete within %s (current phase=%q)",
+				"etcd-operator.cozystack.io/EtcdSnapshot %s/%s did not reach phase=Complete within %s (current phase=%q)",
 				eb.Namespace, eb.Name, etcdDefaultBackupDeadline, eb.Status.Phase))
 		}
 		return r.requeueBackupJobWithReason(ctx, j, "EtcdBackupRunning",
-			fmt.Sprintf("etcd.aenix.io/EtcdBackup %s/%s phase=%q", eb.Namespace, eb.Name, eb.Status.Phase))
+			fmt.Sprintf("etcd-operator.cozystack.io/EtcdSnapshot %s/%s phase=%q", eb.Namespace, eb.Name, eb.Status.Phase))
 	}
 }
 
@@ -342,26 +348,26 @@ func (r *BackupJobReconciler) requeueBackupJobWithReason(ctx context.Context, j 
 	return ctrl.Result{RequeueAfter: etcdPollInterval}, nil
 }
 
-// etcdClusterReady checks the operator-side Ready condition.
+// etcdClusterReady checks the operator-side Available condition.
 func etcdClusterReady(c *etcdtypes.EtcdCluster) bool {
 	if c == nil {
 		return false
 	}
-	cond := apimeta.FindStatusCondition(c.Status.Conditions, etcdtypes.ClusterConditionReady)
+	cond := apimeta.FindStatusCondition(c.Status.Conditions, etcdtypes.ClusterConditionAvailable)
 	return cond != nil && cond.Status == metav1.ConditionTrue
 }
 
 // etcdClusterReadyReason returns a short human-readable summary of the
-// operator-side Ready condition for inclusion in BackupJob terminal
-// failure messages. Falls back to a sentinel when no Ready condition
+// operator-side Available condition for inclusion in BackupJob terminal
+// failure messages. Falls back to a sentinel when no Available condition
 // has been emitted yet.
 func etcdClusterReadyReason(c *etcdtypes.EtcdCluster) string {
 	if c == nil {
 		return "cluster=nil"
 	}
-	cond := apimeta.FindStatusCondition(c.Status.Conditions, etcdtypes.ClusterConditionReady)
+	cond := apimeta.FindStatusCondition(c.Status.Conditions, etcdtypes.ClusterConditionAvailable)
 	if cond == nil {
-		return "no Ready condition emitted yet"
+		return "no Available condition emitted yet"
 	}
 	if cond.Message != "" {
 		return fmt.Sprintf("%s=%s/%s", cond.Type, cond.Status, cond.Message)
@@ -369,7 +375,7 @@ func etcdClusterReadyReason(c *etcdtypes.EtcdCluster) string {
 	return fmt.Sprintf("%s=%s/%s", cond.Type, cond.Status, cond.Reason)
 }
 
-// latestEtcdBackupConditionMessage returns the message most likely to
+// latestEtcdSnapshotConditionMessage returns the message most likely to
 // describe a terminal failure. The upstream operator's reconcile may
 // stamp a housekeeping condition (Started, Uploading, ...) AFTER the
 // failure landed, which would shadow the actual cause if we picked the
@@ -377,7 +383,7 @@ func etcdClusterReadyReason(c *etcdtypes.EtcdCluster) string {
 // (or a Ready=False entry) so tenants see the upstream reason, falling
 // back to the latest transition only when no failure-shaped condition
 // exists.
-func latestEtcdBackupConditionMessage(eb *etcdtypes.EtcdBackup) string {
+func latestEtcdSnapshotConditionMessage(eb *etcdtypes.EtcdSnapshot) string {
 	if eb == nil || len(eb.Status.Conditions) == 0 {
 		return ""
 	}
@@ -396,7 +402,7 @@ func latestEtcdBackupConditionMessage(eb *etcdtypes.EtcdBackup) string {
 		// operator's exact spelling is not pinned by the typed wrapper.
 		isFailure := strings.EqualFold(c.Type, "Failed") ||
 			strings.HasPrefix(c.Reason, "Failed") ||
-			(c.Type == etcdtypes.ClusterConditionReady && c.Status == metav1.ConditionFalse)
+			(c.Type == etcdtypes.ClusterConditionAvailable && c.Status == metav1.ConditionFalse)
 		if !isFailure {
 			continue
 		}
@@ -410,7 +416,7 @@ func latestEtcdBackupConditionMessage(eb *etcdtypes.EtcdBackup) string {
 	return latestAny.Message
 }
 
-// ensureEtcdBackup materialises a per-BackupJob EtcdBackup CR, or returns
+// ensureEtcdSnapshot materialises a per-BackupJob EtcdBackup CR, or returns
 // the existing one if a previous reconcile already created it.
 // Idempotency relies on the OwningJob labels.
 //
@@ -421,12 +427,12 @@ func latestEtcdBackupConditionMessage(eb *etcdtypes.EtcdBackup) string {
 // and reuse it instead of leaking a duplicate Job. Adding an OwnerRef
 // would make Kubernetes GC reap the operator CR with the parent
 // BackupJob, defeating the reuse contract.
-func (r *BackupJobReconciler) ensureEtcdBackup(
+func (r *BackupJobReconciler) ensureEtcdSnapshot(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	rendered *strategyv1alpha1.EtcdTemplate,
-) (*etcdtypes.EtcdBackup, error) {
-	existing, err := r.findEtcdBackupForJob(ctx, j)
+) (*etcdtypes.EtcdSnapshot, error) {
+	existing, err := r.findEtcdSnapshotForJob(ctx, j)
 	if err != nil {
 		return nil, err
 	}
@@ -439,7 +445,7 @@ func (r *BackupJobReconciler) ensureEtcdBackup(
 		return nil, err
 	}
 
-	obj := &etcdtypes.EtcdBackup{
+	obj := &etcdtypes.EtcdSnapshot{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:    j.Namespace,
 			GenerateName: fmt.Sprintf("%s-", j.Name),
@@ -448,7 +454,7 @@ func (r *BackupJobReconciler) ensureEtcdBackup(
 				backupsv1alpha1.OwningJobNamespaceLabel: j.Namespace,
 			},
 		},
-		Spec: etcdtypes.EtcdBackupSpec{
+		Spec: etcdtypes.EtcdSnapshotSpec{
 			ClusterRef:  etcdtypes.EtcdLocalObjectReference{Name: etcdClusterName},
 			Destination: dest,
 		},
@@ -459,10 +465,10 @@ func (r *BackupJobReconciler) ensureEtcdBackup(
 	return obj, nil
 }
 
-// findEtcdBackupForJob returns the EtcdBackup labelled with the
+// findEtcdSnapshotForJob returns the EtcdBackup labelled with the
 // BackupJob's OwningJob{Name,Namespace}, if any.
-func (r *BackupJobReconciler) findEtcdBackupForJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (*etcdtypes.EtcdBackup, error) {
-	list := &etcdtypes.EtcdBackupList{}
+func (r *BackupJobReconciler) findEtcdSnapshotForJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (*etcdtypes.EtcdSnapshot, error) {
+	list := &etcdtypes.EtcdSnapshotList{}
 	if err := r.List(ctx, list,
 		client.InNamespace(j.Namespace),
 		client.MatchingLabels{
@@ -480,7 +486,7 @@ func (r *BackupJobReconciler) findEtcdBackupForJob(ctx context.Context, j *backu
 		for i := range list.Items {
 			names = append(names, list.Items[i].Name)
 		}
-		getLogger(ctx).Debug("multiple etcd.aenix.io/EtcdBackup CRs match BackupJob OwningJob labels; reusing first",
+		getLogger(ctx).Debug("multiple etcd-operator.cozystack.io/EtcdSnapshot CRs match BackupJob OwningJob labels; reusing first",
 			"backupjob", j.Name, "namespace", j.Namespace, "matches", names, "picked", names[0])
 	}
 	return &list.Items[0], nil
@@ -496,7 +502,7 @@ func (r *BackupJobReconciler) createEtcdBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
 	resolved *ResolvedBackupConfig,
-	eb *etcdtypes.EtcdBackup,
+	eb *etcdtypes.EtcdSnapshot,
 	rendered *strategyv1alpha1.EtcdTemplate,
 ) (*backupsv1alpha1.Backup, error) {
 	takenAt := metav1.Now()
@@ -543,7 +549,7 @@ func (r *BackupJobReconciler) createEtcdBackupArtifact(
 	// a URI that points at a non-existent S3 object is worse than
 	// emitting nothing. The buildEtcdRestoreS3Key helper handles
 	// reconstruction at restore time for both cases.
-	if s := eb.Status.Snapshot; s != nil && s.URI != "" {
+	if s := eb.Status.Artifact; s != nil && s.URI != "" {
 		status.Artifact = &backupsv1alpha1.BackupArtifact{
 			URI:       s.URI,
 			SizeBytes: s.SizeBytes,
@@ -689,7 +695,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 	// EtcdCluster disappear would re-render the chart's bootstrap-less
 	// EtcdCluster on the next sync and the operator would start a fresh
 	// empty cluster, defeating the restore. Suspend the HR, hold it
-	// suspended until the new EtcdCluster is Ready, then resume.
+	// suspended until the new EtcdCluster is Available, then resume.
 	hrName := target.AppName
 
 	// First reconcile in the destructive window: snapshot the live spec
@@ -718,7 +724,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 					Type:    etcdRestoreCondTargetPurged,
 					Status:  metav1.ConditionTrue,
 					Reason:  "ClusterPurgedRecovered",
-					Message: fmt.Sprintf("etcd.aenix.io/EtcdCluster %s/%s already gone on this iteration; advancing to recreate phase", target.Namespace, etcdClusterName),
+					Message: fmt.Sprintf("etcd-operator.cozystack.io/EtcdCluster %s/%s already gone on this iteration; advancing to recreate phase", target.Namespace, etcdClusterName),
 				})
 				if err := r.Status().Update(ctx, restoreJob); err != nil {
 					return ctrl.Result{}, err
@@ -726,7 +732,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 				return ctrl.Result{RequeueAfter: etcdPollInterval}, nil
 			}
 			return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
-				"etcd.aenix.io/EtcdCluster %s/%s not found; cannot derive the spec to re-create with bootstrap.restore (deploy the source Etcd application before requesting the restore)",
+				"etcd-operator.cozystack.io/EtcdCluster %s/%s not found; cannot derive the spec to re-create with bootstrap.restore (deploy the source Etcd application before requesting the restore)",
 				target.Namespace, etcdClusterName))
 		}
 
@@ -738,7 +744,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 			liveSpec, _, _ := unstructured.NestedMap(live.Object, "spec")
 			if len(liveSpec) == 0 {
 				return r.markRestoreJobFailed(ctx, restoreJob,
-					"live etcd.aenix.io/EtcdCluster has empty spec; refusing to restore against an unconfigured cluster")
+					"live etcd-operator.cozystack.io/EtcdCluster has empty spec; refusing to restore against an unconfigured cluster")
 			}
 			specPayload, mErr := json.Marshal(liveSpec)
 			if mErr != nil {
@@ -751,7 +757,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 			// with the spec lost.
 			if len(specPayload) > etcdRestoreCapturedSpecMaxBytes {
 				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
-					"live etcd.aenix.io/EtcdCluster spec is %d bytes which exceeds the %d-byte limit the driver can durably capture before the destructive purge; trim podTemplate / topologySpreadConstraints customisation on the source app or open an issue for a ConfigMap-backed capture path",
+					"live etcd-operator.cozystack.io/EtcdCluster spec is %d bytes which exceeds the %d-byte limit the driver can durably capture before the destructive purge; trim podTemplate / topologySpreadConstraints customisation on the source app or open an issue for a ConfigMap-backed capture path",
 					len(specPayload), etcdRestoreCapturedSpecMaxBytes))
 			}
 			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
@@ -774,7 +780,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 
 		if err := r.Resource(etcdClusterGVR).Namespace(target.Namespace).Delete(ctx, etcdClusterName, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			return r.markEtcdRestoreFailedAndResumeHR(ctx, restoreJob, target.Namespace, hrName, fmt.Sprintf(
-				"delete etcd.aenix.io/EtcdCluster %s/%s: %v", target.Namespace, etcdClusterName, err))
+				"delete etcd-operator.cozystack.io/EtcdCluster %s/%s: %v", target.Namespace, etcdClusterName, err))
 		}
 
 		gone, err := r.etcdClusterFullyGone(ctx, target.Namespace)
@@ -794,7 +800,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 			Type:    etcdRestoreCondTargetPurged,
 			Status:  metav1.ConditionTrue,
 			Reason:  "ClusterPurged",
-			Message: fmt.Sprintf("etcd.aenix.io/EtcdCluster %s/%s and member PVCs are gone; recreating with bootstrap.restore", target.Namespace, etcdClusterName),
+			Message: fmt.Sprintf("etcd-operator.cozystack.io/EtcdCluster %s/%s and member PVCs are gone; recreating with bootstrap.restore", target.Namespace, etcdClusterName),
 		})
 		if err := r.Status().Update(ctx, restoreJob); err != nil {
 			return ctrl.Result{}, err
@@ -852,20 +858,20 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 		deadline := options.effectiveRestoreDeadline()
 		if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
 			// This is the most likely production failure point - the
-			// recreated EtcdCluster never becomes Ready within deadline
+			// recreated EtcdCluster never becomes Available within deadline
 			// (e.g. snapshot download stuck, S3 creds wrong, PVC
 			// provisioner slow). Resume the HR before terminal-failing
 			// so helm-controller is not left frozen on the tenant's
 			// Etcd app.
 			return r.markEtcdRestoreFailedAndResumeHR(ctx, restoreJob, target.Namespace, hrName, fmt.Sprintf(
-				"etcd.aenix.io/EtcdCluster %s/%s did not reach Ready within %s after recreation with bootstrap.restore (override via spec.options.restoreTimeoutSeconds)",
+				"etcd-operator.cozystack.io/EtcdCluster %s/%s did not become Available within %s after recreation with bootstrap.restore (override via spec.options.restoreTimeoutSeconds)",
 				target.Namespace, etcdClusterName, deadline))
 		}
 		apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
 			Type:    "Ready",
 			Status:  metav1.ConditionFalse,
 			Reason:  "EtcdClusterBootstrapping",
-			Message: fmt.Sprintf("waiting for etcd.aenix.io/EtcdCluster %s/%s to reach Ready after bootstrap.restore", target.Namespace, etcdClusterName),
+			Message: fmt.Sprintf("waiting for etcd-operator.cozystack.io/EtcdCluster %s/%s to become Available after bootstrap.restore", target.Namespace, etcdClusterName),
 		})
 		if err := r.Status().Update(ctx, restoreJob); err != nil {
 			return ctrl.Result{}, err
@@ -873,7 +879,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 		return ctrl.Result{RequeueAfter: etcdPollInterval}, nil
 	}
 
-	// Cluster is Ready - resume the HR. Idempotent: a NotFound on the HR
+	// Cluster is Available - resume the HR. Idempotent: a NotFound on the HR
 	// (deleted between suspend and resume) is treated as success.
 	if err := r.setEtcdRestoreHRSuspended(ctx, target.Namespace, hrName, false); err != nil {
 		return ctrl.Result{}, err
@@ -886,7 +892,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 		Type:    "Ready",
 		Status:  metav1.ConditionTrue,
 		Reason:  "RestoreCompleted",
-		Message: fmt.Sprintf("etcd.aenix.io/EtcdCluster %s/%s reached Ready after bootstrap.restore", target.Namespace, etcdClusterName),
+		Message: fmt.Sprintf("etcd-operator.cozystack.io/EtcdCluster %s/%s became Available after bootstrap.restore", target.Namespace, etcdClusterName),
 	})
 	if err := r.Status().Update(ctx, restoreJob); err != nil {
 		return ctrl.Result{}, err
@@ -1203,7 +1209,7 @@ func (r *RestoreJobReconciler) etcdClusterFullyGone(ctx context.Context, namespa
 	case err == nil:
 		return false, nil
 	case !apierrors.IsNotFound(err):
-		return false, fmt.Errorf("get etcd.aenix.io/EtcdCluster %s/%s: %w", namespace, etcdClusterName, err)
+		return false, fmt.Errorf("get etcd-operator.cozystack.io/EtcdCluster %s/%s: %w", namespace, etcdClusterName, err)
 	}
 	pvcList := &corev1.PersistentVolumeClaimList{}
 	if err := r.List(ctx, pvcList,
@@ -1400,7 +1406,7 @@ func strategyToEtcdBackupDestination(d strategyv1alpha1.EtcdDestinationTemplate)
 // the boundary parses lazily and keeps behaviour permissive.
 type EtcdRestoreOptions struct {
 	// RestoreTimeoutSeconds caps the time the driver waits for the
-	// re-created EtcdCluster to reach Ready before it marks the
+	// re-created EtcdCluster to become Available before it marks the
 	// RestoreJob Failed. Zero or unset falls back to
 	// etcdDefaultRestoreDeadline.
 	// +optional

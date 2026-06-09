@@ -1,0 +1,33 @@
+## etcd-operator controller-manager image. Published from
+## github.com/cozystack/etcd-operator. The same image doubles as the
+## snapshot/restore agent (wired through the OPERATOR_IMAGE env), so the tag
+## here must be a real, pullable ref.
+image:
+  repository: ghcr.io/cozystack/etcd-operator
+  tag: ""           # defaults to .Chart.AppVersion when empty
+  pullPolicy: IfNotPresent
+
+## DNS suffix of the Kubernetes cluster, threaded into --cluster-domain so the
+## operator builds the correct cert SAN FQDNs. Defaults to the cozystack
+## cluster domain provided via _cluster, falling back to cozy.local.
+clusterDomain: ""
+
+replicaCount: 1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi
+
+vpa:
+  enabled: true
+  updateMode: Auto
+  minAllowed:
+    cpu: 100m
+    memory: 128Mi
+  maxAllowed:
+    cpu: 1000m
+    memory: 1Gi

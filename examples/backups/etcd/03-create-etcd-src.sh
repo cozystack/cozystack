@@ -1,6 +1,6 @@
 #!/bin/bash
 # Step 03: Apply the source Etcd application, wait for the operator-side
-# EtcdCluster to reach Ready, then write a sentinel key that the backup
+# EtcdCluster to become Available, then write a sentinel key that the backup
 # captures and the restore round-trips. The sentinel is the in-cluster
 # witness that the snapshot actually round-tripped through S3.
 set -euo pipefail
@@ -27,13 +27,13 @@ EOF
 
 log_substep "Waiting for HelmRelease 'etcd' to be Ready..."
 kubectl -n "$NAMESPACE" wait hr "${ETCD_NAME}" --for=condition=ready --timeout=300s
-log_substep "Waiting for etcd.aenix.io/EtcdCluster 'etcd' to be Ready..."
-kubectl -n "$NAMESPACE" wait etcdcluster.etcd.aenix.io etcd \
-    --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True \
+log_substep "Waiting for etcd-operator.cozystack.io/EtcdCluster 'etcd' to be Available..."
+kubectl -n "$NAMESPACE" wait etcdcluster.etcd-operator.cozystack.io etcd \
+    --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True \
     --timeout=300s
 
-log_substep "Waiting for etcd-0 pod to be Ready..."
-kubectl -n "$NAMESPACE" wait pod etcd-0 --for=condition=ready --timeout=300s
+log_substep "Waiting for etcd member pods to be Ready..."
+kubectl -n "$NAMESPACE" wait pod -l app.kubernetes.io/instance=etcd --for=condition=ready --timeout=300s
 
 SENTINEL_KEY="__cozystack_e2e_sentinel"
 SENTINEL_VAL="pristine-$(date -u +%Y%m%dT%H%M%SZ)"
