@@ -1,0 +1,4 @@
+=== helmreleases.helm.toolkit.fluxcd.io (not ready) ===
+tenant-prod                    chatty-app                                         False
+  UpgradeFailed: Helm upgrade failed because the apiserver rejected the manifest with a very long validation error that keeps going and g
+  -> 1/1 not ready
