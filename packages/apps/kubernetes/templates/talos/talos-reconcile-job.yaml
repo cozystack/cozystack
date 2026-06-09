@@ -199,6 +199,21 @@ subjects:
 {{- $podCIDR := "10.243.0.0/16" }}
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
+{{- /* Management cluster DNS domain. Tenant Kubernetes workers run as
+       KubeVirt VMs inside the management cluster's pod network and need
+       to resolve management-cluster service short names ("<svc>.<ns>.svc")
+       the same way an Ubuntu+kubeadm worker did via cloud-init DHCP. The
+       kubevirt-csi NFS mount path is the load-bearing case: kubelet on
+       the worker host calls `mount.nfs linstor-csi-nfs.cozy-linstor.svc`
+       (no domain suffix), and without searchDomains in /etc/resolv.conf
+       the host resolver hands that name to management CoreDNS verbatim
+       and gets NXDOMAIN.
+
+       Distinct from tenantClusterDomain ("cluster.local"), which is the
+       *tenant* kubelet --cluster-dns zone. This value is the
+       *management* cluster-domain, sourced from .Values._cluster
+       (populated by cozystack-controller from the platform config). */}}
+{{- $mgmtClusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 {{- range $groupName, $group := .Values.nodeGroups }}
 {{- /* Mirror the kubelet-reservation computation from cluster.yaml so the
        worker machineconfig the hook applies carries the same numbers the
@@ -373,19 +388,32 @@ spec:
                         token: ${TALOS_TOKEN}
                         network:
                           # Management CoreDNS as the worker's host
-                          # resolver. Tenant in-cluster pods are not
-                          # affected: dnsPolicy: ClusterFirst routes
-                          # them through kubelet --cluster-dns (tenant
-                          # CoreDNS). This nameserver covers host-side
-                          # paths only — kubelet's NFS mount syscall
-                          # (e.g. kubevirt-csi's linstor-csi-nfs.cozy-
-                          # linstor.svc), image pulls, and pods that
-                          # opt out of cluster DNS. Mirrors what
-                          # Ubuntu+kubeadm workers got for free from
-                          # cloud-init pod DNS inheritance in the
-                          # pre-Talos chart.
+                          # resolver, plus management cluster search
+                          # domains so partial names like
+                          # "linstor-csi-nfs.cozy-linstor.svc" resolve
+                          # the same way they do on Ubuntu+kubeadm
+                          # workers in main (which got these via
+                          # cloud-init/DHCP). Without searchDomains the
+                          # kubevirt-csi NFS mount fails NXDOMAIN
+                          # because mount.nfs hands the partial name
+                          # to the resolver verbatim and management
+                          # CoreDNS only knows full FQDNs.
+                          #
+                          # Tenant in-cluster pods are not affected:
+                          # dnsPolicy: ClusterFirst routes them through
+                          # kubelet --cluster-dns (tenant CoreDNS).
+                          # This block only configures host-side
+                          # resolution (kubelet mount syscalls, image
+                          # pulls, pods opted out of cluster DNS).
                           nameservers:
                             - ${COREDNS_IP}
+                          searchDomains:
+                            - svc.{{ $mgmtClusterDomain }}
+                            - {{ $mgmtClusterDomain }}
+                            {{- if ne $mgmtClusterDomain "cluster.local" }}
+                            - svc.cluster.local
+                            - cluster.local
+                            {{- end }}
                           extraHostEntries:
                             - ip: ${SVC_IP}
                               aliases:
