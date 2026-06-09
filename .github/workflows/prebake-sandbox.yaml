@@ -10,7 +10,12 @@ name: Publish e2e sandbox prebake
 # cancel-in-progress keeps it to one active build at a time.
 on:
   push:
-    branches: [main]
+    # TODO(revert-before-merge): the ci/e2e-matrix-split branch is listed
+    # here only so the prebake workflow can be exercised on the PR before
+    # merge — workflow_dispatch needs the file present on the default
+    # branch, which is a chicken-and-egg. Drop the branch entry once the
+    # PR is approved.
+    branches: [main, ci/e2e-matrix-split]
     paths:
       - 'packages/**'
       - 'cmd/**'
@@ -22,6 +27,7 @@ on:
       - 'hack/e2e-prepull-images.sh'
       - 'hack/cozytest.sh'
       - 'Makefile'
+      - '.github/workflows/prebake-sandbox.yaml'
   workflow_dispatch:
 
 # Only the latest main commit needs a fresh prebake. Cancelling in-flight
