@@ -22,7 +22,7 @@ image: image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-aut
 image-talos-csr-signer:
 	docker buildx build images/talos-csr-signer \
 		$(call image-tags,talos-csr-signer,$(KUBERNETES_PKG_TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/talos-csr-signer:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/talos-csr-signer:latest \
 		--cache-to type=inline \
 		--metadata-file images/talos-csr-signer.json \
 		$(BUILDX_ARGS)
