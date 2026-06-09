@@ -1,0 +1,70 @@
+name: Publish Talos image
+
+# Build the Talos nocloud raw image and publish it as an OCI artifact to
+# ghcr.io/cozystack/cozystack-talos. PR builds in pull-requests.yaml pull
+# this cached image instead of rebuilding it when the PR does not touch
+# packages/core/talos/**, saving ~50s per PR.
+#
+# Talos image content is fully determined by the contents of
+# packages/core/talos/**, so the trigger is scoped to that path. Any other
+# code change leaves the image identical and reuses the cached artifact.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/core/talos/**'
+  workflow_dispatch:
+
+# Multiple main commits in quick succession only need the latest published.
+# Cancelling in-progress runs avoids racing publishes that would shadow
+# each other on :latest.
+concurrency:
+  group: talos-publish
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and publish Talos image
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Install Flux CLI
+        run: curl -sSL https://fluxcd.io/install.sh | sudo bash
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+
+      - name: Build Talos nocloud image
+        run: make -C packages/core/talos talos-nocloud
+
+      # flux push artifact treats --path as a directory tree, so isolate
+      # nocloud-amd64.raw.xz into its own dir to keep the artifact contents
+      # deterministic regardless of what else lands in _out/assets/.
+      - name: Stage artifact (single-file)
+        run: |
+          mkdir -p _talos_artifact
+          cp _out/assets/nocloud-amd64.raw.xz _talos_artifact/
+
+      - name: Publish Talos image to GHCR
+        run: |
+          REV="$(git describe --tags --always):${GITHUB_SHA}"
+          for tag in "${GITHUB_SHA}" latest; do
+            flux push artifact \
+              "oci://ghcr.io/cozystack/cozystack-talos:${tag}" \
+              --path=_talos_artifact \
+              --source=https://github.com/cozystack/cozystack \
+              --revision="${REV}"
+          done

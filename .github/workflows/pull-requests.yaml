@@ -18,6 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      talos: ${{ steps.filter.outputs.talos }}
     steps:
       - uses: dorny/paths-filter@v3
         id: filter
@@ -25,6 +26,14 @@ jobs:
           filters: |
             code:
               - '!docs/**'
+            # `talos` flags PR changes that affect the Talos nocloud raw image
+            # output. When false, Build job pulls the cached image from
+            # ghcr.io/cozystack/cozystack-talos:latest (published by
+            # talos-publish.yaml on every main commit that touches the same
+            # path) instead of rebuilding it from siderolabs/imager
+            # (~50s savings per PR).
+            talos:
+              - 'packages/core/talos/**'
 
   build:
     name: Build
@@ -80,8 +89,30 @@ jobs:
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
 
-      - name: Build Talos image
+      # Talos nocloud image rebuild is gated on detect-changes.talos: the
+      # raw image output is fully determined by packages/core/talos/**, so
+      # PRs that do not touch that path can reuse the cached image
+      # published to ghcr.io/cozystack/cozystack-talos:latest by
+      # talos-publish.yaml. Fallback rebuilds from source if the cache is
+      # unreachable (fresh repo, transient GHCR outage, or first PR after a
+      # talos-publish workflow disablement).
+      - name: Build Talos image (PR changed Talos sources)
+        if: needs.detect-changes.outputs.talos == 'true'
         run: make -C packages/core/talos talos-nocloud
+
+      - name: Download cached Talos image (no Talos changes)
+        if: needs.detect-changes.outputs.talos != 'true'
+        run: |
+          mkdir -p _out/assets
+          if flux pull artifact \
+              oci://ghcr.io/cozystack/cozystack-talos:latest \
+              --output=_out/assets; then
+            echo "Pulled cached Talos image from ghcr"
+            ls -lh _out/assets/nocloud-amd64.raw.xz
+          else
+            echo "Cached Talos image unavailable, falling back to local build"
+            make -C packages/core/talos talos-nocloud
+          fi
 
       - name: Save git diff as patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
