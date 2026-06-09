@@ -1,16 +1,10 @@
 # GPU operator — native pod workload on Talos (reference)
 
-The files in this directory are **not** templates. They are reference
-artifacts that document one working configuration for running GPU
-workloads directly in pods on a Talos-based Cozystack cluster, together
-with the DCGM metrics needed by the `gpu/gpu-performance` Grafana
-dashboard.
+The files in this directory are **not** templates. They are reference artifacts that document one working configuration for running GPU workloads directly in pods on a Talos-based Cozystack cluster, together with the DCGM metrics needed by the `gpu/gpu-performance` Grafana dashboard.
 
-The out-of-the-box `values-passthrough.yaml` for this package targets the
-sandbox (VFIO passthrough to KubeVirt VMs) scenario. The files here
-illustrate an alternative — running CUDA workloads in regular pods with
-the NVIDIA device plugin — and the workarounds it currently requires on
-Talos.
+For non-Talos Linux hosts that already provide the NVIDIA driver and `nvidia-container-toolkit` via the distro package manager (the typical apt-installed Ubuntu/Debian shape), pick the first-class `container` variant instead — `variant: container` in your Package CR is the starting point. Two host prerequisites still apply: containerd must have the `nvidia` runtime registered (`nvidia-ctk runtime configure --runtime=containerd` + restart; `apt install` lays down binaries only, it does not wire containerd), and because the variant runs with `driver.enabled=false` the operator uses the pre-installed host driver at its standard location — so a stock apt install needs no `hostPaths.driverInstallDir` override. The files here remain the right starting point on Talos, where the driver lands under a non-standard prefix and the operator does not find it at the default location without the override below.
+
+The out-of-the-box `values-passthrough.yaml` for this package targets the sandbox (VFIO passthrough to KubeVirt VMs) scenario. The files here illustrate an alternative — running CUDA workloads in regular pods with the NVIDIA device plugin — and the workarounds it currently requires on Talos.
 
 ## Files
 

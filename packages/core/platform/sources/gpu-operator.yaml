@@ -36,3 +36,16 @@ spec:
         privileged: true
         namespace: cozy-gpu-operator
         releaseName: gpu-operator
+  - name: container
+    dependsOn:
+    - cozystack.networking
+    components:
+    - name: gpu-operator
+      path: system/gpu-operator
+      valuesFiles:
+      - values.yaml
+      - values-container.yaml
+      install:
+        privileged: true
+        namespace: cozy-gpu-operator
+        releaseName: gpu-operator
