@@ -14,7 +14,7 @@ image-piraeus-server:
 		--build-arg LINSTOR_VERSION=$(LINSTOR_VERSION) \
 		--build-arg K8S_AWAIT_ELECTION_VERSION=v0.4.2 \
 		$(call image-tags,piraeus-server,$(LINSTOR_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/piraeus-server:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/piraeus-server:latest \
 		--cache-to type=inline \
 		--metadata-file images/piraeus-server.json \
 		$(BUILDX_ARGS)
@@ -28,7 +28,7 @@ image-linstor-csi:
 	docker buildx build images/linstor-csi \
 		--build-arg VERSION=$(LINSTOR_CSI_VERSION) \
 		$(call image-tags,linstor-csi,$(LINSTOR_CSI_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/linstor-csi:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/linstor-csi:latest \
 		--cache-to type=inline \
 		--metadata-file images/linstor-csi.json \
 		$(BUILDX_ARGS)

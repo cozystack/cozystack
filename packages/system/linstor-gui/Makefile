@@ -14,7 +14,7 @@ image-linstor-gui:
 	docker buildx build images/linstor-gui \
 		--build-arg LINSTOR_GUI_VERSION=$(LINSTOR_GUI_VERSION) \
 		$(call image-tags,linstor-gui,$(LINSTOR_GUI_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/linstor-gui:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/linstor-gui:latest \
 		--cache-to type=inline \
 		--metadata-file images/linstor-gui.json \
 		$(BUILDX_ARGS)

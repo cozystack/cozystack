@@ -8,7 +8,7 @@ image: image-nginx
 image-nginx:
 	docker buildx build images/nginx-cache \
 		$(call image-tags,nginx-cache,$(NGINX_CACHE_TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/nginx-cache:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/nginx-cache:latest \
 		--cache-to type=inline \
 		--metadata-file images/nginx-cache.json \
 		$(BUILDX_ARGS)

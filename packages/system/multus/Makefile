@@ -16,7 +16,7 @@ update:
 image:
 	docker buildx build images/multus-cni \
 		$(call image-tags,multus-cni,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/multus-cni:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/multus-cni:latest \
 		--cache-to type=inline \
 		--metadata-file images/multus-cni.json \
 		$(BUILDX_ARGS)

@@ -12,7 +12,7 @@ image: image-backup-controller
 image-backup-controller:
 	docker buildx build -f images/backup-controller/Dockerfile ../../.. \
 		$(call image-tags,backup-controller,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/backup-controller:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/backup-controller:latest \
 		--cache-to type=inline \
 		--metadata-file images/backup-controller.json \
 		$(BUILDX_ARGS)

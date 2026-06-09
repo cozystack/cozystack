@@ -21,7 +21,7 @@ image-operator:
 	docker buildx build -f images/cozystack-operator/Dockerfile ../../.. \
 		$(call image-tags,cozystack-operator,v$(COZYSTACK_VERSION)) \
 		--build-arg VERSION=v$(COZYSTACK_VERSION) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-operator:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/cozystack-operator:latest \
 		--cache-to type=inline \
 		--metadata-file images/cozystack-operator.json \
 		$(BUILDX_ARGS)

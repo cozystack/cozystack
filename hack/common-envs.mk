@@ -7,6 +7,14 @@ endif
 
 REGISTRY ?= ghcr.io/cozystack/cozystack
 
+# CACHE_REGISTRY: registry that `--cache-from` reads build cache from. It must
+# point at a registry where a `:latest` tag is actually published. PR builds
+# set REGISTRY to a per-CI registry and push only unique `pr-<N>-<sha>` tags
+# (PUBLISH_FLOATING=0), so they never refresh `:latest` there — reading cache
+# from $(REGISTRY):latest would always 404. Release builds publish `:latest`
+# to ghcr.io, so default cache reads there and stays warm across PR builds.
+CACHE_REGISTRY ?= ghcr.io/cozystack/cozystack
+
 # IMAGE_TAG: build-unique tag pushed for every image. Set by CI to a value
 # that does not collide between concurrent builds:
 #   * pull-requests.yaml -> pr-<N>-<sha>

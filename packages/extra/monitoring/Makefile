@@ -12,7 +12,7 @@ generate:
 image:
 	docker buildx build images/grafana \
 		$(call image-tags,grafana,$(GRAFANA_TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/grafana:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/grafana:latest \
 		--cache-to type=inline \
 		--metadata-file images/grafana.json \
 		$(BUILDX_ARGS)

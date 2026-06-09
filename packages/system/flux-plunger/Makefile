@@ -8,7 +8,7 @@ image:
 	docker buildx build -f images/flux-plunger/Dockerfile ../../../ \
 		--provenance false \
 		$(call image-tags,flux-plunger,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/flux-plunger:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/flux-plunger:latest \
 		--cache-to type=inline \
 		--metadata-file images/flux-plunger.json \
 		--push=$(PUSH) \

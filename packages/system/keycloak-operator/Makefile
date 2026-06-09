@@ -7,7 +7,7 @@ include ../../../hack/package.mk
 image:
 	docker buildx build images/keycloak-operator \
 		$(call image-tags,keycloak-operator,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/keycloak-operator:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/keycloak-operator:latest \
 		--cache-to   type=inline \
 		--metadata-file images/keycloak-operator.json \
 		$(BUILDX_ARGS)
