@@ -258,15 +258,19 @@ jobs:
       # ▸ Fastpath detection.
       #
       # Opt-in via the `prebake` label. When set, attempt to download the
-      # prebake artifact from ghcr.io/cozystack/cozystack-prebake:latest
-      # (published by prebake-sandbox.yaml on main pushes). If the artifact
-      # is reachable and valid, the fastpath restore steps below replace
-      # the full Talos bootstrap + Cozystack install (~26m saving). If the
-      # artifact is missing or unreachable, fastpath silently falls back
-      # to the full install path so the PR still succeeds.
+      # Talos-bootstrap prebake from ghcr.io/cozystack/cozystack-prebake:latest
+      # (published by prebake-sandbox.yaml on main pushes that touch the
+      # Talos build inputs). If the artifact is reachable and valid, the
+      # fastpath restore step below replaces the ~3min Talos bootstrap
+      # phase with a snapshot restore. Cozystack itself is still installed
+      # fresh on the restored cluster so the install path stays faithful
+      # to a real PR install.
       #
-      # Release PRs always take the full install path because the release
-      # asset flow is independent of prebake.
+      # If the artifact is missing or unreachable, fastpath silently falls
+      # back to the full prepare-env path so the PR still succeeds.
+      #
+      # Release PRs always take the full path because the release asset
+      # flow is independent of prebake.
       - name: Detect prebake fastpath
         id: prebake
         if: |
@@ -312,10 +316,11 @@ jobs:
           echo "Prepare environment completed after $((attempt + 1)) attempts"
 
       # Fastpath: boot the sandbox container, copy the prebake archive
-      # inside, and restore Talos VMs + apply PR diff via the helper
-      # script. This replaces the fullpath prepare-env + Install
-      # Cozystack steps below and turns the ~26min phase into ~5min.
-      - name: Restore prebake and apply PR diff (fastpath)
+      # inside, and restore the Talos cluster via the helper script. This
+      # replaces only the ~3min Talos bootstrap of the fullpath. Cozystack
+      # itself is still installed below by the unconditional Install step
+      # so the install path stays faithful to a fresh PR install.
+      - name: Restore Talos from prebake (fastpath)
         if: steps.prebake.outputs.available == 'true'
         run: |
           cd /tmp/$SANDBOX_NAME
@@ -323,9 +328,9 @@ jobs:
           docker cp /tmp/prebake/prebake.tar.zst $SANDBOX_NAME:/workspace/prebake.tar.zst
           docker exec $SANDBOX_NAME sh /workspace/hack/e2e-restore-prebake.sh
 
-      # ▸ Install Cozystack (fullpath only — fastpath restores from prebake above)
+      # ▸ Install Cozystack (runs on both paths — the prebake snapshot
+      #   only carries a bootstrapped Talos cluster, not Cozystack itself)
       - name: Install Cozystack into sandbox
-        if: steps.prebake.outputs.available != 'true'
         run: |
           cd /tmp/$SANDBOX_NAME
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then

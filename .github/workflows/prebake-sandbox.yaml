@@ -1,13 +1,23 @@
-name: Publish e2e sandbox prebake
+name: Publish e2e Talos prebake
 
-# Build a Cozystack-installed Talos cluster snapshot and publish it to
-# ghcr.io/cozystack/cozystack-prebake on every main commit that affects the
-# platform install state. PR e2e jobs that opt in via the `prebake` label
-# restore from this snapshot, skip the ~23min install phase, and apply only
-# the PR-specific diff via `helm upgrade installer`.
+# Snapshot a freshly-bootstrapped Talos cluster (3 VMs, etcd up, k8s API
+# reachable, NO Cozystack installed) and publish it as a Flux OCI artifact
+# to ghcr.io/cozystack/cozystack-prebake. PR e2e jobs opt into restoring
+# from this snapshot via the `prebake` label and skip the ~3min Talos
+# bootstrap, while still running a fresh `make install-cozystack` so the
+# Cozystack platform is built from the PR's own sources.
 #
-# Cost: ~38min on oracle-vm-24cpu-96gb per triggered main push. Concurrency
-# cancel-in-progress keeps it to one active build at a time.
+# Why Talos-only (not Cozystack-installed): a snapshot that already has
+# Cozystack baked in carries main-version cluster state into PR runs.
+# Applying a PR diff via `helm upgrade installer` on top of that bakes in
+# subtle correctness bugs — orphan HelmReleases when a PR removes a
+# chart, mismatched CRD schemas, migration path that never tests a fresh
+# install. The Talos-only snapshot keeps PR runs install-correctness
+# faithful at the cost of giving up the ~21min install savings; only the
+# ~3min Talos bootstrap is saved.
+#
+# Trigger: main commits that affect Talos build inputs or the e2e
+# bootstrap path. Most PRs don't touch these, so the snapshot is reused.
 on:
   push:
     # TODO(revert-before-merge): the ci/e2e-matrix-split branch is listed
@@ -17,16 +27,8 @@ on:
     # PR is approved.
     branches: [main, ci/e2e-matrix-split]
     paths:
-      - 'packages/**'
-      - 'cmd/**'
-      - 'internal/**'
-      - 'api/**'
-      - 'hack/e2e-install-cozystack.bats'
+      - 'packages/core/talos/**'
       - 'hack/e2e-prepare-cluster.bats'
-      - 'hack/e2e-post-install-prep.sh'
-      - 'hack/e2e-prepull-images.sh'
-      - 'hack/cozytest.sh'
-      - 'Makefile'
       - '.github/workflows/prebake-sandbox.yaml'
   workflow_dispatch:
 
@@ -36,14 +38,11 @@ concurrency:
   group: prebake
   cancel-in-progress: true
 
-env:
-  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
-
 jobs:
   prebake:
-    name: Build and snapshot e2e sandbox
+    name: Bootstrap Talos and snapshot
     runs-on: oracle-vm-24cpu-96gb-x86-64
-    timeout-minutes: 90
+    timeout-minutes: 30
     permissions:
       contents: read
       packages: write
@@ -54,21 +53,6 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      - name: Set up Docker config
-        run: |
-          if [ -d ~/.docker ]; then
-            cp -r ~/.docker "${{ runner.temp }}/.docker"
-          fi
-
-      - name: Login to OCIR
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.OCIR_USER }}
-          password: ${{ secrets.OCIR_TOKEN }}
-          registry: iad.ocir.io
-        env:
-          DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       - name: Login to GHCR
         uses: docker/login-action@v3
@@ -83,19 +67,6 @@ jobs:
             curl -sSL https://fluxcd.io/install.sh | sudo bash
           fi
 
-      # `prebake-<sha>` IMAGE_TAG keeps platform images for the prebaked
-      # snapshot in their own namespace, isolated from the `pr-N-sha`
-      # tags PR builds push. Tags continue to be referenced from the
-      # snapshotted cluster (by digest), so don't garbage-collect them
-      # without coordinating with prebake artifact retention.
-      - name: Build platform images
-        env:
-          DOCKER_CONFIG: ${{ runner.temp }}/.docker
-          IMAGE_TAG: prebake-${{ github.sha }}
-          PUBLISH_VERSIONED: '0'
-          PUBLISH_FLOATING: '0'
-        run: make build
-
       - name: Build Talos image
         run: make -C packages/core/talos talos-nocloud
 
@@ -109,6 +80,9 @@ jobs:
           rm -rf /tmp/$SANDBOX_NAME
           cp -r ${{ github.workspace }} /tmp/$SANDBOX_NAME
 
+      # Boot the sandbox container and bootstrap a fresh 3-node Talos
+      # cluster. End state: etcd up, k8s API reachable, 3 nodes Ready, no
+      # workloads. This is the snapshot point.
       - name: Prepare environment (Talos bootstrap)
         run: |
           cd /tmp/$SANDBOX_NAME
@@ -122,27 +96,17 @@ jobs:
             echo "prepare-env attempt $attempt failed, retrying..."
           done
 
-      - name: Install Cozystack
-        run: |
-          cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
-
       # Snapshot procedure:
       #   1. talosctl shutdown — graceful OS shutdown so etcd flushes
-      #      before the disks are snapshotted. Without this we'd risk
-      #      racy etcd state in the snapshot.
-      #   2. Wait for all QEMU PIDs to exit (max 120s, then force-kill
-      #      with SIGKILL).
+      #      before the disks are snapshotted.
+      #   2. Wait for all QEMU PIDs to exit (max 120s, then force-kill).
       #   3. qemu-img convert -O qcow2 -c — re-encode each raw disk into
-      #      compressed qcow2. Drops unused sparse blocks and shrinks
-      #      typical disk usage by 3-5x.
-      #   4. tar | zstd — final archive of all disks plus credentials
-      #      and metadata, compressed for transit and GHCR storage.
-      - name: Snapshot VMs and stage prebake artifact
-        # Snapshot logic runs inside the sandbox container so QEMU PIDs,
-        # qemu-img tooling, and disk paths are all reachable. Host-side
-        # values that need to land in the artifact (notably GITHUB_SHA
-        # for the manifest) are forwarded explicitly via `docker exec -e`.
+      #      compressed qcow2. data.img is still empty (LINSTOR provisions
+      #      against /dev/vdc later in e2e-post-install-prep.sh), so it
+      #      compresses to almost nothing.
+      #   4. tar | zstd — archive disks plus credentials and metadata,
+      #      compressed for transit and GHCR storage.
+      - name: Snapshot Talos and stage prebake artifact
         run: |
           cd /tmp/$SANDBOX_NAME
           docker exec -e GITHUB_SHA="$GITHUB_SHA" "$SANDBOX_NAME" bash -c '
@@ -168,7 +132,6 @@ jobs:
                 sleep 2
               done
             " || true
-            # Belt-and-suspenders: force kill anything lingering
             pids=$(cat srv*/qemu.pid 2>/dev/null || true)
             [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
             rm -f srv*/qemu.pid
@@ -182,8 +145,8 @@ jobs:
               qemu-img convert -O qcow2 -c -p srv${i}/data.img _prebake/srv${i}-data.qcow2
               # Preserve cloud-init seed images so the restore boot can keep
               # the same QEMU disk ordering (system=vda, seed=vdb, data=vdc).
-              # LINSTOR depends on /dev/vdc resolving to data.img; dropping
-              # seed.img would shift everything by one and break the pool.
+              # LINSTOR (provisioned later by the PR install) depends on
+              # /dev/vdc resolving to data.img.
               cp srv${i}/seed.img _prebake/srv${i}-seed.img
             done
             cp talosconfig kubeconfig _prebake/
@@ -192,6 +155,7 @@ jobs:
               "{" \
               "  \"sha\": \"${GITHUB_SHA}\"," \
               "  \"created_at\": \"${CREATED_AT}\"," \
+              "  \"kind\": \"talos-bootstrapped\"," \
               "  \"vms\": [" \
               "    {\"name\": \"srv1\", \"ip\": \"192.168.123.11\", \"mac\": \"52:54:00:12:34:51\"}," \
               "    {\"name\": \"srv2\", \"ip\": \"192.168.123.12\", \"mac\": \"52:54:00:12:34:52\"}," \

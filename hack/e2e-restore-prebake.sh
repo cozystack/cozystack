@@ -1,18 +1,16 @@
 #!/bin/sh
-# Restore the Cozystack e2e sandbox from a prebake archive and apply the
-# PR-specific diff via helm upgrade installer. Designed to run inside
-# the sandbox container after `make -C packages/core/testing apply` has
-# booted it.
+# Restore a Talos cluster snapshot from a prebake archive into the e2e
+# sandbox. End state mirrors a freshly-finished hack/e2e-prepare-cluster.bats
+# run: 3 QEMU VMs booted, etcd healthy, k8s API at 192.168.123.10:6443,
+# 3 nodes Ready, NO Cozystack installed yet.
+#
+# Caller must then run `make install-cozystack` from the PR's workspace
+# to provision Cozystack on top — keeping the install path itself faithful
+# to a fresh PR install instead of layering a diff onto baked-in state.
 #
 # Prerequisites:
 #   - /workspace/prebake.tar.zst staged by the caller
-#   - Bridge/tap config NOT yet applied (this script sets them up,
-#     mirroring hack/e2e-prepare-cluster.bats)
-#
-# On success: the cluster mirrors the PR's working-tree state and is
-# ready for the e2e test suite. On failure: prints non-ready
-# HelmRelease conditions and exits non-zero so the caller can teardown
-# + collect diagnostics.
+#   - Bridge/tap config NOT yet applied (this script sets them up)
 set -eux
 
 cd /workspace
@@ -33,8 +31,9 @@ echo "::endgroup::"
 
 echo "::group::Restore disk layout (system+seed+data per node)"
 # QEMU drive order must match the fresh-install layout — system=vda,
-# seed=vdb, data=vdc — because LINSTOR's storage pool is provisioned
-# against /dev/vdc explicitly (see hack/e2e-post-install-prep.sh).
+# seed=vdb, data=vdc — because LINSTOR's storage pool (provisioned later
+# by hack/e2e-post-install-prep.sh during Cozystack install) attaches
+# against /dev/vdc explicitly.
 for i in 1 2 3; do
   mkdir -p "srv${i}"
   mv "_restored/srv${i}-system.qcow2" "srv${i}/system.qcow2"
@@ -81,35 +80,4 @@ echo "Cluster ready after restore"
 kubectl get nodes
 echo "::endgroup::"
 
-echo "::group::Apply PR diff via helm upgrade installer"
-# The PR's packages/core/installer/values.yaml has its operator image
-# and platformSourceUrl/platformSourceRef patched to point at the PR's
-# build outputs. Upgrading the installer chart restarts the operator
-# pod with new args, which on startup replaces the in-cluster
-# OCIRepository resource. Flux source-controller then pulls the
-# PR-version of cozystack-packages, the operator reconciles Package
-# CRs against the new artifact, and helm-controller upgrades every
-# HelmRelease whose values diverged from the snapshot.
-helm upgrade installer packages/core/installer \
-  --install --namespace cozy-system \
-  --set cozystackOperator.helmReleaseInterval=30s \
-  --wait --timeout 5m
-echo "::endgroup::"
-
-echo "::group::Force flux source reconcile (skip 5-min poll interval)"
-flux reconcile source oci cozystack-platform -n cozy-system
-echo "::endgroup::"
-
-echo "::group::Wait HelmReleases to converge to PR values"
-if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
-  kubectl get hr -A || true
-  kubectl get hr -A --no-headers | awk '$4 != "True" { print }' | while read -r ns name _; do
-    echo "--- Non-ready HelmRelease: ${ns}/${name}"
-    kubectl get hr -n "${ns}" "${name}" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' || true
-  done
-  echo "Some HelmReleases failed to reconcile after PR-diff apply" >&2
-  exit 1
-fi
-echo "::endgroup::"
-
-echo "Prebake restore + PR-diff apply complete"
+echo "Prebake restore complete — caller should now run make install-cozystack"
