@@ -1,0 +1,225 @@
+name: Publish e2e sandbox prebake
+
+# Build a Cozystack-installed Talos cluster snapshot and publish it to
+# ghcr.io/cozystack/cozystack-prebake on every main commit that affects the
+# platform install state. PR e2e jobs that opt in via the `prebake` label
+# restore from this snapshot, skip the ~23min install phase, and apply only
+# the PR-specific diff via `helm upgrade installer`.
+#
+# Cost: ~38min on oracle-vm-24cpu-96gb per triggered main push. Concurrency
+# cancel-in-progress keeps it to one active build at a time.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'cmd/**'
+      - 'internal/**'
+      - 'api/**'
+      - 'hack/e2e-install-cozystack.bats'
+      - 'hack/e2e-prepare-cluster.bats'
+      - 'hack/e2e-post-install-prep.sh'
+      - 'hack/e2e-prepull-images.sh'
+      - 'hack/cozytest.sh'
+      - 'Makefile'
+  workflow_dispatch:
+
+# Only the latest main commit needs a fresh prebake. Cancelling in-flight
+# runs avoids wasted oracle-vm time on stale snapshots.
+concurrency:
+  group: prebake
+  cancel-in-progress: true
+
+env:
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+jobs:
+  prebake:
+    name: Build and snapshot e2e sandbox
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+          registry: ghcr.io
+
+      - name: Install Flux CLI
+        run: |
+          if ! command -v flux >/dev/null; then
+            curl -sSL https://fluxcd.io/install.sh | sudo bash
+          fi
+
+      # `prebake-<sha>` IMAGE_TAG keeps platform images for the prebaked
+      # snapshot in their own namespace, isolated from the `pr-N-sha`
+      # tags PR builds push. Tags continue to be referenced from the
+      # snapshotted cluster (by digest), so don't garbage-collect them
+      # without coordinating with prebake artifact retention.
+      - name: Build platform images
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          IMAGE_TAG: prebake-${{ github.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+        run: make build
+
+      - name: Build Talos image
+        run: make -C packages/core/talos talos-nocloud
+
+      - name: Set sandbox ID
+        run: |
+          SHORT_SHA="$(echo "${GITHUB_SHA}" | cut -c1-10)"
+          echo "SANDBOX_NAME=cozy-prebake-${SHORT_SHA}" >> $GITHUB_ENV
+
+      - name: Prepare workspace
+        run: |
+          rm -rf /tmp/$SANDBOX_NAME
+          cp -r ${{ github.workspace }} /tmp/$SANDBOX_NAME
+
+      - name: Prepare environment (Talos bootstrap)
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "Prebake prepare-env failed after 3 attempts"
+              exit 1
+            fi
+            echo "prepare-env attempt $attempt failed, retrying..."
+          done
+
+      - name: Install Cozystack
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+
+      # Snapshot procedure:
+      #   1. talosctl shutdown — graceful OS shutdown so etcd flushes
+      #      before the disks are snapshotted. Without this we'd risk
+      #      racy etcd state in the snapshot.
+      #   2. Wait for all QEMU PIDs to exit (max 120s, then force-kill
+      #      with SIGKILL).
+      #   3. qemu-img convert -O qcow2 -c — re-encode each raw disk into
+      #      compressed qcow2. Drops unused sparse blocks and shrinks
+      #      typical disk usage by 3-5x.
+      #   4. tar | zstd — final archive of all disks plus credentials
+      #      and metadata, compressed for transit and GHCR storage.
+      - name: Snapshot VMs and stage prebake artifact
+        # Snapshot logic runs inside the sandbox container so QEMU PIDs,
+        # qemu-img tooling, and disk paths are all reachable. Host-side
+        # values that need to land in the artifact (notably GITHUB_SHA
+        # for the manifest) are forwarded explicitly via `docker exec -e`.
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          docker exec -e GITHUB_SHA="$GITHUB_SHA" "$SANDBOX_NAME" bash -c '
+            cd /workspace
+            set -eux
+
+            echo "::group::Pre-shutdown disk sizes"
+            for i in 1 2 3; do
+              ls -lh srv${i}/system.img srv${i}/data.img 2>&1
+              qemu-img info srv${i}/system.img 2>&1 | grep -E "disk size|virtual size" || true
+              qemu-img info srv${i}/data.img 2>&1 | grep -E "disk size|virtual size" || true
+            done
+            echo "::endgroup::"
+
+            echo "::group::Graceful Talos shutdown"
+            # Non-fatal: if shutdown returns non-zero (node already gone,
+            # transient API hiccup), the PID wait below still runs and
+            # the force-kill catches any straggler.
+            talosctl shutdown -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 \
+              || echo "talosctl shutdown returned non-zero — relying on PID wait + force-kill"
+            timeout 120 bash -c "
+              while pids=\$(cat srv*/qemu.pid 2>/dev/null) && [ -n \"\$pids\" ] && kill -0 \$pids 2>/dev/null; do
+                sleep 2
+              done
+            " || true
+            # Belt-and-suspenders: force kill anything lingering
+            pids=$(cat srv*/qemu.pid 2>/dev/null || true)
+            [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+            rm -f srv*/qemu.pid
+            sleep 3
+            echo "::endgroup::"
+
+            echo "::group::Compress qcow2 disks"
+            mkdir -p _prebake
+            for i in 1 2 3; do
+              qemu-img convert -O qcow2 -c -p srv${i}/system.img _prebake/srv${i}-system.qcow2
+              qemu-img convert -O qcow2 -c -p srv${i}/data.img _prebake/srv${i}-data.qcow2
+            done
+            cp talosconfig kubeconfig _prebake/
+            CREATED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+            printf "%s\n" \
+              "{" \
+              "  \"sha\": \"${GITHUB_SHA}\"," \
+              "  \"created_at\": \"${CREATED_AT}\"," \
+              "  \"vms\": [" \
+              "    {\"name\": \"srv1\", \"ip\": \"192.168.123.11\", \"mac\": \"52:54:00:12:34:51\"}," \
+              "    {\"name\": \"srv2\", \"ip\": \"192.168.123.12\", \"mac\": \"52:54:00:12:34:52\"}," \
+              "    {\"name\": \"srv3\", \"ip\": \"192.168.123.13\", \"mac\": \"52:54:00:12:34:53\"}" \
+              "  ]" \
+              "}" \
+              > _prebake/prebake-meta.json
+            ls -lh _prebake/
+            du -sh _prebake/
+            echo "::endgroup::"
+
+            echo "::group::zstd compression"
+            apt-get update -qq >/dev/null 2>&1 || true
+            apt-get install -y -q zstd >/dev/null 2>&1 || true
+            cd _prebake
+            tar -cf - . | zstd -10 -T0 -o /workspace/prebake.tar.zst
+            ls -lh /workspace/prebake.tar.zst
+            echo "::endgroup::"
+          '
+          docker cp "$SANDBOX_NAME":/workspace/prebake.tar.zst /tmp/prebake.tar.zst
+          ls -lh /tmp/prebake.tar.zst
+
+      - name: Publish prebake to GHCR
+        run: |
+          mkdir -p _prebake_artifact
+          cp /tmp/prebake.tar.zst _prebake_artifact/
+          REV="$(git describe --tags --always):${GITHUB_SHA}"
+          for tag in "${GITHUB_SHA}" latest; do
+            flux push artifact \
+              "oci://ghcr.io/cozystack/cozystack-prebake:${tag}" \
+              --path=_prebake_artifact \
+              --source=https://github.com/cozystack/cozystack \
+              --revision="${REV}"
+          done
+
+      - name: Teardown sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+      - name: Cleanup workspace
+        if: always()
+        run: rm -rf /tmp/$SANDBOX_NAME /tmp/prebake.tar.zst _prebake_artifact
