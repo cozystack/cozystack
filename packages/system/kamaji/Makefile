@@ -14,7 +14,7 @@ update:
 image:
 	docker buildx build images/kamaji \
 		$(call image-tags,kamaji,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/kamaji:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/kamaji:latest \
 		--cache-to type=inline \
 		--metadata-file images/kamaji.json \
 		$(BUILDX_ARGS)

@@ -8,7 +8,7 @@ image:
 	docker buildx build -f images/kubeovn-plunger/Dockerfile ../../../ \
 		--provenance false \
 		$(call image-tags,kubeovn-plunger,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/kubeovn-plunger:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/kubeovn-plunger:latest \
 		--cache-to type=inline \
 		--metadata-file images/kubeovn-plunger.json \
 		--push=$(PUSH) \

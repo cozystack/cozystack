@@ -34,7 +34,7 @@ build-console:
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
 		$(call image-tags,cozystack-ui,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/cozystack-ui:latest \
 		--cache-to type=inline \
 		--metadata-file images/console.json \
 		--build-arg APP_VERSION=$(COZYSTACK_VERSION) \
@@ -55,7 +55,7 @@ image-token-proxy:
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
 		$(call image-tags,token-proxy,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/token-proxy:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/token-proxy:latest \
 		--cache-to type=inline \
 		--metadata-file images/token-proxy.json \
 		--push=$(PUSH) \

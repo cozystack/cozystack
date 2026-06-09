@@ -15,7 +15,7 @@ update:
 image:
 	docker buildx build images/redis-operator \
 		$(call image-tags,redis-operator,$(REDIS_OPERATOR_TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/redis-operator:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/redis-operator:latest \
 		--cache-to type=inline \
 		--metadata-file images/redis-operator.json \
 		$(BUILDX_ARGS)

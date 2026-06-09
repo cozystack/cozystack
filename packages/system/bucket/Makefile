@@ -13,7 +13,7 @@ image: image-s3manager
 image-s3manager:
 	docker buildx build images/s3manager \
 		$(call image-tags,s3manager,$(S3MANAGER_TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/s3manager:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/s3manager:latest \
 		--cache-to type=inline \
 		--metadata-file images/s3manager.json \
 		$(BUILDX_ARGS)

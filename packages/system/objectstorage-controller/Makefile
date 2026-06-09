@@ -19,7 +19,7 @@ image-controller image-sidecar:
 	docker buildx build images/objectstorage \
 		--target $(TARGET) \
 		$(call image-tags,objectstorage-$(TARGET),v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/objectstorage-$(TARGET):latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/objectstorage-$(TARGET):latest \
 		--cache-to   type=inline \
 		--metadata-file images/$(TARGET).json \
 		$(BUILDX_ARGS)

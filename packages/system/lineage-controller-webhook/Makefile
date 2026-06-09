@@ -14,7 +14,7 @@ test:
 image-lineage-controller-webhook:
 	docker buildx build -f images/lineage-controller-webhook/Dockerfile ../../.. \
 		$(call image-tags,lineage-controller-webhook,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/lineage-controller-webhook:latest \
+		--cache-from type=registry,ref=$(CACHE_REGISTRY)/lineage-controller-webhook:latest \
 		--cache-to type=inline \
 		--metadata-file images/lineage-controller-webhook.json \
 		$(BUILDX_ARGS)
