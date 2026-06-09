@@ -42,7 +42,7 @@ jobs:
   prebake:
     name: Bootstrap Talos and snapshot
     runs-on: oracle-vm-24cpu-96gb-x86-64
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
@@ -136,21 +136,24 @@ jobs:
             done
             echo "::endgroup::"
 
-            echo "::group::Graceful Talos shutdown"
-            # Non-fatal: if shutdown returns non-zero (node already gone,
-            # transient API hiccup), the PID wait below still runs and
-            # the force-kill catches any straggler.
-            talosctl shutdown -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 \
-              || echo "talosctl shutdown returned non-zero — relying on PID wait + force-kill"
-            timeout 120 bash -c "
-              while pids=\$(cat srv*/qemu.pid 2>/dev/null) && [ -n \"\$pids\" ] && kill -0 \$pids 2>/dev/null; do
-                sleep 2
-              done
-            " || true
+            echo "::group::Stop QEMU VMs (hard power-off)"
+            # `talosctl shutdown` was the first attempt, but on a CNI-less
+            # cluster it tries to cordon+drain the nodes (which are
+            # NotReady because no CNI is installed) and stalls until job
+            # timeout — observed in the previous prebake run, where the
+            # shutdown phase blocked for 25min before being cancelled.
+            #
+            # Skip the graceful path entirely. Talos is designed to
+            # survive hard power-off: ext4 journal replays on next boot,
+            # etcd writes are durable via WAL with fsync. Snapshot point
+            # is right after Talos bootstrap (no active workloads), so
+            # there is no in-flight state to lose.
             pids=$(cat srv*/qemu.pid 2>/dev/null || true)
-            [ -n "$pids" ] && kill -9 $pids 2>/dev/null || true
+            [ -n "$pids" ] && kill -KILL $pids 2>/dev/null || true
+            # Wait briefly for kernel to release file handles on the
+            # disks so qemu-img convert reads a stable image.
+            sleep 5
             rm -f srv*/qemu.pid
-            sleep 3
             echo "::endgroup::"
 
             echo "::group::Compress qcow2 disks"
