@@ -37,3 +37,4 @@ gpu/gpu-efficiency
 gpu/gpu-quotas
 gpu/gpu-fleet
 gpu/gpu-tenants
+tenants/overview
