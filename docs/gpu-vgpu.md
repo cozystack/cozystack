@@ -39,29 +39,29 @@ The proprietary `.run` is the **Linux KVM** variant (not the Ubuntu KVM `.deb`, 
 
 ## Deploying with the vgpu variant
 
-Create a `Package` CR pointing at your image coordinates:
+The platform's `iaas` bundle deploys the gpu-operator Package CR when `cozystack.gpu-operator` is in `bundles.enabledPackages` and `bundles.iaas.gpuOperatorVariant: vgpu` is set. The vGPU Manager image is proprietary and not redistributable, so the bundle does not ship a default tag — the operator builds the container per the upstream [`gpu-driver-container`](https://github.com/NVIDIA/gpu-driver-container) recipe and supplies the private-registry coordinates through platform values:
 
 ```yaml
-apiVersion: cozystack.io/v1alpha1
-kind: Package
-metadata:
-  name: cozystack.gpu-operator
-spec:
-  variant: vgpu
-  components:
-    gpu-operator:
-      values:
-        gpu-operator:
-          vgpuManager:
-            repository: registry.example.com/nvidia
-            image: vgpu-manager
-            version: "595.58.02-ubuntu24.04"
-            # imagePullSecrets lives per-component (vgpuManager,
-            # driver, validator, dcgmExporter, …). The value is a
-            # list of strings, not [{name: ...}].
-            imagePullSecrets:
-            - nvidia-registry-secret
+bundles:
+  iaas:
+    enabled: true
+    gpuOperatorVariant: vgpu
+  enabledPackages:
+  - cozystack.gpu-operator
+
+gpu:
+  vgpuManager:
+    repository: registry.example.com/nvidia
+    image: vgpu-manager
+    version: "595.58.02-ubuntu24.04"
+    # imagePullSecrets lives per-component (vgpuManager, driver,
+    # validator, dcgmExporter, …). The value is a list of strings,
+    # not [{name: ...}].
+    imagePullSecrets:
+    - nvidia-registry-secret
 ```
+
+The platform forwards `gpu.vgpuManager` into the emitted gpu-operator Package CR's `components.gpu-operator.values.gpu-operator.vgpuManager`, so the bundle handles the variant + image coordinates in one place. If you need to override anything else on the gpu-operator chart (driver, validator, dcgmExporter, custom node selectors), hand-craft a `Package` CR named `cozystack.gpu-operator` with the full `components.gpu-operator.values` block — that takes precedence over the bundle render.
 
 The `nvidia-registry-secret` should be a docker-registry Secret created beforehand in `cozy-gpu-operator`.
 
@@ -95,24 +95,54 @@ For Pascal–Ampere GPUs (V100, T4, A100, A30) the mdev model still applies. Fli
 
 ## KubeVirt configuration
 
-After [kubevirt#16890](https://github.com/kubevirt/kubevirt/pull/16890), `virt-handler` recognises SR-IOV VFs bound to the `nvidia` driver as candidates whenever a vGPU profile is configured (`current_vgpu_type` ≠ 0). PFs are skipped automatically.
+When `cozystack.gpu-operator` is in `bundles.enabledPackages` (and not also in `bundles.disabledPackages`), the platform mirrors the chosen GPU variant into the `KubeVirt` CR automatically. There is no manual `kubectl patch` step.
 
-Patch the `KubeVirt` CR to permit the resource:
+If you opt out of bundle management and hand-craft a `cozystack.gpu-operator` Package CR directly — typically to apply overrides the bundle does not expose (driver settings, custom node selectors, validator / dcgmExporter tweaks, etc.) — the platform does NOT auto-wire `HostDevices` or `permittedHostDevices` into the KubeVirt CR. In that flow you also hand-craft a `cozystack.kubevirt` Package CR with `components.kubevirt.values.extraFeatureGates: [HostDevices]` and the appropriate `permittedHostDevices` block. The escape-hatch values shape under `.gpu` (below) is intentionally documented in the bundle-managed flow only; the manual Package-CR override path takes precedence over the bundle render whenever both exist.
+
+- `developerConfiguration.featureGates` gets `HostDevices` appended (current KubeVirt splits this from the `GPU` gate; the admission webhook rejects `spec.template.spec.domain.devices.hostDevices` without it).
+- `permittedHostDevices.pciHostDevices` is filled from `packages/core/platform/files/gpu-passthrough-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: default` (the package default). The table covers Hopper (H100/H200), Ada Lovelace (L4/L40/L40S), Ampere (A100 PCIe/SXM, A40, A30, A10), Turing (T4), Volta (V100/V100S). All entries carry `externalResourceProvider: true` because the resource names come from `nvidia-sandbox-device-plugin`, not from KubeVirt's in-tree device plugin.
+- `permittedHostDevices.mediatedDevices` is filled from `packages/core/platform/files/gpu-vgpu-defaults.yaml` when `bundles.iaas.gpuOperatorVariant: vgpu`. This list only EXPOSES, by profile name (`mdevNameSelector`), mdevs that the GPU Operator's vGPU Device Manager CREATES on the node; the platform does not ship a numeric `mediatedDevicesConfiguration` default (those `nvidia-NNN` type ids are per-SKU/driver sysfs indices with no portable value — set `.gpu.mediatedDevicesConfiguration` yourself, with host-verified ids, only if you want KubeVirt rather than the Device Manager to create mdevs). The starter set covers Pascal–Ampere mdev profiles (A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q) — the same family range as the upstream `vgpu-device-manager` walks `/sys/class/mdev_bus/` for. Ada Lovelace / Blackwell SR-IOV vGPU is out of scope for the chart's default list; advertise those VFs via the user-override hook below.
+
+### Extending or replacing the default table
+
+The platform exposes three knobs under `.gpu`:
 
 ```yaml
-spec:
-  configuration:
-    permittedHostDevices:
-      pciHostDevices:
-      - pciVendorSelector: "10DE:26B9"   # L40S — same device ID for PF and VF
-        resourceName: nvidia.com/L40S-24Q
+gpu:
+  # Extend the platform defaults with cluster-specific entries. Both list
+  # keys are read in both variants: pciHostDevices feeds the passthrough
+  # (vfio-pci) path AND the post-kubevirt#16890 SR-IOV vGPU VF path on
+  # Ada Lovelace / Blackwell; mediatedDevices feeds the pre-#16890 mdev
+  # path on Pascal–Ampere. Both render into the same KubeVirt CR.
+  permittedHostDevices:
+    pciHostDevices:
+    - pciVendorSelector: "10DE:26B9"   # L40S, advertised as a VF for SR-IOV vGPU
+      resourceName: nvidia.com/L40S-24Q
+      # externalResourceProvider is intentionally omitted here: after
+      # kubevirt/kubevirt#16890, virt-handler's in-tree device plugin
+      # advertises the resource directly, no sandbox plugin in the loop.
+    mediatedDevices: []
+  # mediatedDevicesConfiguration makes KubeVirt itself create mdevs (vgpu mode). No platform default: mdev creation is normally delegated to the vGPU Device Manager (name-based), and these mediatedDeviceTypes are host/driver-specific nvidia-NNN sysfs indices (look yours up via /sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name). Set this only to opt into KubeVirt-driven creation; mergeOverwrite REPLACES a supplied top-level key wholesale.
+  mediatedDevicesConfiguration: {}
+  # Wipe the platform defaults entirely and ship only the cluster's
+  # curated lists. Useful for non-NVIDIA-only clusters and strict
+  # allowlist requirements.
+  replaceDefaults: false
 ```
+
+`replaceDefaults: false` (the default) appends user entries to the NVIDIA defaults. `replaceDefaults: true` drops the NVIDIA table entirely — if you don't then supply your own pciHostDevices / mediatedDevices list, the rendered KubeVirt CR has no `permittedHostDevices` block and the admission webhook will reject every GPU VM.
+
+### Notes on `nvidia-sandbox-device-plugin` resource names
+
+The `resourceName` strings in `gpu-passthrough-defaults.yaml` are what `nvidia-sandbox-device-plugin` (`nvcr.io/nvidia/kubevirt-gpu-device-plugin`) advertises: it derives each slug mechanically from the device's PCI-IDs database name by uppercasing it, turning `/`, `.` and whitespace into `_`, and stripping the remaining non-alphanumerics (the `[` / `]`). So `TU104GL [Tesla T4]` becomes `nvidia.com/TU104GL_TESLA_T4` and `GA100GL [A30 PCIe]` becomes `nvidia.com/GA100GL_A30_PCIE` — the slug carries every token the PCI-IDs string holds (the `GL` die suffix, the `Tesla` brand on Turing/Volta, form factor, memory), not a tidy `<arch>_<model>`. The names track the pci.ids snapshot bundled in the plugin image, so a different plugin build can publish a different string — check with `kubectl describe node <node> | grep nvidia.com/` and override via `.gpu.permittedHostDevices.pciHostDevices` (or wipe the table with `replaceDefaults: true` and curate it yourself). PCI vendor:device IDs themselves are stable across driver versions.
+
+### SR-IOV PF vs VF (Ada Lovelace and newer)
 
 On L40S (and other Ada-Lovelace cards) the SR-IOV VFs report the same PCI device ID as the PF — `lspci -nn -d 10de:` on the host shows both as `[10de:26b9]`. `virt-handler` distinguishes them by `is-VF + has-vGPU-profile`, so a single `pciVendorSelector` matches the right set. Verify on your specific GPU before assuming this — some other generations split PF/VF IDs.
 
-`externalResourceProvider: true` is **not** required here (and should be omitted) — the device plugin lives inside `virt-handler` itself, no external sandbox-device-plugin advertises this resource.
+`externalResourceProvider: true` is **not** required when the resource is advertised by `virt-handler`'s in-tree device plugin (the SR-IOV path post kubevirt#16890). The platform passthrough defaults include the flag because that path is driven by the external sandbox plugin.
 
-Verify allocatable capacity:
+### Verifying allocatable capacity
 
 ```bash
 kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.status.allocatable.nvidia\.com/L40S-24Q}{"\n"}{end}'

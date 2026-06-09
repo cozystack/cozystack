@@ -2,14 +2,152 @@
 {{- fail "bundles.iaas.enabled can only be true when bundles.system.variant is 'isp-full' or 'isp-full-generic'" }}
 {{- end }}
 {{- if and .Values.bundles.iaas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic")) }}
-{{- $kubevirtComponents := dict -}}
+{{- $kubevirtValues := dict -}}
 {{- if .Values.resources.cpuAllocationRatio -}}
-{{- $_ := set $kubevirtComponents "kubevirt" (dict "values" (dict "cpuAllocationRatio" (.Values.resources.cpuAllocationRatio | int))) -}}
+{{- $_ := set $kubevirtValues "cpuAllocationRatio" (.Values.resources.cpuAllocationRatio | int) -}}
+{{- end -}}
+{{- /*
+  When cozystack.gpu-operator is enabled the platform mirrors the variant
+  into the KubeVirt CR: the HostDevices feature gate plus a starter
+  permittedHostDevices block. Without this the admission webhook rejects
+  any VM that references a host-device GPU by resourceName. See
+  docs/gpu-vgpu.md for the user-facing knobs.
+*/ -}}
+{{- /*
+  Mirror the cozystack.platform.package.optional helper's enable/disable
+  semantics — disabledPackages wins over enabledPackages. A shared values
+  file may list gpu-operator under enabled but a per-cluster override
+  may push it into disabled; in that case the gpu-operator Package CR is
+  not emitted and the kubevirt CR must not carry GPU wiring either.
+*/ -}}
+{{- $gpuName := "cozystack.gpu-operator" -}}
+{{- $gpuEnabled := and (has $gpuName (default (list) .Values.bundles.enabledPackages)) (not (has $gpuName (default (list) .Values.bundles.disabledPackages))) -}}
+{{- $gpuVariant := .Values.bundles.iaas.gpuOperatorVariant | default "default" -}}
+{{- /*
+  Validate the variant up front, not behind $gpuEnabled — a typo like
+  gpuOperatorVariant: passthrough (instead of "default") would otherwise
+  render fine until someone flips gpu-operator into enabledPackages, at
+  which point the bundle breaks. Failing fast here surfaces the typo on
+  the first render after the values file changes.
+*/ -}}
+{{- if not (or (eq $gpuVariant "default") (eq $gpuVariant "vgpu")) -}}
+{{- fail (printf "bundles.iaas.gpuOperatorVariant must be \"default\" or \"vgpu\", got %q" $gpuVariant) -}}
+{{- end -}}
+{{- if $gpuEnabled }}
+{{- $_ := set $kubevirtValues "extraFeatureGates" (list "HostDevices") -}}
+{{- /*
+  Each .Values.gpu access is fully parenthesized — (((.Values.gpu).x).y) —
+  on purpose. Parenthesizing makes the field walk nil-safe: an operator may
+  null out the whole gpu block (gpu: null) or leave a sub-key blank
+  (permittedHostDevices: with no value parses to null), and Helm's
+  null-deletes-key coalescing then drops it from .Values. A bare
+  .Values.gpu.permittedHostDevices.pciHostDevices walk panics with
+  "nil pointer evaluating interface {}.permittedHostDevices" on the first
+  nil hop; the parenthesized form yields an invalid Value that `default`
+  absorbs instead. Do NOT flatten these into a bare dotted path — the
+  null-gpu cases in tests/bundles_gpu_kubevirt_wiring_test.yaml pin it.
+*/ -}}
+{{- $userPci := default (list) (((.Values.gpu).permittedHostDevices).pciHostDevices) -}}
+{{- $userMdev := default (list) (((.Values.gpu).permittedHostDevices).mediatedDevices) -}}
+{{- $userMdevConfig := default (dict) (.Values.gpu).mediatedDevicesConfiguration -}}
+{{- $replace := default false (.Values.gpu).replaceDefaults -}}
+{{- /*
+  pciHostDevices applies in both variants — passthrough (vfio-pci, whole
+  GPU) and post-kubevirt#16890 SR-IOV vGPU VFs (Ada Lovelace / Blackwell
+  with the vGPU 17/20 driver branch) both advertise via pciHostDevices.
+  mediatedDevices is vgpu-only: it EXPOSES, by stable profile name
+  (mdevNameSelector), the mdev devices the GPU Operator's vGPU Device
+  Manager creates on the node. Emitting it in the passthrough variant
+  would carry vGPU-only configuration into a CR that has no vGPU manager
+  deployed — a footgun for operators who keep a shared gpu values block
+  and flip the variant back to default.
+
+  mediatedDevicesConfiguration is intentionally NOT defaulted. Its
+  mediatedDeviceTypes entries are numeric nvidia-NNN ids that make
+  KubeVirt itself create mdevs — but those ids are per-(SKU, driver)
+  sysfs indices with no portable value, and mdev creation is already
+  handled by the vGPU Device Manager (name-based). It is therefore
+  emitted only from the .gpu.mediatedDevicesConfiguration override, for
+  operators who deliberately want KubeVirt to drive creation with
+  host-verified type ids.
+*/ -}}
+{{- $pci := list -}}
+{{- $mdev := list -}}
+{{- $mdevConfig := dict -}}
+{{- if eq $gpuVariant "default" -}}
+{{- if not $replace -}}
+{{- $defaults := $.Files.Get "files/gpu-passthrough-defaults.yaml" | fromYaml -}}
+{{- $pci = concat $pci $defaults.pciHostDevices -}}
+{{- end -}}
+{{- $pci = concat $pci $userPci -}}
+{{- else -}}
+{{- /*
+  The mediatedDevices defaults name the mdev profiles the vGPU Device
+  Manager creates; they are only useful when that DaemonSet is actually
+  deployed — without it, /sys/class/mdev_bus/ stays empty and the
+  rendered mediated resources can never become allocatable. Suppress the
+  platform mdev defaults when vgpuDeviceManager.enabled is false (the
+  case on Ada Lovelace / Blackwell SR-IOV); the operator can still set
+  their own mediated entries via .gpu.permittedHostDevices.
+*/ -}}
+{{- $deviceManagerOn := default false (((.Values.gpu).vgpuDeviceManager).enabled) -}}
+{{- if and (not $replace) $deviceManagerOn -}}
+{{- $vgpuDefaults := $.Files.Get "files/gpu-vgpu-defaults.yaml" | fromYaml -}}
+{{- $mdev = concat $mdev $vgpuDefaults.permittedHostDevices.mediatedDevices -}}
+{{- end -}}
+{{- $pci = concat $pci $userPci -}}
+{{- $mdev = concat $mdev $userMdev -}}
+{{- $mdevConfig = mergeOverwrite $mdevConfig $userMdevConfig -}}
+{{- end -}}
+{{- $permitted := dict -}}
+{{- if $pci -}}
+{{- $_ := set $permitted "pciHostDevices" $pci -}}
+{{- end -}}
+{{- if $mdev -}}
+{{- $_ := set $permitted "mediatedDevices" $mdev -}}
+{{- end -}}
+{{- if $permitted -}}
+{{- $_ := set $kubevirtValues "permittedHostDevices" $permitted -}}
+{{- end -}}
+{{- if $mdevConfig -}}
+{{- $_ := set $kubevirtValues "mediatedDevicesConfiguration" $mdevConfig -}}
+{{- end -}}
+{{- end -}}
+{{- $kubevirtComponents := dict -}}
+{{- if $kubevirtValues -}}
+{{- $_ := set $kubevirtComponents "kubevirt" (dict "values" $kubevirtValues) -}}
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.kubevirt" "default" $ $kubevirtComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.gpu-operator" $) }}
+{{- /*
+  Forward platform-level vGPU knobs into the emitted cozystack.gpu-operator
+  Package CR's components.gpu-operator.values. Only applies to the vgpu
+  variant — passthrough does not consume them. Each knob is forwarded
+  independently: the vgpuManager block ships if any of repository, version,
+  a non-default image, or imagePullSecrets is set (avoids the silent-drop
+  trap where a private registry needs imagePullSecrets but inherits the
+  upstream image tag); vgpuDeviceManager.enabled ships whenever the
+  operator set it (true on Pascal–Ampere mdev clusters, default false).
+*/ -}}
+{{- $gpuOperatorComponents := dict -}}
+{{- if and $gpuEnabled (eq $gpuVariant "vgpu") -}}
+{{- $gpuOperatorOverrides := dict -}}
+{{- $vgpuMgr := default (dict) (.Values.gpu).vgpuManager -}}
+{{- $imageCustomized := and (hasKey $vgpuMgr "image") (ne (default "" $vgpuMgr.image) "vgpu-manager") -}}
+{{- if or $vgpuMgr.repository $vgpuMgr.version $imageCustomized $vgpuMgr.imagePullSecrets -}}
+{{- $_ := set $gpuOperatorOverrides "vgpuManager" $vgpuMgr -}}
+{{- end -}}
+{{- if (((.Values.gpu).vgpuDeviceManager).enabled) -}}
+{{- $_ := set $gpuOperatorOverrides "vgpuDeviceManager" (dict "enabled" true) -}}
+{{- end -}}
+{{- if $gpuOperatorOverrides -}}
+{{- $_ := set $gpuOperatorComponents "gpu-operator" (dict "values" (dict "gpu-operator" $gpuOperatorOverrides)) -}}
+{{- end -}}
+{{- end -}}
+{{- if $gpuEnabled }}
+{{include "cozystack.platform.package" (list "cozystack.gpu-operator" $gpuVariant $ $gpuOperatorComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hami" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-operator" $) }}

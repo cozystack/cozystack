@@ -14,6 +14,17 @@ bundles:
     variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
   iaas:
     enabled: false
+    # gpu-operator variant selector — applies when cozystack.gpu-operator is
+    # in bundles.enabledPackages. "default" runs the vfio-pci passthrough
+    # stack (whole GPU → one VM); "vgpu" runs the vGPU Manager stack. The
+    # platform mirrors this into the KubeVirt CR: passthrough auto-wires the
+    # HostDevices feature gate plus a default permittedHostDevices.pciHostDevices
+    # table covering common NVIDIA datacenter GPUs (vendor 10DE); vgpu
+    # auto-wires permittedHostDevices.mediatedDevices plus a starter
+    # mediatedDevicesConfiguration. Operators with additional or non-NVIDIA
+    # cards extend the defaults via gpu.permittedHostDevices /
+    # gpu.mediatedDevicesConfiguration / gpu.replaceDefaults below.
+    gpuOperatorVariant: default
   paas:
     enabled: false
   naas:
@@ -310,3 +321,85 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
+# GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
+# KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
+# cozystack.gpu-operator. Without it the admission webhook rejects any VM
+# that references a GPU host-device by resourceName.
+gpu:
+  # When false (default), the lists below are appended to the platform's
+  # NVIDIA defaults. When true, the user lists fully replace the defaults
+  # — use this for clusters with only non-NVIDIA accelerators or where a
+  # strictly curated allowlist is required.
+  replaceDefaults: false
+  permittedHostDevices:
+    # PCI passthrough devices. Always rendered when non-empty regardless of
+    # gpuOperatorVariant — pciHostDevices covers both the vfio-pci passthrough
+    # path (default variant) and the post-kubevirt#16890 SR-IOV vGPU path
+    # (vgpu variant on Ada Lovelace / Blackwell, where VFs are advertised
+    # via pciHostDevices, not via mediatedDevices). Default-table coverage:
+    # H100, H200, A100 PCIe/SXM, A40, A30, A10, L40, L40S, L4, T4, V100,
+    # V100S (PCI vendor 10DE). Item shape matches KubeVirt's pciHostDevices:
+    #   - pciVendorSelector: "10DE:2335"
+    #     resourceName: nvidia.com/GH100_H200_SXM_141GB
+    #     externalResourceProvider: true
+    pciHostDevices: []
+    # Mediated (mdev) vGPU devices — pre-kubevirt#16890 path used by
+    # Pascal–Ampere on the legacy mdev driver branch. Default-table coverage:
+    # A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q.
+    # Item shape matches KubeVirt's mediatedDevices:
+    #   - mdevNameSelector: NVIDIA A100-40C
+    #     resourceName: nvidia.com/A100-40C
+    #     externalResourceProvider: true
+    mediatedDevices: []
+  # mediatedDevicesConfiguration makes KubeVirt itself create mdevs on the
+  # node (vgpu variant only). The platform ships NO default here: mdev
+  # creation is delegated to the GPU Operator's vGPU Device Manager
+  # (name-based), and the mediatedDeviceTypes ids below are numeric
+  # nvidia-NNN sysfs indices that vary per GPU SKU and driver branch — no
+  # value is portable, so look yours up on the host
+  # (/sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name) before setting
+  # it. Supplying it opts into KubeVirt-driven creation on top of the
+  # Device Manager. Helm's mergeOverwrite semantics apply: a top-level key
+  # you supply REPLACES that key wholesale rather than appending. Shape
+  # matches KubeVirt's MediatedDevicesConfiguration:
+  #   mediatedDeviceTypes:
+  #     - nvidia-740
+  #   nodeMediatedDeviceTypes:
+  #     - nodeSelector:
+  #         nvidia.com/gpu.product: NVIDIA-L40S
+  #       mediatedDeviceTypes:
+  #         - nvidia-740
+  mediatedDevicesConfiguration: {}
+  # NVIDIA vGPU Manager container image (vgpu variant only). The .run is
+  # proprietary, not redistributable, so the platform cannot ship default
+  # tags — the operator builds the container per
+  # https://github.com/NVIDIA/gpu-driver-container and supplies the
+  # private-registry coordinates here. The platform forwards these as
+  # components.gpu-operator.values.gpu-operator.vgpuManager to the emitted
+  # cozystack.gpu-operator Package CR when bundles.iaas.gpuOperatorVariant
+  # is vgpu. Forwarding triggers when ANY of repository, version, image
+  # (non-default), or imagePullSecrets is set — partial values still
+  # propagate so a private-registry-with-default-tag setup is not
+  # silently dropped.
+  vgpuManager:
+    repository: ""
+    image: vgpu-manager
+    version: ""
+    imagePullSecrets: []
+  # vGPU Device Manager controls whether nvidia.com's
+  # `vgpu-device-manager` DaemonSet is deployed (vgpu variant only). The
+  # DaemonSet walks /sys/class/mdev_bus/ to auto-create mediated devices
+  # from the mediatedDeviceTypes list. Default-off because that path
+  # only exists on Pascal–Ampere (V100, T4, A100, A30, …) with the mdev
+  # driver branch — on Ada Lovelace / Blackwell (L4, L40, L40S, B100)
+  # with the vGPU 17/20 driver branch the directory is missing and the
+  # DaemonSet crash-loops with "no parent devices found". Flip to true
+  # on Pascal–Ampere clusters; leave false on Ada/Blackwell and supply
+  # SR-IOV VFs via .gpu.permittedHostDevices.pciHostDevices instead.
+  # When true the platform also lets the default name-based mediatedDevices
+  # exposure list from files/gpu-vgpu-defaults.yaml flow into the KubeVirt
+  # CR; when false those defaults are suppressed (advertising mediated
+  # resources that nothing can ever allocate is a worse footgun than
+  # missing entries).
+  vgpuDeviceManager:
+    enabled: false
