@@ -73,11 +73,19 @@ done
 sleep 5
 echo "::endgroup::"
 
-echo "::group::Wait for Talos API + Kubernetes nodes Ready"
+echo "::group::Wait for Talos API + etcd quorum + node registration"
+# Mirrors the wait sequence at the end of hack/e2e-prepare-cluster.bats's
+# "Bootstrap Talos cluster" test. Don't wait for kubelet Ready — at this
+# point Cozystack is not installed, no CNI is up, and kubelets stay
+# NotReady. The unconditional Install Cozystack step in pull-requests.yaml
+# brings them to Ready once cilium is installed.
 timeout 60 sh -ec 'until nc -nz 192.168.123.11 50000 && nc -nz 192.168.123.12 50000 && nc -nz 192.168.123.13 50000; do sleep 1; done'
-timeout 180 sh -ec 'until [ $(kubectl get node --no-headers 2>/dev/null | grep -c " Ready ") -eq 3 ]; do sleep 5; kubectl get nodes 2>&1 | head -5; done'
-echo "Cluster ready after restore"
+timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 2; done'
+timeout 60 sh -ec 'while talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 2>&1 | grep -q "rpc error"; do sleep 1; done'
+timeout 60 sh -ec 'until [ $(kubectl get node --no-headers 2>/dev/null | wc -l) -eq 3 ]; do sleep 2; done'
+echo "Talos cluster restored: 3 nodes registered, etcd quorum healthy"
 kubectl get nodes
+talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10
 echo "::endgroup::"
 
 echo "Prebake restore complete — caller should now run make install-cozystack"
