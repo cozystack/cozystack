@@ -99,9 +99,9 @@ See the reference for components utilized in this service:
 
 ### Common Parameters
 
-| Name           | Description                          | Type     | Value        |
-| -------------- | ------------------------------------ | -------- | ------------ |
-| `storageClass` | StorageClass used to store the data. | `string` | `replicated` |
+| Name           | Description                                                                                                                              | Type     | Value        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------ |
+| `storageClass` | Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name. | `string` | `replicated` |
 
 
 ### Application-specific Parameters

@@ -18,7 +18,7 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// StorageClass used to store the data.
+	// Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`

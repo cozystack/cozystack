@@ -3,7 +3,7 @@
   "type": "object",
   "properties": {
     "storageClass": {
-      "description": "StorageClass used to store the data.",
+      "description": "Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.",
       "type": "string",
       "default": "replicated",
       "x-kubernetes-validations": [
