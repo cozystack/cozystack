@@ -1,14 +1,20 @@
 # Builds clastix/talos-csr-signer from upstream source at a pinned commit.
 # The upstream project does not publish semver releases yet (only a rolling
 # `:latest` tag on ghcr.io/clastix/talos-csr-signer), so we mirror it into
-# ghcr.io/cozystack/cozystack/talos-csr-signer:<commit> with a digest pin.
+# ghcr.io/cozystack/cozystack/talos-csr-signer:<chart-version> with a digest
+# pin. The image tag is the kubernetes chart version (KUBERNETES_PKG_TAG /
+# IMAGE_TAG in the Makefile), not the source commit — the commit is
+# fingerprinted indirectly via the resulting image digest, which the
+# Makefile writes into images/talos-csr-signer.tag.
 #
 # To bump the upstream version, update COMMIT below to the desired master
-# SHA and rerun `make image-talos-csr-signer` in packages/apps/kubernetes.
+# SHA and rerun `make image-talos-csr-signer` in packages/apps/kubernetes;
+# the regenerated images/talos-csr-signer.tag must be committed alongside.
 FROM golang:1.26 AS builder
 
 # Upstream is at clastix/talos-csr-signer. Pin to a master SHA so rebuilds
-# are reproducible; CI fingerprints the resulting image by digest.
+# are reproducible; the resulting image digest is what CI fingerprints
+# (via images/talos-csr-signer.json), not the upstream commit directly.
 ARG COMMIT=3b434408954012ee5cc7fe3736166f9b02b58871
 ARG TARGETOS
 ARG TARGETARCH
