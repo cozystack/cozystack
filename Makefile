@@ -71,6 +71,10 @@ manifests:
 cozypkg:
 	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg
 
+# Operator diagnostic: reports non-ready cozystack / Flux / Kubernetes resources.
+check-readiness:
+	go build -ldflags "-X main.Version=v$(COZYSTACK_VERSION)" -o _out/bin/check-readiness ./cmd/check-readiness
+
 assets: assets-talos assets-cozypkg openapi-json
 
 openapi-json:
@@ -94,7 +98,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -122,6 +126,13 @@ go-unit-tests:
 # (`make unit-tests test-controllers`).
 test-controllers:
 	go test ./internal/... -count=1
+
+# Black-box golden test for cmd/check-readiness. Builds the binary and runs it
+# against a mock kubectl (fixtures under test/check-readiness/testdata),
+# diffing stdout/stderr/exit against golden files. Regenerate goldens with:
+#   go test ./test/check-readiness/ -update
+test-check-readiness:
+	go test ./test/check-readiness/ -count=1
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
 # through cozytest.sh. Drop a new *.bats file in hack/ and it is picked

@@ -1,23 +1,36 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Catches silent regressions in the gpu-operator package's two variants:
+# Catches silent regressions in the gpu-operator package's three variants:
 #
 #   1. The base values.yaml pins ccManager.enabled=false and
 #      vgpuDeviceManager.enabled=false. Both upstream defaults are now true
 #      (chart v26.x). If the next chart bump silently un-pins either one,
 #      the `default` (passthrough) variant would gain confidential-computing
 #      auto-enable on Hopper hardware (ccManager) or render an mdev DaemonSet
-#      that crashloops on Ada+/Blackwell (vgpuDeviceManager).
+#      that crashloops on Ada+/Blackwell (vgpuDeviceManager). The same union
+#      must hold for the `container` variant; the `vgpu` variant re-affirms
+#      vgpuDeviceManager=false in its own overlay for the same reason.
 #
-#   2. Each variant's overlay must set sandboxWorkloads.defaultWorkload to its
-#      own enum value (vm-passthrough / vm-vgpu) — without it, GPU nodes that
-#      lack the per-node label nvidia.com/gpu.workload.config fall back to
-#      the upstream default 'container' workload, no DaemonSet renders, and
-#      the variant is silently a no-op.
+#   2. The sandbox variants must set sandboxWorkloads.defaultWorkload to
+#      their own enum value (vm-passthrough / vm-vgpu) — without it, GPU
+#      nodes that lack the per-node label nvidia.com/gpu.workload.config
+#      fall back to the upstream default 'container' workload, no DaemonSet
+#      renders, and the variant is silently a no-op. The container variant
+#      relies on the same upstream default but in the opposite direction:
+#      with sandboxWorkloads.enabled=false the chart picks defaultWorkload
+#      'container', which is what that variant wants — pinned here so an
+#      upstream rename does not silently break it.
 #
 #   3. The vgpu variant must enable the vGPU manager DaemonSet
-#      (vgpuManager.enabled=true) and the passthrough variant must keep
-#      driver.enabled / devicePlugin.enabled at false.
+#      (vgpuManager.enabled=true), the passthrough variant must keep
+#      driver.enabled / devicePlugin.enabled at false, and the container
+#      variant must keep driver / toolkit / vfioManager at false (host
+#      already provides them) while keeping devicePlugin enabled (publishes
+#      nvidia.com/gpu to the kubelet). The container variant must also pin
+#      cdi.enabled=false: upstream defaults it true, but CDI specs are
+#      serviced by the toolkit DaemonSet this variant disables, so leaving
+#      it on points the device plugin at CDI injection with no specs on an
+#      apt host and silently breaks allocation.
 #
 # Implementation: render the chart with the merged values for each variant
 # and grep for the relevant ClusterPolicy keys. We strip the package's
@@ -95,4 +108,33 @@ render_variant() {
   grep -A 1 '^  vgpuManager:'  "$TMP/rendered.yaml" | grep -q 'enabled: true'
   grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  devicePlugin:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+}
+
+@test "container variant: ccManager and vgpuDeviceManager pinned off" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  render_variant container
+  grep -A 1 '^  ccManager:'         "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  grep -A 1 '^  vgpuDeviceManager:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+}
+
+@test "container variant: sandboxWorkloads off, defaultWorkload stays upstream 'container'" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  render_variant container
+  grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'defaultWorkload: container'
+}
+
+@test "container variant: driver, toolkit, vfioManager off; devicePlugin on" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  render_variant container
+  grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  grep -A 1 '^  toolkit:'      "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  grep -A 1 '^  vfioManager:'  "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  grep -A 1 '^  devicePlugin:' "$TMP/rendered.yaml" | grep -q 'enabled: true'
+}
+
+@test "container variant: cdi pinned off (toolkit disabled cannot service CDI specs)" {
+  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  render_variant container
+  grep -A 1 '^  cdi:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
 }

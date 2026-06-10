@@ -1,0 +1,4 @@
+packages                       cozystack.io/v1alpha1                false   Package
+artifactgenerators             source.extensions.fluxcd.io/v1alpha1 true    ArtifactGenerator
+externalartifacts              source.toolkit.fluxcd.io/v1          true    ExternalArtifact
+helmreleases          hr       helm.toolkit.fluxcd.io/v2            true    HelmRelease

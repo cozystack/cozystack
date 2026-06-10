@@ -1,0 +1,27 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits"
+  ],
+  "enabledManagers": ["gomod"],
+  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
+  "labels": ["automated", "do-not-merge/hold"],
+  "automerge": false,
+  "platformAutomerge": false,
+  "prConcurrentLimit": 5,
+  "packageRules": [
+    {
+      "description": "Keep controller-runtime and the Kubernetes libraries in lockstep. A split bump breaks compilation because a given controller-runtime release expects a matching client-go / apimachinery line.",
+      "groupName": "kubernetes",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["sigs.k8s.io/controller-runtime", "k8s.io/**"]
+    },
+    {
+      "description": "Never bump the Go toolchain directive. go.mod is generated and the toolchain is pinned deliberately; raising it needs a matching setup-go and a codegen run, which is out of scope for an automated dependency bump.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "enabled": false
+    }
+  ]
+}

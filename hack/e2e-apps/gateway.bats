@@ -485,7 +485,12 @@ EOF
   cozyvalues=$(kubectl -n tenant-test-gwprop get secret cozystack-values -o jsonpath='{.data.values\.yaml}' | base64 -d)
   echo "$cozyvalues" | grep -E '^\s*gateway:\s*"tenant-test-gwprop"\s*$' >/dev/null
 
+  # Wait out the uninstall instead of fire-and-forget: tenant teardown
+  # runs a cleanup Job that the helm uninstall blocks on, and a dangling
+  # uninstall carries over into the next .bats file, starving the
+  # helm-controller worker pool (--concurrent=5 on the tenants shard).
   kubectl -n tenant-test delete tenant gwprop --ignore-not-found
+  kubectl -n tenant-test wait hr tenant-gwprop --for=delete --timeout=300s
 }
 
 @test "child tenant without explicit gateway inherits _namespace.gateway from a Gateway-owning parent" {
@@ -538,8 +543,14 @@ EOF
   # means no separate Gateway resource for the child tenant.
   ! kubectl -n tenant-test-gwparent-gwchild get helmrelease gateway 2>/dev/null
 
+  # Teardown child before parent, waiting out each uninstall: deleting
+  # the parent while the child is still uninstalling wedges the parent's
+  # cleanup Job on the child's namespace, and both stuck uninstalls
+  # occupy helm-controller workers past the end of this .bats file.
   kubectl -n tenant-test-gwparent delete tenant gwchild --ignore-not-found
+  kubectl -n tenant-test-gwparent wait hr tenant-gwchild --for=delete --timeout=300s
   kubectl -n tenant-test delete tenant gwparent --ignore-not-found
+  kubectl -n tenant-test wait hr tenant-gwparent --for=delete --timeout=300s
 }
 
 @test "child tenant's HTTPRoute drives the parent Gateway's listener set via inheritance label" {
@@ -661,6 +672,13 @@ EOF
   '
 
   kubectl -n tenant-test-rparent-rchild delete httproute inherit-probe --ignore-not-found
+  # Teardown child before parent, waiting out each uninstall (see the
+  # inheritance test above). The rchild HR may still be mid-install when
+  # the delete lands — helm-controller finishes the install action before
+  # it can uninstall, so the child wait also absorbs that tail instead of
+  # leaving it for the next .bats file.
   kubectl -n tenant-test-rparent delete tenant rchild --ignore-not-found
+  kubectl -n tenant-test-rparent wait hr tenant-rchild --for=delete --timeout=300s
   kubectl -n tenant-test delete tenant rparent --ignore-not-found
+  kubectl -n tenant-test wait hr tenant-rparent --for=delete --timeout=300s
 }

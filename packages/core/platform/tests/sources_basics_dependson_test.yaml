@@ -1,0 +1,27 @@
+suite: cozystack-basics waits for the APIs its admission policies type-check
+# Regression guard for the kube-controller-manager VAP-status-controller panic:
+# cozystack-basics ships cluster-wide ValidatingAdmissionPolicies that match
+# tenants.apps.cozystack.io (served by cozystack-api, in cozystack-engine) and
+# the Gateway API types (from gateway-api-crds). If the package installs before
+# those APIs are served, KCM type-checks a policy against an unresolvable schema,
+# panics, and deadlocks the install. The dependsOn edges below must stay.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: cozystack-basics dependsOn cozystack-engine and gateway-api-crds (and tenant-application)
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-basics
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.tenant-application
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-engine
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.gateway-api-crds

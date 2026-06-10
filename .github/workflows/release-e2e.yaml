@@ -1,0 +1,159 @@
+name: Release E2E
+
+# Runs the full E2E suite against the tagged commit. Independent of the
+# release publish flow (`tags.yaml`) — a failure here is an alarm, not a
+# release blocker. PR-time E2E runs Test Impact Analysis by default, so
+# tags are the only place the full suite is exercised against shipped code.
+
+env:
+  # TODO: unhardcode this
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+      - 'v*.*.*-rc.*'
+      - 'v*.*.*-beta.*'
+      - 'v*.*.*-alpha.*'
+
+concurrency:
+  group: release-e2e-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (release E2E)
+    runs-on: [self-hosted]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Login to registry
+        uses: docker/login-action@v3
+        with:
+          registry: iad.ocir.io
+          username: ${{ secrets.OCI_REGISTRY_USERNAME }}
+          password: ${{ secrets.OCI_REGISTRY_PASSWORD }}
+
+      - name: Build images
+        run: make build PUSH=1
+
+      - name: Build Talos image
+        run: make -C packages/core/talos build
+
+      - name: Upload Talos image
+        uses: actions/upload-artifact@v4
+        with:
+          name: talos-image
+          path: _out/assets/nocloud-amd64.raw.xz
+          retention-days: 1
+
+  e2e:
+    name: Release E2E (full suite)
+    runs-on: [self-hosted]
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+    needs: ["build"]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Talos image
+        uses: actions/download-artifact@v4
+        with:
+          name: talos-image
+          path: _out/assets
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-release-$(echo "${GITHUB_REPOSITORY}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      - name: Prepare workspace
+        env:
+          WORKSPACE: ${{ github.workspace }}
+        run: |
+          rm -rf /tmp/$SANDBOX_NAME
+          cp -r "$WORKSPACE" /tmp/$SANDBOX_NAME
+
+      - name: Prepare environment
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "❌ Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "❌ Attempt $attempt failed, retrying..."
+          done
+          echo "✅ The task completed successfully after $attempt attempts"
+
+      - name: Install Cozystack into sandbox
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack
+
+      - name: Run OpenAPI tests
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
+      # Always full suite — release E2E intentionally does not honour the
+      # `full-e2e` / TIA mechanism used by PR runs.
+      - name: Run E2E tests (full suite)
+        id: e2e_tests
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          failed_tests=""
+          for app in $(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1); do
+            echo "::group::Testing $app"
+            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
+              echo "::endgroup::"
+              echo "✅ Test $app completed successfully"
+            else
+              echo "::endgroup::"
+              echo "❌ Test $app failed"
+              failed_tests="$failed_tests $app"
+              echo "::group::Diagnostics for $app"
+              kubectl get hr -A -o wide 2>&1 | tail -50 || true
+              kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50 || true
+              echo "::endgroup::"
+            fi
+          done
+          if [ -n "$failed_tests" ]; then
+            echo "❌ Failed tests:$failed_tests"
+            exit 1
+          fi
+          echo "✅ All E2E tests passed"
+
+      - name: Collect report
+        if: always()
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cozyreport-${{ github.ref_name }}
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+      - name: Remove workspace
+        if: always()
+        run: rm -rf /tmp/$SANDBOX_NAME
