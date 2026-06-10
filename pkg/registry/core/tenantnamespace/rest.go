@@ -216,6 +216,10 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 	pw := watch.NewProxyWatcher(events)
 
 	go func() {
+		// This goroutine is the sole writer to events; closing it on exit
+		// signals end-of-stream to the consumer (ProxyWatcher.Stop does not
+		// close the channel it proxies).
+		defer close(events)
 		defer pw.Stop()
 		defer nsWatch.Stop()
 

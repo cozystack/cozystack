@@ -116,6 +116,22 @@ func waitForFakeWatcherStop(t *testing.T, fw *watch.FakeWatcher, timeout time.Du
 	}
 }
 
+// requireResultChanClosed asserts the watch result channel closes within the
+// timeout without delivering any further events.
+func requireResultChanClosed(t *testing.T, w watch.Interface, timeout time.Duration) {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	select {
+	case ev, open := <-w.ResultChan():
+		if open {
+			t.Fatalf("expected result channel to close, got event %+v", ev)
+		}
+	case <-deadline.C:
+		t.Fatal("timed out waiting for the result channel to close")
+	}
+}
+
 // collectEvents drains up to n events from the watch, or returns early if the
 // channel closes or the timeout fires.
 func collectEvents(t *testing.T, w watch.Interface, n int, timeout time.Duration) []watch.Event {
@@ -583,11 +599,9 @@ func TestWatch_OnClose_FlushesTerminatingBookmark(t *testing.T) {
 	if len(evs) != 1 {
 		t.Fatalf("expected 1 bookmark event, got %d: %+v", len(evs), evs)
 	}
-	// Nothing else may arrive after the terminating bookmark; short window only,
-	// the result channel itself never closes (ProxyWatcher.Stop does not close it).
-	if extra := collectEvents(t, w, 1, 200*time.Millisecond); len(extra) != 0 {
-		t.Fatalf("expected no events after the terminating bookmark, got %+v", extra)
-	}
+	// The terminating bookmark is the last event: the goroutine closes the
+	// result channel on exit, signalling end-of-stream to the consumer.
+	requireResultChanClosed(t, w, 2*time.Second)
 	if evs[0].Type != watch.Bookmark {
 		t.Fatalf("expected Bookmark, got %s", evs[0].Type)
 	}
@@ -626,6 +640,7 @@ func TestWatch_StopTerminatesGoroutine(t *testing.T) {
 	fw.Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}})
 
 	waitForFakeWatcherStop(t, fw, 2*time.Second)
+	requireResultChanClosed(t, w, 2*time.Second)
 }
 
 // TestWatch_ContextCancelTerminatesGoroutine asserts that cancelling the
@@ -649,6 +664,7 @@ func TestWatch_ContextCancelTerminatesGoroutine(t *testing.T) {
 	fw.Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}})
 
 	waitForFakeWatcherStop(t, fw, 2*time.Second)
+	requireResultChanClosed(t, w, 2*time.Second)
 }
 
 // TestWatch_StoppedDuringBookmarkSend_TerminatesGoroutine asserts the early
@@ -673,6 +689,7 @@ func TestWatch_StoppedDuringBookmarkSend_TerminatesGoroutine(t *testing.T) {
 	fw.Action(watch.Bookmark, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "7"}})
 
 	waitForFakeWatcherStop(t, fw, 2*time.Second)
+	requireResultChanClosed(t, w, 2*time.Second)
 }
 
 // TestWatch_StoppedDuringInitialEventsEndBookmarkSend_TerminatesGoroutine
@@ -699,6 +716,7 @@ func TestWatch_StoppedDuringInitialEventsEndBookmarkSend_TerminatesGoroutine(t *
 	fw.Modify(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo", ResourceVersion: "8"}})
 
 	waitForFakeWatcherStop(t, fw, 2*time.Second)
+	requireResultChanClosed(t, w, 2*time.Second)
 }
 
 // TestWatch_BackingWatchError_Propagates asserts that a failure to start the
