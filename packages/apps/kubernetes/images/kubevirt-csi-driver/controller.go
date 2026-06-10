@@ -410,9 +410,65 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 	}, nil
 }
 
+// unpublishHotplugVolume delegates to upstream for the hot-unplug, then re-verifies
+// that the volume is gone from VMI.Status.VolumeStatus before returning success.
+// Upstream treats a missing parent VM as "detach succeeded", but during a CAPI/CAPK
+// teardown the VMI (and its hot-plug pod) can outlive the VM: the hot-plug pod then
+// keeps the infra storage device exclusively attached to the source host, and every
+// subsequent attach of the same volume fails (on DRBD with "failed to set source
+// device readwrite"). When the VMI still reports the hot-plug after upstream
+// returned success, detach it from the VMI directly. Backport of
+// kubevirt/csi-driver#184; drop once it is merged and the module is bumped past it.
+func (w *WrappedControllerService) unpublishHotplugVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	if _, err := w.ControllerService.ControllerUnpublishVolume(ctx, req); err != nil {
+		return nil, err
+	}
+
+	dvName := req.GetVolumeId()
+	_, vmName, err := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse node ID %q: %v", req.GetNodeId(), err)
+	}
+
+	// GetVirtualMachine on this client returns a VirtualMachineInstance, not a VM.
+	vmi, err := w.virtClient.GetVirtualMachine(ctx, w.infraNamespace, vmName)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"cannot verify VMI %s/%s after unpublish of %s: %v", w.infraNamespace, vmName, dvName, err)
+	}
+
+	stillAttached := false
+	for _, vs := range vmi.Status.VolumeStatus {
+		if vs.HotplugVolume != nil && vs.Name == dvName {
+			stillAttached = true
+			break
+		}
+	}
+	if !stillAttached {
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	klog.Infof("Volume %s still reported by VMI %s/%s after unpublish – detaching from the VMI", dvName, w.infraNamespace, vmName)
+	if err := w.virtClient.RemoveVolumeFromVMI(ctx, w.infraNamespace, vmName, &kubevirtv1.RemoveVolumeOptions{Name: dvName}); err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"failed to remove volume %s from VMI %s/%s: %v", dvName, w.infraNamespace, vmName, err)
+	}
+	if err := w.virtClient.EnsureVolumeRemoved(ctx, w.infraNamespace, vmName, dvName, 2*time.Minute); err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"volume %s failed to be removed from VMI %s/%s in time: %v", dvName, w.infraNamespace, vmName, err)
+	}
+
+	klog.V(3).Infof("Successfully unpublished volume %s from VMI %s/%s", dvName, w.infraNamespace, vmName)
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
 // ControllerUnpublishVolume for NFS volumes (RWX Filesystem): deletes CiliumNetworkPolicy.
 // For everything else (RWO and RWX Block), delegates to upstream so the hotplug
-// DataVolume is removed from VM.spec.template.spec.volumes. RWX Block volumes used
+// DataVolume is removed from VM.spec.template.spec.volumes, then verifies the volume
+// actually left VMI.Status.VolumeStatus. RWX Block volumes used
 // for live migration must NOT be treated as NFS — their cleanup goes through upstream
 // hotplug removal, otherwise stale VM-spec entries permanently block re-attachment to
 // a different VM via the anti-split-brain check (issue #2634).
@@ -428,7 +484,7 @@ func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context
 	}
 
 	if !isNFSVolume(pvc) {
-		return w.ControllerService.ControllerUnpublishVolume(ctx, req)
+		return w.unpublishHotplugVolume(ctx, req)
 	}
 
 	// NFS volume: remove VMI ownerReference from CiliumNetworkPolicy
