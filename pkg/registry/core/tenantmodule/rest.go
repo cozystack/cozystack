@@ -366,6 +366,11 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		}
 	}
 
+	// For a SendInitialEvents (WatchList) request, ask the backing watch for
+	// bookmarks — the apiserver omits them by default, which would leave the
+	// terminating initial-events-end bookmark with no reliable trigger.
+	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
+
 	// Start watch on HelmRelease with label selector only
 	// Field selectors are not supported by controller-runtime cache
 	// See: https://github.com/kubernetes-sigs/controller-runtime/issues/612
@@ -373,11 +378,23 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
 		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
+		Raw:           &metav1.ListOptions{AllowWatchBookmarks: sendInitialEvents},
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
 		return nil, err
 	}
+
+	// Emit the initial-events-end bookmark after the initial ADDED events so
+	// client-go reflectors reach HasSynced.
+	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
+		module := &corev1alpha1.TenantModule{}
+		module.TypeMeta = metav1.TypeMeta{
+			APIVersion: corev1alpha1.SchemeGroupVersion.String(),
+			Kind:       r.kindName,
+		}
+		return module
+	})
 
 	// Create a custom watcher to transform events
 	customW := &customWatcher{
@@ -390,32 +407,35 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 		defer close(customW.resultChan)
 		defer customW.underlying.Stop()
 
+		// send forwards an event, returning false if the watch or context ended.
+		send := func(ev watch.Event) bool {
+			select {
+			case customW.resultChan <- ev:
+				return true
+			case <-customW.stopChan:
+				return false
+			case <-ctx.Done():
+				return false
+			}
+		}
+
 		for {
 			select {
 			case event, ok := <-customW.underlying.ResultChan():
 				if !ok {
 					klog.Warning("HelmRelease watcher closed")
+					// Flush the terminating bookmark if still pending.
+					if bookmark, ok := bookmarker.OnClose(); ok {
+						send(bookmark)
+					}
 					return
 				}
 
 				// Handle bookmark events
 				if event.Type == watch.Bookmark {
 					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
-						bookmarkModule := &corev1alpha1.TenantModule{}
-						bookmarkModule.SetResourceVersion(hr.GetResourceVersion())
-						bookmarkModule.TypeMeta = metav1.TypeMeta{
-							APIVersion: corev1alpha1.SchemeGroupVersion.String(),
-							Kind:       r.kindName,
-						}
-						bookmarkEvent := watch.Event{
-							Type:   watch.Bookmark,
-							Object: bookmarkModule,
-						}
-						select {
-						case customW.resultChan <- bookmarkEvent:
-						case <-customW.stopChan:
-							return
-						case <-ctx.Done():
+						bookmark, _ := bookmarker.OnBackingBookmark(hr.GetResourceVersion())
+						if !send(bookmark) {
 							return
 						}
 					}
@@ -434,6 +454,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					klog.V(4).Infof("Expected HelmRelease object, got %T", event.Object)
 					continue
 				}
+				bookmarker.Observe(hr.GetResourceVersion())
 
 				// Apply manual field selector filtering
 				if !fieldFilter.MatchesName(hr.Name) {
@@ -482,18 +503,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					}
 				}
 
-				// Create watch event with TenantModule object
-				moduleEvent := watch.Event{
-					Type:   event.Type,
-					Object: &module,
+				// Emit the initial-events-end bookmark before the first live event.
+				if bookmark, ok := bookmarker.BeforeLiveEvent(event.Type); ok {
+					if !send(bookmark) {
+						return
+					}
 				}
 
-				// Send event to custom watcher
-				select {
-				case customW.resultChan <- moduleEvent:
-				case <-customW.stopChan:
-					return
-				case <-ctx.Done():
+				// Send the translated TenantModule event.
+				if !send(watch.Event{Type: event.Type, Object: &module}) {
 					return
 				}
 
