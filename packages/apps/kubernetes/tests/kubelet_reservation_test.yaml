@@ -2,15 +2,14 @@ suite: kubelet reservation validation tests
 
 # These tests cover the failure-path guards in cluster.yaml's per-nodeGroup
 # validation block (memory/CPU format checks, total-reserved vs effective
-# invariants, mixed-unit eviction rejection, etc.). They run BEFORE the
-# $talosReady gate that hides the TalosConfigTemplate document when the
-# cert-manager-issued Secrets are not yet present in the test environment,
-# so each failedTemplate assertion still fires regardless of the lookup
-# call returning nil. The happy-path TalosConfigTemplate assertions from
-# the original kubeadm-era test file are intentionally not ported — the
-# new TCT's data field is a YAML-encoded string, which is brittle to assert
-# via matchRegex, and kubernetesProvider mocking of the dependency Secrets
-# is left as a follow-up.
+# invariants, mixed-unit eviction rejection, etc.). The TalosConfigTemplate
+# is no longer rendered by cluster.yaml — the post-install hook in
+# templates/talos/talos-reconcile-job.yaml produces it at runtime — so the
+# test file only asserts on the kubeadm-era validation paths that survived
+# the Talos rollover. The kubelet-reservation math used to apply
+# machine.kubelet.extraConfig is exercised separately by helm-unittest on
+# the reconcile hook template (see tests/gpu_node_labels_test.yaml for the
+# matchRegex pattern against the Job's command literal).
 
 templates:
   - templates/cluster.yaml

@@ -30,13 +30,6 @@
   flux marks the HelmRelease Ready and retries its 5m reconcile loop until
   the Tenant chart catches up.
 */}}
-{{- /*
-  Hoist all lookups that are independent of the per-nodeGroup loop body.
-  Without this, every entry in .Values.nodeGroups triggered 4+ live apiserver
-  reads per render (and three of them were duplicates of each other).
-  Gated on $etcd so the awaiting-etcd short-circuit below does not pay for
-  reads it would only throw away.
-*/}}
 {{- /* The TalosConfigTemplate and the apiserver-Service ClusterIP-SAN
        used to be rendered in this template behind a lookup gate that
        races every fresh install: Service / Talos CA / K8s CA do not

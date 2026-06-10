@@ -40,8 +40,8 @@ metadata:
 spec:
   # backoffLimit + restartPolicy: OnFailure gives the Job up to 11 attempts at
   # the tenant apiserver with exponential backoff (capped at 6 min between
-  # restarts). Worst case ~15 min, aligned with the chart's HR install timeout
-  # (release.cozystack.io/helm-install-timeout: 15m on the cozyrds entry) so
+  # restarts). Worst case ~15 min, well inside the chart's HR install timeout
+  # (release.cozystack.io/helm-install-timeout: 20m on the cozyrds entry) so
   # the Job either succeeds within the HR window or fails the chart upgrade
   # loudly, instead of letting Helm mark the install "successful" while the
   # bootstrap-token Secret never lands in the tenant kube-system.

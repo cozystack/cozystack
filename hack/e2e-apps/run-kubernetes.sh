@@ -108,8 +108,9 @@ EOF
   # and starts the talos-csr-signer sidecar and cert-manager has to issue
   # the Talos PKI Certificates that gate the wait-for-kubeconfig init
   # container, so cold-start times in a fresh sandbox crossed the original
-  # 4m budget. Aligned with the helm-install-timeout: 15m annotation that
-  # cozystack-api copies from cozyrds onto the HR.
+  # 4m budget. The 10m wait below sits well inside the
+  # helm-install-timeout: 20m annotation that cozystack-api copies from
+  # cozyrds onto the HR.
   kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=10m
 
   # Wait for Kubernetes resources to be ready. Same rationale as the
