@@ -79,10 +79,6 @@ rules:
   - apiGroups: ["bootstrap.cluster.x-k8s.io"]
     resources: ["talosconfigtemplates"]
     verbs: ["get", "create", "patch", "update"]
-  - apiGroups: ["cert-manager.io"]
-    resources: ["certificates"]
-    resourceNames: ["{{ .Release.Name }}-talos-tls-cert"]
-    verbs: ["get", "patch"]
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
        pod in the tenant namespace; without an explicit allow, this hook Job

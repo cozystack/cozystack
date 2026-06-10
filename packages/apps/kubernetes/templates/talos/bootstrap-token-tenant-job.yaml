@@ -55,8 +55,6 @@ spec:
         - name: kubectl
           image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
           env:
-            - name: TENANT_KUBECONFIG
-              value: /tenant-admin/super-admin.svc
             - name: KUBECONFIG
               value: /tenant-admin/super-admin.svc
             - name: TOKEN_ID

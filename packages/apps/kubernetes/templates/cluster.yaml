@@ -49,9 +49,6 @@
        results. The Job owns the TCT through an ownerReference to the
        KamajiControlPlane so K8s garbage-collects it naturally on
        release uninstall. */}}
-{{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
-{{- $talosVersion := $.Values.talos.version }}
-{{- $talosSchematic := $.Values.talos.schematicID }}
 {{- /*
   Cluster pod/service CIDRs MUST match between the CAPI Cluster
   spec.clusterNetwork below and the Talos worker machineconfig's
