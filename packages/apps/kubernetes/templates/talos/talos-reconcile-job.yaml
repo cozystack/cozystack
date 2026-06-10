@@ -421,6 +421,18 @@ spec:
                                 - ${RELEASE}.${NS}.svc.{{ $dnsDomain }}
                         ca:
                           crt: ${TALOS_CA_B64}
+                        {{- if $group.gpus }}
+                        # GPU node-groups: label every node `gpu=on` so
+                        # HAMi's hami-device-plugin DaemonSet (nodeSelector
+                        # gpu=on) schedules and advertises nvidia.com/gpu.
+                        # Without the label the plugin stays at DESIRED=0
+                        # and no GPUs are exposed to the tenant. Mirrors
+                        # main's kubeadm config (kubeletExtraArgs node-
+                        # labels: "gpu=on") so HAMi behaviour is identical
+                        # before and after the Talos worker rollover.
+                        nodeLabels:
+                          gpu: "on"
+                        {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ $kubeletVersion }}
                           extraConfig:
