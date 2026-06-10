@@ -63,6 +63,29 @@ func findSpecContainer(s *spec.Schema) *spec.Schema {
 	return nil
 }
 
+// markOpenObject marks a schema as a free-form object that accepts arbitrary
+// properties, using the x-kubernetes-preserve-unknown-fields extension rather
+// than the boolean additionalProperties:true form.
+//
+// This distinction matters: the boolean additionalProperties:true construct
+// makes the Kubernetes ValidatingAdmissionPolicy status type-checker (run by
+// kube-controller-manager) nil-dereference when it recurses into the node,
+// crash-looping KCM cluster-wide as soon as a VAP matches one of these
+// aggregated resources (e.g. cozystack-tenant-host-policy on tenants). The
+// extension is semantically equivalent ("arbitrary fields allowed") and the
+// type-checker handles it safely. See
+// https://github.com/cozystack/cozystack/issues/2863.
+func markOpenObject(s *spec.Schema) {
+	if len(s.Type) == 0 {
+		s.Type = spec.StringOrArray{"object"}
+	}
+	s.AdditionalProperties = nil
+	if s.Extensions == nil {
+		s.Extensions = map[string]any{}
+	}
+	s.Extensions["x-kubernetes-preserve-unknown-fields"] = true
+}
+
 // patchSpec injects/overrides ".spec" with user JSON (or schemaless object).
 func patchSpec(target *spec.Schema, raw string) error {
 	if strings.TrimSpace(raw) == "" {
@@ -70,7 +93,7 @@ func patchSpec(target *spec.Schema, raw string) error {
 			target.Properties = map[string]spec.Schema{}
 		}
 		prop := target.Properties["spec"]
-		prop.AdditionalProperties = &spec.SchemaOrBool{Allows: true}
+		markOpenObject(&prop)
 		target.Properties["spec"] = prop
 		return nil
 	}
@@ -80,7 +103,7 @@ func patchSpec(target *spec.Schema, raw string) error {
 		return err
 	}
 	if custom.AdditionalProperties == nil {
-		custom.AdditionalProperties = &spec.SchemaOrBool{Allows: true}
+		markOpenObject(&custom)
 	}
 	if target.Properties == nil {
 		target.Properties = map[string]spec.Schema{}
