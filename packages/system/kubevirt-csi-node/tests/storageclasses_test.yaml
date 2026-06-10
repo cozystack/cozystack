@@ -1,0 +1,81 @@
+suite: tenant StorageClass rendering
+
+templates:
+  - templates/deploy.yaml
+
+tests:
+  - it: renders default replicated (default) and kubevirt alias (non-default)
+    asserts:
+      - equal:
+          path: provisioner
+          value: csi.kubevirt.io
+        documentSelector:
+          path: metadata.name
+          value: replicated
+      - equal:
+          path: parameters.infraStorageClassName
+          value: replicated
+        documentSelector:
+          path: metadata.name
+          value: replicated
+      - equal:
+          path: parameters.bus
+          value: scsi
+        documentSelector:
+          path: metadata.name
+          value: replicated
+      - equal:
+          path: metadata.annotations["storageclass.kubernetes.io/is-default-class"]
+          value: "true"
+        documentSelector:
+          path: metadata.name
+          value: replicated
+      - notExists:
+          path: metadata.annotations
+        documentSelector:
+          path: metadata.name
+          value: kubevirt
+
+  - it: renders one StorageClass per entry with exactly one default
+    set:
+      storageClasses:
+        replicated:
+          infraStorageClass: replicated
+          default: true
+        fast:
+          infraStorageClass: nvme
+          default: false
+        kubevirt:
+          infraStorageClass: replicated
+          default: false
+    asserts:
+      - equal:
+          path: parameters.infraStorageClassName
+          value: nvme
+        documentSelector:
+          path: metadata.name
+          value: fast
+      - notExists:
+          path: metadata.annotations
+        documentSelector:
+          path: metadata.name
+          value: fast
+      - equal:
+          path: metadata.annotations["storageclass.kubernetes.io/is-default-class"]
+          value: "true"
+        documentSelector:
+          path: metadata.name
+          value: replicated
+      - notExists:
+          path: metadata.annotations
+        documentSelector:
+          path: metadata.name
+          value: kubevirt
+
+  - it: leaves the driver-config ConfigMap free of any enforcement allowList
+    asserts:
+      - notExists:
+          path: data.infraStorageClassEnforcement
+        documentSelector:
+          path: metadata.name
+          value: driver-config

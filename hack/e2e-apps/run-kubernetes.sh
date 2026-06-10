@@ -383,6 +383,50 @@ EOF
   # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
 
+  # ----------------------------------------------------------------------
+  # StorageClass propagation (issue #2094). Remote-accessible LINSTOR infra
+  # classes propagate to the tenant under the same name; node-local classes
+  # ("local", allowRemoteVolumeAccess=false) are filtered out; the legacy
+  # "kubevirt" alias is retained for backward compatibility. The e2e infra
+  # cluster ships both "replicated" (remote) and "local" (node-local).
+  # ----------------------------------------------------------------------
+  echo "Verifying StorageClass propagation to tenant..."
+  timeout 2m bash -c '
+    until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get sc replicated >/dev/null 2>&1; do
+      sleep 5
+    done
+  '
+
+  rep_prov=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc replicated -o jsonpath='{.provisioner}')
+  rep_infra=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc replicated -o jsonpath='{.parameters.infraStorageClassName}')
+  if [ "$rep_prov" != "csi.kubevirt.io" ] || [ "$rep_infra" != "replicated" ]; then
+    echo "replicated SC misconfigured: provisioner=$rep_prov infraStorageClassName=$rep_infra" >&2
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc >&2
+    exit 1
+  fi
+
+  # Legacy kubevirt alias must still exist (existing PVCs depend on it).
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc kubevirt >/dev/null 2>&1; then
+    echo "legacy kubevirt StorageClass alias is missing" >&2
+    exit 1
+  fi
+
+  # Node-local "local" class must NOT be propagated (allowRemoteVolumeAccess=false).
+  if kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc local >/dev/null 2>&1; then
+    echo "node-local StorageClass 'local' should not be propagated to the tenant" >&2
+    exit 1
+  fi
+
+  # Exactly one default StorageClass, and it must be "replicated".
+  default_scs=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc \
+    -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}')
+  default_count=$(printf '%s' "$default_scs" | grep -c .)
+  if [ "$default_count" -ne 1 ] || [ "$default_scs" != "replicated" ]; then
+    echo "expected exactly one default StorageClass 'replicated', got: ${default_scs:-<none>} (count=$default_count)" >&2
+    exit 1
+  fi
+  echo "StorageClass propagation OK (replicated default, kubevirt alias present, local filtered)"
+
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
     -n tenant-test --ignore-not-found --timeout=60s || true
