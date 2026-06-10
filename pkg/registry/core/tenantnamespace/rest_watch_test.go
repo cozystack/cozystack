@@ -103,6 +103,19 @@ func requireTenantNamespaceEvent(t *testing.T, ev watch.Event, evType watch.Even
 	return tn
 }
 
+// waitForFakeWatcherStop polls until the filtering goroutine stops the
+// backing watcher (via its deferred Stop) or the timeout fires.
+func waitForFakeWatcherStop(t *testing.T, fw *watch.FakeWatcher, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !fw.IsStopped() {
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for the goroutine to stop the backing watcher")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // collectEvents drains up to n events from the watch, or returns early if the
 // channel closes or the timeout fires.
 func collectEvents(t *testing.T, w watch.Interface, n int, timeout time.Duration) []watch.Event {
@@ -612,13 +625,7 @@ func TestWatch_StopTerminatesGoroutine(t *testing.T) {
 	// Push an event the goroutine must try (and fail) to deliver.
 	fw.Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !fw.IsStopped() {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for the goroutine to stop the backing watcher")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForFakeWatcherStop(t, fw, 2*time.Second)
 }
 
 // TestWatch_ContextCancelTerminatesGoroutine asserts that cancelling the
@@ -641,13 +648,7 @@ func TestWatch_ContextCancelTerminatesGoroutine(t *testing.T) {
 	cancel()
 	fw.Add(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo"}})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !fw.IsStopped() {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for the goroutine to stop the backing watcher")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForFakeWatcherStop(t, fw, 2*time.Second)
 }
 
 // TestWatch_StoppedDuringBookmarkSend_TerminatesGoroutine asserts the early
@@ -671,13 +672,7 @@ func TestWatch_StoppedDuringBookmarkSend_TerminatesGoroutine(t *testing.T) {
 	w.Stop()
 	fw.Action(watch.Bookmark, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{ResourceVersion: "7"}})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !fw.IsStopped() {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for the goroutine to stop the backing watcher")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForFakeWatcherStop(t, fw, 2*time.Second)
 }
 
 // TestWatch_StoppedDuringInitialEventsEndBookmarkSend_TerminatesGoroutine
@@ -703,13 +698,7 @@ func TestWatch_StoppedDuringInitialEventsEndBookmarkSend_TerminatesGoroutine(t *
 	// initial-events-end bookmark first; its send must fail and exit.
 	fw.Modify(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-foo", ResourceVersion: "8"}})
 
-	deadline := time.Now().Add(2 * time.Second)
-	for !fw.IsStopped() {
-		if time.Now().After(deadline) {
-			t.Fatal("timed out waiting for the goroutine to stop the backing watcher")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitForFakeWatcherStop(t, fw, 2*time.Second)
 }
 
 // TestWatch_BackingWatchError_Propagates asserts that a failure to start the
