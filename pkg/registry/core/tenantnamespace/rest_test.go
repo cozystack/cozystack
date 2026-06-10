@@ -275,13 +275,9 @@ func TestHasAccessToNamespace_CozyAdminGroup(t *testing.T) {
 // grant anything, and multiple matching RoleBindings in one namespace don't
 // duplicate it in the result.
 func TestList_FiltersUnauthorizedNamespaces(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	roleRef := rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: "test-role"}
 	client := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		WithObjects(
 			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-allowed"}},
 			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-denied"}},
@@ -334,12 +330,8 @@ func TestList_FiltersUnauthorizedNamespaces(t *testing.T) {
 func TestList_PrivilegedGroups_SeeAllTenantNamespaces(t *testing.T) {
 	for _, group := range []string{"system:masters", "cozystack-cluster-admin"} {
 		t.Run(group, func(t *testing.T) {
-			scheme := runtime.NewScheme()
-			_ = corev1.AddToScheme(scheme)
-			_ = rbacv1.AddToScheme(scheme)
-
 			client := fake.NewClientBuilder().
-				WithScheme(scheme).
+				WithScheme(newTestScheme(t)).
 				WithObjects(
 					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-zebra"}},
 					&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-alpha"}},
@@ -378,12 +370,8 @@ func TestList_PrivilegedGroups_SeeAllTenantNamespaces(t *testing.T) {
 // TestList_MissingUser_ReturnsError asserts List fails when no user is in the
 // context instead of returning an unfiltered list.
 func TestList_MissingUser_ReturnsError(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	client := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}).
 		Build()
 
@@ -405,12 +393,8 @@ func TestList_MissingUser_ReturnsError(t *testing.T) {
 // outside the tenant namespace set grants nothing: filterAccessible
 // intersects RoleBinding namespaces with the tenant name-set.
 func TestList_RoleBindingInNonTenantNamespace_Ignored(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	client := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		WithObjects(
 			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}},
 			&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
@@ -446,13 +430,9 @@ func TestList_RoleBindingInNonTenantNamespace_Ignored(t *testing.T) {
 // TestList_NamespaceListError_Propagates asserts a failure to list namespaces
 // is returned to the caller.
 func TestList_NamespaceListError_Propagates(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	wantErr := errors.New("namespace list failed")
 	fc := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
 				if _, ok := list.(*corev1.NamespaceList); ok {
@@ -480,13 +460,9 @@ func TestList_NamespaceListError_Propagates(t *testing.T) {
 // RoleBindings during access filtering fails the List instead of returning an
 // unfiltered or silently truncated result.
 func TestList_RoleBindingListError_Propagates(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	wantErr := errors.New("rolebinding list failed")
 	fc := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}).
 		WithInterceptorFuncs(interceptor.Funcs{
 			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
@@ -514,12 +490,8 @@ func TestList_RoleBindingListError_Propagates(t *testing.T) {
 // TestGet_MissingUser_ReturnsError asserts Get fails when no user is in the
 // context.
 func TestGet_MissingUser_ReturnsError(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	client := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		WithObjects(&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}}).
 		Build()
 
@@ -536,11 +508,7 @@ func TestGet_MissingUser_ReturnsError(t *testing.T) {
 // TestGet_NamespaceNotFound asserts the backing Get error surfaces when the
 // namespace disappears after the access check passes.
 func TestGet_NamespaceNotFound(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
-	client := fake.NewClientBuilder().WithScheme(scheme).Build()
+	client := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 
 	r := &REST{
 		c:   client,
@@ -568,12 +536,8 @@ func TestMatchesSubject_UnknownKind(t *testing.T) {
 }
 
 func TestHasAccessToNamespace_MissingUser(t *testing.T) {
-	scheme := runtime.NewScheme()
-	_ = corev1.AddToScheme(scheme)
-	_ = rbacv1.AddToScheme(scheme)
-
 	client := fake.NewClientBuilder().
-		WithScheme(scheme).
+		WithScheme(newTestScheme(t)).
 		Build()
 
 	r := &REST{

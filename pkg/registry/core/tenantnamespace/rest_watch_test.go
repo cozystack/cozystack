@@ -27,9 +27,9 @@ import (
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
 )
 
-// newWatchTestScheme returns a scheme with the types Watch tests need: core
+// newTestScheme returns a scheme with the types Watch tests need: core
 // (namespaces drive the watch) and rbac (RoleBindings drive the access check).
-func newWatchTestScheme(t *testing.T) *runtime.Scheme {
+func newTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -133,7 +133,7 @@ func collectEvents(t *testing.T, w watch.Interface, n int, timeout time.Duration
 // namespace is created after the watch starts and then mutated to drive a live
 // event.
 func TestWatch_SendInitialEvents_EmitsInitialEventsEndBookmark(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	r := newTestREST(fc, fc)
 
 	u := &user.DefaultInfo{Name: "admin", Groups: []string{"system:masters"}}
@@ -200,7 +200,7 @@ func TestWatch_SendInitialEvents_EmitsInitialEventsEndBookmark(t *testing.T) {
 // check: with a RoleBinding in only one of two tenant namespaces, ADD/MODIFY/
 // DELETE events for the other never reach the client.
 func TestWatch_FiltersUnauthorizedNamespaceEvents(t *testing.T) {
-	scheme := newWatchTestScheme(t)
+	scheme := newTestScheme(t)
 	fc := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(userRoleBinding("tenant-allowed", "test-user")).
@@ -252,7 +252,7 @@ func TestWatch_FiltersUnauthorizedNamespaceEvents(t *testing.T) {
 func TestWatch_PrivilegedGroups_SeeEverything(t *testing.T) {
 	for _, group := range []string{"system:masters", "cozystack-cluster-admin"} {
 		t.Run(group, func(t *testing.T) {
-			fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+			fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 			r := newTestREST(fc, fc)
 
 			u := &user.DefaultInfo{Name: "admin", Groups: []string{group}}
@@ -285,7 +285,7 @@ func TestWatch_PrivilegedGroups_SeeEverything(t *testing.T) {
 // TestWatch_DropsNonTenantNamespaces asserts that events for namespaces
 // without the tenant- prefix are dropped even for privileged users.
 func TestWatch_DropsNonTenantNamespaces(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	r := newTestREST(fc, fc)
 
 	u := &user.DefaultInfo{Name: "admin", Groups: []string{"system:masters"}}
@@ -315,7 +315,7 @@ func TestWatch_DropsNonTenantNamespaces(t *testing.T) {
 // TestWatch_DropsNonNamespaceObjects asserts that backing events carrying an
 // object that is not a *corev1.Namespace are dropped.
 func TestWatch_DropsNonNamespaceObjects(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -344,7 +344,7 @@ func TestWatch_DropsNonNamespaceObjects(t *testing.T) {
 // resourceVersion. Without SendInitialEvents it must not be annotated as the
 // initial-events-end marker.
 func TestWatch_ForwardsBackingBookmarks(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -387,7 +387,7 @@ func TestWatch_ForwardsBackingBookmarks(t *testing.T) {
 // TestWatch_FieldSelectorFiltersEvents asserts metadata.name field selector
 // filtering at the watch level.
 func TestWatch_FieldSelectorFiltersEvents(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	r := newTestREST(fc, fc)
 
 	u := &user.DefaultInfo{Name: "admin", Groups: []string{"system:masters"}}
@@ -419,7 +419,7 @@ func TestWatch_FieldSelectorFiltersEvents(t *testing.T) {
 // TestWatch_LabelSelectorFiltersEvents asserts label selector filtering at the
 // watch level.
 func TestWatch_LabelSelectorFiltersEvents(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	r := newTestREST(fc, fc)
 
 	u := &user.DefaultInfo{Name: "admin", Groups: []string{"system:masters"}}
@@ -456,7 +456,7 @@ func TestWatch_LabelSelectorFiltersEvents(t *testing.T) {
 // TestWatch_MissingUser_ReturnsUnauthorized asserts Watch rejects a context
 // without user info up front instead of failing per event.
 func TestWatch_MissingUser_ReturnsUnauthorized(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	r := newTestREST(fc, fc)
 
 	w, err := r.Watch(context.Background(), &metainternal.ListOptions{})
@@ -474,7 +474,7 @@ func TestWatch_MissingUser_ReturnsUnauthorized(t *testing.T) {
 // TestWatch_AccessCheckError_SkipsEvent asserts that an error from the
 // RoleBinding lookup drops the affected event without killing the watch.
 func TestWatch_AccessCheckError_SkipsEvent(t *testing.T) {
-	scheme := newWatchTestScheme(t)
+	scheme := newTestScheme(t)
 	fc := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(userRoleBinding("tenant-ok", "test-user")).
@@ -518,7 +518,7 @@ func TestWatch_AccessCheckError_SkipsEvent(t *testing.T) {
 // supplies a resourceVersion, ADDED events at or below it are skipped as
 // already known from the preceding List.
 func TestWatch_SkipsAddedAtOrBelowStartingRV(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -546,7 +546,7 @@ func TestWatch_SkipsAddedAtOrBelowStartingRV(t *testing.T) {
 // watcher closes before any event was observed, a SendInitialEvents watch
 // still emits the terminating bookmark at the starting resourceVersion.
 func TestWatch_OnClose_FlushesTerminatingBookmark(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -595,7 +595,7 @@ func TestWatch_OnClose_FlushesTerminatingBookmark(t *testing.T) {
 // channel is intentionally never read, so the goroutine's send can only
 // observe the stop signal.
 func TestWatch_StopTerminatesGoroutine(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -625,7 +625,7 @@ func TestWatch_StopTerminatesGoroutine(t *testing.T) {
 // request context makes the filtering goroutine exit and stop the backing
 // watcher. As above, the result channel is never read.
 func TestWatch_ContextCancelTerminatesGoroutine(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -655,7 +655,7 @@ func TestWatch_ContextCancelTerminatesGoroutine(t *testing.T) {
 // stopped: the result channel is never read, so the bookmark send can only
 // observe the stop signal and the goroutine must exit.
 func TestWatch_StoppedDuringBookmarkSend_TerminatesGoroutine(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -684,7 +684,7 @@ func TestWatch_StoppedDuringBookmarkSend_TerminatesGoroutine(t *testing.T) {
 // asserts the early return when delivering the initial-events-end bookmark
 // ahead of the first live event fails because the watch was stopped.
 func TestWatch_StoppedDuringInitialEventsEndBookmarkSend_TerminatesGoroutine(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	fw := watch.NewFake()
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, fw: fw})
 
@@ -715,7 +715,7 @@ func TestWatch_StoppedDuringInitialEventsEndBookmarkSend_TerminatesGoroutine(t *
 // TestWatch_BackingWatchError_Propagates asserts that a failure to start the
 // backing watch is returned to the caller.
 func TestWatch_BackingWatchError_Propagates(t *testing.T) {
-	fc := fake.NewClientBuilder().WithScheme(newWatchTestScheme(t)).Build()
+	fc := fake.NewClientBuilder().WithScheme(newTestScheme(t)).Build()
 	wantErr := errors.New("backing watch failed")
 	r := newTestREST(fc, &stubWithWatch{WithWatch: fc, err: wantErr})
 
