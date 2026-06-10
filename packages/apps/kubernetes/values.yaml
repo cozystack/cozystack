@@ -300,7 +300,7 @@ talos:
 
 ## @typedef {struct} NodeHealthCheck - MachineHealthCheck configuration for worker node groups.
 ## @field {string} maxUnhealthy="50%" - Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
-## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow Talos image fetches (e.g. air-gapped mirrors of factory.talos.dev) or first-boot scenarios.
+## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
 
 ## @param {NodeHealthCheck} nodeHealthCheck - MachineHealthCheck tuning for worker node groups.
 nodeHealthCheck:
