@@ -22,8 +22,17 @@
 #
 # Idempotent: re-running on already-annotated objects is a no-op
 # (kubectl annotate --overwrite tolerates the existing value).
-# Best-effort: a failed annotate is logged and leaves the version stamp at 43
-# so the migration retries on the next platform upgrade.
+#
+# Strict failure semantics: a failed annotate exits 1 to halt
+# run-migrations.sh, leaving CURRENT_VERSION at 44 so this migration retries
+# on the next platform upgrade. Best-effort semantics (exit 0 on partial
+# failure) are unsafe here because any KubeadmConfigTemplate left
+# un-pinned can be pruned by Helm during the chart upgrade, which then
+# breaks the still-extant kubeadm-backed MachineSet's bootstrap.configRef
+# while the Talos rollover is in flight — recovering that requires
+# manually recreating the templates with the right helm ownership
+# annotations and is not something we want to gate on a "best-effort"
+# migration.
 
 set -euo pipefail
 
@@ -97,10 +106,26 @@ if [ "$DRY_RUN" = "1" ]; then
 fi
 
 if [ "$FAILURES" -gt 0 ]; then
-  echo "WARN: $FAILURES annotate(s) failed; leaving CURRENT_VERSION at 43 for retry on next upgrade."
-  exit 0
+  echo "ERROR: $FAILURES annotate(s) failed; halting run-migrations.sh and leaving CURRENT_VERSION at 44 so this migration retries on the next platform upgrade." >&2
+  echo "ERROR: any un-pinned KubeadmConfigTemplate left behind is at risk of being pruned by the kubernetes chart upgrade; investigate the failed annotate(s) above before retrying." >&2
+  exit 1
 fi
 
-kubectl create configmap --namespace cozy-system cozystack-version \
-  --from-literal version=44 --dry-run=client --output yaml \
-  | kubectl apply --filename -
+# Stamp version=45. Mirror migration 43's labeled heredoc — a label-less
+# apply by the same field manager (kubectl create cm | kubectl apply)
+# would strip the platform.cozystack.io/no-delete label migration 42
+# added, dropping cozystack-version out of the
+# cozystack-no-delete-guardrail ValidatingAdmissionPolicy.
+# templates/cozystack-version.yaml only re-renders the labeled ConfigMap
+# on first install, so the label must be carried inline here.
+kubectl apply --filename - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "45"
+EOF

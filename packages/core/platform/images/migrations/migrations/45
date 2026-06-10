@@ -107,6 +107,21 @@ fi
 kubectl annotate configmap --namespace cozy-system cozystack-version \
   "cozystack.io/migration-45-failed-tenants-" >/dev/null 2>&1 || true
 
-kubectl create configmap --namespace cozy-system cozystack-version \
-  --from-literal version=46 --dry-run=client --output yaml \
-  | kubectl apply --filename -
+# Stamp version=46. Mirror migration 43's labeled heredoc — a label-less
+# apply by the same field manager (kubectl create cm | kubectl apply)
+# would strip the platform.cozystack.io/no-delete label migration 42
+# added, dropping cozystack-version out of the
+# cozystack-no-delete-guardrail ValidatingAdmissionPolicy.
+# templates/cozystack-version.yaml only re-renders the labeled ConfigMap
+# on first install, so the label must be carried inline here.
+kubectl apply --filename - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "46"
+EOF
