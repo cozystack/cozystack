@@ -166,3 +166,101 @@ func TestPatchedSpecDoesNotPanicVAPTypeChecker(t *testing.T) {
 		})
 	}
 }
+
+// hasBooleanAdditionalProperties walks the schema and reports whether any node
+// carries a boolean-form additionalProperties (inner Schema == nil) — the
+// construct that crashes the VAP type-checker, in either its true or false JSON
+// form.
+func hasBooleanAdditionalProperties(s *spec.Schema) bool {
+	if s == nil {
+		return false
+	}
+	if ap := s.AdditionalProperties; ap != nil {
+		if ap.Schema == nil {
+			return true
+		}
+		if hasBooleanAdditionalProperties(ap.Schema) {
+			return true
+		}
+	}
+	for k := range s.Properties {
+		p := s.Properties[k]
+		if hasBooleanAdditionalProperties(&p) {
+			return true
+		}
+	}
+	if s.Items != nil {
+		if hasBooleanAdditionalProperties(s.Items.Schema) {
+			return true
+		}
+		for i := range s.Items.Schemas {
+			if hasBooleanAdditionalProperties(&s.Items.Schemas[i]) {
+				return true
+			}
+		}
+	}
+	for _, branch := range [][]spec.Schema{s.AllOf, s.AnyOf, s.OneOf} {
+		for i := range branch {
+			if hasBooleanAdditionalProperties(&branch[i]) {
+				return true
+			}
+		}
+	}
+	return hasBooleanAdditionalProperties(s.Not)
+}
+
+// TestPatchSpecSanitizesUserSuppliedBooleanAdditionalProperties is the
+// regression test for the review finding on #2867: ApplicationDefinition
+// schemas are untrusted input, and a user-supplied boolean additionalProperties
+// — declared explicitly at the top level, or nested anywhere under
+// properties/items/allOf — reintroduces the exact #2863 KCM crash. patchSpec
+// must neutralize every such node (both the true and false forms, since both
+// carry a nil inner schema), at any depth, so the published schema can never
+// crash the VAP type-checker. Each case below panics SchemaDeclType before this
+// sanitizer and passes after it.
+func TestPatchSpecSanitizesUserSuppliedBooleanAdditionalProperties(t *testing.T) {
+	cases := map[string]string{
+		"top-level-boolean-true":  `{"type":"object","additionalProperties":true}`,
+		"top-level-boolean-false": `{"type":"object","additionalProperties":false}`,
+		"nested-under-properties": `{"type":"object","properties":{"foo":{"type":"object","additionalProperties":true}}}`,
+		"nested-under-items":      `{"type":"object","properties":{"list":{"type":"array","items":{"type":"object","additionalProperties":true}}}}`,
+		"nested-under-allof":      `{"type":"object","allOf":[{"type":"object","additionalProperties":false}]}`,
+	}
+
+	for name, raw := range cases {
+		t.Run(name, func(t *testing.T) {
+			obj := &spec.Schema{SchemaProps: spec.SchemaProps{
+				Type: spec.StringOrArray{"object"},
+				Properties: map[string]spec.Schema{
+					"apiVersion": {SchemaProps: spec.SchemaProps{Type: spec.StringOrArray{"string"}}},
+					"kind":       {SchemaProps: spec.SchemaProps{Type: spec.StringOrArray{"string"}}},
+					"spec":       {},
+				},
+			}}
+			if err := patchSpec(obj, raw); err != nil {
+				t.Fatalf("patchSpec: %v", err)
+			}
+
+			// Round-trip through JSON: this is what is actually served and what
+			// KCM type-checks.
+			rawJSON, err := json.Marshal(obj)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			var published spec.Schema
+			if err := json.Unmarshal(rawJSON, &published); err != nil {
+				t.Fatalf("unmarshal: %v", err)
+			}
+
+			// (1) no boolean-form additionalProperties survives anywhere
+			if hasBooleanAdditionalProperties(&published) {
+				t.Errorf("published schema still contains a boolean additionalProperties node (#2863): %s", rawJSON)
+			}
+			// (2) the published schema does not crash the VAP type-checker
+			declType := celopenapi.SchemaDeclType(&published, true)
+			if declType == nil {
+				t.Fatalf("SchemaDeclType returned nil for %s", name)
+			}
+		})
+	}
+}
