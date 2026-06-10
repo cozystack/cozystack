@@ -1,5 +1,13 @@
 cilium:
   kubeProxyReplacement: true
+  # Upstream cilium with hostFirewall enabled and the IPv6 datapath disabled
+  # (ipv6.enabled=false, the default here) drops ALL node IPv6 before any
+  # policy evaluation ("Unsupported L3 protocol", DROP_UNKNOWN_L3 in
+  # bpf/bpf_host.c), breaking ICMPv6 Neighbor Discovery and BGP unnumbered on
+  # IPv6/L3 fabrics. The cozystack cilium image carries a BPF patch
+  # (images/cilium/patches/) that passes IPv6 to the kernel stack instead.
+  # Consequence: Cilium host policies apply to IPv4 only; node IPv6 is not
+  # filtered by Cilium.
   hostFirewall:
     enabled: true
   hubble:
