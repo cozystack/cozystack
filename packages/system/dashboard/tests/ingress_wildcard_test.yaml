@@ -9,11 +9,13 @@ release:
 # In operator-supplied wildcard mode (_cluster.wildcard-secret-name set)
 # the ingress controller serves the wildcard as its default SSL cert, so
 # the dashboard Ingress must not request its own cert-manager cert: the
-# cert-manager annotation and the tls block are dropped. Without wildcard
-# mode the per-host ACME path is unchanged.
+# cert-manager annotation and the per-host tls secretName are dropped
+# (the tls section stays so the HTTPS redirect keeps working against
+# the default SSL certificate). Without wildcard mode the per-host ACME
+# path is unchanged.
 
 tests:
-  - it: drops cert-manager annotation and tls block when wildcard secret is set
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
     set:
       _cluster:
         root-host: example.org
@@ -26,10 +28,12 @@ tests:
           value: Ingress
       - notExists:
           path: metadata.annotations["cert-manager.io/cluster-issuer"]
-      - notExists:
+      - exists:
           path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
 
-  - it: keeps cert-manager annotation and tls block without wildcard secret
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
     set:
       _cluster:
         root-host: example.org

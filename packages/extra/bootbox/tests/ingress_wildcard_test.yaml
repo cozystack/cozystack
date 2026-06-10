@@ -9,13 +9,15 @@ release:
 # bootbox deploys into tenant-root and uses the publishing tenant's
 # ingress controller (_namespace.ingress), so in wildcard mode it must
 # also stop minting its own per-host ACME cert. The cert-manager + http01
-# annotations and the tls block are dropped. bootbox's only other
-# annotation (whitelist-source-range) is conditional, so the annotations
+# annotations and the per-host tls secretName are dropped; the tls
+# section itself stays so the HTTPS redirect keeps working against the
+# default SSL certificate. bootbox's only other annotation
+# (whitelist-source-range) is conditional, so the annotations
 # block must collapse entirely when wildcard is set and no whitelist is
 # configured.
 
 tests:
-  - it: collapses the annotations block and drops tls when wildcard set and no whitelist
+  - it: collapses the annotations block and drops tls secretName when wildcard set and no whitelist
     set:
       whitelistHTTP: false
       _namespace:
@@ -31,10 +33,12 @@ tests:
           value: Ingress
       - notExists:
           path: metadata.annotations
-      - notExists:
+      - exists:
           path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
 
-  - it: keeps cert-manager annotation and tls block without wildcard secret
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
     set:
       _namespace:
         host: example.org
@@ -68,5 +72,7 @@ tests:
       - equal:
           path: metadata.annotations["nginx.ingress.kubernetes.io/whitelist-source-range"]
           value: "192.0.2.0/24"
-      - notExists:
+      - exists:
           path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName

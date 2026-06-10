@@ -24,12 +24,15 @@ metadata:
   {{- end }}
 spec:
   ingressClassName: {{ $ingress }}
-  {{- if not $wildcardSecret }}
   tls:
     - hosts:
         - "{{ printf "bootbox.%s" (.Values.host | default $host) }}"
+      {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+             back to the default SSL certificate while the tls section keeps
+             the HTTP-to-HTTPS redirect enforced. */}}
+      {{- if not $wildcardSecret }}
       secretName: bootbox-tls
-  {{- end }}
+      {{- end }}
   rules:
     - host: "{{ printf "bootbox.%s" (.Values.host | default $host) }}"
       http:

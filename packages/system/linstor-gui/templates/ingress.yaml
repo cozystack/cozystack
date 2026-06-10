@@ -51,10 +51,13 @@ spec:
                 name: linstor-gui-gatekeeper
                 port:
                   number: 8000
-  {{- if not $wildcardSecret }}
   tls:
     - hosts:
         - linstor-gui.{{ $host }}
+      {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+             back to the default SSL certificate while the tls section keeps
+             the HTTP-to-HTTPS redirect enforced. */}}
+      {{- if not $wildcardSecret }}
       secretName: linstor-gui-ingress-tls
-  {{- end }}
+      {{- end }}
 {{- end }}

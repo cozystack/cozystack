@@ -8,11 +8,12 @@ release:
 
 # alerta.yaml renders several documents; documentSelector targets the
 # Ingress. In wildcard mode the cert-manager annotations block (the
-# Ingress carries only the labels otherwise) and the tls block are
-# dropped.
+# Ingress carries only the labels otherwise) and the per-host tls
+# secretName are dropped (the tls section stays so the HTTPS redirect
+# keeps working against the default SSL certificate).
 
 tests:
-  - it: drops cert-manager annotations and tls block when wildcard secret is set
+  - it: drops cert-manager annotations and tls secretName when wildcard secret is set
     documentSelector:
       path: kind
       value: Ingress
@@ -29,10 +30,12 @@ tests:
     asserts:
       - notExists:
           path: metadata.annotations
-      - notExists:
+      - exists:
           path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
 
-  - it: keeps cert-manager annotations and tls block without wildcard secret
+  - it: keeps cert-manager annotations and tls secretName without wildcard secret
     documentSelector:
       path: kind
       value: Ingress

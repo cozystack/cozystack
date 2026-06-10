@@ -96,10 +96,13 @@ spec:
                       number: 3000
                 path: /
                 pathType: Prefix
-      {{- if not $wildcardSecret }}
       tls:
       - hosts:
         - "{{ printf "grafana.%s" (.Values.host | default $host) }}"
+        {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+               back to the default SSL certificate while the tls section keeps
+               the HTTP-to-HTTPS redirect enforced. */}}
+        {{- if not $wildcardSecret }}
         secretName: grafana-ingress-tls
-      {{- end }}
+        {{- end }}
   {{- end }}

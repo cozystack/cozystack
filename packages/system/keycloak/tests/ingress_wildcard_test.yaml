@@ -9,11 +9,13 @@ release:
 # keycloak wraps its cert-manager annotations inside
 # `with .Values.ingress.annotations`; the chart ships default
 # session-cookie annotations, so the block always renders. In wildcard
-# mode the cert-manager + http01 annotations and the tls block are
-# dropped while the user annotations are preserved.
+# mode the cert-manager + http01 annotations and the per-host tls
+# secretName are dropped (the tls section stays so the HTTPS redirect
+# keeps working against the default SSL certificate); the user
+# annotations are preserved.
 
 tests:
-  - it: drops cert-manager annotation and tls block when wildcard secret is set
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
     set:
       _cluster:
         root-host: example.org
@@ -28,10 +30,12 @@ tests:
           value: Ingress
       - notExists:
           path: metadata.annotations["cert-manager.io/cluster-issuer"]
-      - notExists:
+      - exists:
           path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
 
-  - it: keeps cert-manager annotation and tls block without wildcard secret
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
     set:
       _cluster:
         root-host: example.org

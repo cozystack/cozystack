@@ -26,12 +26,15 @@ metadata:
     {{- end }}
 spec:
   ingressClassName: {{ $ingress }}
-  {{- if not $wildcardSecret }}
   tls:
     - hosts:
         - {{ $harborHost | quote }}
+      {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+             back to the default SSL certificate while the tls section keeps
+             the HTTP-to-HTTPS redirect enforced. */}}
+      {{- if not $wildcardSecret }}
       secretName: {{ .Release.Name }}-ingress-tls
-  {{- end }}
+      {{- end }}
   rules:
     - host: {{ $harborHost | quote }}
       http:

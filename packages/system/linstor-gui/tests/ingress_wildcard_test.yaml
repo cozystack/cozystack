@@ -10,10 +10,11 @@ release:
 # expose-services + oidc-enabled), so it exercises the drop-cert path
 # for the no-gateway-guard convention. In wildcard mode the controller
 # serves the default SSL cert, so the per-host cert-manager annotation
-# and tls block are dropped.
+# and per-host tls secretName are dropped; the tls section stays so
+# the HTTPS redirect keeps working against the default SSL certificate.
 
 tests:
-  - it: drops cert-manager annotation and tls block when wildcard secret is set
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
     set:
       _cluster:
         root-host: example.org
@@ -26,10 +27,12 @@ tests:
           value: Ingress
       - notExists:
           path: metadata.annotations["cert-manager.io/cluster-issuer"]
-      - notExists:
+      - exists:
           path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
 
-  - it: keeps cert-manager annotation and tls block without wildcard secret
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
     set:
       _cluster:
         root-host: example.org

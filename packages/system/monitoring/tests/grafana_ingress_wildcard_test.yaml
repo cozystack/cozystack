@@ -10,11 +10,12 @@ release:
 # Issue #2812 names grafana explicitly in its acceptance criteria, so
 # this is the load-bearing acceptance test for the ingress-nginx path.
 # In wildcard mode the whole spec.ingress.metadata block (its only
-# content was the cert-manager annotations) and the tls block are
-# dropped; nginx serves the default SSL cert.
+# content was the cert-manager annotations) and the per-host tls
+# secretName are dropped (the tls section stays so the HTTPS redirect
+# keeps working against the default SSL certificate).
 
 tests:
-  - it: drops cert-manager metadata and tls block when wildcard secret is set
+  - it: drops cert-manager metadata and tls secretName when wildcard secret is set
     set:
       _cluster:
         issuer-name: letsencrypt-prod
@@ -30,10 +31,12 @@ tests:
           value: Grafana
       - notExists:
           path: spec.ingress.metadata
-      - notExists:
+      - exists:
           path: spec.ingress.spec.tls
+      - notExists:
+          path: spec.ingress.spec.tls[0].secretName
 
-  - it: keeps cert-manager metadata and tls block without wildcard secret
+  - it: keeps cert-manager metadata and tls secretName without wildcard secret
     set:
       _cluster:
         issuer-name: letsencrypt-prod
