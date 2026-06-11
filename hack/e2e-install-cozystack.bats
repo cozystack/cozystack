@@ -1,5 +1,32 @@
 #!/usr/bin/env bats
 
+setup_file() {
+  # Interim mitigation for the Cilium in-memory endpoint leak
+  # (cilium/cilium#38313 class): a deleted pod's endpoint is orphaned in the
+  # agent's registry, IPAM re-hands its IP to a new pod, and the agent then
+  # rejects the new sandbox with "IP <X> is already in use" until an agent
+  # restart — wedging the pod for the whole install and failing unrelated PRs.
+  # The watchdog surgically evicts only the orphaned endpoint. Detached here so
+  # it covers every test in this file (platform install + tenant + apps); it
+  # self-bounds with its own deadline and writes a PID file we stop below.
+  # Remove together with hack/e2e-cilium-endpoint-leak-healer.sh once a fixed
+  # Cilium ships.
+  hack/e2e-cilium-endpoint-leak-healer.sh > /tmp/cilium-leak-healer.log 2>&1 &
+}
+
+teardown_file() {
+  if [ -f /tmp/cilium-leak-healer.pid ]; then
+    kill "$(cat /tmp/cilium-leak-healer.pid)" 2>/dev/null || true
+  fi
+  # Surface any action it took into the test trace; the run is otherwise green
+  # and the heal would be invisible. REFUSE lines flag a genuine duplicate-IP
+  # (a real bug the watchdog deliberately did not touch).
+  if grep -qE "HEAL |REFUSE " /tmp/cilium-leak-healer.log 2>/dev/null; then
+    echo "# cilium endpoint-leak watchdog activity:" >&3
+    grep -E "HEAL |REFUSE " /tmp/cilium-leak-healer.log >&3 || true
+  fi
+}
+
 @test "Required installer chart exists" {
   if [ ! -f packages/core/installer/Chart.yaml ]; then
     echo "Missing: packages/core/installer/Chart.yaml" >&2
