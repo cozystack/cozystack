@@ -97,12 +97,18 @@ seaweedfs:
     extraArgs:
       - -idleTimeout=60
     enableAuth: false
+    # s3 serves plain HTTP on .port (8333): the 4.31 chart (#2834) gates s3 TLS
+    # behind s3.httpsPort (default 0), so the probe must speak HTTP, not HTTPS —
+    # an HTTPS probe against the HTTP port fails the readiness/liveness check
+    # ("server gave HTTP response to HTTPS client") and the s3 Deployment never
+    # goes Ready. In-cluster TLS to s3 is not enabled; TLS terminates at the
+    # ingress edge.
     readinessProbe:
       httpGet:
-        scheme: HTTPS
+        scheme: HTTP
     livenessProbe:
       httpGet:
-        scheme: HTTPS
+        scheme: HTTP
     logs:
       type: ""
     ingress:
@@ -116,7 +122,9 @@ seaweedfs:
         nginx.ingress.kubernetes.io/proxy-body-size: "5g"
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
         nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
-        nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
+        # s3 serves plain HTTP (see s3.readinessProbe note above); nginx must
+        # reach the backend over HTTP, not HTTPS.
+        nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
         nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
         nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
         nginx.ingress.kubernetes.io/client-body-timeout: "3600"
