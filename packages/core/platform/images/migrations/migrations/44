@@ -11,9 +11,11 @@
 set -euo pipefail
 
 if kubectl get deployment flux-tenants -n cozy-fluxcd >/dev/null 2>&1; then
+  # No early-close (head) in the pipe: under pipefail a large name list would
+  # SIGPIPE kubectl and abort the migration.
   remaining=$(kubectl get helmreleases.helm.toolkit.fluxcd.io -A \
-    -l sharding.fluxcd.io/key=tenants -o name | head -n 1)
-  if [ -z "$remaining" ]; then
+    -l sharding.fluxcd.io/key=tenants -o name | wc -l)
+  if [ "$remaining" -eq 0 ]; then
     echo "No HelmReleases left on the legacy tenants shard; removing flux-tenants Deployment"
     kubectl delete deployment flux-tenants -n cozy-fluxcd --ignore-not-found=true
   else
