@@ -1,0 +1,24 @@
+suite: seaweedfs s3 probe scheme
+
+# Guards the s3 health-probe scheme. The chart serves s3 as plain HTTP on
+# s3.port (TLS is gated onto a separate s3.httpsPort, default 0), so the
+# readiness/liveness probes must use scheme HTTP. An HTTPS probe against the
+# HTTP port fails ("server gave HTTP response to HTTPS client") and the s3
+# Deployment never goes Ready, stalling the seaweedfs-system HelmRelease.
+
+templates:
+  - charts/seaweedfs/templates/s3/s3-deployment.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-test
+
+tests:
+  - it: probes s3 over HTTP, not HTTPS
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTP
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTP
