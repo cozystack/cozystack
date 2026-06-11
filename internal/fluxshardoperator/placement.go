@@ -142,8 +142,13 @@ func rebalance(in PlacementInput, k int, assign map[string]string, load []int, m
 			if t.Deleting || t.Weight == 0 {
 				continue
 			}
-			if _, pinned := in.Pinned[t.Namespace]; pinned {
-				continue
+			// Honor only pins ComputePlacement itself honors: a pin to a
+			// non-existent shard is ignored at placement time, so it must not
+			// make the tenant sticky here either.
+			if pin, pinned := in.Pinned[t.Namespace]; pinned {
+				if idx, ok := ParseShardIndex(pin); ok && idx < k {
+					continue
+				}
 			}
 			if in.CanRebalance != nil && !in.CanRebalance(t.Namespace) {
 				continue

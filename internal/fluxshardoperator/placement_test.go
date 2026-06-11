@@ -126,6 +126,29 @@ func TestComputePlacementPinnedTenant(t *testing.T) {
 	}
 }
 
+func TestComputePlacementRebalanceIgnoresInvalidPins(t *testing.T) {
+	tenants := []TenantInfo{
+		{Namespace: "tenant-anchor", Weight: 25, Current: "shard0"},
+		{Namespace: "tenant-pinned", Weight: 15, Current: "shard0"},
+		{Namespace: "tenant-c", Weight: 10, Current: "shard1"},
+	}
+	assign := ComputePlacement(PlacementInput{
+		Tenants:            tenants,
+		ShardCount:         2,
+		RebalanceThreshold: 0.25,
+		// The pin points at a shard that does not exist at this K; initial
+		// placement already ignores it, so rebalance must not treat the
+		// tenant as sticky either.
+		Pinned: map[string]string{"tenant-pinned": "shard5"},
+		// Veto the unpinned candidate so the invalidly pinned tenant is the
+		// only move that can fix the spread.
+		CanRebalance: func(ns string) bool { return ns == "tenant-pinned" },
+	})
+	if assign["tenant-pinned"] != "shard1" {
+		t.Fatalf("invalidly pinned tenant must participate in rebalance: %v", assign)
+	}
+}
+
 func TestComputePlacementDeletingTenants(t *testing.T) {
 	// A deleting tenant on a removed shard stays put (the provisioner waits
 	// for the drain); an unassigned deleting tenant still gets an owner so its
