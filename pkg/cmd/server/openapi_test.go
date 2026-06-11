@@ -213,18 +213,30 @@ func hasBooleanAdditionalProperties(s *spec.Schema) bool {
 // regression test for the review finding on #2867: ApplicationDefinition
 // schemas are untrusted input, and a user-supplied boolean additionalProperties
 // — declared explicitly at the top level, or nested anywhere under
-// properties/items/allOf — reintroduces the exact #2863 KCM crash. patchSpec
-// must neutralize every such node (both the true and false forms, since both
-// carry a nil inner schema), at any depth, so the published schema can never
-// crash the VAP type-checker. Each case below panics SchemaDeclType before this
-// sanitizer and passes after it.
+// properties/items/additionalProperties/allOf/anyOf/oneOf/not — reintroduces the
+// exact #2863 KCM crash. patchSpec must neutralize every such node (both the true
+// and false forms, since both carry a nil inner schema), at any depth, so the
+// published schema can never crash the VAP type-checker.
+//
+// Two assertions guard each case. SchemaDeclType only descends into properties,
+// items, and additionalProperties.Schema, so the top-level / nested-under-
+// properties / nested-under-items / nested-under-additionalproperties cases are
+// type-checker-reachable: they nil-deref (panic) SchemaDeclType on the
+// pre-sanitizer code. The allOf/anyOf/oneOf/not cases are defense-in-depth —
+// SchemaDeclType never traverses those branches, so it is the
+// hasBooleanAdditionalProperties assertion, not the SchemaDeclType check, that
+// keeps their recursion lines from regressing silently.
 func TestPatchSpecSanitizesUserSuppliedBooleanAdditionalProperties(t *testing.T) {
 	cases := map[string]string{
-		"top-level-boolean-true":  `{"type":"object","additionalProperties":true}`,
-		"top-level-boolean-false": `{"type":"object","additionalProperties":false}`,
-		"nested-under-properties": `{"type":"object","properties":{"foo":{"type":"object","additionalProperties":true}}}`,
-		"nested-under-items":      `{"type":"object","properties":{"list":{"type":"array","items":{"type":"object","additionalProperties":true}}}}`,
-		"nested-under-allof":      `{"type":"object","allOf":[{"type":"object","additionalProperties":false}]}`,
+		"top-level-boolean-true":            `{"type":"object","additionalProperties":true}`,
+		"top-level-boolean-false":           `{"type":"object","additionalProperties":false}`,
+		"nested-under-properties":           `{"type":"object","properties":{"foo":{"type":"object","additionalProperties":true}}}`,
+		"nested-under-items":                `{"type":"object","properties":{"list":{"type":"array","items":{"type":"object","additionalProperties":true}}}}`,
+		"nested-under-additionalproperties": `{"type":"object","additionalProperties":{"type":"object","additionalProperties":true}}`,
+		"nested-under-allof":                `{"type":"object","allOf":[{"type":"object","additionalProperties":false}]}`,
+		"nested-under-anyof":                `{"type":"object","anyOf":[{"type":"object","additionalProperties":true}]}`,
+		"nested-under-oneof":                `{"type":"object","oneOf":[{"type":"object","additionalProperties":false}]}`,
+		"nested-under-not":                  `{"type":"object","not":{"type":"object","additionalProperties":true}}`,
 	}
 
 	for name, raw := range cases {
