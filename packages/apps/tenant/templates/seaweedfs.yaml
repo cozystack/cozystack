@@ -18,7 +18,13 @@ spec:
     name: cozystack-seaweedfs-application-default-seaweedfs
     namespace: cozy-system
   interval: 5m
-  timeout: 10m
+  # This umbrella's helm action waits for the serial child chain
+  # seaweedfs-db (CNPG bootstrap, HR timeout 10m) -> seaweedfs-system
+  # (HR timeout 10m), so its timeout must cover the sum: with 10m here,
+  # a slow-but-healthy install hit the timeout mid-convergence and the
+  # uninstall remediation deleted the child HRs (including the half-
+  # bootstrapped database) in an endless reset loop.
+  timeout: 20m
   install:
     remediation:
       retries: -1
