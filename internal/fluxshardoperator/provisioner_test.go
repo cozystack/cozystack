@@ -183,6 +183,38 @@ func TestBuildShardDeploymentInheritsResourcesWhenUnset(t *testing.T) {
 	}
 }
 
+func TestBuildShardDeploymentMergesPartialResourceOverrides(t *testing.T) {
+	flux := fluxAIODeployment()
+	flux.Spec.Template.Spec.Containers[1].Resources = corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("123m"),
+			corev1.ResourceMemory: resource.MustParse("32Mi"),
+		},
+		Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m")},
+	}
+	cfg := &Config{
+		FluxNamespace:   "cozy-fluxcd",
+		ShardConcurrent: 5,
+		ShardResources: corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+		},
+	}
+	dep, err := BuildShardDeployment(flux, 0, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := dep.Spec.Template.Spec.Containers[0].Resources
+	if res.Requests.Cpu().String() != "123m" || res.Requests.Memory().String() != "32Mi" {
+		t.Fatalf("cloned requests must survive a limits-only override: %v", res)
+	}
+	if res.Limits.Cpu().String() != "500m" {
+		t.Fatalf("cloned cpu limit must survive a memory-only limits override: %v", res)
+	}
+	if res.Limits.Memory().String() != "1Gi" {
+		t.Fatalf("configured memory limit must be applied: %v", res)
+	}
+}
+
 func TestBuildShardDeploymentMissingContainer(t *testing.T) {
 	flux := fluxAIODeployment()
 	flux.Spec.Template.Spec.Containers = flux.Spec.Template.Spec.Containers[:1]

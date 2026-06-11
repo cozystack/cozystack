@@ -122,6 +122,11 @@ func (r *ShardSetReconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctr
 // effectiveShardCount resolves the shard count for this sync: the configured
 // value, or in auto mode the recommendation with hysteresis anchored on the
 // currently provisioned shards (see Config.EffectiveShardCount).
+//
+// Sizing counts every key-labeled HelmRelease, while the placement controller
+// distributes only tenant-attributable ones — so this K can run slightly
+// ahead of what placement fills. The error direction is intentional: worst
+// case is an idle shard, never an overloaded one.
 func (r *ShardSetReconciler) effectiveShardCount(ctx context.Context) (int, error) {
 	if !r.Config.AutoShardCount {
 		return r.Config.EffectiveShardCount(0, 0, 0), nil
@@ -227,6 +232,20 @@ func (r *ShardSetReconciler) drained(ctx context.Context, shardKey string) (bool
 	return len(hrs.Items) == 0, nil
 }
 
+// mergeResourceList overlays the configured quantities onto the cloned ones,
+// keeping cloned entries the overrides do not name.
+func mergeResourceList(dst *corev1.ResourceList, overrides corev1.ResourceList) {
+	if len(overrides) == 0 {
+		return
+	}
+	if *dst == nil {
+		*dst = corev1.ResourceList{}
+	}
+	for name, quantity := range overrides {
+		(*dst)[name] = quantity
+	}
+}
+
 // BuildShardDeployment clones the helm-controller container out of the
 // flux-aio Deployment and sanitises it into a standalone single-shard
 // Deployment:
@@ -298,9 +317,11 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 	}
 	hc.Env = env
 
-	if cfg.ShardResources.Requests != nil || cfg.ShardResources.Limits != nil {
-		hc.Resources = cfg.ShardResources
-	}
+	// Merge per resource name so an unset value inherits the cloned one, as
+	// the flag help documents — replacing the whole block would drop e.g. a
+	// cloned cpu limit when only a memory limit is configured.
+	mergeResourceList(&hc.Resources.Requests, cfg.ShardResources.Requests)
+	mergeResourceList(&hc.Resources.Limits, cfg.ShardResources.Limits)
 
 	mounted := map[string]bool{}
 	for _, m := range hc.VolumeMounts {
