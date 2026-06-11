@@ -285,18 +285,24 @@ func (r *PlacementReconciler) apply(ctx context.Context, views map[string]*tenan
 		if target == "" {
 			continue
 		}
-		if v.info.Current != target {
+		moved := v.info.Current != target
+		if moved {
 			if budget == 0 || !readyShards[target] {
 				pending++
 				continue
 			}
 			budget--
-			r.lastMoved[tenantNS] = r.now()
-			movesCounter.Inc()
-			logger.Info("reassigning tenant", "tenant", tenantNS, "from", v.info.Current, "to", target, "weight", v.info.Weight)
 		}
 		if err := r.stamp(ctx, v, target); err != nil {
 			errs = append(errs, err)
+			continue
+		}
+		// Cooldown and metrics record successful moves only: a failed patch
+		// must neither delay the retry nor count twice.
+		if moved {
+			r.lastMoved[tenantNS] = r.now()
+			movesCounter.Inc()
+			logger.Info("reassigning tenant", "tenant", tenantNS, "from", v.info.Current, "to", target, "weight", v.info.Weight)
 		}
 	}
 	return pending, errs
