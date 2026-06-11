@@ -31,6 +31,12 @@ const WebhookPath = "/mutate-helmrelease-shard"
 // intercepted, and a webhook outage must degrade to the catch-all path (the
 // HelmRelease keeps its legacy "tenants" key until the placement controller
 // relabels it) instead of blocking creation.
+//
+// UPDATE does not need interception: the only full-object writer of tenant
+// HelmReleases is the cozystack-api Update handler, which carries the live
+// shard label over (pkg/registry/apps/application/rest.go); helm-controller
+// itself applies child HelmReleases with server-side apply, which leaves
+// labels owned by other field managers untouched.
 type ShardWebhook struct {
 	// Reader resolves tenant namespaces; backed by the manager's metadata
 	// cache, so lookups are in-memory.
