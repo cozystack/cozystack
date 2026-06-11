@@ -33,6 +33,10 @@ System (non-tenant) HelmReleases are untouched: flux-aio keeps reconciling every
 
 With `shardCount: auto` (the default) the operator drives the shard count from the tenant HelmRelease count: `K = clamp(ceil(H/100), 1, min(16, T))`, applied with hysteresis anchored on the currently provisioned shards (scale up eagerly once a shard runs >120 HR, scale down lazily only under 60 HR/shard) so K does not flap around sizing boundaries. The ~100 HR/shard target leaves headroom for existing tenants growing their HelmRelease count without an immediate reshard. Set an integer to pin the count explicitly.
 
+## Bootstrap on fresh installs
+
+On a fresh cluster the first tenant helm-controller appears through a runtime chain: cert-manager issues the webhook/serving certificate, the operator starts, clones `helm-controller-shard0` from flux-aio, and the placement controller assigns tenants once shard0 reports Ready (assignments only ever target ready shards). Until then tenant HelmReleases stay on their born `sharding.fluxcd.io/key=tenants` label and are simply not reconciled yet — the same install-order dependency as other cert-manager-gated components (capi-operator, capi-providers), surfaced as the platform HelmReleases not turning Ready. To debug a stalled bootstrap, walk the chain in order: cert-manager webhook up → `flux-shard-operator` Deployment Ready (image pull, cert mount) → `helm-controller-shard0` Ready → HelmReleases relabeled off `tenants`.
+
 ## Telemetry
 
-The operator exports `cozy_flux_shard_load`, `cozy_flux_shard_tenants`, `cozy_flux_shard_helmreleases`, `cozy_flux_shard_pending_moves`, `cozy_flux_shard_moves_total` and `cozy_flux_shard_recommended_count` (the raw autosizing recommendation before hysteresis).
+The operator exports `cozy_flux_shard_load`, `cozy_flux_shard_tenants`, `cozy_flux_shard_helmreleases`, `cozy_flux_shard_pending_moves`, `cozy_flux_shard_moves_total` and `cozy_flux_shard_recommended_count` (the raw autosizing recommendation before hysteresis). Metrics are served plain-HTTP on `:8080` and the operator pod carries `prometheus.io/scrape` annotations; gauges are populated by the leader replica.

@@ -3,7 +3,7 @@ kind: MutatingWebhookConfiguration
 metadata:
   name: flux-shard-operator
   annotations:
-    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/flux-shard-operator
+    cert-manager.io/inject-ca-from: "{{ .Release.Namespace }}/flux-shard-operator"
 webhooks:
   - name: flux-shard.cozystack.io
     admissionReviewVersions: ["v1"]

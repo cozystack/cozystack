@@ -50,6 +50,24 @@ tests:
       - equal:
           path: spec.template.spec.volumes[0].secret.secretName
           value: flux-shard-operator-cert
+      # The metrics endpoint must stay reachable: the README-advertised
+      # cozy_flux_shard_* gauges (incl. the autosizing recommendation) are the
+      # operator's observability surface.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8080
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-secure=false
+      - equal:
+          path: spec.template.metadata.annotations["prometheus.io/scrape"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
 
   - it: does not render --pinned-tenants by default
     template: templates/workload.yaml
