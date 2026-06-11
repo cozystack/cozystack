@@ -157,13 +157,16 @@ EOF
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
   # tenant-root parent HR only flips Ready after every child HR is Ready,
   # so listing all four top-level children plus the parent gives precise
-  # failure messages without redundant separate waits. seaweedfs now
-  # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
-  # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
-  # pushes the parent's Ready flip to ~5-6 min; tenant-root HR.spec.timeout
-  # is 15m and this 10m wait stays inside it.
+  # failure messages without redundant separate waits. seaweedfs installs
+  # as a serial chain seaweedfs-db (CNPG bootstrap, HR timeout 10m) ->
+  # seaweedfs-system (master raft quorum, HR timeout 10m) -> seaweedfs
+  # wrapper. On a loaded runner each stage can run close to its own HR
+  # timeout, so this wait must cover the sum of the chain, not a single
+  # stage: 10m proved too tight (runs 27293490370/27293636512/27331238229
+  # timed out here with the chain mid-install), 20m covers the serial
+  # worst case.
   kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
-    -n tenant-root --timeout=10m --for=condition=ready
+    -n tenant-root --timeout=20m --for=condition=ready
 
 
   # Expose Cozystack services through ingress
