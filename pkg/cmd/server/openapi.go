@@ -81,7 +81,7 @@ func markOpenObject(s *spec.Schema) {
 	}
 	s.AdditionalProperties = nil
 	if s.Extensions == nil {
-		s.Extensions = map[string]any{}
+		s.Extensions = spec.Extensions{}
 	}
 	s.Extensions["x-kubernetes-preserve-unknown-fields"] = true
 }
@@ -384,7 +384,7 @@ func sanitizeForV2(s *spec.Schema) {
 		if hasIntAndStringAnyOf(s.AnyOf) {
 			s.Type = spec.StringOrArray{"string"}
 			if s.Extensions == nil {
-				s.Extensions = map[string]any{}
+				s.Extensions = spec.Extensions{}
 			}
 			s.Extensions["x-kubernetes-int-or-string"] = true
 		}
