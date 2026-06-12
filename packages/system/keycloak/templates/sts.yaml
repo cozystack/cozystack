@@ -142,15 +142,23 @@ spec:
             - name: KC_DB
               value: "postgres"
             - name: KC_DB_URL_HOST
+              {{- if .Values.db.host }}
+              value: {{ .Values.db.host | quote }}
+              {{- else }}
               valueFrom:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "host"
+              {{- end }}
             - name: KC_DB_URL_PORT
+              {{- if .Values.db.port }}
+              value: {{ .Values.db.port | quote }}
+              {{- else }}
               valueFrom:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "port"
+              {{- end }}
             - name: KC_DB_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -166,6 +174,10 @@ spec:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "dbname"
+            {{- with .Values.db.urlProperties }}
+            - name: KC_DB_URL_PROPERTIES
+              value: {{ . | quote }}
+            {{- end }}
             - name: KC_FEATURES
               value: "docker"
             - name: KC_HOSTNAME
@@ -175,10 +187,15 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if .Values.themes }}
+          {{- if or .Values.themes .Values.extraVolumeMounts }}
           volumeMounts:
+            {{- if .Values.themes }}
             - name: themes
               mountPath: /opt/keycloak/themes
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           ports:
             - name: http
@@ -207,10 +224,15 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-      {{- if .Values.themes }}
+      {{- if or .Values.themes .Values.extraVolumes }}
       volumes:
+        {{- if .Values.themes }}
         - name: themes
           emptyDir:
             sizeLimit: 256Mi
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       {{- end }}
       terminationGracePeriodSeconds: 60
