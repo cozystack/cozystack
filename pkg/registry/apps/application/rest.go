@@ -1173,15 +1173,13 @@ func (r *REST) hasRequiredApplicationLabelsWithName(hr *helmv2.HelmRelease, appN
 }
 
 // mergeMaps combines two maps of labels or annotations
+// mergeMaps merges b over a into a freshly allocated map. It never returns
+// either input: callers mutate the result in place, and a may be a long-lived
+// shared map (e.g. r.releaseConfig.Labels) that concurrent requests must not
+// write to.
 func mergeMaps(a, b map[string]string) map[string]string {
 	if a == nil && b == nil {
 		return nil
-	}
-	if a == nil {
-		return b
-	}
-	if b == nil {
-		return a
 	}
 	merged := make(map[string]string, len(a)+len(b))
 	for k, v := range a {
