@@ -70,6 +70,14 @@ seaweedfs:
     extraEnvironmentVars:
       WEED_LEVELDB2_ENABLED: "false"
       WEED_POSTGRES2_ENABLED: "true"
+      # Without explicit pool settings the Go sql pool keeps zero idle
+      # connections, so every filer metadata lookup opens a fresh PostgreSQL
+      # connection (TCP + TLS + SCRAM, ~300ms each), adding seconds of latency
+      # to every S3 operation. Keep max_open * filer.replicas below the
+      # database max_connections (CNPG default: 100).
+      WEED_POSTGRES2_CONNECTION_MAX_IDLE: "20"
+      WEED_POSTGRES2_CONNECTION_MAX_OPEN: "40"
+      WEED_POSTGRES2_CONNECTION_MAX_LIFETIME_SECONDS: "600"
       WEED_POSTGRES2_CREATETABLE: |
         CREATE TABLE IF NOT EXISTS "%s" (
           dirhash   BIGINT,
