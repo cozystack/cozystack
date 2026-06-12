@@ -106,3 +106,41 @@ func TestUpdate_PreservesForeignHelmReleaseMetadata(t *testing.T) {
 		t.Errorf("expected application metadata labels to remain, got labels %v", got.Labels)
 	}
 }
+
+// TestCreate_DoesNotMutateSharedConfigLabels pins mergeMaps' allocation
+// contract. Create and Update build the HelmRelease label set starting
+// from r.releaseConfig.Labels, a long-lived map shared by every request
+// for the kind, and then write the application metadata labels into the
+// result in place. If mergeMaps returns one of its inputs instead of a
+// fresh map — which the old implementation did whenever the other input
+// was nil, e.g. for an Application with no labels — those in-place
+// writes land on the shared config map: requests cross-contaminate
+// (application.name varies per request) and concurrent map writes crash
+// the apiserver.
+func TestCreate_DoesNotMutateSharedConfigLabels(t *testing.T) {
+	configLabels := map[string]string{"cozystack.io/ui": "true"}
+	r := newTestRESTWithSchemes()
+	r.releaseConfig.Labels = configLabels
+
+	app := &appsv1alpha1.Application{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: "apps.cozystack.io/v1alpha1",
+			Kind:       "PostgreSQL",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "nolabels",
+			Namespace: "default",
+			// No labels: the conversion yields a nil label map, the
+			// trigger for mergeMaps returning the config map itself.
+		},
+	}
+
+	ctx := request.WithNamespace(context.Background(), "default")
+	if _, err := r.Create(ctx, app, nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(configLabels) != 1 || configLabels["cozystack.io/ui"] != "true" {
+		t.Errorf("expected shared config labels to be untouched, got %v", configLabels)
+	}
+}
