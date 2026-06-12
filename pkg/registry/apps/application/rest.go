@@ -560,9 +560,19 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Fetch the live HelmRelease: it backs the ResourceVersion when the
-	// converted object carries none, and runtime-managed labels are carried
-	// over from it below.
+	// The conversion above rebuilds the HelmRelease from the Application
+	// alone, but parts of the HelmRelease metadata are owned by other
+	// controllers and must survive the update. Fetch the current object
+	// and carry them over before issuing the full-replace PUT:
+	//   - controller finalizers: helm-controller's finalizers.fluxcd.io guarantees
+	//     `helm uninstall` runs on deletion. Stripping it here lets a
+	//     subsequent delete remove the HelmRelease instantly, orphaning
+	//     every resource of the release.
+	//   - ownerReferences: garbage collection and lineage.
+	//   - labels/annotations outside the apps.cozystack.io- prefix: set
+	//     directly on the HelmRelease by Flux or other controllers.
+	// Keys under the prefix are owned by this API: stale ones are dropped
+	// so deleting a label or annotation on the Application propagates.
 	cur := &helmv2.HelmRelease{}
 	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
 		return nil, false, registry.WrapPreservingStatus("failed to fetch current HelmRelease", err, r.gvr.GroupResource(), name)
@@ -573,6 +583,9 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Finalizers = mergeGarbageCollectionFinalizers(cur.Finalizers, previousFinalizers, app.Finalizers)
 	helmRelease.DeletionTimestamp = cur.DeletionTimestamp.DeepCopy()
 	helmRelease.DeletionGracePeriodSeconds = cur.DeletionGracePeriodSeconds
+	helmRelease.OwnerReferences = cur.OwnerReferences
+	helmRelease.Labels = mergeMaps(omitPrefixedMap(cur.Labels, LabelPrefix), helmRelease.Labels)
+	helmRelease.Annotations = mergeMaps(omitPrefixedMap(cur.Annotations, AnnotationPrefix), helmRelease.Annotations)
 
 	// Merge system labels (from config) directly
 	helmRelease.Labels = mergeMaps(r.releaseConfig.Labels, helmRelease.Labels)
@@ -1239,6 +1252,24 @@ func mergeGarbageCollectionFinalizers(current, previous, desired []string) []str
 		}
 	}
 	return result
+}
+
+// omitPrefixedMap returns the entries of a map whose keys do NOT carry the
+// predefined prefix, keeping the keys as-is. It is the complement of
+// filterPrefixedMap: prefixed keys are owned by this API and recomputed from
+// the Application on every write, while the remaining keys belong to other
+// controllers and must be preserved.
+func omitPrefixedMap(original map[string]string, prefix string) map[string]string {
+	if original == nil {
+		return nil
+	}
+	processed := make(map[string]string)
+	for k, v := range original {
+		if !strings.HasPrefix(k, prefix) {
+			processed[k] = v
+		}
+	}
+	return processed
 }
 
 // ConvertHelmReleaseToApplication converts a HelmRelease to an Application.
