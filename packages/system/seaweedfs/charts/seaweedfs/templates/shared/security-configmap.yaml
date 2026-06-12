@@ -19,14 +19,20 @@ data:
   {{- $existing = lookup "v1" "ConfigMap" .Release.Namespace $legacyName }}
   {{- end }}
   {{- $securityConfig := fromToml (dig "data" "security.toml" "" $existing) }}
+  {{- $expiresAfter := default dict .Values.global.seaweedfs.securityConfig.jwtSigning.expiresAfterSeconds }}
   security.toml: |-
     # this file is read by master, volume server, and filer
 
     {{- if .Values.global.seaweedfs.securityConfig.jwtSigning.volumeWrite }}
-    # the jwt signing key is read by master and volume server
-    # a jwt expires in 10 seconds
+    # the jwt signing key is read by master and volume server.
+    # a jwt expires in 10 seconds by default; override via
+    # global.seaweedfs.securityConfig.jwtSigning.expiresAfterSeconds.volumeWrite
     [jwt.signing]
     key = "{{ dig "jwt" "signing" "key" (randAlphaNum 10 | b64enc) $securityConfig }}"
+    {{- $ttl := int (dig "volumeWrite" 0 $expiresAfter) }}
+    {{- if gt $ttl 0 }}
+    expires_after_seconds = {{ $ttl }}
+    {{- end }}
     {{- end }}
 
     {{- if .Values.global.seaweedfs.securityConfig.jwtSigning.volumeRead }}
@@ -35,24 +41,38 @@ data:
     # - the Volume server validates the JWT on reading
     [jwt.signing.read]
     key = "{{ dig "jwt" "signing" "read" "key" (randAlphaNum 10 | b64enc) $securityConfig }}"
+    {{- $ttl := int (dig "volumeRead" 0 $expiresAfter) }}
+    {{- if gt $ttl 0 }}
+    expires_after_seconds = {{ $ttl }}
+    {{- end }}
     {{- end }}
 
     {{- if .Values.global.seaweedfs.securityConfig.jwtSigning.filerWrite }}
     # If this JWT key is configured, Filer only accepts writes over HTTP if they are signed with this JWT:
     # - f.e. the S3 API Shim generates the JWT
     # - the Filer server validates the JWT on writing
-    # the jwt defaults to expire after 10 seconds.
+    # the jwt defaults to expire after 10 seconds; override via
+    # global.seaweedfs.securityConfig.jwtSigning.expiresAfterSeconds.filerWrite
     [jwt.filer_signing]
     key = "{{ dig "jwt" "filer_signing" "key" (randAlphaNum 10 | b64enc) $securityConfig }}"
+    {{- $ttl := int (dig "filerWrite" 0 $expiresAfter) }}
+    {{- if gt $ttl 0 }}
+    expires_after_seconds = {{ $ttl }}
+    {{- end }}
     {{- end }}
 
     {{- if .Values.global.seaweedfs.securityConfig.jwtSigning.filerRead }}
     # If this JWT key is configured, Filer only accepts reads over HTTP if they are signed with this JWT:
     # - f.e. the S3 API Shim generates the JWT
     # - the Filer server validates the JWT on reading
-    # the jwt defaults to expire after 10 seconds.
+    # the jwt defaults to expire after 10 seconds; override via
+    # global.seaweedfs.securityConfig.jwtSigning.expiresAfterSeconds.filerRead
     [jwt.filer_signing.read]
     key = "{{ dig "jwt" "filer_signing" "read" "key" (randAlphaNum 10 | b64enc) $securityConfig }}"
+    {{- $ttl := int (dig "filerRead" 0 $expiresAfter) }}
+    {{- if gt $ttl 0 }}
+    expires_after_seconds = {{ $ttl }}
+    {{- end }}
     {{- end }}
 
     {{- if .Values.global.seaweedfs.enableSecurity }}

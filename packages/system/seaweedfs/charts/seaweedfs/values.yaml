@@ -26,6 +26,14 @@ global:
         volumeRead: false
         filerWrite: false
         filerRead: false
+        # Token lifetime in seconds for each JWT section. The SeaweedFS default
+        # (when omitted) is 10 seconds, which can be too short for large blob
+        # uploads or busy backends. Set to 0 to keep the SeaweedFS default.
+        expiresAfterSeconds:
+          volumeWrite: 0
+          volumeRead: 0
+          filerWrite: 0
+          filerRead: 0
     # we will use this serviceAccountName for all ClusterRoles/ClusterRoleBindings
     serviceAccountName: "seaweedfs"
     serviceAccountAnnotations: {}
