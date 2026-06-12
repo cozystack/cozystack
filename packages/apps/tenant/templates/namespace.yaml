@@ -76,10 +76,20 @@ metadata:
   {{- if hasPrefix "tenant-" .Release.Namespace }}
   labels:
     tenant.cozystack.io/{{ $tenantName }}: ""
-    {{- $parts := splitList "-" .Release.Namespace }}
-    {{- range $i, $v := $parts }}
-    {{- if ne $i 0 }}
-    tenant.cozystack.io/{{ join "-" (slice $parts 0 (add $i 1)) }}: ""
+    {{/*
+      Inherit all ancestor `tenant.cozystack.io/*` labels from the parent
+      namespace. The previous implementation derived the chain by splitting
+      `.Release.Namespace` on `-`, which assumed tenant names encode the
+      full hierarchy in their name (e.g. `tenant-root-ktj-htdev`). The
+      actual convention uses short names (`tenant-ktj`, `tenant-htdev`),
+      so for tenants at depth >= 2 the loop produced only the parent's own
+      label, dropping all transitive ancestors (notably `tenant-root`).
+      Reading the existing parent namespace's labels recovers the full
+      chain regardless of naming.
+    */}}
+    {{- range $k, $_ := (default dict $existingNS.metadata.labels) }}
+    {{- if hasPrefix "tenant.cozystack.io/" $k }}
+    {{ $k }}: ""
     {{- end }}
     {{- end }}
     {{/* Labels for network policies */}}
