@@ -444,7 +444,7 @@ spec:
       {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
       {{- if $sec }}
         {{- range $key, $_ := $sec.data }}
-      - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
+      - path: /etc/containerd/certs.d/{{ regexReplaceAll "_([0-9]+)$" (trimSuffix ".toml" $key) ":${1}" }}/hosts.toml
         contentFrom:
           secret:
             name: {{ $.Release.Name }}-patch-containerd
