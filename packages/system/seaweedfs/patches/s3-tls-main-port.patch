@@ -1,0 +1,14 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml
+index db231fc96..efb967bb2 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-deployment.yaml
+@@ -127,8 +127,8 @@ spec:
+               {{- if .Values.global.seaweedfs.enableSecurity }}
+               {{- if .Values.s3.httpsPort }}
+               -port.https={{ .Values.s3.httpsPort }} \
+-              {{- include "seaweedfs.s3.tlsArgs" (dict "root" . "prefix" "") | nindent 14 }}
+               {{- end }}
++              {{- include "seaweedfs.s3.tlsArgs" (dict "root" . "prefix" "") | nindent 14 }}
+               {{- end }}
+               {{- if .Values.s3.domainName }}
+               -domainName={{ .Values.s3.domainName }} \
