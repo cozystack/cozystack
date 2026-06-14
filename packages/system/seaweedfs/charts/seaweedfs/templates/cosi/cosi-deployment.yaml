@@ -58,7 +58,7 @@ spec:
       priorityClassName: {{ .Values.cosi.priorityClassName | quote }}
       {{- end }}
       enableServiceLinks: false
-      serviceAccountName: {{ include "seaweedfs.componentName" (list . "objectstorage-provisioner") }}
+      serviceAccountName: {{ .Values.global.seaweedfs.serviceAccountName }}-objectstorage-provisioner
       {{- if .Values.cosi.initContainers }}
       initContainers:
         {{ tpl .Values.cosi.initContainers . | nindent 8 | trim }}
