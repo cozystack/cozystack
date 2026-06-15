@@ -45,7 +45,7 @@ EOF
   timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
 
   # --- Test readwrite user (admin) ---
-  mc alias set rw-user https://localhost:8333 $ADMIN_ACCESS_KEY $ADMIN_SECRET_KEY --insecure
+  mc alias set rw-user https://127.0.0.1:8333 $ADMIN_ACCESS_KEY $ADMIN_SECRET_KEY --insecure
 
   # Admin can upload
   echo "readwrite test" > /tmp/rw-test.txt
@@ -58,7 +58,7 @@ EOF
   mc cp --insecure rw-user/$BUCKET_NAME/rw-test.txt /tmp/rw-test-download.txt
 
   # --- Test readonly user (viewer) ---
-  mc alias set ro-user https://localhost:8333 $VIEWER_ACCESS_KEY $VIEWER_SECRET_KEY --insecure
+  mc alias set ro-user https://127.0.0.1:8333 $VIEWER_ACCESS_KEY $VIEWER_SECRET_KEY --insecure
 
   # Viewer can list
   mc ls --insecure ro-user/$BUCKET_NAME/rw-test.txt
