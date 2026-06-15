@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "seaweedfs.componentName" (list . "s3") }}
+  name: {{ template "seaweedfs.name" . }}-s3
   namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
