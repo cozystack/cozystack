@@ -134,6 +134,24 @@ kubectl get packagesources --no-headers | awk '$3 != "True"' | \
     kubectl describe packagesource $NAME > $DIR/describe.txt 2>&1
   done
 
+echo "Collecting source-watcher diagnostics..."
+DIR=$REPORT_DIR/kubernetes/source-watcher
+mkdir -p $DIR
+# PackageSource copies its Ready condition straight from ArtifactGenerator.Status,
+# so a stuck PackageSource ultimately means a stuck ArtifactGenerator or its OCIRepository source.
+kubectl get artifactgenerators -A > $DIR/artifactgenerators.txt 2>&1 || true
+kubectl get artifactgenerators -A -o yaml > $DIR/artifactgenerators.yaml 2>&1 || true
+kubectl get ocirepositories -A > $DIR/ocirepositories.txt 2>&1 || true
+kubectl get ocirepositories -A -o yaml > $DIR/ocirepositories.yaml 2>&1 || true
+kubectl get pods -n cozy-fluxcd -l app.kubernetes.io/name=source-watcher -o wide > $DIR/pods.txt 2>&1 || true
+kubectl get pods -n cozy-fluxcd -l app.kubernetes.io/name=source-watcher -o name 2>/dev/null | \
+  while read POD; do
+    POD=${POD#pod/}
+    kubectl logs -n cozy-fluxcd $POD --all-containers --prefix --tail=2000 > $DIR/$POD.log 2>&1 || true
+    kubectl logs -n cozy-fluxcd $POD --all-containers --prefix --tail=2000 --previous > $DIR/$POD-previous.log 2>&1 || true
+  done
+kubectl get events -n cozy-fluxcd --sort-by=.lastTimestamp > $DIR/events.txt 2>&1 || true
+
 echo "Collecting cozystack apps..."
 DIR=$REPORT_DIR/cozystack-apps
 mkdir -p $DIR
