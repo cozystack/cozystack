@@ -38,11 +38,17 @@ EOF
   VIEWER_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' bucket-viewer-credentials.json)
   VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' bucket-viewer-credentials.json)
 
-  # Start port-forwarding
-  bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
+  # Start port-forwarding in this shell (not via `bash -c '... &'` — the
+  # wrapper subshell exits immediately, the backgrounded kubectl becomes an
+  # orphan and gets reaped before the first mc S3 request, so `mc cp` sees
+  # `dial tcp 127.0.0.1:8333: connect: connection refused` even though the
+  # earlier `nc -z` probe succeeded.
+  kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
+  PORT_FORWARD_PID=$!
+  trap 'kill ${PORT_FORWARD_PID} 2>/dev/null || true' RETURN
 
   # Wait for port-forward to be ready
-  timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+  timeout 30 sh -ec 'until nc -z 127.0.0.1 8333; do sleep 1; done'
 
   # --- Test readwrite user (admin) ---
   mc alias set rw-user https://127.0.0.1:8333 $ADMIN_ACCESS_KEY $ADMIN_SECRET_KEY --insecure
