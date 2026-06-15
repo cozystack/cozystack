@@ -12,7 +12,16 @@ global:
       enabled: true
 seaweedfs:
   master:
-    volumeSizeLimitMB: 30000
+    # 30 GB per volume × 10 GiB PVC = 0 → rounded to 1 maxVolume per
+    # volume server. With defaultReplication=001 (one replica on a
+    # different node) two volume servers can host exactly one logical
+    # volume between them. The platform now ships a default
+    # bucket-cozy-backups Bucket that grabs that single slot, so any
+    # second collection (the bucket E2E, a tenant app bucket, etc.)
+    # blocks on `assign volume: No writable volumes` until the test
+    # times out. Smaller volumes = more parallel collections on a
+    # 10 GiB E2E sandbox PVC. The upstream chart default is 1000.
+    volumeSizeLimitMB: 1000
     replicas: 3
     #  replication type is XYZ:
     # X number of replica in other data centers
