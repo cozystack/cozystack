@@ -97,7 +97,15 @@
 {{-     if eq $k "cpu" }}
 {{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
-{{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{- /*
+        Round the CPU request to whole milliCPU. The VPA admission webhook
+        rejects MinAllowed and MaxAllowed when they are not integer milliCPU
+        (e.g. when cpuAllocationRatio does not evenly divide the input);
+        kube-apiserver tolerates sub-milliCPU on pod requests, but VPA does
+        not. See https://github.com/cozystack/cozystack/issues/2917
+*/ -}}
+{{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | addf 0.5 | int }}
+{{-       $_ := set $output.requests $k (printf "%dm" $cpuRequestMilli) }}
 {{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}

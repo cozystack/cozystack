@@ -22,7 +22,7 @@ tests:
 
       - equal:
           path: spec.hard["requests.cpu"]
-          value: "2"
+          value: "2000m"
 
       - equal:
           path: spec.hard["limits.foobar"]

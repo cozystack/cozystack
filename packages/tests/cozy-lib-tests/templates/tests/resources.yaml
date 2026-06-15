@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  containers:
+    - name: test
+      resources: {{- include "cozy-lib.resources.sanitize" (list .Values.resources $) | nindent 8 }}
