@@ -42,10 +42,10 @@ EOF
   # wrapper subshell exits immediately, the backgrounded kubectl becomes an
   # orphan and gets reaped before the first mc S3 request, so `mc cp` sees
   # `dial tcp 127.0.0.1:8333: connect: connection refused` even though the
-  # earlier `nc -z` probe succeeded.
+  # earlier `nc -z` probe succeeded). The forked port-forward inherits the
+  # test process group; cozytest.sh kills the whole group when the test
+  # function returns, so no explicit cleanup is needed.
   kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
-  PORT_FORWARD_PID=$!
-  trap 'kill ${PORT_FORWARD_PID} 2>/dev/null || true' RETURN
 
   # Wait for port-forward to be ready
   timeout 30 sh -ec 'until nc -z 127.0.0.1 8333; do sleep 1; done'
