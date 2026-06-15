@@ -79,18 +79,27 @@
 
 ### Grafana configuration
 
-| Name                                | Description                              | Type       | Value   |
-| ----------------------------------- | ---------------------------------------- | ---------- | ------- |
-| `grafana`                           | Configuration for Grafana.               | `object`   | `{}`    |
-| `grafana.db`                        | Database configuration.                  | `object`   | `{}`    |
-| `grafana.db.size`                   | Persistent volume size for the database. | `string`   | `10Gi`  |
-| `grafana.resources`                 | Resource configuration.                  | `object`   | `{}`    |
-| `grafana.resources.requests`        | Resource requests.                       | `object`   | `{}`    |
-| `grafana.resources.requests.cpu`    | CPU request.                             | `quantity` | `100m`  |
-| `grafana.resources.requests.memory` | Memory request.                          | `quantity` | `256Mi` |
-| `grafana.resources.limits`          | Resource limits.                         | `object`   | `{}`    |
-| `grafana.resources.limits.cpu`      | CPU limit.                               | `quantity` | `1`     |
-| `grafana.resources.limits.memory`   | Memory limit.                            | `quantity` | `1Gi`   |
+| Name                                | Description                                                             | Type       | Value                   |
+| ----------------------------------- | ----------------------------------------------------------------------- | ---------- | ----------------------- |
+| `grafana`                           | Configuration for Grafana.                                              | `object`   | `{}`                    |
+| `grafana.db`                        | Database configuration.                                                 | `object`   | `{}`                    |
+| `grafana.db.size`                   | Persistent volume size for the database.                                | `string`   | `10Gi`                  |
+| `grafana.resources`                 | Resource configuration.                                                 | `object`   | `{}`                    |
+| `grafana.resources.requests`        | Resource requests.                                                      | `object`   | `{}`                    |
+| `grafana.resources.requests.cpu`    | CPU request.                                                            | `quantity` | `100m`                  |
+| `grafana.resources.requests.memory` | Memory request.                                                         | `quantity` | `256Mi`                 |
+| `grafana.resources.limits`          | Resource limits.                                                        | `object`   | `{}`                    |
+| `grafana.resources.limits.cpu`      | CPU limit.                                                              | `quantity` | `1`                     |
+| `grafana.resources.limits.memory`   | Memory limit.                                                           | `quantity` | `1Gi`                   |
+| `grafana.smtp`                      | SMTP configuration for email notifications.                             | `object`   | `{}`                    |
+| `grafana.smtp.enabled`              | Enable SMTP for email notifications via Grafana Unified Alerting.       | `bool`     | `false`                 |
+| `grafana.smtp.host`                 | SMTP server address and port (e.g. smtp.gmail.com:587).                 | `string`   | `""`                    |
+| `grafana.smtp.user`                 | SMTP authentication username (stored in Secret).                        | `string`   | `""`                    |
+| `grafana.smtp.password`             | SMTP authentication password (stored in Secret).                        | `string`   | `""`                    |
+| `grafana.smtp.from_address`         | Email address used as the sender.                                       | `string`   | `""`                    |
+| `grafana.smtp.from_name`            | Display name used as the sender.                                        | `string`   | `Grafana`               |
+| `grafana.smtp.start_tls_policy`     | StartTLS policy (OpportunisticStartTLS, MandatoryStartTLS, NoStartTLS). | `string`   | `OpportunisticStartTLS` |
+| `grafana.smtp.skip_verify`          | Skip TLS certificate verification.                                      | `bool`     | `false`                 |
 
 
 ### Vmagent configuration

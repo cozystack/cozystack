@@ -3,6 +3,19 @@
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- if and .Values.grafana.smtp .Values.grafana.smtp.enabled .Values.grafana.smtp.user }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-smtp
+  labels:
+    app: grafana
+type: Opaque
+stringData:
+  user: {{ .Values.grafana.smtp.user | quote }}
+  password: {{ .Values.grafana.smtp.password | quote }}
+{{- end }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
 kind: Grafana
@@ -71,6 +84,34 @@ spec:
                   secretKeyRef:
                     key: password
                     name: grafana-admin-password
+              {{- if and .Values.grafana.smtp .Values.grafana.smtp.enabled }}
+              {{- if .Values.grafana.smtp.user }}
+              - name: GF_SMTP_USER
+                valueFrom:
+                  secretKeyRef:
+                    name: grafana-smtp
+                    key: user
+              {{- if .Values.grafana.smtp.password }}
+              - name: GF_SMTP_PASSWORD
+                valueFrom:
+                  secretKeyRef:
+                    name: grafana-smtp
+                    key: password
+              {{- end }}
+              {{- end }}
+              - name: GF_SMTP_ENABLED
+                value: "true"
+              - name: GF_SMTP_HOST
+                value: {{ .Values.grafana.smtp.host | quote }}
+              - name: GF_SMTP_FROM_ADDRESS
+                value: {{ .Values.grafana.smtp.from_address | quote }}
+              - name: GF_SMTP_FROM_NAME
+                value: {{ .Values.grafana.smtp.from_name | default "Grafana" | quote }}
+              - name: GF_SMTP_SKIP_VERIFY
+                value: {{ .Values.grafana.smtp.skip_verify | default false | quote }}
+              - name: GF_SMTP_STARTTLS_POLICY
+                value: {{ .Values.grafana.smtp.start_tls_policy | default "OpportunisticStartTLS" | quote }}
+              {{- end }}
   {{- if ne $gatewayEnabled "true" }}
   ingress:
     metadata:
