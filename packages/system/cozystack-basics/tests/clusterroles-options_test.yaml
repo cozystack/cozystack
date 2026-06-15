@@ -23,3 +23,43 @@ tests:
             apiGroups: ["core.cozystack.io"]
             resources: ["options"]
             verbs: ["get", "list", "watch"]
+
+  - it: cozy:tenant:base grants full access on sdn.cozystack.io securitygroups
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["sdn.cozystack.io"]
+            resources: ["securitygroups"]
+            verbs: ['*']
+
+  - it: cozy:tenant:view:base grants read on sdn.cozystack.io securitygroups
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:view:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["sdn.cozystack.io"]
+            resources: ["securitygroups"]
+            verbs: ["get", "list", "watch"]
+
+  # cozy:tenant:base aggregates only into the tenant ServiceAccount role, so the
+  # human admin/super-admin tiers need their own securitygroups write grant —
+  # mirroring how apps.cozystack.io is granted at admin:base — or a tenant admin
+  # could read but never manage their own SecurityGroups.
+  - it: cozy:tenant:admin:base grants write on sdn.cozystack.io securitygroups
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["sdn.cozystack.io"]
+            resources: ["securitygroups"]
+            verbs: ["create", "update", "patch", "delete"]
