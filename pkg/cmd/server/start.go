@@ -29,6 +29,7 @@ import (
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/spf13/cobra"
@@ -78,6 +79,7 @@ func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
 			apiserver.Codecs.LegacyCodec(
 				corev1alpha1.SchemeGroupVersion,
 				appsv1alpha1.SchemeGroupVersion,
+				sdnv1alpha1.SchemeGroupVersion,
 			),
 		),
 		StdOut: out,
