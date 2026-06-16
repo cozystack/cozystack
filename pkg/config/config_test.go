@@ -124,18 +124,23 @@ func TestParseHelmInstallTimeoutAnnotation(t *testing.T) {
 // HelmRelease and being rejected by helm-controller's CRD validation later.
 func TestParsePositiveDuration(t *testing.T) {
 	tests := []struct {
-		name    string
-		raw     string
-		want    time.Duration
-		wantErr bool
+		name string
+		raw  string
+		want time.Duration
+		// errMatch pins which of the two error branches fired: a
+		// time.ParseDuration failure ("invalid duration") versus a
+		// non-positive value ("must be > 0"). Keeps the two diagnostics
+		// from drifting and operators seeing the wrong message.
+		errMatch string
+		wantErr  bool
 	}{
 		{name: "valid seconds", raw: "30s", want: 30 * time.Second},
 		{name: "valid minutes", raw: "5m", want: 5 * time.Minute},
 		{name: "valid compound", raw: "1h30m", want: 90 * time.Minute},
-		{name: "zero rejected", raw: "0s", wantErr: true},
-		{name: "negative rejected", raw: "-5m", wantErr: true},
-		{name: "malformed rejected", raw: "5x", wantErr: true},
-		{name: "empty rejected", raw: "", wantErr: true},
+		{name: "zero rejected", raw: "0s", wantErr: true, errMatch: "must be > 0"},
+		{name: "negative rejected", raw: "-5m", wantErr: true, errMatch: "must be > 0"},
+		{name: "malformed rejected", raw: "5x", wantErr: true, errMatch: "invalid duration"},
+		{name: "empty rejected", raw: "", wantErr: true, errMatch: "invalid duration"},
 	}
 
 	for _, tt := range tests {
@@ -144,6 +149,9 @@ func TestParsePositiveDuration(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for %q, got nil", tt.raw)
+				}
+				if tt.errMatch != "" && !strings.Contains(err.Error(), tt.errMatch) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.errMatch)
 				}
 				return
 			}
