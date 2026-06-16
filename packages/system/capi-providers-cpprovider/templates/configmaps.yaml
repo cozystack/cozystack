@@ -1,7 +1,9 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: v0.16.0-cp
+  # Must match spec.version in templates/providers.yaml so the
+  # ControlPlaneProvider operator selects this components bundle.
+  name: v0.19.0-cozystack.0
   labels:
     cp-components: cozy
   annotations:

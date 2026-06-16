@@ -1,0 +1,297 @@
+diff --git a/api/v1alpha1/kamajicontrolplane_types.go b/api/v1alpha1/kamajicontrolplane_types.go
+index 3068fe5..bd1f229 100644
+--- a/api/v1alpha1/kamajicontrolplane_types.go
++++ b/api/v1alpha1/kamajicontrolplane_types.go
+@@ -109,6 +109,11 @@ type NetworkComponent struct {
+ 	AdvertiseAddress   string            `json:"advertiseAddress,omitempty"`
+ 	ServiceLabels      map[string]string `json:"serviceLabels,omitempty"`
+ 	ServiceAnnotations map[string]string `json:"serviceAnnotations,omitempty"`
++	// AdditionalServicePorts adds extra ports to the Service that fronts the
++	// TenantControlPlane Pods. Useful when sidecars (such as a CSR signer)
++	// running alongside the kube-apiserver need to be reachable from tenant
++	// workers through the same Service endpoint.
++	AdditionalServicePorts []kamajiv1alpha1.AdditionalPort `json:"additionalServicePorts,omitempty"`
+ 	// Configure additional Subject Address Names for the kube-apiserver certificate,
+ 	// useful if the TenantControlPlane is going to be exposed behind a FQDN with NAT.
+ 	CertSANs []string `json:"certSANs,omitempty"` //nolint:tagliatelle
+diff --git a/api/v1alpha1/zz_generated.deepcopy.go b/api/v1alpha1/zz_generated.deepcopy.go
+index 72e7c6d..a92e21d 100644
+--- a/api/v1alpha1/zz_generated.deepcopy.go
++++ b/api/v1alpha1/zz_generated.deepcopy.go
+@@ -551,6 +551,13 @@ func (in *NetworkComponent) DeepCopyInto(out *NetworkComponent) {
+ 			(*out)[key] = val
+ 		}
+ 	}
++	if in.AdditionalServicePorts != nil {
++		in, out := &in.AdditionalServicePorts, &out.AdditionalServicePorts
++		*out = make([]apiv1alpha1.AdditionalPort, len(*in))
++		for i := range *in {
++			(*in)[i].DeepCopyInto(&(*out)[i])
++		}
++	}
+ 	if in.CertSANs != nil {
+ 		in, out := &in.CertSANs, &out.CertSANs
+ 		*out = make([]string, len(*in))
+diff --git a/config/control-plane-components.yaml b/config/control-plane-components.yaml
+index adc08ba..85ef61a 100644
+--- a/config/control-plane-components.yaml
++++ b/config/control-plane-components.yaml
+@@ -7051,6 +7051,58 @@ spec:
+                   serviceType: LoadBalancer
+                 description: Configure how the TenantControlPlane should be exposed.
+                 properties:
++                  additionalServicePorts:
++                    description: |-
++                      AdditionalServicePorts adds extra ports to the Service that fronts the
++                      TenantControlPlane Pods. Useful when sidecars (such as a CSR signer)
++                      running alongside the kube-apiserver need to be reachable from tenant
++                      workers through the same Service endpoint.
++                    items:
++                      properties:
++                        appProtocol:
++                          description: |-
++                            The application protocol for this port.
++                            This is used as a hint for implementations to offer richer behavior for protocols that they understand.
++                            This field follows standard Kubernetes label syntax.
++                            Valid values are either:
++
++                            * Un-prefixed protocol names - reserved for IANA standard service names (as per
++                            RFC-6335 and https://www.iana.org/assignments/service-names).
++                          type: string
++                        name:
++                          description: |-
++                            The name of this port within the Service created by Kamaji.
++                            This must be a DNS_LABEL, must have unique names, and cannot be `kube-apiserver`, or `konnectivity-server`.
++                          type: string
++                        port:
++                          description: The port that will be exposed by this service.
++                          format: int32
++                          type: integer
++                        protocol:
++                          default: TCP
++                          description: The IP protocol for this port. Supports "TCP", "UDP", and "SCTP".
++                          enum:
++                          - TCP
++                          - UDP
++                          - SCTP
++                          type: string
++                        targetPort:
++                          anyOf:
++                          - type: integer
++                          - type: string
++                          description: |-
++                            Number or name of the port to access on the pods of the Tenant Control Plane.
++                            Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.
++                            If this is a string, it will be looked up as a named port in the
++                            target Pod's container ports. If this is not specified, the value
++                            of the 'port' field is used (an identity map).
++                          x-kubernetes-int-or-string: true
++                      required:
++                      - name
++                      - port
++                      - targetPort
++                      type: object
++                    type: array
+                   advertiseAddress:
+                     description: |-
+                       AdvertiseAddress is the address advertised to tenant-side consumers (workers, konnectivity).
+@@ -14599,6 +14651,58 @@ spec:
+                           serviceType: LoadBalancer
+                         description: Configure how the TenantControlPlane should be exposed.
+                         properties:
++                          additionalServicePorts:
++                            description: |-
++                              AdditionalServicePorts adds extra ports to the Service that fronts the
++                              TenantControlPlane Pods. Useful when sidecars (such as a CSR signer)
++                              running alongside the kube-apiserver need to be reachable from tenant
++                              workers through the same Service endpoint.
++                            items:
++                              properties:
++                                appProtocol:
++                                  description: |-
++                                    The application protocol for this port.
++                                    This is used as a hint for implementations to offer richer behavior for protocols that they understand.
++                                    This field follows standard Kubernetes label syntax.
++                                    Valid values are either:
++
++                                    * Un-prefixed protocol names - reserved for IANA standard service names (as per
++                                    RFC-6335 and https://www.iana.org/assignments/service-names).
++                                  type: string
++                                name:
++                                  description: |-
++                                    The name of this port within the Service created by Kamaji.
++                                    This must be a DNS_LABEL, must have unique names, and cannot be `kube-apiserver`, or `konnectivity-server`.
++                                  type: string
++                                port:
++                                  description: The port that will be exposed by this service.
++                                  format: int32
++                                  type: integer
++                                protocol:
++                                  default: TCP
++                                  description: The IP protocol for this port. Supports "TCP", "UDP", and "SCTP".
++                                  enum:
++                                  - TCP
++                                  - UDP
++                                  - SCTP
++                                  type: string
++                                targetPort:
++                                  anyOf:
++                                  - type: integer
++                                  - type: string
++                                  description: |-
++                                    Number or name of the port to access on the pods of the Tenant Control Plane.
++                                    Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.
++                                    If this is a string, it will be looked up as a named port in the
++                                    target Pod's container ports. If this is not specified, the value
++                                    of the 'port' field is used (an identity map).
++                                  x-kubernetes-int-or-string: true
++                              required:
++                              - name
++                              - port
++                              - targetPort
++                              type: object
++                            type: array
+                           advertiseAddress:
+                             description: |-
+                               AdvertiseAddress is the address advertised to tenant-side consumers (workers, konnectivity).
+diff --git a/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanes.yaml b/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanes.yaml
+index 6ab7db4..f30acc5 100644
+--- a/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanes.yaml
++++ b/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanes.yaml
+@@ -7399,6 +7399,59 @@ spec:
+                   serviceType: LoadBalancer
+                 description: Configure how the TenantControlPlane should be exposed.
+                 properties:
++                  additionalServicePorts:
++                    description: |-
++                      AdditionalServicePorts adds extra ports to the Service that fronts the
++                      TenantControlPlane Pods. Useful when sidecars (such as a CSR signer)
++                      running alongside the kube-apiserver need to be reachable from tenant
++                      workers through the same Service endpoint.
++                    items:
++                      properties:
++                        appProtocol:
++                          description: |-
++                            The application protocol for this port.
++                            This is used as a hint for implementations to offer richer behavior for protocols that they understand.
++                            This field follows standard Kubernetes label syntax.
++                            Valid values are either:
++
++                            * Un-prefixed protocol names - reserved for IANA standard service names (as per
++                            RFC-6335 and https://www.iana.org/assignments/service-names).
++                          type: string
++                        name:
++                          description: |-
++                            The name of this port within the Service created by Kamaji.
++                            This must be a DNS_LABEL, must have unique names, and cannot be `kube-apiserver`, or `konnectivity-server`.
++                          type: string
++                        port:
++                          description: The port that will be exposed by this service.
++                          format: int32
++                          type: integer
++                        protocol:
++                          default: TCP
++                          description: The IP protocol for this port. Supports "TCP",
++                            "UDP", and "SCTP".
++                          enum:
++                          - TCP
++                          - UDP
++                          - SCTP
++                          type: string
++                        targetPort:
++                          anyOf:
++                          - type: integer
++                          - type: string
++                          description: |-
++                            Number or name of the port to access on the pods of the Tenant Control Plane.
++                            Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.
++                            If this is a string, it will be looked up as a named port in the
++                            target Pod's container ports. If this is not specified, the value
++                            of the 'port' field is used (an identity map).
++                          x-kubernetes-int-or-string: true
++                      required:
++                      - name
++                      - port
++                      - targetPort
++                      type: object
++                    type: array
+                   advertiseAddress:
+                     description: |-
+                       AdvertiseAddress is the address advertised to tenant-side consumers (workers, konnectivity).
+diff --git a/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanetemplates.yaml b/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanetemplates.yaml
+index dbac427..774dd8a 100644
+--- a/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanetemplates.yaml
++++ b/config/crd/bases/controlplane.cluster.x-k8s.io_kamajicontrolplanetemplates.yaml
+@@ -7490,6 +7490,60 @@ spec:
+                         description: Configure how the TenantControlPlane should be
+                           exposed.
+                         properties:
++                          additionalServicePorts:
++                            description: |-
++                              AdditionalServicePorts adds extra ports to the Service that fronts the
++                              TenantControlPlane Pods. Useful when sidecars (such as a CSR signer)
++                              running alongside the kube-apiserver need to be reachable from tenant
++                              workers through the same Service endpoint.
++                            items:
++                              properties:
++                                appProtocol:
++                                  description: |-
++                                    The application protocol for this port.
++                                    This is used as a hint for implementations to offer richer behavior for protocols that they understand.
++                                    This field follows standard Kubernetes label syntax.
++                                    Valid values are either:
++
++                                    * Un-prefixed protocol names - reserved for IANA standard service names (as per
++                                    RFC-6335 and https://www.iana.org/assignments/service-names).
++                                  type: string
++                                name:
++                                  description: |-
++                                    The name of this port within the Service created by Kamaji.
++                                    This must be a DNS_LABEL, must have unique names, and cannot be `kube-apiserver`, or `konnectivity-server`.
++                                  type: string
++                                port:
++                                  description: The port that will be exposed by this
++                                    service.
++                                  format: int32
++                                  type: integer
++                                protocol:
++                                  default: TCP
++                                  description: The IP protocol for this port. Supports
++                                    "TCP", "UDP", and "SCTP".
++                                  enum:
++                                  - TCP
++                                  - UDP
++                                  - SCTP
++                                  type: string
++                                targetPort:
++                                  anyOf:
++                                  - type: integer
++                                  - type: string
++                                  description: |-
++                                    Number or name of the port to access on the pods of the Tenant Control Plane.
++                                    Number must be in the range 1 to 65535. Name must be an IANA_SVC_NAME.
++                                    If this is a string, it will be looked up as a named port in the
++                                    target Pod's container ports. If this is not specified, the value
++                                    of the 'port' field is used (an identity map).
++                                  x-kubernetes-int-or-string: true
++                              required:
++                              - name
++                              - port
++                              - targetPort
++                              type: object
++                            type: array
+                           advertiseAddress:
+                             description: |-
+                               AdvertiseAddress is the address advertised to tenant-side consumers (workers, konnectivity).
+diff --git a/controllers/kamajicontrolplane_controller_tcp.go b/controllers/kamajicontrolplane_controller_tcp.go
+index f5cccff..78383e6 100644
+--- a/controllers/kamajicontrolplane_controller_tcp.go
++++ b/controllers/kamajicontrolplane_controller_tcp.go
+@@ -152,6 +152,7 @@ func (r *KamajiControlPlaneReconciler) createOrUpdateTenantControlPlane(ctx cont
+ 			tcp.Spec.ControlPlane.Service.ServiceType = kcp.Spec.Network.ServiceType
+ 			tcp.Spec.ControlPlane.Service.AdditionalMetadata.Labels = kcp.Spec.Network.ServiceLabels
+ 			tcp.Spec.ControlPlane.Service.AdditionalMetadata.Annotations = kcp.Spec.Network.ServiceAnnotations
++			tcp.Spec.ControlPlane.Service.AdditionalPorts = kcp.Spec.Network.AdditionalServicePorts
+ 
+ 			for _, i := range kcp.Spec.Network.CertSANs {
+ 				// validating CertSANs as soon as possible to avoid github.com/clastix/kamaji/issues/679:
