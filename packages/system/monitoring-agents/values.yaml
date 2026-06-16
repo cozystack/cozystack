@@ -426,7 +426,6 @@ fluent-bit:
       [FILTER]
           Name modify
           Match kube.*
-          Remove kubernetes_node_name
           Remove kubernetes_host
 scrapeRules:
   etcd:
