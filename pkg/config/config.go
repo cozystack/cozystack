@@ -127,8 +127,10 @@ type ReleaseConfig struct {
 	HelmReleaseUpgradeTimeout time.Duration `yaml:"helmReleaseUpgradeTimeout,omitempty"`
 	// HelmReleaseMaxHistory is the global default for Spec.MaxHistory.
 	// 0 means unlimited per Helm semantics; matches the cozystack-operator
-	// flag of the same name.
-	HelmReleaseMaxHistory int `yaml:"helmReleaseMaxHistory,omitempty"`
+	// flag of the same name. No omitempty: 0 ("unlimited") must survive a
+	// round-trip distinct from an unset field if ReleaseConfig is ever
+	// marshalled.
+	HelmReleaseMaxHistory int `yaml:"helmReleaseMaxHistory"`
 }
 
 // ChartRefConfig references a Flux source artifact for the Helm chart.
