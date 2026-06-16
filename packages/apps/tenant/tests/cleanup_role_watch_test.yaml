@@ -1,10 +1,16 @@
-suite: tenant cleanup Role can watch HelmReleases
+suite: tenant cleanup pre-delete hook
 
 # The pre-delete cleanup hook deletes the tenant's HelmReleases with
 # `kubectl delete --wait=true`, which sets up a watch on helmreleases to block
 # until finalization completes. Without the watch verb that watch is rejected
 # with HTTP 403, the delete call hangs, the Job never finishes, and tenant
 # deletion stalls on the hook. Pin the verb so it cannot regress.
+#
+# The Job runs kubectl from a maintained, version-pinned image. Pin the image
+# so it cannot drift back to an unpinned / sunset base (e.g. bitnami:latest),
+# and pin the command interpreter to a shell that image actually ships
+# (clastix/kubectl is Alpine — /bin/sh only, no /bin/bash) so the container
+# can exec at all.
 
 # Restrict rendering to the cleanup template so the chart's namespace.yaml
 # `lookup` (which errors under helm-unittest) is not evaluated.
@@ -27,3 +33,27 @@ tests:
         contains:
           path: rules[0].verbs
           content: watch
+
+  - it: cleanup Job uses the maintained clastix kubectl image
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        isKind:
+          of: Job
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+
+  - it: cleanup Job invokes a shell the image actually ships
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        isKind:
+          of: Job
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].command[0]
+          value: /bin/sh

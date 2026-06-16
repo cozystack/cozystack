@@ -62,9 +62,9 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: cleanup
-        image: bitnami/kubectl:latest
+        image: docker.io/clastix/kubectl:v1.32
         command:
-        - /bin/bash
+        - /bin/sh
         - -c
         - |
           set -e
