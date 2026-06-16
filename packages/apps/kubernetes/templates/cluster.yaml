@@ -1,3 +1,23 @@
+{{- /*
+  Talos -> Kubernetes support matrix. Each Talos minor release supports a
+  bounded window of Kubernetes minor versions; running a kubelet outside
+  that window produces a silently broken Talos+kubelet combination that
+  HelmRelease cannot detect. Fail the chart render instead, so the operator
+  sees the mismatch in Flux/dashboards before workers roll over.
+
+  The matrix only fires for Talos versions it knows about; operators who
+  override talos.version to something outside this list take responsibility
+  for compatibility themselves (extend the dict or upstream a PR).
+  Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+*/}}
+{{- $talosK8sSupportMatrix := dict
+      "v1.13.0" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
+}}
+{{- with index $talosK8sSupportMatrix .Values.talos.version }}
+{{-   if not (has $.Values.version .) }}
+{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
+{{-   end }}
+{{- end }}
 {{- $etcd := .Values._namespace.etcd }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
@@ -10,13 +30,38 @@
   flux marks the HelmRelease Ready and retries its 5m reconcile loop until
   the Tenant chart catches up.
 */}}
+{{- /* The TalosConfigTemplate and the apiserver-Service ClusterIP-SAN
+       used to be rendered in this template behind a lookup gate that
+       races every fresh install: Service / Talos CA / K8s CA do not
+       exist on first Helm render, so the gate fails, the TCT is
+       skipped, and Helm's release-storage three-way merge then refuses
+       to upgrade because no values changed. Both objects are now
+       produced by the post-install/post-upgrade Helm hook Job in
+       templates/talos/talos-reconcile-job.yaml, which blocks until the
+       four dependencies exist and then `kubectl apply`s deterministic
+       results. The Job owns the TCT through an ownerReference to the
+       KamajiControlPlane so K8s garbage-collects it naturally on
+       release uninstall. */}}
+{{- /*
+  Cluster pod/service CIDRs MUST match between the CAPI Cluster
+  spec.clusterNetwork below and the Talos worker machineconfig's
+  cluster.network — Talos surfaces overlaps against the host pod CIDR
+  as a diagnostic at boot, and divergence between CAPI and Talos would
+  manifest as silently broken kube-proxy / Cilium routing. Keep them
+  in one place here.
+*/}}
+{{- $podCIDR := "10.243.0.0/16" }}
+{{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
+  {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
+        on an SSH probe that will never succeed. The Machine reaches Ready
+        once kubelet registers with the tenant apiserver via standard CSR. */}}
   virtualMachineBootstrapCheck:
-    checkStrategy: ssh
+    checkStrategy: none
   virtualMachineTemplate:
     metadata:
       namespace: {{ $.Release.Namespace }}
@@ -33,16 +78,21 @@ spec:
       runStrategy: Always
       dataVolumeTemplates:
       - metadata:
-          name: disk-kubelet
+          name: disk-system
           annotations:
-            {{/* Populator creates intermediate PVC + PV rebind that causes ClaimMisbound with LINSTOR CSI */}}
             cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
+          {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
+                injects bootstrap data via cloudInitConfigDrive (OpenStack
+                metadata service shape), and the openstack platform image
+                is the one that reads it. The nocloud-amd64 image silently
+                ignores configdrive and never applies the machineconfig. */}}
+          source:
+            http:
+              url: https://factory.talos.dev/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}
-          source:
-            blank: {}
           storage:
             resources:
               requests:
@@ -92,13 +142,10 @@ spec:
                 disk:
                   bus: virtio
                   pciAddress: 0000:07:00.0
-              - name: disk-kubelet
-                disk:
-                  bus: virtio
-                  pciAddress: 0000:08:00.0
                 blockSize:
-                  matchVolume:
-                    enabled: true
+                  custom:
+                    logical: 512
+                    physical: 4096
               interfaces:
               - name: default
                 bridge: {}
@@ -112,11 +159,8 @@ spec:
           evictionStrategy: External
           volumes:
           - name: system
-            containerDisk:
-              image: "{{ $.Files.Get (printf "images/ubuntu-container-disk-%s.tag" $.Values.version) | trim }}"
-          - name: disk-kubelet
             dataVolume:
-              name: disk-kubelet
+              name: disk-system
           networks:
           - name: default
             pod: {}
@@ -151,10 +195,10 @@ spec:
   clusterNetwork:
     pods:
       cidrBlocks:
-      - 10.243.0.0/16
+      - {{ $podCIDR }}
     services:
       cidrBlocks:
-      - 10.95.0.0/16
+      - {{ $serviceCIDR }}
   controlPlaneRef:
     namespace: {{ .Release.Namespace }}
     apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
@@ -208,10 +252,69 @@ spec:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
       hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
       className: "{{ $ingress }}"
+    additionalServicePorts:
+      - name: talos-trustd
+        port: 50001
+        targetPort: 50001
+        protocol: TCP
+    {{- /* Initial render lists only the DNS SANs because the apiserver
+           Service ClusterIP is not yet allocated when Helm executes the
+           template. The talos-reconcile post-install/post-upgrade hook
+           re-patches certSANs with the live ClusterIP once Kamaji emits
+           the Service, and Kamaji then re-issues the apiserver TLS cert
+           to cover it. */}}
+    certSANs:
+      - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
+      - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
   deployment:
     podAdditionalMetadata:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
+    extraContainers:
+      - name: talos-csr-signer
+        image: "{{ default (.Files.Get "images/talos-csr-signer.tag" | trim) .Values.images.talosCsrSigner }}"
+        imagePullPolicy: IfNotPresent
+        ports:
+          - name: trustd
+            containerPort: 50001
+            protocol: TCP
+        env:
+          - name: TALOS_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-talos-secrets
+                key: token
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - name: talos-ca
+            mountPath: /etc/talos-ca
+            readOnly: true
+          - name: talos-tls-cert
+            mountPath: /etc/talos-server-crt
+            readOnly: true
+    extraVolumes:
+      - name: talos-ca
+        secret:
+          secretName: {{ .Release.Name }}-talos-ca
+      - name: talos-tls-cert
+        secret:
+          secretName: {{ .Release.Name }}-talos-tls-cert
   replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
 ---
@@ -406,104 +509,18 @@ metadata:
 {{-   end }}
 {{- end }}
 ---
-apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-kind: KubeadmConfigTemplate
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-spec:
-  template:
-    spec:
-      files:
-      - path: /usr/bin/update-k8s.sh
-        owner: root:root
-        permissions: "0755"
-        content: |
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          # Expected to be passed in via preKubeadmCommands
-          : "${KUBELET_VERSION:?KUBELET_VERSION must be set, e.g. v1.31.0}"
-
-          ARCH="$(uname -m)"
-          case "${ARCH}" in
-            x86_64) ARCH=amd64 ;;
-            aarch64) ARCH=arm64 ;;
-          esac
-
-          # Use your internal mirror here for real-world use.
-          BASE_URL="https://dl.k8s.io/release/${KUBELET_VERSION}/bin/linux/${ARCH}"
-
-          echo "Installing kubelet and kubeadm  ${KUBELET_VERSION} for ${ARCH}..."
-          curl -fsSL "${BASE_URL}/kubelet" -o /root/kubelet
-          curl -fsSL "${BASE_URL}/kubeadm" -o /root/kubeadm
-          chmod 0755 /root/kubelet
-          chmod 0755 /root/kubeadm
-          if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
-          if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
-      {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
-      {{- if $sec }}
-        {{- range $key, $_ := $sec.data }}
-      - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
-        contentFrom:
-          secret:
-            name: {{ $.Release.Name }}-patch-containerd
-            key: {{ $key }}
-        permissions: "0400"
-        {{- end }}
-      {{- end }}
-      diskSetup:
-        filesystems:
-        - device: /dev/vdb
-          filesystem: xfs
-          label: persistent
-          partition: "none"
-          {{/* overwrite must stay false: XFS on /dev/vdb is created on first boot; subsequent reboots of the same VM must reuse the existing filesystem via LABEL=persistent */}}
-          overwrite: false
-      mounts:
-      - ["LABEL=persistent", "/persistent"]
-      - ["/persistent/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
-      - ["/persistent/containerd", "/var/lib/containerd", "none", "bind,nofail"]
-      preKubeadmCommands:
-      - KUBELET_VERSION={{ include "kubernetes.versionMap" $}} /usr/bin/update-k8s.sh || true
-      - sed -i 's|root:x:|root::|' /etc/passwd
-      - systemctl stop containerd.service
-      - mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd
-      - mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet
-      - mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd
-      {{/* containerd 2.x renamed the CRI plugin from io.containerd.grpc.v1.cri to io.containerd.cri.v1.images; both seds run unconditionally and the wrong-version one is a no-op */}}
-      - sed -i '/\[plugins\.[^]]*grpc\.v1\.cri[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
-      - sed -i '/\[plugins\.[^]]*io\.containerd\.cri\.v1\.images[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
-      - systemctl start containerd.service
-      joinConfiguration:
-        nodeRegistration:
-          kubeletExtraArgs:
-            {{- /*
-              GPU node-groups: label every node `gpu=on` so HAMi's
-              hami-device-plugin DaemonSet (nodeSelector gpu=on) schedules
-              and advertises nvidia.com/gpu. Without the label the plugin
-              stays at DESIRED=0 and no GPUs are exposed to the tenant.
-            */}}
-            {{- if $group.gpus }}
-            node-labels: "gpu=on"
-            {{- end }}
-            system-reserved: "memory={{ $systemReservedMemory }},cpu={{ $systemReservedCpu }}"
-            kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
-            eviction-hard: "memory.available<{{ $evictionHardMemory }},nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
-            eviction-soft: "memory.available<{{ $evictionSoftMemory }},nodefs.available<15%,imagefs.available<20%"
-            eviction-soft-grace-period: "memory.available=1m30s,nodefs.available=1m30s,imagefs.available=1m30s"
-            # 256Mi ensures meaningful reclamation per eviction cycle while being
-            # proportional to the 256Mi-1Gi auto-computed reservation range.
-            eviction-minimum-reclaim: "memory.available=256Mi"
-            enforce-node-allocatable: "pods"
-          ignorePreflightErrors:
-          - FileExisting-conntrack
-        discovery:
-          bootstrapToken:
-            apiServerEndpoint: {{ $.Release.Name }}.{{ $.Release.Namespace }}.svc:6443
-      initConfiguration:
-        skipPhases:
-        - addon/kube-proxy
+{{- /* TalosConfigTemplate is no longer rendered here — the chart cannot
+       produce a valid Talos worker machineconfig at Helm template time
+       because three of the inputs (apiserver Service ClusterIP, Talos
+       CA from cert-manager, Kamaji-issued tenant CA) are created
+       asynchronously after Helm applies this manifest. The
+       talos-reconcile-job hook (templates/talos/talos-reconcile-job.yaml)
+       waits for those inputs and produces the TalosConfigTemplate with
+       a KamajiControlPlane ownerReference for natural GC. The
+       MachineDeployment below still references the TCT name; CAPI's
+       Machine controller blocks on its absence and unblocks the moment
+       the hook applies it, which happens in the same post-install/
+       post-upgrade cycle. */}}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
@@ -569,8 +586,8 @@ spec:
     spec:
       bootstrap:
         configRef:
-          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-          kind: KubeadmConfigTemplate
+          apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+          kind: TalosConfigTemplate
           name: {{ $.Release.Name }}-{{ $groupName }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $.Release.Name }}
@@ -588,8 +605,13 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 spec:
   clusterName: {{ $.Release.Name }}
-  maxUnhealthy: 0
-  nodeStartupTimeout: 10m
+  {{- /* MHC spec.maxUnhealthy is an IntOrString. CAPI admission accepts a
+         bare integer (0, 1, ...) or a percentage string ("0%", "50%"), but
+         rejects a quoted plain integer ("0"). Quote only when the operator
+         supplied a percentage; otherwise render the value as a bare int so
+         the admission webhook is happy with the chart-default "0". */}}
+  maxUnhealthy: {{ if hasSuffix "%" (toString $.Values.nodeHealthCheck.maxUnhealthy) }}{{ $.Values.nodeHealthCheck.maxUnhealthy | quote }}{{ else }}{{ $.Values.nodeHealthCheck.maxUnhealthy | int }}{{ end }}
+  nodeStartupTimeout: {{ $.Values.nodeHealthCheck.nodeStartupTimeout }}
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}

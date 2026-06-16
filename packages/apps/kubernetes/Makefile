@@ -8,7 +8,6 @@ include ../../../hack/package.mk
 
 test:
 	helm unittest .
-	bash tests/containerd-config-path-test.sh
 
 generate:
 	cozyvalues-gen -m 'kubernetes' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/kubernetes/types.go
@@ -18,21 +17,17 @@ update:
 	hack/update-versions.sh
 	make generate
 
-image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
+image: image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler image-talos-csr-signer
 
-image-ubuntu-container-disk:
-	$(foreach ver,$(KUBERNETES_VERSIONS), \
-		docker buildx build images/ubuntu-container-disk \
-			--build-arg KUBERNETES_VERSION=$(ver) \
-			--tag $(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG) \
-			$(if $(filter 1,$(PUBLISH_VERSIONED)),--tag $(REGISTRY)/ubuntu-container-disk:$(ver)) \
-			$(call cache-args,ubuntu-container-disk,$(ver)-buildcache) \
-			--metadata-file images/ubuntu-container-disk-$(ver).json \
-			$(BUILDX_ARGS) && \
-		echo "$(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk-$(ver).json -o json -r)" \
-			> images/ubuntu-container-disk-$(ver).tag && \
-		rm -f images/ubuntu-container-disk-$(ver).json; \
-	)
+image-talos-csr-signer:
+	docker buildx build images/talos-csr-signer \
+		$(call image-tags,talos-csr-signer,$(KUBERNETES_PKG_TAG)) \
+		$(call cache-args,talos-csr-signer) \
+		--metadata-file images/talos-csr-signer.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/talos-csr-signer:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/talos-csr-signer.json -o json -r)" \
+		> images/talos-csr-signer.tag
+	rm -f images/talos-csr-signer.json
 
 image-kubevirt-cloud-provider:
 	docker buildx build images/kubevirt-cloud-provider \
