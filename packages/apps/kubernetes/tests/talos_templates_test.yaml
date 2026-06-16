@@ -1,0 +1,160 @@
+suite: talos hook + secrets template render tests
+
+# Minimal render-coverage for the four new talos/ templates introduced in
+# PR #2610. The TalosConfigTemplate embedded in talos-reconcile-job.yaml is
+# asserted separately by gpu_node_labels_test.yaml (matchRegex against the
+# Job's command literal); this suite covers the surrounding RBAC/Job/Secret
+# scaffolding so a future refactor breaking ServiceAccount/Role wiring is
+# caught locally before chart push. helm-unittest sees documents in source-
+# file order (not helm template's normalized render order), so the
+# documentIndex constants below follow the original template file
+# layout — update if a top-level object is added/removed/reordered.
+
+values:
+  - values/common.yaml
+
+tests:
+  - it: talos-reconcile-job renders the full hook RBAC stack + Job
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # Source order in templates/talos/talos-reconcile-job.yaml:
+      # 0 ServiceAccount, 1 Role, 2 CiliumNetworkPolicy, 3 RoleBinding,
+      # 4 ClusterRole, 5 ClusterRoleBinding, 6 Job (one per nodeGroup;
+      # common.yaml has md0 only -> 7 documents total).
+      - hasDocuments:
+          count: 7
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-reconcile
+        documentIndex: 0
+      - isKind:
+          of: ClusterRole
+        documentIndex: 4
+      - equal:
+          path: metadata.name
+          value: tenant-test-test-k8s-talos-reconcile-coredns
+        documentIndex: 4
+      - isKind:
+          of: ClusterRoleBinding
+        documentIndex: 5
+      - equal:
+          path: subjects[0].name
+          value: test-k8s-talos-reconcile
+        documentIndex: 5
+      - equal:
+          path: subjects[0].namespace
+          value: tenant-test
+        documentIndex: 5
+      - isKind:
+          of: Job
+        documentIndex: 6
+
+  - it: bootstrap-token tenant Job renders ServiceAccount + Job
+    templates:
+      - templates/talos/bootstrap-token-tenant-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # Source order: 0 ServiceAccount, 1 Job (Role/RoleBinding/CNP are
+      # inside the Job's command literal as text, not separate top-level
+      # documents, so they do not contribute to hasDocuments count).
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-bootstrap-token-tenant
+        documentIndex: 0
+      - isKind:
+          of: Job
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: test-k8s-bootstrap-token-tenant
+        documentIndex: 1
+
+  - it: talos-pki emits two cert-manager Certificates and two Issuers
+    templates:
+      - templates/talos/talos-pki.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # Source order in templates/talos/talos-pki.yaml:
+      # 0 Issuer test-k8s-talos-bootstrap (self-signed),
+      # 1 Certificate test-k8s-talos-ca (issued by talos-bootstrap),
+      # 2 Issuer test-k8s-talos-ca (issues tls-cert from talos-ca Secret),
+      # 3 Certificate test-k8s-talos-tls-cert (issued by talos-ca).
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Issuer
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-bootstrap
+        documentIndex: 0
+      - isKind:
+          of: Certificate
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-ca
+        documentIndex: 1
+      - equal:
+          path: spec.secretName
+          value: test-k8s-talos-ca
+        documentIndex: 1
+      - isKind:
+          of: Issuer
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-ca
+        documentIndex: 2
+      - isKind:
+          of: Certificate
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-tls-cert
+        documentIndex: 3
+
+  - it: talos-secrets Secret carries the four token-component keys the reconcile hook env binds from
+    templates:
+      - templates/talos/talos-secrets.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Secret
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-secrets
+        documentIndex: 0
+      - exists:
+          path: data.token
+        documentIndex: 0
+      - exists:
+          path: data.clusterId
+        documentIndex: 0
+      - exists:
+          path: data.clusterSecret
+        documentIndex: 0
+      - exists:
+          path: data.bootstrapToken
+        documentIndex: 0
