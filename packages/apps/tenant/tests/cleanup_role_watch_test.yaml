@@ -1,0 +1,29 @@
+suite: tenant cleanup Role can watch HelmReleases
+
+# The pre-delete cleanup hook deletes the tenant's HelmReleases with
+# `kubectl delete --wait=true`, which sets up a watch on helmreleases to block
+# until finalization completes. Without the watch verb that watch is rejected
+# with HTTP 403, the delete call hangs, the Job never finishes, and tenant
+# deletion stalls on the hook. Pin the verb so it cannot regress.
+
+# Restrict rendering to the cleanup template so the chart's namespace.yaml
+# `lookup` (which errors under helm-unittest) is not evaluated.
+templates:
+  - templates/cleanup-job.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+tests:
+  - it: cleanup Role grants watch on helmreleases
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 1
+        isKind:
+          of: Role
+      - template: templates/cleanup-job.yaml
+        documentIndex: 1
+        contains:
+          path: rules[0].verbs
+          content: watch
