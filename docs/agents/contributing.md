@@ -33,6 +33,15 @@ To locate packages a WIP branch likely needs to be regenerated:
 git diff --name-only | xargs -n1 dirname | sort -u | grep ^packages/
 ```
 
+## Verify Before Considering Done
+
+After every change, verify the relevant artifacts before opening the PR:
+
+- **Helm templates changed:** `make show` in the package directory renders cleanly.
+- **Go code changed:** `make generate && make manifests` at the repo root, then commit the regenerated files.
+- **`values.yaml` annotations changed:** `make generate` in the package; review the `values.schema.json` diff.
+- **Migration scripts:** confirm what data actually exists first with `kubectl get <resource> -A -o jsonpath='{...}'` on a dev cluster before writing the logic.
+
 ## Commit Format
 
 Follow [Conventional Commits](https://www.conventionalcommits.org/) with `--signoff`:
@@ -129,6 +138,11 @@ git push -f origin my-feature
 Fill in the template at [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). It includes the required `release-note` block.
 
 Create the PR with `gh pr create --title "type(scope): brief description" --body-file <file>`.
+
+## Review Expectations
+
+- A bug-fix PR should include a behavioural regression test, not just a single field assertion — prove the bug can no longer recur.
+- Keep the PR description on the template: `## What this PR does` plus the `release-note` block.
 
 ## Fetching Unresolved Review Comments
 
