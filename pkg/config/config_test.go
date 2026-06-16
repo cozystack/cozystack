@@ -164,3 +164,102 @@ func TestParsePositiveDuration(t *testing.T) {
 		})
 	}
 }
+
+// Cover the disable-wait annotation parser. cozystack-api consumes it on
+// every ApplicationDefinition at startup (see pkg/cmd/server/start.go);
+// a typo in the parsed value silently drops back to false and the
+// chicken-and-egg deadlock between the kubernetes chart and its emitted
+// in-tenant addon HelmReleases reappears (parent chart waits for child
+// HRs Ready before running post-install hooks, child HRs cannot be Ready
+// without the TalosConfigTemplate the parent's hook produces, deadlock).
+// Mirrors the sibling timeout parser table.
+func TestParseHelmInstallDisableWaitAnnotation(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		want     bool
+		wantErr  bool
+		errMatch string
+	}{
+		{
+			name:  "empty string leaves flux defaults in place",
+			input: "",
+			want:  false,
+		},
+		{
+			name:  "lower-case true",
+			input: "true",
+			want:  true,
+		},
+		{
+			name:  "title-case True",
+			input: "True",
+			want:  true,
+		},
+		{
+			name:  "upper-case TRUE",
+			input: "TRUE",
+			want:  true,
+		},
+		{
+			name:  "lower-case false",
+			input: "false",
+			want:  false,
+		},
+		{
+			name:  "title-case False",
+			input: "False",
+			want:  false,
+		},
+		{
+			name:  "upper-case FALSE",
+			input: "FALSE",
+			want:  false,
+		},
+		{
+			name:     "mixed-case rejected (Helm-style scrubbing not applied here)",
+			input:    "tRue",
+			wantErr:  true,
+			errMatch: `must be "true" or "false"`,
+		},
+		{
+			name:     "integer rejected",
+			input:    "1",
+			wantErr:  true,
+			errMatch: `must be "true" or "false"`,
+		},
+		{
+			name:     "yes/no idiom rejected",
+			input:    "yes",
+			wantErr:  true,
+			errMatch: `must be "true" or "false"`,
+		},
+		{
+			name:     "garbage rejected",
+			input:    "abc",
+			wantErr:  true,
+			errMatch: `must be "true" or "false"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParseHelmInstallDisableWaitAnnotation(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error, got %v", got)
+				}
+				if tc.errMatch != "" && !strings.Contains(err.Error(), tc.errMatch) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.errMatch)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
