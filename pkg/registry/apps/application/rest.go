@@ -1527,12 +1527,15 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	// Per-Application annotation override (HelmInstallTimeout, populated
 	// from release.cozystack.io/helm-install-timeout on the
 	// ApplicationDefinition at startup) wins over the global defaults
-	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout). Today only
-	// kubernetes-rd carries the annotation because the Kubernetes
-	// Application's parent chart contains CAPI/Kamaji resources whose
-	// admin-kubeconfig Secret is provisioned asynchronously and Kamaji
-	// cold-start routinely exceeds flux's default wait budget; any future
-	// kind with the same shape can opt in by setting the same annotation.
+	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout).
+	// kubernetes-rd and tenant-rd carry the annotation today: the
+	// Kubernetes Application's parent chart contains CAPI/Kamaji
+	// resources whose admin-kubeconfig Secret is provisioned
+	// asynchronously and Kamaji cold-start routinely exceeds flux's
+	// default wait budget, and the Tenant parent chart bootstraps the
+	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
+	// Any future kind with the same shape can opt in by setting the
+	// same annotation.
 	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
 	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
 	if r.releaseConfig.HelmInstallTimeout > 0 {
