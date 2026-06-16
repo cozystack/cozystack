@@ -139,11 +139,11 @@ func TestInstallPlatformPackageSource_Updates(t *testing.T) {
 
 func TestParsePlatformSourceURL(t *testing.T) {
 	tests := []struct {
-		name       string
-		url        string
-		wantType   string
-		wantURL    string
-		wantErr    bool
+		name     string
+		url      string
+		wantType string
+		wantURL  string
+		wantErr  bool
 	}{
 		{
 			name:     "OCI URL",
@@ -572,4 +572,3 @@ func TestGenerateGitRepository_InvalidRef(t *testing.T) {
 		t.Fatal("expected error for invalid Git ref key, got nil")
 	}
 }
-

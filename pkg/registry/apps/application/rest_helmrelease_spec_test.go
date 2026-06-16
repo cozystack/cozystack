@@ -169,12 +169,12 @@ func TestConvertApplicationToHelmRelease_ZeroMaxHistory(t *testing.T) {
 // checked symmetric globals.
 func TestConvertApplicationToHelmRelease_PerAppTimeoutOverridesGlobal(t *testing.T) {
 	cases := []struct {
-		name           string
-		globalInstall  time.Duration
-		globalUpgrade  time.Duration
-		override       time.Duration
-		wantInstall    time.Duration
-		wantUpgrade    time.Duration
+		name          string
+		globalInstall time.Duration
+		globalUpgrade time.Duration
+		override      time.Duration
+		wantInstall   time.Duration
+		wantUpgrade   time.Duration
 	}{
 		{
 			name:          "symmetric globals, override wins",
