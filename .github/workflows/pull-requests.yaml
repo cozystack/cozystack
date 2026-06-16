@@ -108,7 +108,7 @@ jobs:
 
       - name: Save git diff as patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        run: git diff HEAD > _out/assets/pr.patch
+        run: git diff --binary HEAD > _out/assets/pr.patch
 
       - name: Upload git diff patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
