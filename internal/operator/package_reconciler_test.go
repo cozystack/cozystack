@@ -122,10 +122,11 @@ func TestBuildHelmReleaseSpec(t *testing.T) {
 	if spec.Install.Strategy.RetryInterval == nil || spec.Install.Strategy.RetryInterval.Duration != 17*time.Second {
 		t.Errorf("Install.Strategy.RetryInterval = %v, want 17s", spec.Install.Strategy.RetryInterval)
 	}
-	// Remediation must remain nil: helm-controller's XValidation rule rejects
-	// Strategy.Name=RetryOnFailure with RetryInterval set alongside a
-	// Remediation entry, so a future "for safety" re-introduction of
-	// Remediation{Retries: -1} would silently break every HR.
+	// Remediation must remain nil: retries are driven solely by
+	// Strategy.Name=RetryOnFailure with an explicit RetryInterval.
+	// Re-introducing Remediation{Retries: -1} "for safety" would add a
+	// second, conflicting retry mechanism alongside the strategy retry
+	// path.
 	if spec.Install.Remediation != nil {
 		t.Errorf("Install.Remediation = %+v, want nil", spec.Install.Remediation)
 	}

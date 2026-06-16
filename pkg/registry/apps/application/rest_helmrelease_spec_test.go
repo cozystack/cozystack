@@ -97,11 +97,12 @@ func TestConvertApplicationToHelmRelease_BuildsSpecFromConfig(t *testing.T) {
 	if hr.Spec.Install.Strategy.RetryInterval == nil || hr.Spec.Install.Strategy.RetryInterval.Duration != 17*time.Second {
 		t.Errorf("Install.Strategy.RetryInterval = %v, want 17s", hr.Spec.Install.Strategy.RetryInterval)
 	}
-	// Remediation must remain nil: helm-controller's XValidation rule
-	// rejects Strategy.Name=RetryOnFailure with RetryInterval set
-	// alongside a Remediation entry, so a future "for safety"
-	// re-introduction of Remediation{Retries: -1} would silently break
-	// every HR.
+	// Remediation must remain nil: retries are driven solely by
+	// Strategy.Name=RetryOnFailure with an explicit RetryInterval, the
+	// same single retry path cozystack-operator's PackageReconciler
+	// uses. Re-introducing Remediation{Retries: -1} "for safety" would
+	// add a second, conflicting retry mechanism and break parity with
+	// the operator path.
 	if hr.Spec.Install.Remediation != nil {
 		t.Errorf("Install.Remediation = %+v, want nil", hr.Spec.Install.Remediation)
 	}
