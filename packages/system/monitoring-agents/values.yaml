@@ -426,7 +426,19 @@ fluent-bit:
       [FILTER]
           Name modify
           Match kube.*
-          Remove kubernetes_host
+          Rename kubernetes_pod_name keep_kubernetes_pod_name
+          Rename kubernetes_namespace_name keep_kubernetes_namespace_name
+          Rename kubernetes_container_name keep_kubernetes_container_name
+      [FILTER]
+          Name modify
+          Match kube.*
+          Remove_wildcard kubernetes_
+      [FILTER]
+          Name modify
+          Match kube.*
+          Rename keep_kubernetes_pod_name kubernetes_pod_name
+          Rename keep_kubernetes_namespace_name kubernetes_namespace_name
+          Rename keep_kubernetes_container_name kubernetes_container_name
 scrapeRules:
   etcd:
     enabled: false
