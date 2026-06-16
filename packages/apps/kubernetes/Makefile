@@ -26,8 +26,7 @@ image-ubuntu-container-disk:
 			--build-arg KUBERNETES_VERSION=$(ver) \
 			--tag $(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG) \
 			$(if $(filter 1,$(PUBLISH_VERSIONED)),--tag $(REGISTRY)/ubuntu-container-disk:$(ver)) \
-			--cache-from type=registry,ref=$(CACHE_REGISTRY)/ubuntu-container-disk:$(ver) \
-			--cache-to type=inline \
+			$(call cache-args,ubuntu-container-disk,$(ver)-buildcache) \
 			--metadata-file images/ubuntu-container-disk-$(ver).json \
 			$(BUILDX_ARGS) && \
 		echo "$(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk-$(ver).json -o json -r)" \
@@ -38,8 +37,7 @@ image-ubuntu-container-disk:
 image-kubevirt-cloud-provider:
 	docker buildx build images/kubevirt-cloud-provider \
 		$(call image-tags,kubevirt-cloud-provider,$(KUBERNETES_PKG_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/kubevirt-cloud-provider:latest \
-		--cache-to type=inline \
+		$(call cache-args,kubevirt-cloud-provider) \
 		--metadata-file images/kubevirt-cloud-provider.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/kubevirt-cloud-provider:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kubevirt-cloud-provider.json -o json -r)" \
@@ -49,8 +47,7 @@ image-kubevirt-cloud-provider:
 image-kubevirt-csi-driver:
 	docker buildx build images/kubevirt-csi-driver \
 		$(call image-tags,kubevirt-csi-driver,$(KUBERNETES_PKG_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/kubevirt-csi-driver:latest \
-		--cache-to type=inline \
+		$(call cache-args,kubevirt-csi-driver) \
 		--metadata-file images/kubevirt-csi-driver.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/kubevirt-csi-driver:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kubevirt-csi-driver.json -o json -r)" \
@@ -63,8 +60,7 @@ image-kubevirt-csi-driver:
 image-cluster-autoscaler:
 	docker buildx build images/cluster-autoscaler \
 		$(call image-tags,cluster-autoscaler,$(KUBERNETES_PKG_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/cluster-autoscaler:latest \
-		--cache-to type=inline \
+		$(call cache-args,cluster-autoscaler) \
 		--metadata-file images/cluster-autoscaler.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/cluster-autoscaler:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/cluster-autoscaler.json -o json -r)" \

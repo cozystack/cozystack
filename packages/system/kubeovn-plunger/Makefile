@@ -8,8 +8,7 @@ image:
 	docker buildx build -f images/kubeovn-plunger/Dockerfile ../../../ \
 		--provenance false \
 		$(call image-tags,kubeovn-plunger,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/kubeovn-plunger:latest \
-		--cache-to type=inline \
+		$(call cache-args,kubeovn-plunger) \
 		--metadata-file images/kubeovn-plunger.json \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \

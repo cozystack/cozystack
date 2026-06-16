@@ -1,0 +1,67 @@
+name: Build cache (main)
+
+# Warms the shared mode=max build cache so PR builds start hot.
+#
+# PR builds (pull-requests.yaml) read the cache but never write it
+# (WRITE_CACHE unset -> 0). Only this serialized main build writes
+# CACHE_REGISTRY/<img>:buildcache, so concurrent PR builds never race on the
+# cache manifest -- the 409 collisions PR #2711 fixed for image tags would
+# otherwise reappear on the cache ref. Cache is mode=max so all multistage
+# `builder` stages are cached, not just the final stage as with inline.
+
+env:
+  # Same per-CI registry as pull-requests.yaml; the cache is co-located here.
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+
+# Only the newest main commit's cache matters; cancel older in-flight warmers.
+concurrency:
+  group: build-main-cache
+  cancel-in-progress: true
+
+jobs:
+  warm-cache:
+    name: Warm build cache
+    runs-on: [self-hosted]
+    timeout-minutes: 90
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build all images and write mode=max cache
+        run: make build
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
+          WRITE_CACHE: '1'
+          # Publish a floating :main handle; do not move :latest (releases do).
+          IMAGE_TAG: main
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
