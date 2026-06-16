@@ -1524,11 +1524,14 @@ func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
 // from Spec.Interval — the previous coupling caused failed installs to
 // retry only every 5m, exceeding E2E budgets.
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
-	// Per-Application annotation override (HelmInstallTimeout, populated
-	// from release.cozystack.io/helm-install-timeout on the
-	// ApplicationDefinition at startup) wins over the global defaults
-	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout).
-	// kubernetes-rd and tenant-rd carry the annotation today: the
+	// Per-Application annotation overrides win over the global defaults
+	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout):
+	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
+	//     sets both Install.Timeout and Upgrade.Timeout;
+	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
+	//     then overrides only Upgrade.Timeout, so a kind can carry an
+	//     asymmetric budget (short install, long upgrade or vice versa).
+	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
 	// Kubernetes Application's parent chart contains CAPI/Kamaji
 	// resources whose admin-kubeconfig Secret is provisioned
 	// asynchronously and Kamaji cold-start routinely exceeds flux's
@@ -1541,6 +1544,9 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	if r.releaseConfig.HelmInstallTimeout > 0 {
 		installTimeout = r.releaseConfig.HelmInstallTimeout
 		upgradeTimeout = r.releaseConfig.HelmInstallTimeout
+	}
+	if r.releaseConfig.HelmUpgradeTimeout > 0 {
+		upgradeTimeout = r.releaseConfig.HelmUpgradeTimeout
 	}
 
 	maxHistory := r.releaseConfig.HelmReleaseMaxHistory

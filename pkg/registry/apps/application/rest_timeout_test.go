@@ -136,3 +136,63 @@ func TestConvertApplicationToHelmRelease_AppliesReleaseConfigTimeout(t *testing.
 		})
 	}
 }
+
+// HelmUpgradeTimeout (the per-Application release.cozystack.io/helm-upgrade-timeout
+// annotation override) overrides only Upgrade.Timeout, and wins over the
+// Upgrade.Timeout value HelmInstallTimeout would otherwise apply. This lets a
+// kind carry an asymmetric budget — e.g. a short install but a long upgrade.
+func TestConvertApplicationToHelmRelease_UpgradeTimeoutAnnotation(t *testing.T) {
+	cases := []struct {
+		name           string
+		installTimeout time.Duration // helm-install-timeout annotation
+		upgradeTimeout time.Duration // helm-upgrade-timeout annotation
+		wantInstall    time.Duration
+		wantUpgrade    time.Duration
+	}{
+		{
+			name:           "upgrade override alone leaves install on the global default",
+			installTimeout: 0,
+			upgradeTimeout: 20 * time.Minute,
+			wantInstall:    testGlobalInstallTimeout,
+			wantUpgrade:    20 * time.Minute,
+		},
+		{
+			name:           "upgrade override wins over the install-annotation copy",
+			installTimeout: 15 * time.Minute,
+			upgradeTimeout: 25 * time.Minute,
+			wantInstall:    15 * time.Minute,
+			wantUpgrade:    25 * time.Minute,
+		},
+		{
+			name:           "install override alone still sets both (regression guard)",
+			installTimeout: 15 * time.Minute,
+			upgradeTimeout: 0,
+			wantInstall:    15 * time.Minute,
+			wantUpgrade:    15 * time.Minute,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newRESTForTimeout("Example", "example-", tc.installTimeout)
+			r.releaseConfig.HelmUpgradeTimeout = tc.upgradeTimeout
+			app := &appsv1alpha1.Application{
+				ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "tenant-root"},
+			}
+
+			hr, err := r.convertApplicationToHelmRelease(app)
+			if err != nil {
+				t.Fatalf("convertApplicationToHelmRelease returned error: %v", err)
+			}
+			if hr.Spec.Install == nil || hr.Spec.Upgrade == nil {
+				t.Fatalf("Spec.Install/Upgrade must be non-nil")
+			}
+			if hr.Spec.Install.Timeout == nil || hr.Spec.Install.Timeout.Duration != tc.wantInstall {
+				t.Errorf("Spec.Install.Timeout = %v, want %v", hr.Spec.Install.Timeout, tc.wantInstall)
+			}
+			if hr.Spec.Upgrade.Timeout == nil || hr.Spec.Upgrade.Timeout.Duration != tc.wantUpgrade {
+				t.Errorf("Spec.Upgrade.Timeout = %v, want %v", hr.Spec.Upgrade.Timeout, tc.wantUpgrade)
+			}
+		})
+	}
+}

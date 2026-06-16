@@ -137,9 +137,10 @@ func NewCommandStartCozyServer(ctx context.Context, defaults *CozyServerOptions)
 			"same annotation also overrides --helmrelease-upgrade-timeout.")
 	flags.StringVar(&o.HelmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", o.HelmReleaseUpgradeTimeout,
 		"Default timeout for the Helm upgrade action of HelmReleases generated from Application "+
-			"resources (Spec.Upgrade.Timeout). Overridden per-Application by the same "+
-			"release.cozystack.io/helm-install-timeout annotation as --helmrelease-install-timeout: "+
-			"one annotation overrides both install and upgrade timeouts together.")
+			"resources (Spec.Upgrade.Timeout). Overridden per-Application by the "+
+			"release.cozystack.io/helm-install-timeout annotation (which sets both install and "+
+			"upgrade), or by release.cozystack.io/helm-upgrade-timeout to override only the upgrade "+
+			"side for a kind that needs an asymmetric budget.")
 	flags.IntVar(&o.HelmReleaseMaxHistory, "helmrelease-max-history", o.HelmReleaseMaxHistory,
 		"Number of release revisions Helm keeps for HelmReleases generated from Application "+
 			"resources (Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default.")
@@ -273,8 +274,10 @@ func (o *CozyServerOptions) Complete() error {
 		// layer when building the HelmRelease Spec. The parser rejects
 		// units Flux would reject at webhook time, so a bad annotation
 		// surfaces as a loud startup failure instead of a silent drop to
-		// defaults.
-		d, err := config.ParseHelmInstallTimeoutAnnotation(
+		// defaults. helm-install-timeout covers both install and upgrade;
+		// helm-upgrade-timeout overrides only the upgrade side for kinds
+		// that need an asymmetric budget.
+		installTimeout, err := config.ParseHelmTimeoutAnnotation(
 			crd.Annotations[config.HelmInstallTimeoutAnnotation],
 		)
 		if err != nil {
@@ -283,7 +286,17 @@ func (o *CozyServerOptions) Complete() error {
 				crd.Name, config.HelmInstallTimeoutAnnotation, err,
 			)
 		}
-		release.HelmInstallTimeout = d
+		release.HelmInstallTimeout = installTimeout
+		upgradeTimeout, err := config.ParseHelmTimeoutAnnotation(
+			crd.Annotations[config.HelmUpgradeTimeoutAnnotation],
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"ApplicationDefinition %q has invalid %s annotation: %w",
+				crd.Name, config.HelmUpgradeTimeoutAnnotation, err,
+			)
+		}
+		release.HelmUpgradeTimeout = upgradeTimeout
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
 				Kind:          crd.Spec.Application.Kind,

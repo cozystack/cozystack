@@ -15,7 +15,7 @@ import (
 // - compound forms (the CRD pattern accepts repeats),
 // - units time.ParseDuration accepts but Flux rejects (ns, us, µs),
 // - outright garbage.
-func TestParseHelmInstallTimeoutAnnotation(t *testing.T) {
+func TestParseHelmTimeoutAnnotation(t *testing.T) {
 	cases := []struct {
 		name     string
 		input    string
@@ -98,7 +98,7 @@ func TestParseHelmInstallTimeoutAnnotation(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := ParseHelmInstallTimeoutAnnotation(tc.input)
+			got, err := ParseHelmTimeoutAnnotation(tc.input)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected error, got duration=%v", got)
