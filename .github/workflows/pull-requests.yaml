@@ -28,7 +28,17 @@ jobs:
 
   build:
     name: Build
-    runs-on: [self-hosted]
+    # Run each Build on its own ephemeral VM instead of the shared self-hosted
+    # runner. The shared host runs 4 runner agents against one dockerd-embedded
+    # buildkit; concurrent build jobs serialize on buildkit's single-writer bbolt
+    # cache lock + exporter mutex and stall to the 30-min timeout (proven via a
+    # live SIGUSR1 goroutine dump). One VM per job => one buildkit per job => that
+    # contention is severed by construction. `make build` is serial (one image at
+    # a time), so a small shape suffices -- 4cpu/16gb, not the 24cpu the e2e job
+    # uses -- and it leans on the warm mode=max cache (#2938) to stay under the
+    # 30-min wall. The `debug` label still routes to self-hosted for the
+    # breakpoint path. Phase 0.5 of #2937.
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 30
     permissions:
       contents: read
