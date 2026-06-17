@@ -7,6 +7,7 @@ include ../../../hack/package.mk
 image:
 	docker buildx build -f images/flux-plunger/Dockerfile ../../../ \
 		--provenance false \
+		$(if $(strip $(BUILDER)),--builder=$(BUILDER)) \
 		$(call image-tags,flux-plunger,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,flux-plunger) \
 		--metadata-file images/flux-plunger.json \

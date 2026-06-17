@@ -7,6 +7,7 @@ include ../../../hack/package.mk
 image:
 	docker buildx build -f images/kubeovn-plunger/Dockerfile ../../../ \
 		--provenance false \
+		$(if $(strip $(BUILDER)),--builder=$(BUILDER)) \
 		$(call image-tags,kubeovn-plunger,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,kubeovn-plunger) \
 		--metadata-file images/kubeovn-plunger.json \
