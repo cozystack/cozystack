@@ -57,6 +57,16 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
+      # Ephemeral runners don't carry the helm unittest plugin that the
+      # persistent self-hosted runner accreted. Install it if absent
+      # (idempotent; the debug/self-hosted path already has it). The durable
+      # fix is the container-based builder (separate PR) that bakes the full
+      # toolchain into an image instead of depending on the host.
+      - name: Set up build toolchain
+        run: |
+          helm plugin list 2>/dev/null | grep -q unittest \
+            || helm plugin install https://github.com/helm-unittest/helm-unittest
+
       - name: Run unit tests
         run: make unit-tests
 
