@@ -8,6 +8,13 @@ name: Build cache (main)
 # cache manifest -- the 409 collisions PR #2711 fixed for image tags would
 # otherwise reappear on the cache ref. Cache is mode=max so all multistage
 # `builder` stages are cached, not just the final stage as with inline.
+#
+# This job builds on a docker-container buildx builder, NOT the host's default
+# embedded `docker` driver: `--cache-to type=registry,mode=max` is unsupported
+# on the docker driver unless the daemon runs the containerd image store, so on
+# a classic store the warmer would otherwise fail to export any cache. The
+# container driver also gives this build its own buildkit (separate bbolt), so
+# the warmer never contends with PR builds on the shared embedded buildkit.
 
 env:
   # Same per-CI registry as pull-requests.yaml; the cache is co-located here.
@@ -55,10 +62,23 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
+      # docker-container driver: required for `--cache-to type=registry,mode=max`
+      # (unsupported on the host's default docker driver) and gives this build an
+      # isolated buildkit so it never contends with PR builds on the shared one.
+      - name: Set up Buildx (docker-container driver)
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+
       - name: Build all images and write mode=max cache
         run: make build
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Build on the docker-container builder created above (BUILDX_ARGS adds
+          # --builder=$(BUILDER)); buildx forwards the OCIR auth from DOCKER_CONFIG
+          # to the container builder for cache reads/writes and image pushes.
+          BUILDER: ${{ steps.buildx.outputs.name }}
           # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
           WRITE_CACHE: '1'
           # Publish a floating :main handle; do not move :latest (releases do).
