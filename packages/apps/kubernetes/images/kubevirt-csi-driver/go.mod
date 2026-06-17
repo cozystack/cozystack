@@ -1,6 +1,6 @@
 module cozystack.io/kubevirt-csi-driver
 
-go 1.26.2
+go 1.26.4
 
 require (
 	github.com/container-storage-interface/spec v1.10.0
