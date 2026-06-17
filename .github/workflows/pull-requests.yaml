@@ -57,15 +57,18 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
 
-      # Ephemeral runners don't carry the helm unittest plugin that the
-      # persistent self-hosted runner accreted. Install it if absent
-      # (idempotent; the debug/self-hosted path already has it). The durable
-      # fix is the container-based builder (separate PR) that bakes the full
-      # toolchain into an image instead of depending on the host.
+      # Ephemeral runners don't carry two tools the persistent self-hosted
+      # runner accreted: the helm-unittest plugin (make unit-tests) and the
+      # flux CLI (the installer's `flux push artifact` publishes the
+      # cozystack-packages OCI artifact the operator pulls). Install if absent
+      # (idempotent; the debug/self-hosted path already has them). Durable fix:
+      # bake both into the oracle-vm runner image, then drop this step.
       - name: Set up build toolchain
         run: |
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
+          command -v flux >/dev/null \
+            || curl -s https://fluxcd.io/install.sh | sudo bash
 
       - name: Run unit tests
         run: make unit-tests
