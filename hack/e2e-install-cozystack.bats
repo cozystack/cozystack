@@ -312,7 +312,7 @@ spec:
   resourceQuotas:
     cpu: "60"
     memory: "128Gi"
-    storage: "100Gi"
+    storage: "200Gi"
   seaweedfs: false
 EOF
   timeout 60 sh -ec 'until kubectl get hr/tenant-test -n tenant-root >/dev/null 2>&1; do sleep 2; done'
@@ -323,7 +323,7 @@ EOF
   timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'
   kubectl get quota -n tenant-test \
     -o jsonpath='{range .items[*]}{.spec.hard.requests\.memory}{" "}{.spec.hard.requests\.storage}{"\n"}{end}' \
-    | grep -qx '137438953472 100Gi'
+    | grep -qx '137438953472 200Gi'
 
   # Assert LimitRange defaults for containers
   kubectl get limitrange -n tenant-test \
