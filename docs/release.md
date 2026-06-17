@@ -164,3 +164,39 @@ gitGraph
    1. Moves the tag `v0.42.1` to the newly created merge commit by force-pushing a tag to GitHub.
    2. Publishes the release page (`draft` → `latest`).
 7. The maintainer can now announce the release to the community.
+
+## UI Release Branch
+
+`packages/system/dashboard/Makefile` has a `CONSOLE_BRANCH` variable that controls which branch of [`cozystack/cozystack-ui`](https://github.com/cozystack/cozystack-ui) is cloned when building the dashboard image. Each cozystack release branch must point at a matching `cozystack-ui` branch so that patch builds on `release-X.Y` never pull in unreleased UI features from `main`.
+
+### When cutting a new minor (`vX.Y.0`)
+
+Do this once, after `pull-requests-release.yaml` creates the `release-X.Y` maintenance branch:
+
+1. **Create `cozystack-ui/release-X.Y`** from `cozystack-ui/main` HEAD:
+
+   ```bash
+   SHA=$(gh api repos/cozystack/cozystack-ui/git/ref/heads/main --jq '.object.sha')
+   gh api repos/cozystack/cozystack-ui/git/refs \
+     --method POST \
+     --field ref="refs/heads/release-X.Y" \
+     --field sha="$SHA"
+   ```
+
+2. **Pin `CONSOLE_BRANCH`** — open a PR to `cozystack/release-X.Y` changing `packages/system/dashboard/Makefile`:
+
+   ```makefile
+   CONSOLE_BRANCH ?= release-X.Y   # was: main
+   ```
+
+   The `main` branch Makefile keeps `CONSOLE_BRANCH ?= main` and is never touched.
+
+3. **Triage recent `cozystack-ui/main` commits** since the previous minor's cut point. Cherry-pick pure bug fixes to `cozystack-ui/release-X.Y`. Features stay on `main` only — same discipline as cozystack backports.
+
+### Backporting UI fixes to an existing release branch
+
+UI bug fixes follow the same backport rule as backend fixes:
+
+- Fix lands on `cozystack-ui/main` first.
+- Cherry-pick to `cozystack-ui/release-X.Y` after review.
+- The next `make image` on `cozystack/release-X.Y` picks up the fix automatically.
