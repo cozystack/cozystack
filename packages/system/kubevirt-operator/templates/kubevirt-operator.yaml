@@ -8536,14 +8536,14 @@ spec:
         - virt-operator
         env:
         - name: VIRT_OPERATOR_IMAGE
-          value: quay.io/kubevirt/virt-operator:v1.8.2
+          value: quay.io/kubevirt/virt-operator:v1.8.4
         - name: WATCH_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.annotations['olm.targetNamespaces']
         - name: KUBEVIRT_VERSION
-          value: v1.8.2
-        image: quay.io/kubevirt/virt-operator:v1.8.2
+          value: v1.8.4
+        image: quay.io/kubevirt/virt-operator:v1.8.4
         imagePullPolicy: IfNotPresent
         livenessProbe:
           httpGet:
