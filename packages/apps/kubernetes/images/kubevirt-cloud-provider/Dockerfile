@@ -1,5 +1,5 @@
 # Source: https://github.com/kubevirt/cloud-provider-kubevirt/blob/main/build/images/kubevirt-cloud-controller-manager/Dockerfile
-FROM golang:1.20.6 AS builder
+FROM golang:1.26 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
