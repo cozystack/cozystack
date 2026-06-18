@@ -27,8 +27,7 @@ update:
 image:
 	docker buildx build images/cilium \
 		$(call image-tags,cilium,$(CILIUM_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/cilium:latest \
-		--cache-to type=inline \
+		$(call cache-args,cilium) \
 		--metadata-file images/cilium.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/cilium" \

@@ -14,8 +14,7 @@ update:
 image:
 	docker buildx build --file images/grafana-dashboards/Dockerfile ../../.. \
 		$(call image-tags,grafana-dashboards,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/grafana-dashboards:latest \
-		--cache-to type=inline \
+		$(call cache-args,grafana-dashboards) \
 		--metadata-file images/grafana-dashboards.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/grafana-dashboards:$(IMAGE_TAG)@$$(yq --exit-status '.["containerimage.digest"]' images/grafana-dashboards.json --output-format json -r)" \

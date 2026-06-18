@@ -14,8 +14,7 @@ update:
 image:
 	docker buildx build images/mariadb-backup \
 		$(call image-tags,mariadb-backup,$(MARIADB_BACKUP_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/mariadb-backup:latest \
-		--cache-to type=inline \
+		$(call cache-args,mariadb-backup) \
 		--metadata-file images/mariadb-backup.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/mariadb-backup:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/mariadb-backup.json -o json -r)" \
