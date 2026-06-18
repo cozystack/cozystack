@@ -4,6 +4,7 @@ ARG KUBECTL_VERSION=1.33.2
 ARG TALOSCTL_VERSION=1.10.4
 ARG HELM_VERSION=3.18.3
 ARG COZYHR_VERSION=1.6.1
+ARG CRUST_GATHER_VERSION=0.15.2
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -21,6 +22,10 @@ RUN curl -sSL "https://fluxcd.io/install.sh" | bash
 RUN curl -sSL "https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh" | sh -s -- -v "${COZYHR_VERSION}"
 RUN curl -fsSL "https://dl.min.io/client/mc/release/${TARGETOS}-${TARGETARCH}/mc" --create-dirs -o /usr/local/bin/mc \
  && chmod +x /usr/local/bin/mc
+# crust-gather: full-cluster diagnostic snapshots, captured per failed test by
+# cozytest.sh (host + each nested tenant cluster) and `crust-gather serve`-able
+# from the cozyreport artifact. Installs a static musl binary as crust-gather.
+RUN curl -sSfL "https://github.com/crust-gather/crust-gather/raw/main/install.sh" | sh -s -- --version "${CRUST_GATHER_VERSION}" --bin-dir /usr/local/bin --yes
 RUN <<'EOF'
 cat <<'EOT' >> /etc/bash.bashrc
 . /etc/bash_completion

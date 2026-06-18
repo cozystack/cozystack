@@ -1,5 +1,16 @@
 . hack/e2e-apps/remediation-guard.sh
 
+# Unconditional cleanup hook, invoked by cozytest.sh after this file's tests
+# (pass or fail). A failed run otherwise leaves the tenant cluster's worker-VM
+# PVCs (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
+# cascade-failing every storage-heavy app that runs afterwards. Delete the
+# cluster(s) and wait for teardown so the quota is freed. Defined at file scope
+# (not inside the @test) so cozytest.sh's parent-shell EXIT trap can reach it.
+cozy_cleanup() {
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
+}
+
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"

@@ -76,7 +76,37 @@ run_one() {
 # convert .bats -> shell-functions                                            #
 ###############################################################################
 TMP_SH=$(mktemp) || { echo "Failed to create temp file" >&2; exit 1; }
-trap 'rm -f "$TMP_SH"' EXIT
+
+# Per-file lifecycle hook. cozytest.sh runs each .bats as a single invocation
+# and exit()s on the first failing @test, so this EXIT trap is the one place to:
+#   1. on failure, snapshot the cluster(s) with crust-gather BEFORE any cleanup,
+#      so each failed test keeps its own inspectable state (host + every nested
+#      tenant cluster via tenantkubeconfig-*) instead of one end-of-suite dump;
+#   2. ALWAYS run the file's cozy_cleanup() if it defines one, so a test never
+#      leaks resources into the shared tenant-test namespace (left-behind PVCs
+#      otherwise exhaust the tenant quota and cascade-fail every later app).
+# cozy_cleanup is a plain shell function a .bats file may define — there are no
+# bats setup/teardown directives here, this runner only knows @test + bash.
+COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
+_cozy_on_exit() {
+  _rc=$?
+  if [ "$_rc" -ne 0 ] && command -v crust-gather >/dev/null 2>&1; then
+    _snap="$COZY_REPORT_DIR/snapshots/$(basename "$TEST_FILE" .bats)"
+    mkdir -p "$_snap" 2>/dev/null || true
+    echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
+    crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
+    for _kc in tenantkubeconfig-*; do
+      [ -f "$_kc" ] || continue
+      crust-gather collect -k "$_kc" --exclude-kind Secret -f "$_snap/$_kc" >/dev/null 2>&1 || true
+    done
+  fi
+  if command -v cozy_cleanup >/dev/null 2>&1; then
+    echo "» cozy_cleanup $(basename "$TEST_FILE" .bats)"
+    cozy_cleanup || true
+  fi
+  rm -f "$TMP_SH"
+}
+trap '_cozy_on_exit' EXIT
 awk '
   /^@test[[:space:]]+"/ {
     line  = substr($0, index($0, "\"") + 1)

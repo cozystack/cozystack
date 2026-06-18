@@ -294,6 +294,12 @@ fi
 echo "Generating summary..."
 "$SCRIPT_DIR/cozyreport-summary.sh" > "$REPORT_DIR/summary.txt" 2>&1 || true
 
+# Fold in the per-test crust-gather snapshots cozytest.sh captured on failure
+# (host + each nested tenant cluster) so the uploaded artifact carries an
+# inspectable, `crust-gather serve`-able state for every failed test.
+SNAP_DIR="${COZY_REPORT_DIR:-_out/cozyreport}/snapshots"
+[ -d "$SNAP_DIR" ] && cp -a "$SNAP_DIR" "$REPORT_DIR/snapshots" 2>/dev/null || true
+
 echo "Creating archive..."
 tar -czf $REPORT_NAME.tgz -C $REPORT_PDIR .
 echo "Report created: $REPORT_NAME.tgz"
