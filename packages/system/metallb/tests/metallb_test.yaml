@@ -94,40 +94,42 @@ tests:
       - hasDocuments:
           count: 0
 
-  # The cozystack outer values.yaml pins .metallb.controller.image.tag and
-  # .metallb.speaker.image.tag to a ghcr.io/cozystack/cozystack build that
-  # MUST match the appVersion of the vendored chart. v0.16.0 introduced a
-  # new probe contract (/healthz on port 17472) that earlier binaries don't
-  # serve — a bump that lets these two drift produces CrashLoopBackOff pods
-  # on the default branch between merge and the next release-prep commit.
-  # The two assertions below pin the rendered image tag to the exact string
-  # captured at chart appVersion v0.16.1; any in-place edit to values.yaml
-  # (intentional or otherwise) without a matching test fixture refresh fails
-  # CI before the change lands. Treat a failure here as "you edited
-  # values.yaml; if the edit was intentional, run `make image` to push fresh
-  # digests and update this fixture in the same commit". A future appVersion
-  # bump in Chart.yaml requires updating both halves: `make image` writes
-  # the new digest to values.yaml, then the fixture below is regenerated to
-  # match — the test catches a forgotten regeneration as part of the bump.
-  - it: pins controller image tag to the chart appVersion
+  # The cozystack outer values.yaml pins the controller and speaker images to
+  # a ghcr.io/cozystack/cozystack build addressed by digest. Do NOT pin the
+  # exact version+digest literal here: release-prep re-stamps every image tag
+  # to the platform version (e.g. v1.5.0-rc.2) and rebuilds the digest, so
+  # neither half is stable across a release cut. An exact-literal assertion is
+  # green on the default branch but breaks on every release branch — and that
+  # breakage stays hidden until a release PR drops the `release` label, since
+  # that label skips the Build job that runs `make unit-tests`.
+  #
+  # What MUST hold is weaker but real: the image is the cozystack-built
+  # repository and is pinned by an @sha256 digest, never a floating tag. The
+  # two assertions below enforce that form; the version string is left free on
+  # purpose. A wrong repository (e.g. an upstream quay.io/metallb image) or a
+  # tag with no digest still fails the suite. The probe-contract guarantee the
+  # old literal was meant to provide actually comes from the build itself —
+  # the image is built with `--build-arg VERSION=<appVersion>` — not from the
+  # tag string rendered here.
+  - it: pins the controller image to a digest-addressed cozystack build
     template: charts/metallb/templates/controller.yaml
     documentSelector:
       path: kind
       value: Deployment
     asserts:
-      - equal:
+      - matchRegex:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/cozystack/cozystack/metallb-controller:v0.16.1@sha256:0d8d567780c0f1d487e15a5df2377c40f9c608a55f1a24581052c7c69eb4ccfd
+          pattern: '^ghcr\.io/cozystack/cozystack/metallb-controller:[^@]+@sha256:[0-9a-f]{64}$'
 
-  - it: pins speaker image tag to the chart appVersion
+  - it: pins the speaker image to a digest-addressed cozystack build
     template: charts/metallb/templates/speaker.yaml
     documentSelector:
       path: kind
       value: DaemonSet
     asserts:
-      - equal:
+      - matchRegex:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/cozystack/cozystack/metallb-speaker:v0.16.1@sha256:aa16cee1c88923b67dbfcf69fe3e4dcb9a4ded95125a7f078752b4be240b5690
+          pattern: '^ghcr\.io/cozystack/cozystack/metallb-speaker:[^@]+@sha256:[0-9a-f]{64}$'
 
   # The values.yaml header comment documents that operators can revert the
   # speaker to legacy FRR mode by flipping these two keys. Pin both halves
