@@ -123,6 +123,11 @@ jobs:
           IMAGE_TAG: ${{ github.ref_name }}
           PUBLISH_VERSIONED: '1'
           PUBLISH_FLOATING: '1'
+          # Build the dashboard UI from the cozystack-ui branch that matches
+          # the cozystack branch this tag came from (main -> main,
+          # release-X.Y -> release-X.Y). The tag checkout is a detached HEAD,
+          # so the dashboard Makefile cannot infer the branch itself.
+          CONSOLE_BRANCH: ${{ steps.get_base.outputs.branch }}
 
       # Commit built artifacts
       - name: Commit release artifacts

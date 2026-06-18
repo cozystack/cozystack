@@ -118,6 +118,54 @@ jobs:
               }
             }
 
+      # Ensure the matching cozystack-ui maintenance branch exists.
+      #
+      # release-X.Y dashboard builds clone the UI from a pinned branch
+      # (packages/system/dashboard/Makefile -> CONSOLE_BRANCH), so a new minor
+      # line needs a matching cozystack-ui/release-X.Y. We branch it from
+      # cozystack-ui/main HEAD the first time the line is cut, then leave it
+      # alone — UI fixes are cherry-picked onto it manually, the same way
+      # backend fixes are backported. Idempotent: on later patch releases the
+      # branch already exists (422) and is left untouched, never reset to main.
+      - name: Ensure cozystack-ui maintenance branch release-X.Y
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const tag = '${{ steps.get_tag.outputs.tag }}';
+            const match = tag.match(/^v(\d+)\.(\d+)\.\d+(?:[-\w\.]+)?$/);
+            if (!match) {
+              core.setFailed(`❌ tag '${tag}' must match 'vX.Y.Z' or 'vX.Y.Z-suffix'`);
+              return;
+            }
+            const branch = `release-${match[1]}.${match[2]}`;
+            const uiRepo = 'cozystack-ui';
+
+            // Branch cozystack-ui/release-X.Y from cozystack-ui/main HEAD.
+            const main = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo:  uiRepo,
+              ref:   'heads/main'
+            });
+
+            try {
+              await github.rest.git.createRef({
+                owner: context.repo.owner,
+                repo:  uiRepo,
+                ref:   `refs/heads/${branch}`,
+                sha:   main.data.object.sha
+              });
+              console.log(`✅ Created ${uiRepo} branch '${branch}' at ${main.data.object.sha}`);
+            } catch (err) {
+              if (err.status === 422) {
+                console.log(`ℹ️  ${uiRepo} branch '${branch}' already exists, leaving as-is`);
+              } else {
+                console.error('Unexpected error --', err);
+                core.setFailed(`Unexpected error creating ${uiRepo} branch: ${err.message}`);
+                throw err;
+              }
+            }
+
       # Publish draft release and ensure correct latest flag
       - name: Publish draft release
         uses: actions/github-script@v7

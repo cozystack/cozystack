@@ -561,6 +561,26 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 - The `update-releasenotes.yaml` workflow syncs `docs/changelogs/vX.Y.Z.md` into the GitHub Release body on the next push to `main`. Edits to a published changelog file land on the release page the next time `main` moves.
 - Local cleanup: remove your worktree (`git worktree remove`) and prune merged release branches.
 
+## UI release branch (dashboard)
+
+The dashboard image is built from the separate [`cozystack/cozystack-ui`](https://github.com/cozystack/cozystack-ui) repository. `packages/system/dashboard/Makefile` clones a single branch of it at build time, controlled by `CONSOLE_BRANCH`. To keep patch releases from silently shipping unreleased UI work, each cozystack release line builds from a matching `cozystack-ui` branch — the same backport discipline as backend code.
+
+How `CONSOLE_BRANCH` is resolved (no manual pinning required):
+
+- **Release builds** (`tags.yaml`) pass `CONSOLE_BRANCH` explicitly, set to the branch the release tag came from (`steps.get_base.outputs.branch`): `main` for `vX.Y.0` cut from `main`, `release-X.Y` for patch tags cut from the maintenance branch. The tag checkout is a detached HEAD, so the Makefile cannot infer the branch on its own — the workflow supplies it.
+- **Local/manual builds** derive it from the current git branch: a `release-X.Y` checkout builds `cozystack-ui@release-X.Y`, anything else (main, feature branches) builds `cozystack-ui@main`.
+
+What happens automatically when a new minor is cut:
+
+- `pull-requests-release.yaml::Ensure cozystack-ui maintenance branch release-X.Y` branches `cozystack-ui/release-X.Y` from `cozystack-ui/main` HEAD the first time the line is cut (idempotent — left untouched on later patch releases). This requires the `cozystack-ci` GitHub App to be installed on `cozystack-ui` with `contents:write`.
+- From then on, every `release-X.Y` dashboard build clones `cozystack-ui@release-X.Y` automatically.
+
+The only manual step — UI fix backports:
+
+- A UI fix lands on `cozystack-ui/main` first.
+- Cherry-pick it to `cozystack-ui/release-X.Y` after review, exactly as backend fixes are backported. Features stay on `main` only.
+- The next `release-X.Y` patch build picks up the fix automatically; no cozystack-side change is needed.
+
 ## See also
 
 - [`agents/changelog.md`](./agents/changelog.md) — canonical changelog generation process.
@@ -569,5 +589,6 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 - [`.github/workflows/tags.yaml`](../.github/workflows/tags.yaml) — tag-push pipeline.
 - [`.github/workflows/pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — merge-finalize pipeline.
 - [`.github/workflows/auto-release.yaml`](../.github/workflows/auto-release.yaml) — nightly auto-patch.
+- [`packages/system/dashboard/Makefile`](../packages/system/dashboard/Makefile) — `CONSOLE_BRANCH` resolution for the dashboard UI build.
 - [`.github/workflows/backport.yaml`](../.github/workflows/backport.yaml) — automatic cherry-pick bot.
 - [`.github/workflows/update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — sync changelog → GitHub Release body.

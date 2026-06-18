@@ -19,7 +19,15 @@ test-go:
 image: image-console image-token-proxy
 
 CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
-CONSOLE_BRANCH ?= main
+
+# CONSOLE_BRANCH: which cozystack-ui branch to build the dashboard from.
+# Release builds (tags.yaml) pass this explicitly, derived from the release
+# tag's base branch (main -> main, release-X.Y -> release-X.Y), because the
+# tag checkout is a detached HEAD where the branch name is unavailable. For
+# local/manual builds we derive it from the current branch: a release-X.Y
+# checkout builds the matching UI branch; everything else builds from main.
+CONSOLE_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+CONSOLE_BRANCH ?= $(if $(filter release-%,$(CONSOLE_GIT_BRANCH)),$(CONSOLE_GIT_BRANCH),main)
 
 image-console: clone-console build-console update-values-console clean-console
 
