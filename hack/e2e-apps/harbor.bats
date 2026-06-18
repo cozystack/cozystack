@@ -43,10 +43,13 @@ EOF
   timeout 60 sh -ec "until kubectl -n tenant-test get hr $release >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr $release --timeout=5m --for=condition=ready
 
-  # Wait for COSI to provision bucket
+  # Wait for COSI to provision bucket. The driver creates the Bucket and grants
+  # access quickly, but the central COSI controller's propagation of the Bucket's
+  # readiness back onto the namespaced BucketClaim can lag several minutes on a
+  # loaded runner, so allow the same 10m budget the dependent HelmRelease gets.
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io $release-registry \
-    --timeout=300s --for=jsonpath='{.status.bucketReady}'=true
+    --timeout=600s --for=jsonpath='{.status.bucketReady}'=true
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io $release-registry \
     --timeout=60s --for=jsonpath='{.status.accessGranted}'=true
