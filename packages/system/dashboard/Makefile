@@ -26,7 +26,7 @@ CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
 # tag checkout is a detached HEAD where the branch name is unavailable. For
 # local/manual builds we derive it from the current branch: a release-X.Y
 # checkout builds the matching UI branch; everything else builds from main.
-CONSOLE_GIT_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
+CONSOLE_GIT_BRANCH = $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 CONSOLE_BRANCH ?= $(if $(filter release-%,$(CONSOLE_GIT_BRANCH)),$(CONSOLE_GIT_BRANCH),main)
 
 image-console: clone-console build-console update-values-console clean-console
