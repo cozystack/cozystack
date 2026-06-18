@@ -563,7 +563,7 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 
 ## UI release branch (dashboard)
 
-The dashboard image is built from the separate [`cozystack/cozystack-ui`](https://github.com/cozystack/cozystack-ui) repository. `packages/system/dashboard/Makefile` clones a single branch of it at build time, controlled by `CONSOLE_BRANCH`. To keep patch releases from silently shipping unreleased UI work, each cozystack release line builds from a matching `cozystack-ui` branch — the same backport discipline as backend code.
+The dashboard image is built from the separate [`cozystack/cozystack-ui`](https://github.com/cozystack/cozystack-ui) repository. `packages/system/dashboard/Makefile` clones a single branch of it at build time, controlled by `CONSOLE_BRANCH`. To keep patch releases from silently shipping unreleased UI work, each cozystack release line builds from a matching `cozystack-ui` branch — the same backport discipline as backend code. For the end-to-end two-repo workflow, see [`multirepo-development.md`](./multirepo-development.md).
 
 How `CONSOLE_BRANCH` is resolved (no manual pinning required):
 
@@ -583,6 +583,7 @@ The only manual step — UI fix backports:
 
 ## See also
 
+- [`multirepo-development.md`](./multirepo-development.md) — how the cozystack and cozystack-ui repos move together across `main` and release branches.
 - [`agents/changelog.md`](./agents/changelog.md) — canonical changelog generation process.
 - [`agents/contributing.md`](./agents/contributing.md) — commit/PR conventions, backport label semantics.
 - [`agents/releasing.md`](./agents/releasing.md) — pointer file for AI agents handling release tasks.
