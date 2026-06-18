@@ -1,38 +1,32 @@
 #!/usr/bin/env bats
 
-setup_file() {
-  # Interim mitigation for the Cilium in-memory endpoint leak
-  # (cilium/cilium#38313 class): a deleted pod's endpoint is orphaned in the
-  # agent's registry, IPAM re-hands its IP to a new pod, and the agent then
-  # rejects the new sandbox with "IP <X> is already in use" until an agent
-  # restart — wedging pods across install AND the app suite and failing
-  # unrelated PRs. The watchdog surgically evicts only the orphaned endpoint.
+@test "Deploy cilium-leak-healer watchdog (best-effort)" {
+  # Interim mitigation for the Cilium in-memory endpoint leak (cilium/cilium#38313
+  # class): a deleted pod's endpoint is orphaned in the agent's registry, IPAM
+  # re-hands its IP to a new pod, and the agent then rejects the new sandbox with
+  # "IP <X> is already in use" until an agent restart. The watchdog runs as an
+  # in-cluster Job that surgically evicts only the orphaned endpoint, covering
+  # install and (the Job outlives this file) the whole app suite.
   #
-  # It runs as an in-cluster Job (not a bats-scoped background process, which
-  # died at this file's teardown_file — before any app test ran — and left the
-  # app-phase leak unhealed). Bound to the cluster, it covers every later test
-  # step too. The heal logic stays in hack/e2e-cilium-endpoint-leak-healer.sh
-  # (single source of truth) and is shipped to the pod via a ConfigMap built
-  # from it here. Remove together with that script and
+  # This is a real @test, NOT a bats setup_file hook: the e2e runner
+  # (hack/cozytest.sh) only executes @test functions — it never invokes
+  # setup_file/teardown_file — so a hook would silently never run. It is placed
+  # first so the watchdog is up before the install churn. Best-effort: the leak's
+  # primary trigger (VPA Auto eviction) is removed separately by the
+  # monitoring/etcd VPA->Initial fixes, so this is only the reactive net for
+  # residual churn and must never fail the suite. The heal logic stays in
+  # hack/e2e-cilium-endpoint-leak-healer.sh (single source of truth), shipped to
+  # the pod via a ConfigMap built here. Remove this test, that script, and
   # hack/e2e-cilium-leak-healer.yaml once a fixed Cilium ships.
   kubectl create configmap cilium-leak-healer -n kube-system \
     --from-file=heal.sh=hack/e2e-cilium-endpoint-leak-healer.sh \
     --dry-run=client -o yaml | kubectl apply -f - || true
   kubectl apply -f hack/e2e-cilium-leak-healer.yaml || true
-}
-
-teardown_file() {
-  # Surface any heal/refuse activity from the install phase into the test trace;
-  # the run is otherwise green and the heal would be invisible. App-phase
-  # activity lands in the same pod log (kubectl logs job/cilium-leak-healer) and
-  # the end-of-job cozyreport. Do NOT delete the Job here — later test steps
-  # still need the watchdog. REFUSE lines flag a genuine duplicate-IP (a real
-  # bug the watchdog deliberately did not touch).
-  if kubectl logs -n kube-system job/cilium-leak-healer --tail=-1 2>/dev/null \
-       | grep -qE "HEAL |REFUSE "; then
-    echo "# cilium endpoint-leak watchdog activity (install phase):" >&3
-    kubectl logs -n kube-system job/cilium-leak-healer --tail=-1 2>/dev/null \
-      | grep -E "HEAL |REFUSE " >&3 || true
+  # Confirm it landed (visible in the cozytest.sh trace); never fail on a band-aid.
+  if kubectl -n kube-system get job cilium-leak-healer >/dev/null 2>&1; then
+    echo "cilium-leak-healer Job created"
+  else
+    echo "WARNING: cilium-leak-healer Job NOT created — watchdog inactive this run"
   fi
 }
 
