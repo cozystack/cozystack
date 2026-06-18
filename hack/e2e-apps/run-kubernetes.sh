@@ -133,14 +133,18 @@ EOF
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 1; done'
 
-  # Wait for at least 2 nodes to join (timeout after 8 minutes)
-  timeout 8m bash -c '
-    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -ge 2 ]; do
-      sleep 2
+  # Wait until at least 2 worker nodes have joined AND become Ready, on a single
+  # deadline. This used to be split (8m to join + 3m to become Ready), but the
+  # two budgets starve each other under load: a slow KubeVirt VM boot consumes
+  # the join budget, then the tenant cluster's cilium CNI needs several more
+  # minutes to make the freshly-joined nodes Ready — overflowing the fixed 3m
+  # Ready window even though the CNI converges fine. One 12m deadline that polls
+  # for ">=2 nodes Ready" is robust to wherever the time goes.
+  if ! timeout 12m bash -c '
+    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
+      sleep 5
     done
-  '
-  # Verify the nodes are ready
-  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=3m --for=condition=Ready; then
+  '; then
     # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
     kubectl -n tenant-test get hr
