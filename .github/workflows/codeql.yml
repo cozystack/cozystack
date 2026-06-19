@@ -6,8 +6,9 @@ on:
   pull_request:
     branches: [main]
   schedule:
-    # Weekly, off-peak and offset from the other Monday cron jobs
-    # (scorecard 06:00, labels 04:17, stale 04:37).
+    # Weekly on Monday 03:27 UTC — off-peak and offset from the other
+    # scheduled jobs (scorecard 06:00 Mon, labels 04:17 Mon, stale 04:37
+    # daily).
     - cron: '27 3 * * 1'
 
 # Default to read-only; the analyze job opts into security-events: write.
