@@ -69,7 +69,7 @@ Root targets (run from the repo root):
 
 ```bash
 make build          # Build all Docker images (needs: docker, skopeo, jq, gh, helm, yq, GNU tar/sed/awk)
-make unit-tests     # Run Helm unit tests across all packages
+make unit-tests     # Run all unit tests (Helm, BATS, Go, etc.)
 make generate       # Code generation (hack/update-codegen.sh) — CRDs, DeepCopy, clients, RBAC
 make manifests      # Generate CRD manifests and operator YAML variants
 make cozypkg        # Build the cozypkg CLI
