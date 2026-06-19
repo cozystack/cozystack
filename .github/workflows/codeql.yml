@@ -37,10 +37,15 @@ jobs:
       matrix:
         include:
           # Go only supports "autobuild" or "manual" (not "none"). autobuild
-          # runs the Go build the same way `go build ./...` does — the repo
-          # already compiles cleanly there, including the committed generated
-          # files. setup-go below pins the toolchain to the go.mod version so
-          # autobuild does not fall back to whatever Go the runner ships.
+          # discovers every go.mod in the tree and extracts each module
+          # separately (the root module, api/apps/v1alpha1, and the three
+          # nested image modules that `go build ./...` from the root never
+          # reaches), so coverage is broader than a single root build. It first
+          # attempts `make` from the repo root — which runs the default Makefile
+          # goal, including a network `git fetch upstream --tags` — before
+          # falling back to the Go build. setup-go below pins the toolchain to
+          # the go.mod version so autobuild does not use whatever Go the runner
+          # ships.
           - language: go
             build-mode: autobuild
 
