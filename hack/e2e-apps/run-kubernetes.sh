@@ -7,6 +7,16 @@
 # cluster(s) and wait for teardown so the quota is freed. Defined at file scope
 # (not inside the @test) so cozytest.sh's parent-shell EXIT trap can reach it.
 cozy_cleanup() {
+  # Stop any tenant API port-forward supervisors so a failed run doesn't leave a
+  # loop respawning kubectl against the about-to-be-deleted tenant API. The PIDs
+  # are read from a pidfile because this hook runs in cozytest.sh's parent shell
+  # (the EXIT trap), not the test subshell that started them. Killing the
+  # supervisor stops the respawn; the pkill then reaps the current child PF.
+  if [ -f tenant-pf-supervisors.pids ]; then
+    while read -r _pf_pid; do kill "${_pf_pid}" 2>/dev/null || true; done < tenant-pf-supervisors.pids
+    rm -f tenant-pf-supervisors.pids
+  fi
+  pkill -f "port-forward.*tenant-test" 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
 }
@@ -136,9 +146,27 @@ EOF
   pkill -f "port-forward.*${port}:" 2>/dev/null || true
   sleep 1
 
-  # Set up port forwarding to the Kubernetes API server
-  # No timeout — process is killed at end of test or by job-level timeout-minutes
-  kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443 > /dev/null 2>&1 &
+  # Set up port forwarding to the tenant Kubernetes API server.
+  #
+  # A single `kubectl port-forward` silently dies on an SPDY/connection drop
+  # (the tenant apiserver itself stays up — observed: control-plane pods at 0
+  # restarts while localhost refused connections) and never reconnects, which
+  # wedges every later tenant kubectl op: a long `kubectl wait` then burns its
+  # full timeout against the dead socket (observed: nfs-test-pod hit its 10m
+  # deadline, and the failure-path describe/get-events then printed "connection
+  # refused"). Run it under a respawn loop so a drop self-heals within ~1s;
+  # `kubectl wait` retries across the gap. Record the supervisor PID so
+  # cozy_cleanup() can stop it on a failed run (the success path kills it
+  # directly). The `>/dev/null 2>&1` MUST wrap the whole subshell, not just the
+  # inner kubectl: cozytest.sh runs each test inside a `... | tee | while read`
+  # pipeline, and a backgrounded subshell that inherits the pipe's stdout holds
+  # it open, so `while read` never sees EOF and the whole run deadlocks until the
+  # job timeout. Redirecting the subshell's fds releases the pipe while keeping
+  # the port-forward tunnel (a socket, fd-independent) intact. Verified in an
+  # ubuntu:22.04 container under both dash (CI's /bin/sh) and bash.
+  ( while true; do kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443; sleep 1; done ) >/dev/null 2>&1 &
+  PF_SUPERVISOR_PID=$!
+  echo "${PF_SUPERVISOR_PID}" >> tenant-pf-supervisors.pids || true
   # Wait for port-forward to be ready before using it
   timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
@@ -530,7 +558,9 @@ EOF
     exit 1
   fi
 
-  # Clean up
+  # Clean up: stop the port-forward supervisor first so it can't respawn, then
+  # kill the current child port-forward.
+  kill "${PF_SUPERVISOR_PID}" 2>/dev/null || true
   pkill -f "port-forward.*${port}:" 2>/dev/null || true
   rm -f "tenantkubeconfig-${test_name}"
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
