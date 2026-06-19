@@ -142,7 +142,7 @@ Create the PR with `gh pr create --title "type(scope): brief description" --body
 ## Review Expectations
 
 - A bug-fix PR should include a behavioural regression test, not just a single field assertion — prove the bug can no longer recur.
-- Keep the PR description on the template: `## What this PR does` plus the `release-note` block.
+- Keep the PR description aligned with the template: `## What this PR does` plus the `release-note` block.
 
 ## Fetching Unresolved Review Comments
 
