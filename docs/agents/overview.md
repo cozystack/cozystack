@@ -100,7 +100,7 @@ Package `values.yaml` files carry annotations (`@param`, `@typedef`, `@field`, `
 
 ## Testing
 
-- **Helm unit tests:** `make unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target).
+- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). `make unit-tests` runs the full unit suite — Helm, BATS, Go, and the preset/readiness checks.
 - **E2E tests:** BATS suites in `hack/e2e-apps/` (one `.bats` per app), run through `hack/cozytest.sh`. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
 
