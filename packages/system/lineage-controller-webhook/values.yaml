@@ -11,3 +11,5 @@ lineageControllerWebhook:
   # performance work obviates the locality motivation. Leave disabled.
   localK8sAPIEndpoint:
     enabled: false
+  # -- Optional resource requests and limits for the lineage-controller-webhook container.
+  resources: {}
