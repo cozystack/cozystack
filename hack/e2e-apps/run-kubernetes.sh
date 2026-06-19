@@ -21,6 +21,26 @@ cozy_cleanup() {
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
 }
 
+# Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
+# Registered as an EXIT trap INSIDE run_kubernetes_test so it fires during THIS
+# test subshell's exit, while the supervised port-forward is still alive. The
+# generic cozytest.sh trap cannot do this: it runs in the parent shell after the
+# test subshell has exited and reaped its port-forward, and crust-gather can only
+# reach the tenant via that localhost forward (it connects directly to the
+# kubeconfig server URL — no host-proxy mode — and the in-cluster URL is
+# unreachable from the runner). CURRENT_TENANT_KC is a global so the handler can
+# read it regardless of function scope at EXIT-trap time.
+_tenant_snapshot_on_fail() {
+  _rc=$?
+  [ "$_rc" -eq 0 ] && return 0
+  command -v crust-gather >/dev/null 2>&1 || return 0
+  [ -n "${CURRENT_TENANT_KC:-}" ] && [ -f "${CURRENT_TENANT_KC}" ] || return 0
+  _snap="${COZY_REPORT_DIR:-_out/cozyreport}/snapshots/$(basename "${TEST_FILE:-tenant}" .bats)"
+  mkdir -p "$_snap" 2>/dev/null || true
+  echo "» capturing tenant crust-gather snapshot (${CURRENT_TENANT_KC}) before teardown"
+  crust-gather collect -k "${CURRENT_TENANT_KC}" --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" >/dev/null 2>&1 || true
+}
+
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
@@ -169,6 +189,11 @@ EOF
   echo "${PF_SUPERVISOR_PID}" >> tenant-pf-supervisors.pids || true
   # Wait for port-forward to be ready before using it
   timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
+  # The kubeconfig + port-forward are live now. Arm the tenant snapshot: any
+  # failure from here on captures the tenant cluster while the PF is still up
+  # (see _tenant_snapshot_on_fail). Cleared on the success path below.
+  CURRENT_TENANT_KC="tenantkubeconfig-${test_name}"
+  trap '_tenant_snapshot_on_fail' EXIT
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 1; done'
 
@@ -558,6 +583,8 @@ EOF
     exit 1
   fi
 
+  # Success: disarm the tenant-snapshot trap so it doesn't fire on the clean exit.
+  trap - EXIT
   # Clean up: stop the port-forward supervisor first so it can't respawn, then
   # kill the current child port-forward.
   kill "${PF_SUPERVISOR_PID}" 2>/dev/null || true
