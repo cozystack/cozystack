@@ -79,7 +79,7 @@ jobs:
               .sort((a, b) => lineNum(b) - lineNum(a))
               .slice(0, SUPPORTED_LINE_COUNT);
 
-            const skipped = allBranches.filter(b => !branches.includes(b)).sort();
+            const skipped = allBranches.filter(b => !branches.includes(b)).sort((a, b) => lineNum(a) - lineNum(b));
             console.log(`Found ${allBranches.length} release branches; auto-releasing the ${SUPPORTED_LINE_COUNT} newest: ${branches.join(', ')}`);
             if (skipped.length) {
               console.log(`Skipping ${skipped.length} EOL release branches: ${skipped.join(', ')}`);
