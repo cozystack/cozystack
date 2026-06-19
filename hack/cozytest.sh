@@ -93,6 +93,50 @@ TMP_SH=$(mktemp) || { echo "Failed to create temp file" >&2; exit 1; }
 # forward — so a test that creates tenant clusters (run-kubernetes.sh) captures
 # them from its OWN in-subshell EXIT trap, while the forward is still alive.
 COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
+
+# Run one crust-gather collect, capturing its full output + exit code into a
+# sibling .collect.log. A failed collect then leaves a breadcrumb inside the
+# uploaded artifact instead of vanishing into /dev/null (the previous behaviour
+# silently dropped snapshots with no clue why). Bounded by `timeout -k 30 5m`
+# so a wedged/degraded cluster can't stall the whole job (-k hard-kills a
+# collect that ignores the SIGTERM). The caller supplies the filter flags; the
+# helper only owns -f, the timeout and logging.
+#
+# crust-gather exits non-zero when its --duration window closes with a scanner
+# still in flight, even though the API tree and pod logs are already on disk —
+# so a non-zero rc that still produced resources is reported as PARTIAL, not
+# FAILED. A 100+MB usable snapshot must not be mistaken for an empty one and
+# discarded over a scary label. $1=label $2=dest-dir [crust-gather collect args…].
+_cozy_collect() {
+  _label=$1; _dest=$2; shift 2
+  if timeout -k 30 5m crust-gather collect -f "$_dest" "$@" >"$_dest.collect.log" 2>&1; then
+    echo "  ✓ crust-gather $_label -> $_dest"
+  else
+    # First statement in the else, so $? is still the failed collect's status
+    # (after `fi` it would be the if-compound's 0). Treat a non-zero rc that
+    # nonetheless wrote a resource tree as PARTIAL rather than FAILED.
+    _crc=$?
+    if [ -d "$_dest/cluster" ] || find "$_dest/namespaces" -name '*.yaml' -print -quit 2>/dev/null | grep -q .; then
+      echo "  ⚠ crust-gather $_label PARTIAL (rc=$_crc) — $(tail -n1 "$_dest.collect.log"); see $_dest.collect.log"
+    else
+      echo "  ✗ crust-gather $_label FAILED (rc=$_crc) — see $_dest.collect.log"
+    fi
+  fi
+}
+
+# Helm stores each release as a kind=Secret object (sh.helm.release.v1.<rel>.v<n>),
+# so the main dump below drops it along with every other Secret. This dedicated
+# include-only collect captures JUST those secrets — verified AND-composition:
+# crust-gather puts all CLI filters in one FilterList evaluated with .all(), so
+# `--include-kind Secret --include-name <re>` keeps a Secret only when BOTH match.
+# It carries each release's revision history + status, which is what explains a
+# HelmRelease wedged mid-install. $1=label $2=dest-dir [extra args e.g. -k kc].
+_cozy_collect_helm() {
+  _label=$1; _dest=$2; shift 2
+  _cozy_collect "$_label" "$_dest" \
+    --include-kind Secret --include-name 'sh\.helm\.release\..*' "$@"
+}
+
 _cozy_on_exit() {
   _rc=$?
   if [ "$_rc" -ne 0 ]; then
@@ -100,13 +144,16 @@ _cozy_on_exit() {
     mkdir -p "$_snap" 2>/dev/null || true
     if command -v crust-gather >/dev/null 2>&1; then
       echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
-      # Bound with a timeout: crust-gather collect has hung indefinitely on a
-      # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
-      # wedging the whole test step for hours until the job-level cancel. 5 min is
-      # ample for a host snapshot; a partial capture (timeout exits 124, swallowed
-      # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills if a blocked
-      # collect ignores the SIGTERM.
-      timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
+      # --disable-additional-logs: skip the node host-log scanner. It spawns a
+      # privileged busybox debug pod per node which PodSecurity rejects (403) in
+      # cozystack's baseline/restricted namespaces, then retries until --duration
+      # elapses — burning the deadline and forcing a non-zero exit while the
+      # already-collected API tree + container logs sit on disk. Talos host logs
+      # aren't reachable that way anyway, and aren't needed for app-level failures.
+      _cozy_collect host "$_snap/host" --exclude-kind Secret --disable-additional-logs
+      # Helm release storage is excluded by --exclude-kind Secret above; grab it
+      # separately so a wedged HelmRelease's revision history is in the artifact.
+      _cozy_collect_helm host-helm "$_snap/host-helm"
     fi
     # Diagnostic-only: capture the host->pod CNI data-plane state for any
     # NotReady pod so the recurrent host->local-pod "connection refused"
