@@ -6,11 +6,19 @@ ingress:
   # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
   host: ""
   # Optional separate hostname for the Keycloak admin console (opt-in).
-  # When set (e.g., "keycloak-admin.example.com"), the admin console and admin
-  # REST API are served only on this hostname (Keycloak KC_HOSTNAME_ADMIN), and
-  # the admin endpoints become unavailable on the main `host` (login/realms
-  # only). An additional Ingress rule / HTTPRoute hostname is created so the
-  # admin hostname routes to the same Keycloak service.
+  # When set (e.g., "keycloak-admin.example.com"):
+  #   - KC_HOSTNAME_ADMIN is configured so the admin console generates its
+  #     URLs on this hostname;
+  #   - the main `host` (login) route is narrowed to the public OIDC paths
+  #     (/realms, /resources, /.well-known) only, so the admin console and
+  #     Administration REST API (/admin) are NOT served on the login hostname;
+  #   - a dedicated Ingress/HTTPRoute for this hostname routes /  to Keycloak.
+  # The admin route attaches to the Gateway/ingressClass selected by the
+  # cluster-level expose-ingress-admin (defaults to expose-ingress). Point
+  # that at a separate, e.g. private-IP, Gateway to keep the admin console off
+  # the public internet. Note: KC_HOSTNAME_ADMIN alone is NOT a security
+  # boundary (admin REST stays reachable on any hostname routed to Keycloak);
+  # the network/path separation here is what restricts access.
   # If left empty, the admin console stays on the main hostname (default).
   adminHost: ""
   annotations:

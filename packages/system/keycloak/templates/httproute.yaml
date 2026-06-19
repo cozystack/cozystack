@@ -1,7 +1,9 @@
 {{- $host := index .Values._cluster "root-host" }}
 {{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $adminExposeIngress := (index .Values._cluster "expose-ingress-admin") | default $exposeIngress }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- $adminHost := .Values.ingress.adminHost }}
 {{- if eq $gatewayEnabled "true" }}
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -15,11 +17,51 @@ spec:
     namespace: {{ $exposeIngress }}
   hostnames:
   - {{ $ingressHost | quote }}
-  {{- with .Values.ingress.adminHost }}
-  - {{ . | quote }}
+  rules:
+  {{- if $adminHost }}
+  # adminHost is set: the public (login) hostname exposes only the
+  # OIDC/login paths. The admin console and Administration REST API are
+  # served exclusively on the dedicated admin route below, so /admin is
+  # not reachable here. See the Keycloak reverse proxy guide,
+  # "Exposed path recommendations".
+  - matches:
+    - path:
+        type: PathPrefix
+        value: /realms
+    - path:
+        type: PathPrefix
+        value: /resources
+    - path:
+        type: PathPrefix
+        value: /.well-known
+    backendRefs:
+    - name: keycloak-http
+      port: 80
+  {{- else }}
+  - backendRefs:
+    - name: keycloak-http
+      port: 80
   {{- end }}
+{{- if $adminHost }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: keycloak-admin
+spec:
+  # Attaches to the Gateway named cozystack in the admin namespace. When
+  # expose-ingress-admin points at a separate (e.g. private-IP) Gateway,
+  # admin traffic leaves the public Gateway entirely.
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    namespace: {{ $adminExposeIngress }}
+  hostnames:
+  - {{ $adminHost | quote }}
   rules:
   - backendRefs:
     - name: keycloak-http
       port: 80
+{{- end }}
 {{- end }}

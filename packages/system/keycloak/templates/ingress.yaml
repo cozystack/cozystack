@@ -3,8 +3,10 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $adminExposeIngress := (index .Values._cluster "expose-ingress-admin") | default $exposeIngress }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+{{- $adminHost := .Values.ingress.adminHost }}
 {{- if ne $gatewayEnabled "true" }}
 
 apiVersion: networking.k8s.io/v1
@@ -33,17 +35,25 @@ spec:
     {{- if not $wildcardSecret }}
     secretName: web-tls
     {{- end }}
-  {{- with .Values.ingress.adminHost }}
-  - hosts:
-      - {{ . }}
-    {{- if not $wildcardSecret }}
-    secretName: keycloak-admin-tls
-    {{- end }}
-  {{- end }}
   rules:
   - host: {{ $ingressHost }}
     http:
       paths:
+      {{- if $adminHost }}
+      # adminHost is set: expose only the OIDC/login paths here. The admin
+      # console and Administration REST API live on the admin Ingress below,
+      # so /admin is not reachable on the login hostname. See the Keycloak
+      # reverse proxy guide, "Exposed path recommendations".
+      {{- range $path := list "/realms" "/resources" "/.well-known" }}
+      - path: {{ $path }}
+        pathType: Prefix
+        backend:
+          service:
+            name: keycloak-http
+            port:
+              name: http
+      {{- end }}
+      {{- else }}
       - path: /
         pathType: Prefix
         backend:
@@ -51,8 +61,40 @@ spec:
             name: keycloak-http
             port:
               name: http
-  {{- with .Values.ingress.adminHost }}
-  - host: {{ . }}
+      {{- end }}
+{{- if $adminHost }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: keycloak-admin-ingress
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+    {{- if not $wildcardSecret }}
+    {{- if eq $solver "http01" }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $adminExposeIngress }}
+    {{- end }}
+    cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- end }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  # Uses the admin ingressClass. When expose-ingress-admin points at a
+  # separate (e.g. private) ingress controller, admin traffic leaves the
+  # public ingress entirely.
+  ingressClassName: {{ $adminExposeIngress }}
+  tls:
+  - hosts:
+      - {{ $adminHost }}
+    {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+           back to the default SSL certificate while the tls section keeps
+           the HTTP-to-HTTPS redirect enforced. */}}
+    {{- if not $wildcardSecret }}
+    secretName: keycloak-admin-tls
+    {{- end }}
+  rules:
+  - host: {{ $adminHost }}
     http:
       paths:
       - path: /
@@ -62,5 +104,5 @@ spec:
             name: keycloak-http
             port:
               name: http
-  {{- end }}
+{{- end }}
 {{- end }}
