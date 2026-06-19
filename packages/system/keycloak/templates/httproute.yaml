@@ -15,6 +15,9 @@ spec:
     namespace: {{ $exposeIngress }}
   hostnames:
   - {{ $ingressHost | quote }}
+  {{- with .Values.ingress.adminHost }}
+  - {{ . | quote }}
+  {{- end }}
   rules:
   - backendRefs:
     - name: keycloak-http

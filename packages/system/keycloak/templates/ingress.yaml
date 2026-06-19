@@ -33,6 +33,13 @@ spec:
     {{- if not $wildcardSecret }}
     secretName: web-tls
     {{- end }}
+  {{- with .Values.ingress.adminHost }}
+  - hosts:
+      - {{ . }}
+    {{- if not $wildcardSecret }}
+    secretName: keycloak-admin-tls
+    {{- end }}
+  {{- end }}
   rules:
   - host: {{ $ingressHost }}
     http:
@@ -44,4 +51,16 @@ spec:
             name: keycloak-http
             port:
               name: http
+  {{- with .Values.ingress.adminHost }}
+  - host: {{ . }}
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: keycloak-http
+            port:
+              name: http
+  {{- end }}
 {{- end }}

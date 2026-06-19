@@ -5,6 +5,14 @@ ingress:
   # If set, this value will be used as the Ingress hostname (e.g., "auth.example.com").
   # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
   host: ""
+  # Optional separate hostname for the Keycloak admin console (opt-in).
+  # When set (e.g., "keycloak-admin.example.com"), the admin console and admin
+  # REST API are served only on this hostname (Keycloak KC_HOSTNAME_ADMIN), and
+  # the admin endpoints become unavailable on the main `host` (login/realms
+  # only). An additional Ingress rule / HTTPRoute hostname is created so the
+  # admin hostname routes to the same Keycloak service.
+  # If left empty, the admin console stays on the main hostname (default).
+  adminHost: ""
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
