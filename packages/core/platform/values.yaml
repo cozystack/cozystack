@@ -49,6 +49,13 @@ networking:
 publishing:
   host: "example.org"
   ingressName: tenant-root
+  # Optional namespace of a SEPARATE Gateway / ingressClass that system
+  # components attach their admin routes to (currently Keycloak) — e.g. one
+  # bound to a private IP, unreachable from the public internet. Empty means
+  # admin endpoints share the same ingress as everything else (ingressName).
+  # The private Gateway itself is NOT created by cozystack; provision it out
+  # of band, then point this at its namespace to move admin traffic onto it.
+  ingressNameAdmin: ""
   exposedServices:
     - api
     - dashboard
