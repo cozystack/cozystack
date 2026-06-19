@@ -142,7 +142,6 @@ Documentation is organized as follows:
 
 Before working on these areas, read the relevant doc first:
 
-- **Dashboard resources:** `internal/controller/dashboard/README.md`
 - **Backup subsystem design:** `api/backups/v1alpha1/DESIGN.md`
 - **A new app package:** copy the structure of an existing one (e.g. `packages/apps/postgres/`)
 
