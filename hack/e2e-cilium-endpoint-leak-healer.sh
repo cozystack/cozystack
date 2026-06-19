@@ -106,12 +106,39 @@ while true; do
       fi
     fi
 
-    # Confirmed orphan: endpoint $epid holds $ip, backs no live pod, and pod
-    # $ns/$pod is wedged requesting the same IP. Evict only this endpoint.
+    # An endpoint that holds the IP but backs no k8s pod (empty k8s identity) is
+    # a reserved/infra endpoint — e.g. reserved:ingress, the per-node Cilium
+    # Ingress endpoint — that legitimately owns the IP; the duplicate is an IPAM
+    # race that handed the same pod-CIDR IP to a pod. Such endpoints both cannot
+    # be disconnected ("endpoint may not be associated reserved labels") and must
+    # not be: evicting infra is wrong. The correct remedy is to reschedule the
+    # wedged pod onto a free IP by deleting it; its controller recreates it and
+    # the next CNI ADD picks a fresh IP (verified: the new pod lands on a clean
+    # address while the ingress endpoint keeps the disputed one).
+    if [ -z "$epns" ] || [ -z "$eppod" ]; then
+      log "HEAL node=$node ep=$epid ip=$ip held by reserved/infra endpoint (no k8s pod) -> delete wedged pod $ns/$pod"
+      out=$(kubectl delete pod -n "$ns" "$pod" --wait=false 2>&1)
+      log "  result: ${out:-<none>}"
+      continue
+    fi
+
+    # Confirmed stale pod endpoint: endpoint $epid holds $ip, backs a pod that is
+    # no longer live, and pod $ns/$pod is wedged requesting the same IP. Evict
+    # only this endpoint.
     log "HEAL node=$node agent=$agent ep=$epid ip=$ip wedged=$ns/$pod -> endpoint disconnect ipv4:$ip"
     out=$(kubectl exec -n "$CILIUM_NS" "$agent" -c cilium-agent -- \
             cilium-dbg endpoint disconnect "ipv4:$ip" 2>&1)
     log "  result: ${out:-<none>}"
+    # Disconnect can still be rejected (e.g. the endpoint carries reserved labels
+    # the identity probe above did not surface). Never leave the pod wedged: fall
+    # back to rescheduling it onto a free IP.
+    case "$out" in
+      *Error*|*error*|*invalid*)
+        log "  disconnect failed -> delete wedged pod $ns/$pod"
+        out=$(kubectl delete pod -n "$ns" "$pod" --wait=false 2>&1)
+        log "  result: ${out:-<none>}"
+        ;;
+    esac
   done <<EOF
 $events
 EOF
