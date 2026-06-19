@@ -246,15 +246,19 @@ Fires on every push to `main`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHe
 
 ## Automated patch tag (`auto-release.yaml`)
 
-Cron: daily at 01:00 UTC. For every `release-X.Y` branch:
+Cron: daily at 01:00 UTC. It only auto-releases the **2 newest minor `release-X.Y` lines** (`SUPPORTED_LINE_COUNT` in the workflow); older lines are treated as EOL and skipped, so long-unmaintained branches no longer accumulate stray patch tags and broken release PRs. The window is derived from the live branch list, so it slides automatically — once `release-1.5` exists the window becomes `{1.5, 1.4}` and the trailing line retires with no edits.
+
+For each supported line:
 
 1. Find the latest published `vX.Y.*` GA release tag.
 2. If the branch has commits ahead of that tag, increment Z and push a new `vX.Y.(Z+1)` tag.
 3. Push via `git push origin HEAD:refs/tags/<tag>` so `base_ref` is set and `tags.yaml` runs.
 
-So **any commit that lands on `release-X.Y` triggers a patch release on the next nightly run.** If you want to batch backports across a couple of days before cutting, hold the cherry-picks. Conversely, if a critical fix lands you can do nothing and it ships in <24h.
+So **any commit that lands on a supported `release-X.Y` line triggers a patch release on the next nightly run.** If you want to batch backports across a couple of days before cutting, hold the cherry-picks. Conversely, if a critical fix lands you can do nothing and it ships in <24h.
 
 To skip the nightly cut: don't merge to `release-X.Y` yet. There is no "block this branch this cycle" knob.
+
+**Cutting a patch on an EOL line.** The window only governs *automatic* tagging. A maintainer can still release any branch by pushing a `vX.Y.Z` tag manually — [`tags.yaml`](../.github/workflows/tags.yaml) fires on any `v*.*.*` tag push, so the full pipeline runs regardless of whether the line is inside the auto-release window.
 
 ## Backports
 
