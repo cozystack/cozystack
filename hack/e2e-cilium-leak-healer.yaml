@@ -24,10 +24,12 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
-  # inspect the wedged pod and the endpoint's claimed owner
+  # inspect the wedged pod and the endpoint's claimed owner, and delete the
+  # wedged pod to reschedule it onto a free IP when the disputed IP is held by
+  # a reserved/infra endpoint (or a disconnect otherwise fails)
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list"]
+    verbs: ["get", "list", "delete"]
   # run `cilium-dbg endpoint ...` inside the owning node's cilium-agent
   - apiGroups: [""]
     resources: ["pods/exec"]
