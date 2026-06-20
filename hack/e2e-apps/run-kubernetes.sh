@@ -7,29 +7,22 @@
 # cluster(s) and wait for teardown so the quota is freed. Defined at file scope
 # (not inside the @test) so cozytest.sh's parent-shell EXIT trap can reach it.
 cozy_cleanup() {
-  # Stop any tenant API port-forward supervisors so a failed run doesn't leave a
-  # loop respawning kubectl against the about-to-be-deleted tenant API. The PIDs
-  # are read from a pidfile because this hook runs in cozytest.sh's parent shell
-  # (the EXIT trap), not the test subshell that started them. Killing the
-  # supervisor stops the respawn; the pkill then reaps the current child PF.
-  if [ -f tenant-pf-supervisors.pids ]; then
-    while read -r _pf_pid; do kill "${_pf_pid}" 2>/dev/null || true; done < tenant-pf-supervisors.pids
-    rm -f tenant-pf-supervisors.pids
-  fi
-  pkill -f "port-forward.*tenant-test" 2>/dev/null || true
+  # Delete any test-scoped tenant API LoadBalancer Services left by a failed run
+  # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
+  # test so a single selector reaps them all.
+  kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
 # Registered as an EXIT trap INSIDE run_kubernetes_test so it fires during THIS
-# test subshell's exit, while the supervised port-forward is still alive. The
-# generic cozytest.sh trap cannot do this: it runs in the parent shell after the
-# test subshell has exited and reaped its port-forward, and crust-gather can only
-# reach the tenant via that localhost forward (it connects directly to the
-# kubeconfig server URL — no host-proxy mode — and the in-cluster URL is
-# unreachable from the runner). CURRENT_TENANT_KC is a global so the handler can
-# read it regardless of function scope at EXIT-trap time.
+# test subshell's exit, before the success path (or cozy_cleanup) deletes the
+# tenant API LoadBalancer. crust-gather reaches the tenant only through the
+# kubeconfig's server URL (it connects directly — no host-proxy mode — and the
+# in-cluster URL is unreachable from the runner), which is the LB IP and stays
+# routable until teardown. CURRENT_TENANT_KC is a global so the handler can read
+# it regardless of function scope at EXIT-trap time.
 _tenant_snapshot_on_fail() {
   _rc=$?
   [ "$_rc" -eq 0 ] && return 0
@@ -158,40 +151,57 @@ EOF
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
-  # Update the kubeconfig to use localhost for the API server
-  yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" "tenantkubeconfig-${test_name}"
-
-
-  # Kill any stale port-forward on this port from a previous retry
-  pkill -f "port-forward.*${port}:" 2>/dev/null || true
-  sleep 1
-
-  # Set up port forwarding to the tenant Kubernetes API server.
+  # Expose the tenant Kubernetes API via a test-scoped LoadBalancer instead of
+  # `kubectl port-forward`. The host cluster runs MetalLB on the same /24 as the
+  # sandbox nodes (pool 192.168.123.200-250), so an LB IP is directly routable
+  # from the test — the in-tenant LB test below already curls such an address.
+  # Crucially, a LoadBalancer Service load-balances across ALL ready apiserver
+  # endpoints (both Kamaji control-plane pods), so a single apiserver pod restart
+  # is routed around transparently. `kubectl port-forward` instead pins to one
+  # pod and dies when that pod blips: a lone kube-apiserver restart was observed
+  # leaving localhost refusing connections for the entire 12m node-Ready wait
+  # while the cluster was in fact healthy (CAPI NodeHealthy=True on both nodes),
+  # failing the test on a dead tunnel. The LB endpoint is also stable until
+  # teardown, so the failure snapshot can still reach the tenant. Test-scoped and
+  # additive — no change to the product Kamaji/Kubernetes chart.
   #
-  # A single `kubectl port-forward` silently dies on an SPDY/connection drop
-  # (the tenant apiserver itself stays up — observed: control-plane pods at 0
-  # restarts while localhost refused connections) and never reconnects, which
-  # wedges every later tenant kubectl op: a long `kubectl wait` then burns its
-  # full timeout against the dead socket (observed: nfs-test-pod hit its 10m
-  # deadline, and the failure-path describe/get-events then printed "connection
-  # refused"). Run it under a respawn loop so a drop self-heals within ~1s;
-  # `kubectl wait` retries across the gap. Record the supervisor PID so
-  # cozy_cleanup() can stop it on a failed run (the success path kills it
-  # directly). The `>/dev/null 2>&1` MUST wrap the whole subshell, not just the
-  # inner kubectl: cozytest.sh runs each test inside a `... | tee | while read`
-  # pipeline, and a backgrounded subshell that inherits the pipe's stdout holds
-  # it open, so `while read` never sees EOF and the whole run deadlocks until the
-  # job timeout. Redirecting the subshell's fds releases the pipe while keeping
-  # the port-forward tunnel (a socket, fd-independent) intact. Verified in an
-  # ubuntu:22.04 container under both dash (CI's /bin/sh) and bash.
-  ( while true; do kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443; sleep 1; done ) >/dev/null 2>&1 &
-  PF_SUPERVISOR_PID=$!
-  echo "${PF_SUPERVISOR_PID}" >> tenant-pf-supervisors.pids || true
-  # Wait for port-forward to be ready before using it
-  timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
-  # The kubeconfig + port-forward are live now. Arm the tenant snapshot: any
-  # failure from here on captures the tenant cluster while the PF is still up
-  # (see _tenant_snapshot_on_fail). Cleared on the success path below.
+  # Clean up a stale LB from a previous failed retry of this same test first.
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl apply -n tenant-test -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-${test_name}-e2e-lb
+  labels:
+    cozystack-e2e.io/tenant-api-lb: "${test_name}"
+spec:
+  type: LoadBalancer
+  selector:
+    kamaji.clastix.io/name: kubernetes-${test_name}
+  ports:
+  - name: kube-apiserver
+    port: 6443
+    targetPort: 6443
+EOF
+  # Wait for MetalLB to assign an external IP.
+  timeout 90 sh -ec 'until [ -n "$(kubectl get svc -n tenant-test kubernetes-'"${test_name}"'-e2e-lb -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>/dev/null)" ]; do sleep 2; done'
+  TENANT_API_LB_IP=$(kubectl get svc -n tenant-test "kubernetes-${test_name}-e2e-lb" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  if [ -z "${TENANT_API_LB_IP}" ]; then
+    echo "tenant API LoadBalancer did not receive an IP" >&2
+    exit 1
+  fi
+
+  # Point the kubeconfig at the LB IP. The MetalLB IP is not in the apiserver
+  # serving-cert SANs, so skip TLS verification (e2e only — we functionally test
+  # the cluster, not its serving identity) and drop the now-mismatched CA data
+  # (kubectl rejects insecure-skip-tls-verify alongside certificate-authority).
+  yq -i ".clusters[0].cluster.server = \"https://${TENANT_API_LB_IP}:6443\" | .clusters[0].cluster.\"insecure-skip-tls-verify\" = true | del(.clusters[0].cluster.\"certificate-authority-data\")" "tenantkubeconfig-${test_name}"
+
+  # Wait for the API to answer through the LB before using it.
+  timeout 60 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get --raw /healthz >/dev/null 2>&1; do sleep 2; done'
+  # The kubeconfig + LB are live now. Arm the tenant snapshot: any failure from
+  # here on captures the tenant cluster (the LB endpoint stays up until teardown,
+  # so crust-gather can reach it). Cleared on the success path below.
   CURRENT_TENANT_KC="tenantkubeconfig-${test_name}"
   trap '_tenant_snapshot_on_fail' EXIT
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
@@ -585,10 +595,9 @@ EOF
 
   # Success: disarm the tenant-snapshot trap so it doesn't fire on the clean exit.
   trap - EXIT
-  # Clean up: stop the port-forward supervisor first so it can't respawn, then
-  # kill the current child port-forward.
-  kill "${PF_SUPERVISOR_PID}" 2>/dev/null || true
-  pkill -f "port-forward.*${port}:" 2>/dev/null || true
+  # Clean up: delete the test-scoped tenant API LoadBalancer (frees its MetalLB
+  # IP) and the local kubeconfig.
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
   rm -f "tenantkubeconfig-${test_name}"
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
