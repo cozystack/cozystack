@@ -46,6 +46,10 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          # This privileged workflow has packages:write and an OCIR push token;
+          # it never pushes git, so don't leave the checkout's GITHUB_TOKEN in
+          # .git/config where a later build step could read it.
+          persist-credentials: false
 
       - name: Set up Docker config
         run: |
