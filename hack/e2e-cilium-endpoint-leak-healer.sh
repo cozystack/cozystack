@@ -97,11 +97,19 @@ while true; do
     # If that endpoint claims a pod that is alive on the cluster with this IP,
     # it is a LIVE endpoint -> a genuine duplicate-IP, NOT the leak. Refuse and
     # shout so the real problem is visible instead of silently broken.
+    #
+    # Refuse for ANY non-terminal owner phase, not just Running: a Pending owner
+    # can already hold a live IPAM allocation (status.podIP is populated once the
+    # sandbox is created, before the pod goes Running), so disconnecting it would
+    # evict a legitimate endpoint mid-startup. Only a Succeeded/Failed owner is
+    # safely past needing its endpoint. (owner_ip == ip already gates on the pod
+    # still existing with that IP, so an empty phase from a vanished pod can't
+    # reach this branch.)
     if [ -n "$epns" ] && [ -n "$eppod" ]; then
       owner_ip=$(kubectl get pod -n "$epns" "$eppod" -o jsonpath='{.status.podIP}' 2>/dev/null)
       owner_phase=$(kubectl get pod -n "$epns" "$eppod" -o jsonpath='{.status.phase}' 2>/dev/null)
-      if [ "$owner_ip" = "$ip" ] && [ "$owner_phase" = "Running" ]; then
-        log "REFUSE ip=$ip on node=$node: held by LIVE pod $epns/$eppod (genuine duplicate IP, not the leak) — investigate"
+      if [ "$owner_ip" = "$ip" ] && [ "$owner_phase" != "Succeeded" ] && [ "$owner_phase" != "Failed" ]; then
+        log "REFUSE ip=$ip on node=$node: held by non-terminal pod $epns/$eppod (phase=$owner_phase; genuine duplicate IP, not the leak) — investigate"
         continue
       fi
     fi
