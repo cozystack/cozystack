@@ -99,7 +99,13 @@ _cozy_on_exit() {
     _snap="$COZY_REPORT_DIR/snapshots/$(basename "$TEST_FILE" .bats)"
     mkdir -p "$_snap" 2>/dev/null || true
     echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
-    crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
+    # Bound with a timeout: crust-gather collect has hung indefinitely on a
+    # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
+    # wedging the whole test step for hours until the job-level cancel. 5 min is
+    # ample for a host snapshot; a partial capture (timeout exits 124, swallowed
+    # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills if a blocked
+    # collect ignores the SIGTERM.
+    timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
   fi
   if command -v cozy_cleanup >/dev/null 2>&1; then
     echo "» cozy_cleanup $(basename "$TEST_FILE" .bats)"

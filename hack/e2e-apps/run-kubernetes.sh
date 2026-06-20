@@ -31,7 +31,10 @@ _tenant_snapshot_on_fail() {
   _snap="${COZY_REPORT_DIR:-_out/cozyreport}/snapshots/$(basename "${TEST_FILE:-tenant}" .bats)"
   mkdir -p "$_snap" 2>/dev/null || true
   echo "» capturing tenant crust-gather snapshot (${CURRENT_TENANT_KC}) before teardown"
-  crust-gather collect -k "${CURRENT_TENANT_KC}" --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" >/dev/null 2>&1 || true
+  # Bounded with a timeout for the same reason as the host snapshot in
+  # cozytest.sh: an unbounded collect can hang for hours and wedge the job.
+  # (timeout's own -k 30 / 300 are distinct from crust-gather's -k kubeconfig.)
+  timeout -k 30 300 crust-gather collect -k "${CURRENT_TENANT_KC}" --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" >/dev/null 2>&1 || true
 }
 
 run_kubernetes_test() {
