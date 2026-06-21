@@ -199,6 +199,21 @@ publishing:
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod
+    # Operator-provided wildcard certificate. When set, platform
+    # services and the root tenant's ingress/Gateway serve under this
+    # pre-existing TLS Secret instead of minting per-host ACME certs.
+    # The Secret must already exist in the publishing namespace — the
+    # one that runs the root ingress controller / Gateway, which follows
+    # publishing.ingressName (tenant-root by default) — be of type
+    # kubernetes.io/tls, and cover the root host (typically a wildcard
+    # *.<root-host> + <root-host>). Only the
+    # NAME is distributed through the platform values channel — the
+    # cert/key material is never broadcast. Leave empty to keep ACME
+    # issuance (solver/issuerName above). This is per-controller and
+    # currently applies to the root tenant only; propagating it to
+    # child tenants requires replicating the Secret into each tenant
+    # namespace (tracked separately).
+    wildcardSecretName: ""
     # Rate-limit note: every tenant with gateway=true issues one
     # Certificate for its wildcard + apex hostnames. If many tenants share
     # the same apex domain with issuerName=letsencrypt-prod, the cluster
