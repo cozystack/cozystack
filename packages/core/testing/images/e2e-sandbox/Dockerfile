@@ -4,12 +4,19 @@ ARG KUBECTL_VERSION=1.33.2
 ARG TALOSCTL_VERSION=1.10.4
 ARG HELM_VERSION=3.18.3
 ARG COZYHR_VERSION=1.6.1
+ARG ORAS_VERSION=1.2.0
 
 ARG TARGETOS
 ARG TARGETARCH
 
 RUN apt update -q
-RUN apt install -yq --no-install-recommends psmisc genisoimage ca-certificates qemu-kvm qemu-utils iproute2 iptables wget xz-utils netcat curl jq make git bash-completion
+RUN apt install -yq --no-install-recommends psmisc genisoimage ca-certificates qemu-kvm qemu-utils iproute2 iptables wget xz-utils zstd netcat curl jq make git bash-completion
+# oras streams the cluster-state snapshot to/from the registry as an OCI
+# artifact (sparse-aware tar handles the holes), so the save/restore steps
+# never copy disk images out of the container.
+RUN curl -sSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VERSION}/oras_${ORAS_VERSION}_${TARGETOS}_${TARGETARCH}.tar.gz" \
+ | tar -C /usr/local/bin -xzf - oras \
+ && chmod +x /usr/local/bin/oras
 RUN curl -sSL "https://github.com/siderolabs/talos/releases/download/v${TALOSCTL_VERSION}/talosctl-${TARGETOS}-${TARGETARCH}" -o /usr/local/bin/talosctl \
  && chmod +x /usr/local/bin/talosctl
 RUN curl -sSL "https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/${TARGETOS}/${TARGETARCH}/kubectl" -o /usr/local/bin/kubectl \

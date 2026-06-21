@@ -165,6 +165,13 @@ prepare-env:
 	make -C packages/core/testing apply
 	make -C packages/core/testing prepare-cluster
 
+# Counterpart to prepare-env for the restore side: bring up a fresh sandbox and
+# boot the cluster from a snapshot pulled out of the registry instead of
+# provisioning it from scratch.
+restore-env:
+	make -C packages/core/testing apply
+	make -C packages/core/testing restore-cluster
+
 generate:
 	hack/update-codegen.sh
 

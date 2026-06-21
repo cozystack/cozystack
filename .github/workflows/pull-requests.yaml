@@ -93,7 +93,7 @@ jobs:
         with:
           name: pr-patch
           path: _out/assets/pr.patch
-     
+
       - name: Upload Talos image
         uses: actions/upload-artifact@v4
         with:
@@ -164,14 +164,18 @@ jobs:
             core.setOutput('disk_id',     diskId);
 
 
-  e2e:
-    name: "E2E Tests"
+  # Provision a fresh cluster, install Cozystack into it, then force-stop the
+  # VMs and push a consistent snapshot of their disks (plus the talosconfig/
+  # kubeconfig working dir) to the registry as an image. The e2e job below
+  # pulls that image on another runner and boots the cluster from it — so the
+  # slow bring-up happens once here and the tests run against a restored state.
+  save_state:
+    name: "Save cluster state"
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
-    #runs-on: [oracle-vm-32cpu-128gb-x86-64]
     timeout-minutes: 180
     permissions:
       contents: read
-      packages: read
+      packages: write
       checks: write
     needs: ["build", "resolve_assets"]
     if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
@@ -290,6 +294,138 @@ jobs:
           else
             echo "skip=false" >> $GITHUB_OUTPUT
           fi
+
+      # ▸ Force-stop VMs and push a consistent snapshot to the registry. oras
+      #   logs in from inside the sandbox, so the credentials are forwarded as
+      #   env (GitHub masks them in the logs).
+      - name: Save cluster state
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME save-state
+        env:
+          REGISTRY_USERNAME: ${{ secrets.OCIR_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.OCIR_TOKEN }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+
+      # ▸ Collect debug information (always runs)
+      - name: Collect report
+        if: always()
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cozyreport-save-state
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+
+      # ▸ Open an SSH breakpoint to the sandbox if provisioning or install fails.
+      - name: Breakpoint on save-state failure
+        if: |
+          failure() &&
+          vars.BREAKPOINT_ENDPOINT != '' &&
+          (contains(github.event.pull_request.labels.*.name, 'debug')
+            || contains(github.event.pull_request.labels.*.name, 'release'))
+        # cozystack/breakpoint-action v2-cozy.1
+        # mode: pause-idle defaults: grace-period=20m, idle-timeout=10m
+        uses: cozystack/breakpoint-action@a6f3a6f87be398ad63b6577351e3398e53f578e4
+        with:
+          mode: pause-idle
+          endpoint: ${{ vars.BREAKPOINT_ENDPOINT }}
+          authorized-users: androndo, Arsolitt, IvanHunters, kvaps, lexfrei, lllamnyp, mattia-eleuteri, matthieu-robin, myasnikovdaniil, sircthulhu, tym83
+          check-run-name: "Breakpoint Open"
+          github-token: ${{ github.token }}
+          check-run-summary-template: |
+            ## 🔴 SSH breakpoint open — paused for debug
+
+            ```
+            {endpoint}
+            ```
+
+            Enter the e2e sandbox after SSH:
+            ```
+            docker exec -ti $(docker ps --filter name=cozy-e2e-sandbox -q | head -1) bash
+            export KUBECONFIG=/workspace/kubeconfig
+            ```
+
+            Resume from inside: `breakpoint resume`. Otherwise the breakpoint
+            exits 10 minutes after the last SSH session disconnects.
+
+      # ▸ Tear down environment (always runs)
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+      - name: Remove workspace
+        if: always()
+        run: rm -rf /tmp/$SANDBOX_NAME
+
+  e2e:
+    name: "E2E Tests"
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
+    #runs-on: [oracle-vm-32cpu-128gb-x86-64]
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+      checks: write
+    needs: ["save_state"]
+    # always() is required because resolve_assets is skipped on regular (non-
+    # release) PRs and GHA's default success() gate propagates that skip down
+    # the needs graph, skipping e2e too. The explicit check on save_state's
+    # result keeps the intended semantics: e2e runs iff save_state succeeded.
+    if: ${{ always() && needs.save_state.result == 'success' }}
+
+    steps:
+      # ▸ Checkout and prepare the codebase
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ▸ Regular PR path – apply the patch so the sandbox repo (and the e2e app
+      #   tests in it) matches the PR under test. The state image already holds
+      #   the booted cluster, so no Talos image download is needed here.
+      - name: Download PR patch
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-patch
+          path: _out/assets
+
+      - name: Apply patch
+        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+        run: |
+          git apply _out/assets/pr.patch
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
+      # ▸ Prepare environment
+      - name: Prepare workspace
+        run: |
+          rm -rf /tmp/$SANDBOX_NAME
+          cp -r ${{ github.workspace }} /tmp/$SANDBOX_NAME
+
+      # ▸ Pull the snapshot and boot the cluster from it. oras logs in from
+      #   inside the sandbox, so the credentials are forwarded as env.
+      - name: Restore cluster state and boot VMs
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME restore-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then
+              echo "❌ Attempt $attempt failed, exiting..."
+              exit 1
+            fi
+            echo "❌ Attempt $attempt failed, retrying..."
+          done
+          echo "✅ The task completed successfully after $attempt attempts"
+        env:
+          REGISTRY_USERNAME: ${{ secrets.OCIR_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.OCIR_TOKEN }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
 
       - name: Run OpenAPI tests
         run: |
