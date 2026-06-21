@@ -1,0 +1,84 @@
+{{- /*
+  Talos PKI infrastructure for the talos-csr-signer sidecar.
+
+  Two layers:
+  - <release>-talos-ca           : Ed25519 self-signed CA used as Talos machine CA.
+                                   The signer mounts this Secret to sign worker
+                                   trustd CSRs. Workers carry the *cert* in their
+                                   machineconfig as machine.ca.crt.
+  - <release>-talos-tls-cert     : Server TLS certificate for the signer's gRPC
+                                   listener, issued by the CA above.
+
+  cert-manager is a hard dependency of Kamaji, so it is always available.
+*/}}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-talos-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-talos-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Release.Name }}-talos-ca
+  isCA: true
+  commonName: talos
+  duration: 87600h  # 10 years
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: Ed25519
+  issuerRef:
+    name: {{ .Release.Name }}-talos-bootstrap
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-talos-ca
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-talos-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-talos-tls-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  secretName: {{ .Release.Name }}-talos-tls-cert
+  duration: 8760h   # 1 year
+  renewBefore: 720h # 30 days
+  privateKey:
+    algorithm: Ed25519
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+  dnsNames:
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "kubernetes.tenantClusterDomain" . }}
+  {{- /* spec.ipAddresses (Service ClusterIP) is patched in by the
+         talos-reconcile post-install hook once the Service exists.
+         Workers contact trustd at https://<ClusterIP>:50001 so the cert
+         must cover that IP — but the ClusterIP only exists after the
+         first Helm install pass, so a lookup-and-reuse here would race. */}}
+  issuerRef:
+    name: {{ .Release.Name }}-talos-ca
+    kind: Issuer
+    group: cert-manager.io

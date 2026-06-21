@@ -1,0 +1,131 @@
+#!/bin/bash
+# Migration 44 --> 45
+# Pin KubeadmConfigTemplate / KubeadmConfig objects with helm.sh/resource-policy=keep
+# so the Talos migration (PR #2610) does not let Helm prune them while CAPI still
+# references them from the existing kubeadm-backed MachineSet.
+#
+# PR #2610 drops KubeadmConfigTemplate from the kubernetes app chart templates
+# entirely (workers move to TalosConfigTemplate). On upgrade Helm sees the
+# resource present in the previous release manifest but absent in the new one
+# and issues a delete. The old MachineSet, which is still around until CAPI
+# finishes rolling workers onto Talos, then has its bootstrap.configRef pointing
+# at a missing object and floods controller-manager logs with reconcile errors.
+# In pathological cases (slow Talos image fetch from factory.talos.dev,
+# MachineHealthCheck remediation, etc.) workers can hang in pending state with
+# nothing to bootstrap from.
+#
+# The fix is to annotate every Helm-managed KubeadmConfigTemplate (and the
+# KubeadmConfig instances spawned from them) with helm.sh/resource-policy=keep
+# *before* the new chart renders. Helm then leaves the object alone, CAPI keeps
+# its references intact, and the resources disappear naturally when the old
+# MachineSet is finally garbage-collected after the Talos rollover completes.
+#
+# Idempotent: re-running on already-annotated objects is a no-op
+# (kubectl annotate --overwrite tolerates the existing value).
+#
+# Strict failure semantics: a failed annotate exits 1 to halt
+# run-migrations.sh, leaving CURRENT_VERSION at 44 so this migration retries
+# on the next platform upgrade. Best-effort semantics (exit 0 on partial
+# failure) are unsafe here because any KubeadmConfigTemplate left
+# un-pinned can be pruned by Helm during the chart upgrade, which then
+# breaks the still-extant kubeadm-backed MachineSet's bootstrap.configRef
+# while the Talos rollover is in flight — recovering that requires
+# manually recreating the templates with the right helm ownership
+# annotations and is not something we want to gate on a "best-effort"
+# migration.
+
+set -euo pipefail
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+FAILURES=0
+PATCHED=0
+SKIPPED=0
+
+KEEP_ANNOTATION="helm.sh/resource-policy=keep"
+HELM_RELEASE_LABEL="meta.helm.sh/release-name"
+
+annotate_object() {
+  local kind="$1" ns="$2" name="$3"
+  local current
+
+  current=$(kubectl get "$kind" --namespace "$ns" "$name" \
+    --output 'jsonpath={.metadata.annotations.helm\.sh/resource-policy}' 2>/dev/null || true)
+
+  if [ "$current" = "keep" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] would annotate $kind $ns/$name $KEEP_ANNOTATION"
+    PATCHED=$((PATCHED + 1))
+    return 0
+  fi
+
+  local kubectl_err
+  if kubectl_err=$(kubectl annotate "$kind" --namespace "$ns" "$name" \
+       "$KEEP_ANNOTATION" --overwrite 2>&1 >/dev/null); then
+    echo "Annotated $kind $ns/$name"
+    PATCHED=$((PATCHED + 1))
+  else
+    echo "WARN: failed to annotate $kind $ns/$name: ${kubectl_err:-unknown error}" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+list_helm_managed() {
+  local kind="$1" out
+  if ! out=$(kubectl get "$kind" --all-namespaces \
+       --selector "$HELM_RELEASE_LABEL" \
+       --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+       2>&1); then
+    case "$out" in
+      *"the server doesn't have a resource type"*|*"no matches for kind"*|*"NotFound"*) return 0 ;;
+    esac
+    echo "ERROR: kubectl get $kind failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+for kind in kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io \
+            kubeadmconfigs.bootstrap.cluster.x-k8s.io; do
+  echo "==> Pinning Helm-managed $kind with $KEEP_ANNOTATION"
+  items=$(list_helm_managed "$kind") || exit 1
+  while IFS=$'\t' read -r ns name; do
+    [ -z "$ns" ] && continue
+    annotate_object "$kind" "$ns" "$name"
+  done <<<"$items"
+done
+
+echo "==> Summary: patched=$PATCHED skipped=$SKIPPED failures=$FAILURES" | tee /dev/stderr
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+if [ "$FAILURES" -gt 0 ]; then
+  echo "ERROR: $FAILURES annotate(s) failed; halting run-migrations.sh and leaving CURRENT_VERSION at 44 so this migration retries on the next platform upgrade." >&2
+  echo "ERROR: any un-pinned KubeadmConfigTemplate left behind is at risk of being pruned by the kubernetes chart upgrade; investigate the failed annotate(s) above before retrying." >&2
+  exit 1
+fi
+
+# Stamp version=45. Mirror migration 43's labeled heredoc — a label-less
+# apply by the same field manager (kubectl create cm | kubectl apply)
+# would strip the platform.cozystack.io/no-delete label migration 42
+# added, dropping cozystack-version out of the
+# cozystack-no-delete-guardrail ValidatingAdmissionPolicy.
+# templates/cozystack-version.yaml only re-renders the labeled ConfigMap
+# on first install, so the label must be carried inline here.
+kubectl apply --filename - <<EOF
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cozystack-version
+  namespace: cozy-system
+  labels:
+    platform.cozystack.io/no-delete: "true"
+data:
+  version: "45"
+EOF

@@ -4,9 +4,24 @@ metadata:
   name: v1.10.1-bootstrap
   labels:
     bootstrap-components: cozy
+    bootstrap-provider: kubeadm
   annotations:
     provider.cluster.x-k8s.io/compressed: "true"
 binaryData:
   components: {{ .Files.Get "files/components.gz" | b64enc | quote }}
 data:
   metadata: {{ .Files.Get "files/metadata.yaml" | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: v0.6.12-bootstrap-talos
+  labels:
+    bootstrap-components: cozy
+    bootstrap-provider: talos
+  annotations:
+    provider.cluster.x-k8s.io/compressed: "true"
+binaryData:
+  components: {{ .Files.Get "files/components-talos.gz" | b64enc | quote }}
+data:
+  metadata: {{ .Files.Get "files/metadata-talos.yaml" | quote }}
