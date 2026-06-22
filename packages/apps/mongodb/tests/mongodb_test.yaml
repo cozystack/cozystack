@@ -106,7 +106,7 @@ tests:
   # CR Version     #
   ##################
 
-  - it: sets crVersion to 1.21.1
+  - it: sets crVersion to 1.22.0
     release:
       name: test-mongodb
       namespace: tenant-test
@@ -116,7 +116,7 @@ tests:
     asserts:
       - equal:
           path: spec.crVersion
-          value: "1.21.1"
+          value: "1.22.0"
         documentIndex: 0
 
   #####################
