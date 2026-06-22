@@ -7,12 +7,14 @@ release:
   namespace: tenant-root
 
 # When the operator supplies a wildcard Secret
-# (_cluster.wildcard-secret-name), the publishing tenant's ingress
-# controller must serve it as the default SSL certificate so per-host
-# ACME certs are no longer needed. The reference is same-namespace
-# (publishing namespace == controller namespace), and the flag is set
-# only on the publishing controller — child-tenant controllers cannot
-# read a Secret from another namespace, so they must NOT get the flag.
+# (_cluster.wildcard-secret-name), each tenant ingress controller serves
+# it as the default SSL certificate so per-host ACME certs are no longer
+# needed. The reference is always same-namespace: the publishing
+# controller reads the operator-created Secret in its own namespace, and
+# a child-tenant controller reads the replica the platform controller
+# mirrors into that tenant namespace. ingress-nginx can only read a
+# default-ssl-certificate Secret from its own namespace, so the flag
+# points at .Release.Namespace in every case.
 
 tests:
   - it: sets default-ssl-certificate on the publishing controller when wildcard is set
@@ -33,7 +35,7 @@ tests:
       - notExists:
           path: spec.values.ingress-nginx.controller.extraArgs.default-ssl-certificate
 
-  - it: does not set default-ssl-certificate on a non-publishing tenant controller
+  - it: points a child-tenant controller at its own-namespace wildcard replica
     release:
       name: ingress
       namespace: tenant-foo
@@ -42,5 +44,6 @@ tests:
         expose-ingress: tenant-root
         wildcard-secret-name: wildcard-tls
     asserts:
-      - notExists:
+      - equal:
           path: spec.values.ingress-nginx.controller.extraArgs.default-ssl-certificate
+          value: tenant-foo/wildcard-tls
