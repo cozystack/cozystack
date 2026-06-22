@@ -45,6 +45,44 @@ networking:
   # Set this to comma-separated list of master node IPs to override.
   kubeovn:
     MASTER_NODES: ""
+  # In-cluster (east-west) transport encryption. Opt-in, OFF by default.
+  #
+  # When enabled, pod-to-pod traffic that crosses nodes is encrypted at the
+  # network layer by the ACTIVE datapath, regardless of whether the workload
+  # speaks TLS — defense-in-depth for the whole mesh without per-application
+  # changes. This COMPLEMENTS, and does NOT replace, application-level /
+  # end-to-end TLS: it never reaches an external client and gives a tenant no
+  # verifiable endpoint certificate (see the per-app certificate series). Use
+  # it alongside, not instead of, TLS on exposed endpoints.
+  #
+  # The mechanism is datapath-specific (selected by bundles.system.variant):
+  #
+  #   * kubeovn-cilium (isp-full, the default) and kubeovn-cilium-generic
+  #     (isp-full-generic): KubeOVN owns the datapath; its Geneve overlay is
+  #     encrypted with IPsec (kube-ovn ENABLE_OVN_IPSEC). KubeOVN's own
+  #     controller provisions the IPsec CA and per-node certificates through
+  #     the Kubernetes CSR API — no cert-manager wiring is required. This is
+  #     the path this toggle drives today.
+  #   * cilium / cilium-generic (Cilium owns the datapath): Cilium-native
+  #     WireGuard/IPsec is the right mechanism there, but the platform system
+  #     bundle does not select those variants, so this toggle does not reach
+  #     them yet.
+  #   * cilium-kilo: Kilo already establishes a WireGuard mesh, but only at
+  #     meshGranularity=location — it encrypts CROSS-LOCATION traffic and
+  #     leaves intra-location pod-to-pod in cleartext by design. This toggle
+  #     targets exactly that intra-location gap and composes with Kilo rather
+  #     than conflicting with it.
+  #
+  # CAVEATS: encrypting the overlay adds per-packet ESP overhead and lowers
+  # the effective MTU, so east-west throughput drops and latency rises; the
+  # cost is highest for high-bandwidth flows. IPsec here protects the
+  # inter-node overlay tunnels — same-node pod-to-pod traffic never leaves the
+  # host and is not tunneled or encrypted. Flipping this on an existing
+  # cluster triggers a rollout of the CNI components. On variants without a
+  # cozystack-managed encryptable datapath (e.g. isp-hosted / noop) the toggle
+  # has no effect.
+  encryption:
+    enabled: false
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"
