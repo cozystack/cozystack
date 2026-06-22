@@ -8,9 +8,18 @@ sourceUrl: ""
 ## @param {string} sourceSecretName - Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys).
 sourceSecretName: ""
 
+## @param {string} vddkInitImage - VDDK init image (VMware Virtual Disk Development Kit) used by Forklift for efficient vSphere disk transfer. Required when `skipGuestConversion` is enabled (raw-copy mode). Built from the proprietary VMware VDDK SDK and pushed to a registry reachable by the cluster. Note: VDDK connects directly to the ESXi hosts, so the cluster must have network access to them.
+vddkInitImage: ""
+
 ##
 ## @section Migration Plan
 ##
+
+## @param {bool} skipGuestConversion - Skip virt-v2v guest conversion and copy the disk as-is (raw-copy mode). Faster and avoids the privileged virt-v2v conversion pod, but the guest OS must already contain virtio drivers. Requires `vddkInitImage` to be set.
+skipGuestConversion: false
+
+## @param {string} virtV2vImage - Override the virt-v2v conversion container image used by Forklift. Leave empty to use the operator default. Provided as an escape hatch for version mismatches in the conversion image.
+virtV2vImage: ""
 
 ## @typedef {struct} VM - A virtual machine to migrate.
 ## @field {string} id - The managed object reference ID of the VM in vSphere (e.g. `vm-123`).

@@ -176,21 +176,24 @@ kubectl delete dv -n <namespace> -l forklift.konveyor.io/plan=<import-name>
 
 ### VMware Source
 
-| Name               | Description                                                                                          | Type     | Value |
-| ------------------ | ---------------------------------------------------------------------------------------------------- | -------- | ----- |
-| `sourceUrl`        | URL of the VMware vCenter server (e.g. `https://vcenter.example.com/sdk`).                           | `string` | `""`  |
-| `sourceSecretName` | Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys). | `string` | `""`  |
+| Name               | Description                                                                                                                                                                                                                                                                                                                                                                | Type     | Value |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `sourceUrl`        | URL of the VMware vCenter server (e.g. `https://vcenter.example.com/sdk`).                                                                                                                                                                                                                                                                                                 | `string` | `""`  |
+| `sourceSecretName` | Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys).                                                                                                                                                                                                                                                                       | `string` | `""`  |
+| `vddkInitImage`    | VDDK init image (VMware Virtual Disk Development Kit) used by Forklift for efficient vSphere disk transfer. Required when `skipGuestConversion` is enabled (raw-copy mode). Built from the proprietary VMware VDDK SDK and pushed to a registry reachable by the cluster. Note: VDDK connects directly to the ESXi hosts, so the cluster must have network access to them. | `string` | `""`  |
 
 
 ### Migration Plan
 
-| Name             | Description                                                                       | Type       | Value   |
-| ---------------- | --------------------------------------------------------------------------------- | ---------- | ------- |
-| `vms`            | List of virtual machines to migrate.                                              | `[]object` | `[]`    |
-| `vms[i].id`      | The managed object reference ID of the VM in vSphere (e.g. `vm-123`).             | `string`   | `""`    |
-| `vms[i].name`    | Optional target name for the VM in KubeVirt.                                      | `string`   | `""`    |
-| `warm`           | Enable warm migration (incremental replication before cutover).                   | `bool`     | `false` |
-| `enableAdoption` | Automatically label imported VMs for Cozystack adoption and dashboard visibility. | `bool`     | `true`  |
+| Name                  | Description                                                                                                                                                                                                                 | Type       | Value   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `skipGuestConversion` | Skip virt-v2v guest conversion and copy the disk as-is (raw-copy mode). Faster and avoids the privileged virt-v2v conversion pod, but the guest OS must already contain virtio drivers. Requires `vddkInitImage` to be set. | `bool`     | `false` |
+| `virtV2vImage`        | Override the virt-v2v conversion container image used by Forklift. Leave empty to use the operator default. Provided as an escape hatch for version mismatches in the conversion image.                                     | `string`   | `""`    |
+| `vms`                 | List of virtual machines to migrate.                                                                                                                                                                                        | `[]object` | `[]`    |
+| `vms[i].id`           | The managed object reference ID of the VM in vSphere (e.g. `vm-123`).                                                                                                                                                       | `string`   | `""`    |
+| `vms[i].name`         | Optional target name for the VM in KubeVirt.                                                                                                                                                                                | `string`   | `""`    |
+| `warm`                | Enable warm migration (incremental replication before cutover).                                                                                                                                                             | `bool`     | `false` |
+| `enableAdoption`      | Automatically label imported VMs for Cozystack adoption and dashboard visibility.                                                                                                                                           | `bool`     | `true`  |
 
 
 ### Network Mapping

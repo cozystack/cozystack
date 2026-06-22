@@ -11,6 +11,10 @@ metadata:
     vm-import.cozystack.io/import-name: {{ .Release.Name | quote }}
 spec:
   warm: {{ default false .Values.warm }}
+  skipGuestConversion: {{ default false .Values.skipGuestConversion }}
+  {{- with .Values.virtV2vImage }}
+  virtV2vImage: {{ . | quote }}
+  {{- end }}
   provider:
     source:
       name: {{ .Release.Name }}-source
