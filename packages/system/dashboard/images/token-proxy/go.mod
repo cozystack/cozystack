@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/gorilla/securecookie v1.1.2
-	github.com/lestrrat-go/httprc/v3 v3.0.5
+	github.com/lestrrat-go/httprc/v3 v3.0.6
 	github.com/lestrrat-go/jwx/v3 v3.1.0
 )
 
