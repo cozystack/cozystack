@@ -71,7 +71,7 @@ spec:
             - "--leader-election"
             - "--leader-election-namespace={{ .Release.Namespace }}"
             - "--extra-create-metadata=true"
-            - "--feature-gates=HonorPVReclaimPolicy=true"
+            - "--feature-gates=HonorPVReclaimPolicy=true,VolumeAttributesClass=false"
             - "--timeout=1200s"
             - "--retry-interval-max=30m"
           env:
@@ -99,6 +99,7 @@ spec:
             - "-leader-election"
             - "--leader-election-namespace={{ .Release.Namespace }}"
             - '-handle-volume-inuse-error=false'
+            - '-feature-gates=VolumeAttributesClass=false'
           env:
             - name: ADDRESS
               value: /csi/csi.sock
@@ -182,6 +183,7 @@ spec:
             - "--working-mount-dir={{ .Values.controller.workingMountDir }}"
             - "--default-ondelete-policy={{ .Values.controller.defaultOnDeletePolicy }}"
             - "--use-tar-command-in-snapshot={{ .Values.controller.useTarCommandInSnapshot }}"
+            - "--enable-snapshot-compression={{ .Values.controller.enableSnapshotCompression }}"
           env:
             - name: NODE_ID
               valueFrom:
