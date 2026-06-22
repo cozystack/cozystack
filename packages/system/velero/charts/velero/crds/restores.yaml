@@ -87,8 +87,8 @@ spec:
                           nullable: true
                           type: array
                         excludedResources:
-                          description: ExcludedResources specifies the resources
-                            to which this hook spec does not apply.
+                          description: ExcludedResources specifies the resources to
+                            which this hook spec does not apply.
                           items:
                             type: string
                           nullable: true
@@ -110,8 +110,8 @@ spec:
                           nullable: true
                           type: array
                         labelSelector:
-                          description: LabelSelector, if specified, filters the
-                            resources to which this hook spec applies.
+                          description: LabelSelector, if specified, filters the resources
+                            to which this hook spec applies.
                           nullable: true
                           properties:
                             matchExpressions:
@@ -172,8 +172,8 @@ spec:
                                 properties:
                                   command:
                                     description: Command is the command and arguments
-                                      to execute from within a container after a
-                                      pod has been restored.
+                                      to execute from within a container after a pod
+                                      has been restored.
                                     items:
                                       type: string
                                     minItems: 1
@@ -190,8 +190,8 @@ spec:
                                     type: string
                                   onError:
                                     description: OnError specifies how Velero should
-                                      behave if it encounters an error executing
-                                      this hook.
+                                      behave if it encounters an error executing this
+                                      hook.
                                     enum:
                                     - Continue
                                     - Fail
@@ -214,9 +214,8 @@ spec:
                                 description: Init defines an init restore hook.
                                 properties:
                                   initContainers:
-                                    description: InitContainers is list of init
-                                      containers to be added to a pod during its
-                                      restore.
+                                    description: InitContainers is list of init containers
+                                      to be added to a pod during its restore.
                                     items:
                                       type: object
                                       x-kubernetes-preserve-unknown-fields: true
@@ -336,16 +335,16 @@ spec:
                     label selector matches no objects.
                   properties:
                     matchExpressions:
-                      description: matchExpressions is a list of label selector
-                        requirements. The requirements are ANDed.
+                      description: matchExpressions is a list of label selector requirements.
+                        The requirements are ANDed.
                       items:
                         description: |-
                           A label selector requirement is a selector that contains values, a key, and an operator that
                           relates the key and values.
                         properties:
                           key:
-                            description: key is the label key that the selector
-                              applies to.
+                            description: key is the label key that the selector applies
+                              to.
                             type: string
                           operator:
                             description: |-
@@ -381,8 +380,8 @@ spec:
                 nullable: true
                 type: array
               preserveNodePorts:
-                description: PreserveNodePorts specifies whether to restore old
-                  nodePorts from backup.
+                description: PreserveNodePorts specifies whether to restore old nodePorts
+                  from backup.
                 nullable: true
                 type: boolean
               resourceModifier:
@@ -442,17 +441,16 @@ spec:
                   from the most recent successful backup created from this schedule.
                 type: string
               uploaderConfig:
-                description: UploaderConfig specifies the configuration for the
-                  restore.
+                description: UploaderConfig specifies the configuration for the restore.
                 nullable: true
                 properties:
                   parallelFilesDownload:
-                    description: ParallelFilesDownload is the concurrency number
-                      setting for restore.
+                    description: ParallelFilesDownload is the concurrency number setting
+                      for restore.
                     type: integer
                   writeSparseFiles:
-                    description: WriteSparseFiles is a flag to indicate whether
-                      write files sparsely or not.
+                    description: WriteSparseFiles is a flag to indicate whether write
+                      files sparsely or not.
                     nullable: true
                     type: boolean
                 type: object
@@ -478,8 +476,8 @@ spec:
                   to fail.
                 type: string
               hookStatus:
-                description: HookStatus contains information about the status of
-                  the hooks.
+                description: HookStatus contains information about the status of the
+                  hooks.
                 nullable: true
                 properties:
                   hooksAttempted:
@@ -489,8 +487,8 @@ spec:
                       and the number of hooks that executed successfully.
                     type: integer
                   hooksFailed:
-                    description: HooksFailed is the total number of hooks which
-                      ended with an error
+                    description: HooksFailed is the total number of hooks which ended
+                      with an error
                     type: integer
                 type: object
               phase:
@@ -515,8 +513,8 @@ spec:
                 nullable: true
                 properties:
                   itemsRestored:
-                    description: ItemsRestored is the number of items that have
-                      actually been restored so far
+                    description: ItemsRestored is the number of items that have actually
+                      been restored so far
                     type: integer
                   totalItems:
                     description: |-

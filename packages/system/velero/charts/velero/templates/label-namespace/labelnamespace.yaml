@@ -28,11 +28,13 @@ spec:
         image: "{{ .Values.kubectl.image.repository }}:{{ template "chart.KubernetesVersion" . }}"
         {{- end }}
         command:
-        - /bin/sh
-        - -c
-        - |
+          - /bin/kubectl
+        args:
+          - label
+          - namespace
+          - {{ .Release.Namespace }}
           {{- range $key, $value := .Values.namespace.labels }}
-          kubectl label namespace {{ $.Release.Namespace }} {{ $key }}={{ $value }}
+          - {{ $key }}={{ $value }}
           {{- end }}
         {{- if .Values.kubectl.extraVolumeMounts }}
         volumeMounts:

@@ -48,8 +48,8 @@ spec:
           metadata:
             type: object
           spec:
-            description: DeleteBackupRequestSpec is the specification for which
-              backups to delete.
+            description: DeleteBackupRequestSpec is the specification for which backups
+              to delete.
             properties:
               backupName:
                 type: string
