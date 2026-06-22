@@ -11,6 +11,7 @@ require (
 	k8s.io/client-go v12.0.0+incompatible
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/mount-utils v0.36.0
+	kubevirt.io/api v1.2.2
 	kubevirt.io/containerized-data-importer-api v1.59.0
 	kubevirt.io/csi-driver v0.0.0-20260424143118-bee6c348c004
 )
@@ -57,7 +58,6 @@ require (
 	k8s.io/apiextensions-apiserver v0.26.4 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
-	kubevirt.io/api v1.2.2 // indirect
 	kubevirt.io/controller-lifecycle-operator-sdk/api v0.0.0-20220329064328-f3cc58c6ed90 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
@@ -91,5 +91,5 @@ replace (
 	k8s.io/mount-utils => k8s.io/mount-utils v0.36.0
 	k8s.io/pod-security-admission => k8s.io/pod-security-admission v0.36.0
 	k8s.io/sample-apiserver => k8s.io/sample-apiserver v0.36.0
-	kubevirt.io/csi-driver => github.com/kubevirt/csi-driver v0.0.0-20260424143118-bee6c348c004
+	kubevirt.io/csi-driver => github.com/kubevirt/csi-driver v0.0.0-20260430151523-51c6bca7c611
 )
