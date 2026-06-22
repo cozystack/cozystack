@@ -9,8 +9,7 @@ image: image-backupstrategy-controller
 image-backupstrategy-controller:
 	docker buildx build -f images/backupstrategy-controller/Dockerfile ../../.. \
 		$(call image-tags,backupstrategy-controller,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/backupstrategy-controller:latest \
-		--cache-to type=inline \
+		$(call cache-args,backupstrategy-controller) \
 		--metadata-file images/backupstrategy-controller.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/backupstrategy-controller:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/backupstrategy-controller.json -o json -r)" \

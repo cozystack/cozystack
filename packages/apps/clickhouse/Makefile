@@ -13,8 +13,7 @@ test:
 image:
 	docker buildx build images/clickhouse-backup \
 		$(call image-tags,clickhouse-backup,$(CLICKHOUSE_BACKUP_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/clickhouse-backup:latest \
-		--cache-to type=inline \
+		$(call cache-args,clickhouse-backup) \
 		--metadata-file images/clickhouse-backup.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/clickhouse-backup:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/clickhouse-backup.json -o json -r)" \
@@ -22,8 +21,7 @@ image:
 	rm -f images/clickhouse-backup.json
 	docker buildx build images/altinity-clickhouse-backup \
 		$(call image-tags,altinity-clickhouse-backup,$(CLICKHOUSE_BACKUP_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/altinity-clickhouse-backup:latest \
-		--cache-to type=inline \
+		$(call cache-args,altinity-clickhouse-backup) \
 		--metadata-file images/altinity-clickhouse-backup.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/altinity-clickhouse-backup:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/altinity-clickhouse-backup.json -o json -r)" \

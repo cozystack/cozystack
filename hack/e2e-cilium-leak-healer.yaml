@@ -1,0 +1,101 @@
+# Interim in-cluster self-heal for the Cilium endpoint leak (cilium/cilium#38313
+# class). Applied during e2e install (hack/e2e-install-cozystack.bats) and left
+# running for the whole cluster lifetime, so it covers install AND every app
+# test. The heal logic lives in hack/e2e-cilium-endpoint-leak-healer.sh and is
+# shipped to the pod via a ConfigMap built from that file at apply time (single
+# source of truth). REMOVE this file, that script, and the bats wiring once a
+# fixed Cilium ships. CI band-aid, not a product fix.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cilium-leak-healer
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: cilium-leak-healer
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cilium-leak-healer
+  labels:
+    app.kubernetes.io/name: cilium-leak-healer
+rules:
+  # find FailedCreatePodSandBox "IP already in use" rejections, cluster-wide
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # inspect the wedged pod and the endpoint's claimed owner, and delete the
+  # wedged pod to reschedule it onto a free IP when the disputed IP is held by
+  # a reserved/infra endpoint (or a disconnect otherwise fails)
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "delete"]
+  # run `cilium-dbg endpoint ...` inside the owning node's cilium-agent
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cilium-leak-healer
+  labels:
+    app.kubernetes.io/name: cilium-leak-healer
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cilium-leak-healer
+subjects:
+  - kind: ServiceAccount
+    name: cilium-leak-healer
+    namespace: kube-system
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: cilium-leak-healer
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: cilium-leak-healer
+spec:
+  # The pod runs an endless heal loop and is torn down with the ephemeral e2e
+  # cluster, so it never completes on its own. backoffLimit only matters if the
+  # watchdog itself ever crashes — keep restarting it.
+  backoffLimit: 100
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: cilium-leak-healer
+    spec:
+      serviceAccountName: cilium-leak-healer
+      restartPolicy: OnFailure
+      # Immune to the very leak it heals: host networking needs no Cilium
+      # endpoint, so this pod can never be wedged by the leak and can reach the
+      # API server before pod networking is fully up. Broad tolerations let it
+      # schedule before nodes are Ready and stay put through later taints.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      containers:
+        - name: healer
+          # Reuse the in-tree, digest-pinned kubectl+jq image already shipped by
+          # the installer (packages/core/installer/templates/cozy-system-labels.yaml).
+          image: docker.io/alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
+          command: ["/bin/sh", "/opt/healer/heal.sh"]
+          env:
+            - name: CILIUM_NS
+              value: cozy-cilium
+          volumeMounts:
+            - name: script
+              mountPath: /opt/healer
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: script
+          configMap:
+            name: cilium-leak-healer

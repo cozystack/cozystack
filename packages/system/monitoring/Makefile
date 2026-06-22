@@ -12,8 +12,7 @@ test:
 image:
 	docker buildx build images/grafana \
 		$(call image-tags,grafana,$(GRAFANA_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/grafana:latest \
-		--cache-to type=inline \
+		$(call cache-args,grafana) \
 		--metadata-file images/grafana.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/grafana:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/grafana.json -o json -r)" \

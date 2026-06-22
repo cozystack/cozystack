@@ -103,7 +103,11 @@ spec:
 EOF
   wait_etcd_hr_ready || { dump_diagnostics; false; }
   kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
-  kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd || { dump_diagnostics; false; }
+  # Reconfiguring the Etcd CR triggers a HelmRelease upgrade that renders the
+  # EtcdBackupSchedule; hr/etcdcluster readiness can report ready on the prior
+  # revision before that resource materializes, so poll for it instead of a
+  # bare get (same pattern this test already uses for the CronJob below).
+  timeout 120 sh -ec "until kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd >/dev/null 2>&1; do sleep 2; done" || { dump_diagnostics; false; }
   # Verify the region field propagated to the EtcdBackupSchedule.
   REGION=$(kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd -o jsonpath='{.spec.destination.s3.region}')
   [ "$REGION" = "us-east-1" ]

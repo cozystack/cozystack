@@ -1,3 +1,11 @@
+{{- /*
+  updateMode is Initial, not Auto. Auto mode evicts running pods to apply new
+  recommendations; during install that churn recreates pods faster than Cilium
+  releases their endpoint IPs, tripping the cluster-pool IPAM "IP already in
+  use" (putEndpointIdInvalid) leak that wedges a pod and stalls the install.
+  Initial sets requests at creation without evicting, removing the trigger.
+  Do not switch back to Auto without fixing the underlying Cilium IP-reuse race.
+*/ -}}
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
 metadata:
@@ -8,7 +16,7 @@ spec:
     kind: VMAgent
     name: vmagent
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
     minReplicas: 1
   resourcePolicy:
     containerPolicies:

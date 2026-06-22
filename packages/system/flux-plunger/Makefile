@@ -7,9 +7,9 @@ include ../../../hack/package.mk
 image:
 	docker buildx build -f images/flux-plunger/Dockerfile ../../../ \
 		--provenance false \
+		$(if $(strip $(BUILDER)),--builder=$(BUILDER)) \
 		$(call image-tags,flux-plunger,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/flux-plunger:latest \
-		--cache-to type=inline \
+		$(call cache-args,flux-plunger) \
 		--metadata-file images/flux-plunger.json \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \

@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -566,8 +567,27 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Update the HelmRelease in Kubernetes
-	err = r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+	// Update the HelmRelease in Kubernetes.
+	//
+	// Flux's helm-controller (and other controllers) continuously write the
+	// HelmRelease's status, which shares the object's resourceVersion. When a
+	// caller updates an app CR while a prior reconcile is still in flight, the
+	// resourceVersion read above goes stale and the Update is rejected with a
+	// 409 Conflict. The HelmRelease spec is fully derived from the Application
+	// the caller just applied, so a stale-resourceVersion conflict is never a
+	// real spec conflict here: refresh the resourceVersion from the live object
+	// and retry.
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		if apierrors.IsConflict(updateErr) {
+			cur := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+				return getErr
+			}
+			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+		}
+		return updateErr
+	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)

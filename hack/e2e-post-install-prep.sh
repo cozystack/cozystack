@@ -3,22 +3,54 @@
 # their respective prerequisites are reachable. Designed to run in the
 # background during the platform HR reconcile wait, so its wall-clock cost
 # overlaps with the wait instead of compounding it.
+#
+# Each LINSTOR prerequisite below sits at the end of a multi-hop reconcile
+# chain: cozystack-operator -> platform HR -> linstor HR -> piraeus-operator
+# -> cert-manager issues the controller TLS -> linstor-controller Deployment
+# -> controller pod -> DB migration. On a loaded CI runner that chain has been
+# observed to take 7-9 min end to end, and the operator alone needs ~70s just
+# to emit the linstor HR. The earlier per-step "object exists" budgets
+# (timeout 60 / timeout 300) were anchored to this script's start, so they
+# raced that reconcile latency; when one lost (linstor HR appeared at ~+70s
+# against a 60s budget) `set -e` aborted the whole script and the install
+# failed. Instead, drive every wait off one shared deadline -- the same 15m
+# window the installer's `kubectl wait hr --all` uses -- and tolerate
+# not-yet-created objects without aborting, while still failing hard if a
+# resource never becomes ready inside the budget.
 set -eu
 
-echo "[post-install-prep] waiting for linstor HelmRelease object to exist"
-timeout 60 sh -ec 'until kubectl get hr/linstor -n cozy-linstor >/dev/null 2>&1; do sleep 2; done'
+DEADLINE=$(( $(date +%s) + 900 ))
 
-echo "[post-install-prep] waiting for linstor HelmRelease to be Ready"
-kubectl wait helmrelease/linstor -n cozy-linstor --for=condition=Ready --timeout=15m
+# wait_for <description> <kubectl-wait-args...>
+# Polls `kubectl wait` until it succeeds or the shared deadline elapses.
+# kubectl wait exits non-zero immediately when the object does not exist yet,
+# so the loop tolerates "not created yet" without the set -e cliff that a bare
+# `kubectl wait` would trigger on a NotFound. The per-attempt timeout shrinks
+# to the budget remaining, so the final attempt can consume the rest of it.
+wait_for() {
+  desc=$1
+  shift
+  echo "[post-install-prep] waiting for ${desc}"
+  while :; do
+    remaining=$(( DEADLINE - $(date +%s) ))
+    if [ "$remaining" -le 0 ]; then
+      echo "[post-install-prep] timed out waiting for ${desc}" >&2
+      return 1
+    fi
+    if kubectl wait "$@" --timeout="${remaining}s" 2>/dev/null; then
+      return 0
+    fi
+    sleep 5
+  done
+}
 
-echo "[post-install-prep] waiting for linstor-controller deployment to exist"
-timeout 300 sh -ec 'until kubectl get deploy/linstor-controller -n cozy-linstor >/dev/null 2>&1; do sleep 2; done'
-
-echo "[post-install-prep] waiting for linstor-controller to be Available"
-kubectl wait deployment/linstor-controller -n cozy-linstor --timeout=5m --for=condition=available
+wait_for "linstor HelmRelease to be Ready" \
+  helmrelease/linstor -n cozy-linstor --for=condition=Ready
+wait_for "linstor-controller Deployment to be Available" \
+  deployment/linstor-controller -n cozy-linstor --for=condition=available
 
 echo "[post-install-prep] waiting for 3 LINSTOR nodes Online"
-timeout 60 sh -ec 'until [ $(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list | grep -c Online) -eq 3 ]; do sleep 1; done'
+timeout 300 sh -ec 'until [ $(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list | grep -c Online) -eq 3 ]; do sleep 2; done'
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
 created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')

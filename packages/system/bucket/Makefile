@@ -16,8 +16,7 @@ image: image-s3manager
 image-s3manager:
 	docker buildx build images/s3manager \
 		$(call image-tags,s3manager,$(S3MANAGER_TAG)) \
-		--cache-from type=registry,ref=$(CACHE_REGISTRY)/s3manager:latest \
-		--cache-to type=inline \
+		$(call cache-args,s3manager) \
 		--metadata-file images/s3manager.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/s3manager:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/s3manager.json -o json -r)" \
