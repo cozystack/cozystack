@@ -197,7 +197,7 @@ seaweedfs:
     bucketClassName: "seaweedfs"
     region: ""
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.4.0-rc.2@sha256:ad318fa6e365d2c1ef5559979104b62c34b4440d33ac2e554508f77cde1f1d3e"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.5.0-rc.3@sha256:362ad8d7e63214622315e3bf41ca879189c42b6215587046d44f8c9ddcd8d8f2"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
