@@ -4,7 +4,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}
-  namespace: {{ default .Release.Namespace .Values.admissionController.metrics.serviceMonitor.namespace | quote }}
+  namespace: {{ default (include "common.names.namespace" .) .Values.admissionController.metrics.serviceMonitor.namespace | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
     {{- if .Values.admissionController.metrics.serviceMonitor.labels }}
@@ -25,13 +25,13 @@ spec:
     - port: http-metrics
       {{- if .Values.admissionController.metrics.serviceMonitor.interval }}
       interval: {{ .Values.admissionController.metrics.serviceMonitor.interval }}
-      {{- end}}
+      {{- end }}
       {{- if .Values.admissionController.metrics.serviceMonitor.scrapeTimeout }}
       scrapeTimeout: {{ .Values.admissionController.metrics.serviceMonitor.scrapeTimeout }}
-      {{- end}}
+      {{- end }}
       {{- if .Values.admissionController.metrics.serviceMonitor.honorLabels }}
       honorLabels: {{ .Values.admissionController.metrics.serviceMonitor.honorLabels }}
-      {{- end}}
+      {{- end }}
       {{- if .Values.admissionController.metrics.serviceMonitor.metricRelabelings }}
       metricRelabelings: {{ toYaml .Values.admissionController.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
       {{- end }}
@@ -41,7 +41,7 @@ spec:
       path: /metrics
   namespaceSelector:
     matchNames:
-      - {{ .Release.Namespace | quote }}
+      - {{ include "common.names.namespace" . | quote }}
   selector:
     matchLabels:
       {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 6 }}

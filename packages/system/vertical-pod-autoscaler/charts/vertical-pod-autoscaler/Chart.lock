@@ -1,6 +1,6 @@
 dependencies:
 - name: common
-  repository: https://charts.bitnami.com/bitnami/
-  version: 2.21.0
-digest: sha256:e25ca51f064e63a6b2d595f4bb318563de95e5e7ee2534b0457010be6acefc1e
-generated: "2025-01-28T22:38:50.721673297Z"
+  repository: oci://ghcr.io/cowboysysop/charts
+  version: 2.31.3
+digest: sha256:97c0702416bf7bd224e8a2fa1e13f01521c6fef4909fc387c28778dd5ceb5442
+generated: "2025-10-06T16:51:00.77929793Z"

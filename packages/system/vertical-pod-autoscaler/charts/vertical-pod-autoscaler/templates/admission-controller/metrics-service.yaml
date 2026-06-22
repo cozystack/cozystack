@@ -3,6 +3,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "vertical-pod-autoscaler.admissionController.metrics.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}

@@ -1,0 +1,30 @@
+suite: cozy-vertical-pod-autoscaler chart rendering invariants
+release:
+  name: vpa
+  namespace: cozy-vertical-pod-autoscaler
+tests:
+  - it: drives the recommender off cluster prometheus (cozystack storage config)
+    template: charts/vertical-pod-autoscaler/templates/recommender/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--storage=prometheus"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--prometheus-address=http://vmselect-shortterm.tenant-root.svc.cozy.local:8481/select/0/prometheus/"
+
+  - it: renders the recommender on the upstream registry.k8s.io image, not Bitnami
+    template: charts/vertical-pod-autoscaler/templates/recommender/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^registry\.k8s\.io/autoscaling/vpa-recommender:'
+
+  # Cozystack disables the bundled CRD-install Job (crds.enabled: false) — CRDs
+  # are managed out-of-band — so the upstream chart's Bitnami-based kubectl
+  # Job (and the Bitnami image override it would otherwise need) never renders.
+  - it: does not emit the CRD-install Job when crds.enabled is false
+    template: charts/vertical-pod-autoscaler/templates/crds/job.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

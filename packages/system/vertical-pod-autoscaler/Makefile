@@ -3,9 +3,12 @@ export NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	# VirtualPodAutoscaler operator
 	helm repo add cowboysysop https://cowboysysop.github.io/charts/
 	helm repo update cowboysysop
-	helm pull cowboysysop/vertical-pod-autoscaler --untar --untardir charts
+	helm pull cowboysysop/vertical-pod-autoscaler --untar --untardir charts --version 11.1.1

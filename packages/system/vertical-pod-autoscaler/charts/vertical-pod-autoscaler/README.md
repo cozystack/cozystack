@@ -11,6 +11,12 @@ $ helm repo add cowboysysop https://cowboysysop.github.io/charts/
 $ helm install my-release cowboysysop/vertical-pod-autoscaler
 ```
 
+or for an OCI-based registry:
+
+```bash
+$ helm install my-release oci://ghcr.io/cowboysysop/charts/vertical-pod-autoscaler
+```
+
 ## Introduction
 
 This chart bootstraps a Vertical Pod Autoscaler deployment on a [Kubernetes](http://kubernetes.io) cluster using the [Helm](https://helm.sh) package manager.
@@ -30,6 +36,12 @@ $ helm repo add cowboysysop https://cowboysysop.github.io/charts/
 $ helm install my-release cowboysysop/vertical-pod-autoscaler
 ```
 
+or for an OCI-based registry:
+
+```bash
+$ helm install my-release oci://ghcr.io/cowboysysop/charts/vertical-pod-autoscaler
+```
+
 These commands deploy Vertical Pod Autoscaler on the Kubernetes cluster in the default configuration and with the release name `my-release`. The deployment configuration can be customized by specifying the customization parameters with the `helm install` command using the `--values` or `--set` arguments. Find more information in the [configuration section](#configuration) of this document.
 
 ## Upgrading
@@ -40,9 +52,22 @@ Upgrade the chart deployment using:
 $ helm upgrade my-release cowboysysop/vertical-pod-autoscaler
 ```
 
+or for an OCI-based registry:
+
+```bash
+$ helm upgrade my-release oci://ghcr.io/cowboysysop/charts/vertical-pod-autoscaler
+```
+
 The command upgrades the existing `my-release` deployment with the most latest release of the chart.
 
-**TIP**: Use `helm repo update` to update information on available charts in the chart repositories.
+### Upgrading to version 11.0.0
+
+The chart now uses forked versions of the Bitnami charts to reference the Bitnami Legacy repository:
+
+- https://github.com/bitnami/containers/issues/83267
+
+Pod and container security contexts have been hardened and some values are now configured at
+the container level instead of the pod level.
 
 ### Upgrading to version 10.0.0
 
@@ -143,6 +168,7 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | `kubeVersion`       | Override Kubernetes version                                                                                  | `""`    |
 | `nameOverride`      | Partially override `vertical-pod-autoscaler.fullname` template with a string (will prepend the release name) | `""`    |
 | `fullnameOverride`  | Fully override `vertical-pod-autoscaler.fullname` template with a string                                     | `""`    |
+| `namespaceOverride` | Fully override `common.names.namespace` template with a string                                               | `""`    |
 | `commonAnnotations` | Annotations to add to all deployed objects                                                                   | `{}`    |
 | `commonLabels`      | Labels to add to all deployed objects                                                                        | `{}`    |
 | `extraDeploy`       | Array of extra objects to deploy with the release                                                            | `[]`    |
@@ -153,9 +179,10 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
 | `admissionController.enabled`                                  | Enable the component                                                                                                | `true`                                 |
 | `admissionController.replicaCount`                             | Number of replicas                                                                                                  | `1`                                    |
+| `admissionController.revisionHistoryLimit`                     | Number of old history to retain to allow rollback                                                                   | `10`                                   |
 | `admissionController.image.registry`                           | Image registry                                                                                                      | `registry.k8s.io`                      |
 | `admissionController.image.repository`                         | Image repository                                                                                                    | `autoscaling/vpa-admission-controller` |
-| `admissionController.image.tag`                                | Image tag                                                                                                           | `1.3.0`                                |
+| `admissionController.image.tag`                                | Image tag                                                                                                           | `1.5.0`                                |
 | `admissionController.image.digest`                             | Image digest                                                                                                        | `""`                                   |
 | `admissionController.image.pullPolicy`                         | Image pull policy                                                                                                   | `IfNotPresent`                         |
 | `admissionController.pdb.create`                               | Specifies whether a pod disruption budget should be created                                                         | `false`                                |
@@ -170,14 +197,18 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | `admissionController.podAnnotations`                           | Additional pod annotations                                                                                          | `{}`                                   |
 | `admissionController.podLabels`                                | Additional pod labels                                                                                               | `{}`                                   |
 | `admissionController.podSecurityContext`                       | Pod security context                                                                                                |                                        |
-| `admissionController.podSecurityContext.runAsNonRoot`          | Whether the container must run as a non-root user                                                                   | `true`                                 |
-| `admissionController.podSecurityContext.runAsUser`             | The UID to run the entrypoint of the container process                                                              | `65534`                                |
-| `admissionController.podSecurityContext.runAsGroup`            | The GID to run the entrypoint of the container process                                                              | `65534`                                |
+| `admissionController.podSecurityContext.seccompProfile.type`   | Set pod's Security Context seccomp profile                                                                          | `RuntimeDefault`                       |
 | `admissionController.hostNetwork`                              | Use the host network                                                                                                | `false`                                |
 | `admissionController.priorityClassName`                        | Priority class name                                                                                                 | `nil`                                  |
 | `admissionController.runtimeClassName`                         | Runtime class name                                                                                                  | `""`                                   |
 | `admissionController.topologySpreadConstraints`                | Topology Spread Constraints for pod assignment                                                                      | `[]`                                   |
-| `admissionController.securityContext`                          | Container security context                                                                                          | `{}`                                   |
+| `admissionController.securityContext`                          | Container security context                                                                                          |                                        |
+| `admissionController.securityContext.allowPrivilegeEscalation` | Set container's Security Context allowPrivilegeEscalation                                                           | `false`                                |
+| `admissionController.securityContext.capabilities.drop`        | List of capabilities to be dropped                                                                                  | `["ALL"]`                              |
+| `admissionController.securityContext.readOnlyRootFilesystem`   | Set container's Security Context readOnlyRootFilesystem                                                             | `true`                                 |
+| `admissionController.securityContext.runAsNonRoot`             | Whether the container must run as a non-root user                                                                   | `true`                                 |
+| `admissionController.securityContext.runAsUser`                | The UID to run the entrypoint of the container process                                                              | `65534`                                |
+| `admissionController.securityContext.runAsGroup`               | The GID to run the entrypoint of the container process                                                              | `65534`                                |
 | `admissionController.containerPorts.https`                     | Container port for HTTPS                                                                                            | `8000`                                 |
 | `admissionController.containerPorts.metrics`                   | Container port for Metrics                                                                                          | `8944`                                 |
 | `admissionController.livenessProbe.enabled`                    | Enable liveness probe                                                                                               | `true`                                 |
@@ -243,9 +274,10 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | Name                                                   | Description                                                                                                         | Default                       |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
 | `recommender.replicaCount`                             | Number of replicas                                                                                                  | `1`                           |
+| `recommender.revisionHistoryLimit`                     | Number of old history to retain to allow rollback                                                                   | `10`                          |
 | `recommender.image.registry`                           | Image registry                                                                                                      | `registry.k8s.io`             |
 | `recommender.image.repository`                         | Image repository                                                                                                    | `autoscaling/vpa-recommender` |
-| `recommender.image.tag`                                | Image tag                                                                                                           | `1.3.0`                       |
+| `recommender.image.tag`                                | Image tag                                                                                                           | `1.5.0`                       |
 | `recommender.image.digest`                             | Image digest                                                                                                        | `""`                          |
 | `recommender.image.pullPolicy`                         | Image pull policy                                                                                                   | `IfNotPresent`                |
 | `recommender.pdb.create`                               | Specifies whether a pod disruption budget should be created                                                         | `false`                       |
@@ -260,13 +292,17 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | `recommender.podAnnotations`                           | Additional pod annotations                                                                                          | `{}`                          |
 | `recommender.podLabels`                                | Additional pod labels                                                                                               | `{}`                          |
 | `recommender.podSecurityContext`                       | Pod security context                                                                                                |                               |
-| `recommender.podSecurityContext.runAsNonRoot`          | Whether the container must run as a non-root user                                                                   | `true`                        |
-| `recommender.podSecurityContext.runAsUser`             | The UID to run the entrypoint of the container process                                                              | `65534`                       |
-| `recommender.podSecurityContext.runAsGroup`            | The GID to run the entrypoint of the container process                                                              | `65534`                       |
+| `recommender.podSecurityContext.seccompProfile.type`   | Set pod's Security Context seccomp profile                                                                          | `RuntimeDefault`              |
 | `recommender.priorityClassName`                        | Priority class name                                                                                                 | `nil`                         |
 | `recommender.runtimeClassName`                         | Runtime class name                                                                                                  | `""`                          |
 | `recommender.topologySpreadConstraints`                | Topology Spread Constraints for pod assignment                                                                      | `[]`                          |
-| `recommender.securityContext`                          | Container security context                                                                                          | `{}`                          |
+| `recommender.securityContext`                          | Container security context                                                                                          |                               |
+| `recommender.securityContext.allowPrivilegeEscalation` | Set container's Security Context allowPrivilegeEscalation                                                           | `false`                       |
+| `recommender.securityContext.capabilities.drop`        | List of capabilities to be dropped                                                                                  | `["ALL"]`                     |
+| `recommender.securityContext.readOnlyRootFilesystem`   | Set container's Security Context readOnlyRootFilesystem                                                             | `true`                        |
+| `recommender.securityContext.runAsNonRoot`             | Whether the container must run as a non-root user                                                                   | `true`                        |
+| `recommender.securityContext.runAsUser`                | The UID to run the entrypoint of the container process                                                              | `65534`                       |
+| `recommender.securityContext.runAsGroup`               | The GID to run the entrypoint of the container process                                                              | `65534`                       |
 | `recommender.containerPorts.metrics`                   | Container port for Metrics                                                                                          | `8942`                        |
 | `recommender.livenessProbe.enabled`                    | Enable liveness probe                                                                                               | `true`                        |
 | `recommender.livenessProbe.initialDelaySeconds`        | Delay before the liveness probe is initiated                                                                        | `0`                           |
@@ -320,9 +356,10 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------- |
 | `updater.enabled`                                  | Enable the component                                                                                                | `true`                    |
 | `updater.replicaCount`                             | Number of replicas                                                                                                  | `1`                       |
+| `updater.revisionHistoryLimit`                     | Number of old history to retain to allow rollback                                                                   | `10`                      |
 | `updater.image.registry`                           | Image registry                                                                                                      | `registry.k8s.io`         |
 | `updater.image.repository`                         | Image repository                                                                                                    | `autoscaling/vpa-updater` |
-| `updater.image.tag`                                | Image tag                                                                                                           | `1.3.0`                   |
+| `updater.image.tag`                                | Image tag                                                                                                           | `1.5.0`                   |
 | `updater.image.digest`                             | Image digest                                                                                                        | `""`                      |
 | `updater.image.pullPolicy`                         | Image pull policy                                                                                                   | `IfNotPresent`            |
 | `updater.pdb.create`                               | Specifies whether a pod disruption budget should be created                                                         | `false`                   |
@@ -337,13 +374,17 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | `updater.podAnnotations`                           | Additional pod annotations                                                                                          | `{}`                      |
 | `updater.podLabels`                                | Additional pod labels                                                                                               | `{}`                      |
 | `updater.podSecurityContext`                       | Pod security context                                                                                                |                           |
-| `updater.podSecurityContext.runAsNonRoot`          | Whether the container must run as a non-root user                                                                   | `true`                    |
-| `updater.podSecurityContext.runAsUser`             | The UID to run the entrypoint of the container process                                                              | `65534`                   |
-| `updater.podSecurityContext.runAsGroup`            | The GID to run the entrypoint of the container process                                                              | `65534`                   |
+| `updater.podSecurityContext.seccompProfile.type`   | Set pod's Security Context seccomp profile                                                                          | `RuntimeDefault`          |
 | `updater.priorityClassName`                        | Priority class name                                                                                                 | `nil`                     |
 | `updater.runtimeClassName`                         | Runtime class name                                                                                                  | `""`                      |
 | `updater.topologySpreadConstraints`                | Topology Spread Constraints for pod assignment                                                                      | `[]`                      |
-| `updater.securityContext`                          | Container security context                                                                                          | `{}`                      |
+| `updater.securityContext`                          | Container security context                                                                                          |                           |
+| `updater.securityContext.allowPrivilegeEscalation` | Set container's Security Context allowPrivilegeEscalation                                                           | `false`                   |
+| `updater.securityContext.capabilities.drop`        | List of capabilities to be dropped                                                                                  | `["ALL"]`                 |
+| `updater.securityContext.readOnlyRootFilesystem`   | Set container's Security Context readOnlyRootFilesystem                                                             | `true`                    |
+| `updater.securityContext.runAsNonRoot`             | Whether the container must run as a non-root user                                                                   | `true`                    |
+| `updater.securityContext.runAsUser`                | The UID to run the entrypoint of the container process                                                              | `65534`                   |
+| `updater.securityContext.runAsGroup`               | The GID to run the entrypoint of the container process                                                              | `65534`                   |
 | `updater.containerPorts.metrics`                   | Container port for Metrics                                                                                          | `8943`                    |
 | `updater.livenessProbe.enabled`                    | Enable liveness probe                                                                                               | `true`                    |
 | `updater.livenessProbe.initialDelaySeconds`        | Delay before the liveness probe is initiated                                                                        | `0`                       |
@@ -393,25 +434,29 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 
 ### CRDs parameters
 
-| Name                                   | Description                                            | Default           |
-| -------------------------------------- | ------------------------------------------------------ | ----------------- |
-| `crds.enabled`                         | Enable CRDs                                            | `true`            |
-| `crds.image.registry`                  | Image registry                                         | `docker.io`       |
-| `crds.image.repository`                | Image repository                                       | `bitnami/kubectl` |
-| `crds.image.tag`                       | Image tag                                              | `1.29.3`          |
-| `crds.image.digest`                    | Image digest                                           | `""`              |
-| `crds.image.pullPolicy`                | Image pull policy                                      | `IfNotPresent`    |
-| `crds.podAnnotations`                  | Additional pod annotations                             | `{}`              |
-| `crds.podLabels`                       | Additional pod labels                                  | `{}`              |
-| `crds.podSecurityContext`              | Pod security context                                   |                   |
-| `crds.podSecurityContext.runAsNonRoot` | Whether the container must run as a non-root user      | `true`            |
-| `crds.podSecurityContext.runAsUser`    | The UID to run the entrypoint of the container process | `1001`            |
-| `crds.podSecurityContext.runAsGroup`   | The GID to run the entrypoint of the container process | `1001`            |
-| `crds.securityContext`                 | Container security context                             | `{}`              |
-| `crds.resources`                       | CPU/Memory resource requests/limits                    | `{}`              |
-| `crds.nodeSelector`                    | Node labels for pod assignment                         | `{}`              |
-| `crds.tolerations`                     | Tolerations for pod assignment                         | `[]`              |
-| `crds.affinity`                        | Map of node/pod affinities                             | `{}`              |
+| Name                                            | Description                                               | Default                 |
+| ----------------------------------------------- | --------------------------------------------------------- | ----------------------- |
+| `crds.enabled`                                  | Enable CRDs                                               | `true`                  |
+| `crds.image.registry`                           | Image registry                                            | `docker.io`             |
+| `crds.image.repository`                         | Image repository                                          | `bitnamilegacy/kubectl` |
+| `crds.image.tag`                                | Image tag                                                 | `1.29.3`                |
+| `crds.image.digest`                             | Image digest                                              | `""`                    |
+| `crds.image.pullPolicy`                         | Image pull policy                                         | `IfNotPresent`          |
+| `crds.podAnnotations`                           | Additional pod annotations                                | `{}`                    |
+| `crds.podLabels`                                | Additional pod labels                                     | `{}`                    |
+| `crds.podSecurityContext`                       | Pod security context                                      |                         |
+| `crds.podSecurityContext.seccompProfile.type`   | Set pod's Security Context seccomp profile                | `RuntimeDefault`        |
+| `crds.securityContext`                          | Container security context                                |                         |
+| `crds.securityContext.allowPrivilegeEscalation` | Set container's Security Context allowPrivilegeEscalation | `false`                 |
+| `crds.securityContext.capabilities.drop`        | List of capabilities to be dropped                        | `["ALL"]`               |
+| `crds.securityContext.readOnlyRootFilesystem`   | Set container's Security Context readOnlyRootFilesystem   | `true`                  |
+| `crds.securityContext.runAsNonRoot`             | Whether the container must run as a non-root user         | `true`                  |
+| `crds.securityContext.runAsUser`                | The UID to run the entrypoint of the container process    | `65534`                 |
+| `crds.securityContext.runAsGroup`               | The GID to run the entrypoint of the container process    | `65534`                 |
+| `crds.resources`                                | CPU/Memory resource requests/limits                       | `{}`                    |
+| `crds.nodeSelector`                             | Node labels for pod assignment                            | `{}`                    |
+| `crds.tolerations`                              | Tolerations for pod assignment                            | `[]`                    |
+| `crds.affinity`                                 | Map of node/pod affinities                                | `{}`                    |
 
 ### Tests parameters
 
@@ -419,7 +464,7 @@ $ kubectl delete crd verticalpodautoscalercheckpoints.autoscaling.k8s.io
 | ------------------------ | ----------------- | -------------------- |
 | `tests.image.registry`   | Image registry    | `ghcr.io`            |
 | `tests.image.repository` | Image repository  | `cowboysysop/pytest` |
-| `tests.image.tag`        | Image tag         | `1.0.41`             |
+| `tests.image.tag`        | Image tag         | `1.2.0`              |
 | `tests.image.digest`     | Image digest      | `""`                 |
 | `tests.image.pullPolicy` | Image pull policy | `IfNotPresent`       |
 
@@ -432,6 +477,13 @@ $ helm install my-release \
     --set nameOverride=my-name cowboysysop/vertical-pod-autoscaler
 ```
 
+or for an OCI-based registry:
+
+```bash
+$ helm install my-release \
+    --set nameOverride=my-name oci://ghcr.io/cowboysysop/charts/vertical-pod-autoscaler
+```
+
 The above command sets the `nameOverride` to `my-name`.
 
 Alternatively, a YAML file that specifies the values for the above parameters can be provided while installing the chart. For example,
@@ -439,6 +491,13 @@ Alternatively, a YAML file that specifies the values for the above parameters ca
 ```bash
 $ helm install my-release \
     --values values.yaml cowboysysop/vertical-pod-autoscaler
+```
+
+or for an OCI-based registry:
+
+```bash
+$ helm install my-release \
+    --values values.yaml oci://ghcr.io/cowboysysop/charts/vertical-pod-autoscaler
 ```
 
 **TIP**: You can use the default [values.yaml](values.yaml).
