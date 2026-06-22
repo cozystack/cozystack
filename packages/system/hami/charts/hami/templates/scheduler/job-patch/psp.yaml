@@ -1,23 +1,40 @@
 {{- if and .Values.scheduler.admissionWebhook.enabled (not .Values.dra.enabled) -}}
 {{- if and (.Values.scheduler.patch.enabled) (not .Values.scheduler.certManager.enabled) }}
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
+{{- if .Values.podSecurityPolicy.enabled }}
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
 metadata:
   name: {{ include "hami-vgpu.fullname" . }}-admission
-  namespace: {{ include "hami-vgpu.namespace" . }}
   annotations:
     "helm.sh/hook": pre-install,pre-upgrade,post-install,post-upgrade
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
   labels:
     {{- include "hami-vgpu.labels" . | nindent 4 }}
     app.kubernetes.io/component: admission-webhook
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: Role
-  name: {{ include "hami-vgpu.fullname" . }}-admission
-subjects:
-  - kind: ServiceAccount
-    name: {{ include "hami-vgpu.fullname" . }}-admission
-    namespace: {{ include "hami-vgpu.namespace" . }}
+spec:
+  allowPrivilegeEscalation: false
+  fsGroup:
+    ranges:
+    - max: 65535
+      min: 1
+    rule: MustRunAs
+  requiredDropCapabilities:
+  - ALL
+  runAsUser:
+    rule: MustRunAsNonRoot
+  seLinux:
+    rule: RunAsAny
+  supplementalGroups:
+    ranges:
+    - max: 65535
+      min: 1
+    rule: MustRunAs
+  volumes:
+  - configMap
+  - emptyDir
+  - projected
+  - secret
+  - downwardAPI
+{{- end }}
 {{- end }}
 {{- end }}

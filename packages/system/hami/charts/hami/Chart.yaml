@@ -1,18 +1,18 @@
 apiVersion: v2
-appVersion: 2.8.1
+appVersion: 2.9.0
 dependencies: []
 description: Heterogeneous AI Computing Virtualization Middleware
 keywords:
-- vgpu
-- gpu
+  - vgpu
+  - gpu
 kubeVersion: '>= 1.18.0-0'
 maintainers:
-- email: archlitchi@gmail.com
-  name: limengxuan
-- email: xiaozhang0210@hotmail.com
-  name: zhangxiao
+  - email: archlitchi@gmail.com
+    name: limengxuan
+  - email: xiaozhang0210@hotmail.com
+    name: zhangxiao
 name: hami
 sources:
-- https://github.com/Project-HAMi/HAMi
+  - https://github.com/Project-HAMi/HAMi
 type: application
-version: 2.8.1
+version: 2.9.0
