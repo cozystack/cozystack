@@ -1,6 +1,6 @@
 # E2E Testing Conventions
 
-Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflows (`.github/workflows/pull-requests.yaml`, `.github/workflows/release-e2e.yaml`), or `packages/core/testing/`.
+Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflow (`.github/workflows/pull-requests.yaml`), or `packages/core/testing/`.
 
 ## The core principle
 
@@ -59,7 +59,7 @@ A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is 
 
 - Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, shared `hack/*.sh|*.bats` helpers, the `Makefile`, or the E2E workflows escalate to the **full suite**. A per-app bats edit selects **only** that app.
 - The `full-e2e` PR label forces the whole suite.
-- Companion: `.github/workflows/release-e2e.yaml` runs the **full** suite on every release tag, closing the coverage gap TIA opens on PRs.
+- The coverage gap TIA opens on PRs is closed at release-cut time: the "Prepare release" commit bakes image digests into `packages/core/` (and other packages), which TIA escalates to the **full** suite — so the release PR exercises the whole suite against the commit the tag will point at.
 
 When adding a new app package, confirm `select-e2e.sh` maps it correctly (it has a unit test, `hack/select-e2e_test.bats`).
 
