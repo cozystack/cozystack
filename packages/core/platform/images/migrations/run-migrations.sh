@@ -1,6 +1,9 @@
 #!/bin/sh
 set -euo pipefail
 
+# shellcheck source=migrations/lib/cozystack-version.sh
+. /migrations/lib/cozystack-version.sh
+
 NAMESPACE="${NAMESPACE:-cozy-system}"
 CURRENT_VERSION="${CURRENT_VERSION:-0}"
 TARGET_VERSION="${TARGET_VERSION:-0}"
@@ -10,9 +13,9 @@ echo "Starting migrations from version $CURRENT_VERSION to $TARGET_VERSION"
 # Check if ConfigMap exists
 if ! kubectl get configmap --namespace "$NAMESPACE" cozystack-version >/dev/null 2>&1; then
   echo "ConfigMap cozystack-version does not exist, creating it with version $TARGET_VERSION"
-  kubectl create configmap --namespace "$NAMESPACE" cozystack-version \
-    --from-literal=version="$TARGET_VERSION" \
-    --dry-run=client --output yaml | kubectl apply --filename -
+  # Stamp via the shared helper so the bootstrap ConfigMap carries the
+  # platform.cozystack.io/no-delete label like every migration-driven stamp.
+  stamp_cozystack_version "$TARGET_VERSION"
   echo "ConfigMap created with version $TARGET_VERSION"
   exit 0
 fi
