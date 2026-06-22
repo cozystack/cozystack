@@ -28,3 +28,18 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # updateMode Auto is deprecated since VPA 1.4 (an alias for Recreate that will
+  # be removed in a future API version). Pin the vpa-for-vpa
+  # VerticalPodAutoscalers to the explicit, non-deprecated Recreate so the bump
+  # does not leave a deprecated value behind.
+  - it: pins the vpa-for-vpa VerticalPodAutoscalers to updateMode Recreate
+    template: templates/vpa-for-vpa.yaml
+    documentSelector:
+      path: kind
+      value: VerticalPodAutoscaler
+      matchMany: true
+    asserts:
+      - equal:
+          path: spec.updatePolicy.updateMode
+          value: Recreate
