@@ -58,7 +58,7 @@ spec:
       restartPolicy: Never
       containers:
         - name: update-resources
-          image: docker.io/alpine/k8s:1.33.4
+          image: docker.io/alpine/k8s:1.36.2
           resources:
             requests:
               memory: "16Mi"

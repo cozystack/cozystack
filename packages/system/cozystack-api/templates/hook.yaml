@@ -18,7 +18,7 @@ spec:
       serviceAccountName: "cozystack-api-hook"
       containers:
         - name: kubectl
-          image: docker.io/alpine/k8s:1.33.4
+          image: docker.io/alpine/k8s:1.36.2
           command:
           - sh
           args:
