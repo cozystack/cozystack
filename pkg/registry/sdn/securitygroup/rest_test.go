@@ -765,6 +765,35 @@ func TestCreateRejectsInvalidSpec(t *testing.T) {
 	}
 }
 
+// TestCreateAcceptsBareIPCIDR asserts a bare IP (no prefix) is accepted in
+// fromCIDR/toCIDR and projected 1:1. Cilium's CIDR.sanitize treats a bare IP as
+// a single-host CIDR, so rejecting it here would make the validator stricter
+// than Cilium and block a legitimate single-host rule.
+func TestCreateAcceptsBareIPCIDR(t *testing.T) {
+	r := newTestREST(t)
+	in := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-host", Namespace: testNamespace},
+		Spec: sdnv1alpha1.SecurityGroupSpec{
+			EndpointSelector: metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+			Ingress:          []sdnv1alpha1.IngressRule{{FromCIDR: []string{"10.0.0.5"}}},
+			Egress:           []sdnv1alpha1.EgressRule{{ToCIDR: []string{"2001:db8::1"}}},
+		},
+	}
+	if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); err != nil {
+		t.Fatalf("Create with bare-IP CIDRs returned error: %v", err)
+	}
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-host"}, np); err != nil {
+		t.Fatalf("backing policy not found: %v", err)
+	}
+	if got := np.Spec.Ingress[0].FromCIDR; len(got) != 1 || got[0] != "10.0.0.5" {
+		t.Fatalf("fromCIDR not projected 1:1: got %v", got)
+	}
+	if got := np.Spec.Egress[0].ToCIDR; len(got) != 1 || got[0] != "2001:db8::1" {
+		t.Fatalf("toCIDR not projected 1:1: got %v", got)
+	}
+}
+
 func TestCreateNormalizesProtocolToUpper(t *testing.T) {
 	r := newTestREST(t)
 	// Numeric port, named port, and a lowercase protocol must all be accepted,

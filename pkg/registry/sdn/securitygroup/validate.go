@@ -4,7 +4,7 @@
 package securitygroup
 
 import (
-	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 
@@ -63,8 +63,15 @@ func validateSecurityGroup(sg *sdnv1alpha1.SecurityGroup) error {
 func validateCIDRs(path *field.Path, cidrs []string) field.ErrorList {
 	var errs field.ErrorList
 	for i, c := range cidrs {
-		if _, _, err := net.ParseCIDR(c); err != nil {
-			errs = append(errs, field.Invalid(path.Index(i), c, "must be a valid CIDR"))
+		// Mirror Cilium's CIDR.sanitize: a CIDR value may be a prefix
+		// (10.0.0.0/24) or a bare IP (10.0.0.1, treated as /32 or /128).
+		// Rejecting a bare IP here would make the validator stricter than
+		// Cilium and block a legitimate single-host rule, so fall back to a
+		// plain-address parse before declaring the value invalid.
+		if _, err := netip.ParsePrefix(c); err != nil {
+			if _, err := netip.ParseAddr(c); err != nil {
+				errs = append(errs, field.Invalid(path.Index(i), c, "must be a valid CIDR or IP address"))
+			}
 		}
 	}
 	return errs
