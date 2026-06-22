@@ -16,9 +16,18 @@ spec:
         policy.cozystack.io/allow-to-apiserver: "true"
     spec:
       serviceAccountName: "cozystack-api-hook"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: kubectl
           image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
           - sh
           args:

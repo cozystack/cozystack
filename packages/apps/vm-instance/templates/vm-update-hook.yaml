@@ -56,9 +56,18 @@ spec:
     spec:
       serviceAccountName: {{ $.Release.Name }}-update-hook
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: update-resources
           image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               memory: "16Mi"
