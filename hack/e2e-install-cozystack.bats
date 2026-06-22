@@ -193,10 +193,13 @@ EOF
   # failure messages without redundant separate waits. seaweedfs now
   # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
   # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
-  # pushes the parent's Ready flip to ~5-6 min; tenant-root HR.spec.timeout
-  # is 15m and this 10m wait stays inside it.
+  # pushes the parent's Ready flip to ~5-6 min on an idle runner. On a loaded
+  # runner the tenant stack only starts creating pods ~9-10 min in, so the
+  # parent's Ready can land past the HR's single 15m timeout window; the HR
+  # re-reconciles every 1m until it converges, so this wait is 20m to observe
+  # that eventual Ready rather than expiring first.
   kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
-    -n tenant-root --timeout=10m --for=condition=ready
+    -n tenant-root --timeout=20m --for=condition=ready
 
 
   # Expose Cozystack services through ingress
@@ -204,26 +207,26 @@ EOF
 
   # NGINX ingress controller
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=5m --for=condition=available
+  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
 
   # etcd statefulset
   timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=5m
+  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=10m
 
   # VictoriaMetrics components
   timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
   timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=10m
   timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=10m
 
   # Grafana
   timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=5m
+  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=10m
   timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=5m
+  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=10m
 
   # Verify Grafana via ingress
   ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -243,7 +246,7 @@ EOF
   kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true,"keycloakInternalUrl":"http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"}}}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
+  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=20m --for=condition=ready
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {
