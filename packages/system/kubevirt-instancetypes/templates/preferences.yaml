@@ -1352,8 +1352,7 @@ spec:
     preferredAutoattachInputDevice: true
     preferredDiskBus: sata
     preferredInterfaceModel: e1000e
-    preferredTPM:
-      persistent: true
+    preferredTPM: {}
   features:
     preferredAcpi: {}
     preferredApic: {}
@@ -1375,7 +1374,6 @@ spec:
     preferredSmm: {}
   firmware:
     preferredEfi:
-      persistent: true
       secureBoot: true
   preferredTerminationGracePeriodSeconds: 3600
   requirements:
@@ -1424,8 +1422,7 @@ spec:
     preferredInputBus: virtio
     preferredInputType: tablet
     preferredInterfaceModel: virtio
-    preferredTPM:
-      persistent: true
+    preferredTPM: {}
   features:
     preferredAcpi: {}
     preferredApic: {}
@@ -1447,7 +1444,6 @@ spec:
     preferredSmm: {}
   firmware:
     preferredEfi:
-      persistent: true
       secureBoot: true
   preferredTerminationGracePeriodSeconds: 3600
   requirements:
@@ -1894,8 +1890,7 @@ spec:
     preferredAutoattachInputDevice: true
     preferredDiskBus: sata
     preferredInterfaceModel: e1000e
-    preferredTPM:
-      persistent: true
+    preferredTPM: {}
   features:
     preferredAcpi: {}
     preferredApic: {}
@@ -1917,7 +1912,6 @@ spec:
     preferredSmm: {}
   firmware:
     preferredEfi:
-      persistent: true
       secureBoot: true
   preferredTerminationGracePeriodSeconds: 3600
   requirements:
@@ -1966,8 +1960,7 @@ spec:
     preferredInputBus: virtio
     preferredInputType: tablet
     preferredInterfaceModel: virtio
-    preferredTPM:
-      persistent: true
+    preferredTPM: {}
   features:
     preferredAcpi: {}
     preferredApic: {}
@@ -1989,7 +1982,6 @@ spec:
     preferredSmm: {}
   firmware:
     preferredEfi:
-      persistent: true
       secureBoot: true
   preferredTerminationGracePeriodSeconds: 3600
   requirements:
@@ -2036,8 +2028,7 @@ spec:
     preferredAutoattachInputDevice: true
     preferredDiskBus: sata
     preferredInterfaceModel: e1000e
-    preferredTPM:
-      persistent: true
+    preferredTPM: {}
   features:
     preferredAcpi: {}
     preferredApic: {}
@@ -2059,7 +2050,6 @@ spec:
     preferredSmm: {}
   firmware:
     preferredEfi:
-      persistent: true
       secureBoot: true
   preferredTerminationGracePeriodSeconds: 3600
   requirements:
@@ -2108,8 +2098,7 @@ spec:
     preferredInputBus: virtio
     preferredInputType: tablet
     preferredInterfaceModel: virtio
-    preferredTPM:
-      persistent: true
+    preferredTPM: {}
   features:
     preferredAcpi: {}
     preferredApic: {}
@@ -2131,7 +2120,6 @@ spec:
     preferredSmm: {}
   firmware:
     preferredEfi:
-      persistent: true
       secureBoot: true
   preferredTerminationGracePeriodSeconds: 3600
   requirements:
