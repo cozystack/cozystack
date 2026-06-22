@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/grafana:0.0.0@sha256:58ee26efdccf81ee79b4d5478df347b91398280600971eaf4b9626b0ca72ed35
+ghcr.io/cozystack/cozystack/grafana:0.0.0@sha256:a13f7f30add7b6290dc43609b53bae14be687733df432ab99b63309c085273e6
