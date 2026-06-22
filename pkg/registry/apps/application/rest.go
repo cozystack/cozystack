@@ -1509,8 +1509,47 @@ func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
 	return m.CreationTimestamp
 }
 
-// convertApplicationToHelmRelease implements the actual conversion logic
+// convertApplicationToHelmRelease implements the actual conversion logic.
+//
+// Spec.Interval, Install/Upgrade.Strategy{Name=RetryOnFailure,RetryInterval},
+// Install/Upgrade.Timeout, and Spec.MaxHistory are populated from
+// ReleaseConfig fields fed by the cozystack-api server flags
+// (--helmrelease-{interval,retry-interval,install-timeout,upgrade-timeout,
+// max-history}). This mirrors cozystack-operator's
+// PackageReconciler.buildHelmReleaseSpec so both HelmRelease-generating paths
+// share the same retry strategy, history retention, and reconcile cadence.
+//
+// Strategy.Name=RetryOnFailure with an explicit RetryInterval (rather than
+// Remediation{Retries:-1}) decouples failed install/upgrade retry timing
+// from Spec.Interval — the previous coupling caused failed installs to
+// retry only every 5m, exceeding E2E budgets.
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	// Per-Application annotation overrides win over the global defaults
+	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout):
+	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
+	//     sets both Install.Timeout and Upgrade.Timeout;
+	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
+	//     then overrides only Upgrade.Timeout, so a kind can carry an
+	//     asymmetric budget (short install, long upgrade or vice versa).
+	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
+	// Kubernetes Application's parent chart contains CAPI/Kamaji
+	// resources whose admin-kubeconfig Secret is provisioned
+	// asynchronously and Kamaji cold-start routinely exceeds flux's
+	// default wait budget, and the Tenant parent chart bootstraps the
+	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
+	// Any future kind with the same shape can opt in by setting the
+	// same annotation.
+	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
+	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
+	if r.releaseConfig.HelmInstallTimeout > 0 {
+		installTimeout = r.releaseConfig.HelmInstallTimeout
+		upgradeTimeout = r.releaseConfig.HelmInstallTimeout
+	}
+	if r.releaseConfig.HelmUpgradeTimeout > 0 {
+		upgradeTimeout = r.releaseConfig.HelmUpgradeTimeout
+	}
+
+	maxHistory := r.releaseConfig.HelmReleaseMaxHistory
 	helmRelease := &helmv2.HelmRelease{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "helm.toolkit.fluxcd.io/v2",
@@ -1530,15 +1569,20 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 				Name:      r.releaseConfig.ChartRef.Name,
 				Namespace: r.releaseConfig.ChartRef.Namespace,
 			},
-			Interval: metav1.Duration{Duration: 5 * time.Minute},
+			Interval:   metav1.Duration{Duration: r.releaseConfig.HelmReleaseInterval},
+			MaxHistory: &maxHistory,
 			Install: &helmv2.Install{
-				Remediation: &helmv2.InstallRemediation{
-					Retries: -1,
+				Timeout: &metav1.Duration{Duration: installTimeout},
+				Strategy: &helmv2.InstallStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			Upgrade: &helmv2.Upgrade{
-				Remediation: &helmv2.UpgradeRemediation{
-					Retries: -1,
+				Timeout: &metav1.Duration{Duration: upgradeTimeout},
+				Strategy: &helmv2.UpgradeStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			ValuesFrom: []helmv2.ValuesReference{
@@ -1549,26 +1593,6 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Values: app.Spec,
 		},
-	}
-
-	// Per-Application HelmRelease wait budget. The mechanism is generic:
-	// an ApplicationDefinition that sets
-	// release.cozystack.io/helm-install-timeout gets Install.Timeout and
-	// Upgrade.Timeout populated from ReleaseConfig.HelmInstallTimeout
-	// (parsed at startup). Applications that leave it unset keep flux
-	// defaults so their failed installs remediate on the normal cadence.
-	// kubernetes-rd and tenant-rd carry the annotation today: the
-	// Kubernetes Application's parent chart contains CAPI/Kamaji
-	// resources whose admin-kubeconfig Secret is provisioned
-	// asynchronously and Kamaji cold-start routinely exceeds flux's
-	// default wait budget, and the Tenant parent chart bootstraps the
-	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
-	// Any future kind with the same shape can opt in by setting the
-	// same annotation.
-	if r.releaseConfig.HelmInstallTimeout > 0 {
-		timeout := metav1.Duration{Duration: r.releaseConfig.HelmInstallTimeout}
-		helmRelease.Spec.Install.Timeout = &timeout
-		helmRelease.Spec.Upgrade.Timeout = &timeout
 	}
 
 	return helmRelease, nil
