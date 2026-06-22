@@ -30,7 +30,7 @@ rules:
   - workloadmonitors
   resourceNames:
   - {{ .Release.Name }}
-  {{- range $groupName, $group := .Values.nodeGroups }}
+  {{- range $groupName, $group := (include "kubernetes.nodeGroups" $ | fromYaml) }}
   - {{ $.Release.Name }}-{{ $groupName }}
   {{- end }}
   verbs: ["get", "list", "watch"]

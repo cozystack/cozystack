@@ -98,3 +98,32 @@ must exist on the pod and mount at /etc/kubernetes/kubeconfig.
     mountPath: /etc/kubernetes/kubeconfig
     readOnly: true
 {{- end }}
+
+{{/*
+Effective worker node groups.
+
+The default "md0" group is applied here, in the template, only when the user
+supplies no nodeGroups at all. Keeping the default out of values.yaml makes
+user-supplied nodeGroups authoritative: a Helm values merge would otherwise
+re-add a baked-in default md0 on top of the user's groups, and because
+Kubernetes strips null values the default could never be removed. With the
+default applied only when the map is empty, users can freely choose their own
+node groups (and omit md0).
+*/}}
+{{- define "kubernetes.nodeGroups" -}}
+{{- if .Values.nodeGroups -}}
+{{ toYaml .Values.nodeGroups }}
+{{- else -}}
+md0:
+  minReplicas: 0
+  maxReplicas: 10
+  instanceType: "u1.medium"
+  diskSize: 20Gi
+  storageClass: ""
+  roles:
+  - ingress-nginx
+  resources: {}
+  gpus: []
+  kubelet: {}
+{{- end -}}
+{{- end }}
