@@ -1,0 +1,148 @@
+{{- if .Values.encryption.enabled }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $kms := .Values.encryption.kms }}
+{{- if eq $kms.backend "static" }}
+{{- /*
+  Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
+  and preserved across upgrades via lookup (same pattern as the admin
+  credentials in sts.yaml). For production prefer kms.backend=vault-transit.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace "keycloak-kms-proxy-kek" }}
+{{- $kek := randAlphaNum 32 | b64enc }}
+{{- if $existing }}
+{{- $kek = index $existing.data "kek" }}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: keycloak-kms-proxy-kek
+  labels:
+    app: keycloak-kms-proxy
+data:
+  kek: {{ $kek | quote }}
+---
+{{- end }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+spec:
+  # Single replica: HA needs a shared wrapped DEK set (KKP_DEKSET_FILE) so
+  # every replica encrypts deterministic columns with the same key. Tracked
+  # as a follow-up.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak-kms-proxy
+  template:
+    metadata:
+      labels:
+        app: keycloak-kms-proxy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: proxy
+          image: {{ .Values.encryption.image }}
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - name: postgres
+              containerPort: 5432
+            - name: metrics
+              containerPort: 9090
+          env:
+            - name: KKP_LISTEN_ADDR
+              value: ":5432"
+            - name: KKP_METRICS_ADDR
+              value: ":9090"
+            # TODO: CNPG enforces TLS on the read-write endpoint; the proxy
+            # must dial keycloak-db-rw over TLS and validate the CNPG CA.
+            # Backend TLS re-origination is a follow-up before production.
+            - name: KKP_BACKEND_ADDR
+              value: "keycloak-db-rw.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}:5432"
+            # The proxy terminates SCRAM on both legs. Keycloak still presents
+            # the CNPG-managed credential (KC_DB_USERNAME/KC_DB_PASSWORD come
+            # from keycloak-db-app), so the upstream and backend credentials
+            # are the same CNPG role.
+            - name: KKP_UPSTREAM_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: username
+            - name: KKP_UPSTREAM_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: password
+            - name: KKP_BACKEND_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: username
+            - name: KKP_BACKEND_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-db-app
+                  key: password
+            - name: KKP_FIELDS
+              value: {{ .Values.encryption.fields | quote }}
+            - name: KKP_LENIENT
+              value: {{ .Values.encryption.lenient | quote }}
+            {{- if eq $kms.backend "vault-transit" }}
+            - name: KKP_VAULT_ADDR
+              value: {{ $kms.vault.address | quote }}
+            - name: KKP_VAULT_KEY_NAME
+              value: {{ $kms.vault.keyName | quote }}
+            - name: KKP_VAULT_MOUNT
+              value: {{ $kms.vault.mount | default "transit" | quote }}
+            - name: KKP_VAULT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "encryption.kms.vault.tokenSecretName is required when kms.backend=vault-transit" $kms.vault.tokenSecretName }}
+                  key: token
+            {{- else }}
+            - name: KKP_KEK
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-kms-proxy-kek
+                  key: kek
+            {{- end }}
+          {{- with .Values.encryption.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          readinessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket:
+              port: postgres
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+spec:
+  selector:
+    app: keycloak-kms-proxy
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+{{- end }}
