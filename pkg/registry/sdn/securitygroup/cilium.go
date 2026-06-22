@@ -21,16 +21,31 @@ import (
 // read and write CiliumNetworkPolicy objects through a controller-runtime
 // client without importing the full Cilium module (which pins a Kubernetes
 // version incompatible with this project's apimachinery fork).
-//
-// The Spec is intentionally the same type as SecurityGroupSpec: the
-// SecurityGroup field names and JSON tags match the CiliumNetworkPolicy CRD, so
-// the projection is a near-identity translation in both directions.
 type CiliumNetworkPolicy struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
 	// Spec is the policy enforced by the CiliumNetworkPolicy.
-	Spec *sdnv1alpha1.SecurityGroupSpec `json:"spec,omitempty"`
+	Spec *CiliumNetworkPolicySpec `json:"spec,omitempty"`
+}
+
+// CiliumNetworkPolicySpec is the subset of the cilium.io/v2 CiliumNetworkPolicy
+// spec that the SecurityGroup projection writes. Unlike SecurityGroupSpec it
+// carries a concrete endpointSelector (derived by the storage from the
+// SecurityGroup's TargetRef, never copied from tenant input). The JSON tags
+// match the CiliumNetworkPolicy CRD exactly, so marshalling produces a
+// wire-compatible object. The rule slice types are shared with SecurityGroupSpec
+// since the ingress/egress projection is a 1:1 copy.
+type CiliumNetworkPolicySpec struct {
+	// EndpointSelector selects the pods the policy applies to. The storage
+	// derives it from the SecurityGroup's TargetRef.
+	EndpointSelector metav1.LabelSelector `json:"endpointSelector,omitempty"`
+
+	// Ingress is the list of allowed inbound traffic rules.
+	Ingress []sdnv1alpha1.IngressRule `json:"ingress,omitempty"`
+
+	// Egress is the list of allowed outbound traffic rules.
+	Egress []sdnv1alpha1.EgressRule `json:"egress,omitempty"`
 }
 
 // CiliumNetworkPolicyList is a list of CiliumNetworkPolicy objects.
@@ -87,6 +102,36 @@ func (in *CiliumNetworkPolicy) DeepCopyObject() runtime.Object {
 		return c
 	}
 	return nil
+}
+
+// DeepCopyInto copies the receiver into out. Hand-written because cilium.go is
+// not run through deepcopy-gen; the field handling mirrors the generated
+// SecurityGroupSpec deepcopy.
+func (in *CiliumNetworkPolicySpec) DeepCopyInto(out *CiliumNetworkPolicySpec) {
+	*out = *in
+	in.EndpointSelector.DeepCopyInto(&out.EndpointSelector)
+	if in.Ingress != nil {
+		out.Ingress = make([]sdnv1alpha1.IngressRule, len(in.Ingress))
+		for i := range in.Ingress {
+			in.Ingress[i].DeepCopyInto(&out.Ingress[i])
+		}
+	}
+	if in.Egress != nil {
+		out.Egress = make([]sdnv1alpha1.EgressRule, len(in.Egress))
+		for i := range in.Egress {
+			in.Egress[i].DeepCopyInto(&out.Egress[i])
+		}
+	}
+}
+
+// DeepCopy returns a deep copy of the receiver.
+func (in *CiliumNetworkPolicySpec) DeepCopy() *CiliumNetworkPolicySpec {
+	if in == nil {
+		return nil
+	}
+	out := new(CiliumNetworkPolicySpec)
+	in.DeepCopyInto(out)
+	return out
 }
 
 // DeepCopyInto copies the receiver into out.

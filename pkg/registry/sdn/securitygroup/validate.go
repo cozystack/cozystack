@@ -28,15 +28,7 @@ func validateSecurityGroup(sg *sdnv1alpha1.SecurityGroup) error {
 	var errs field.ErrorList
 	spec := field.NewPath("spec")
 
-	// An empty endpointSelector selects every pod in the namespace in Cilium, so
-	// a tenant intending a single-pod rule would silently get a namespace-wide
-	// policy (and, with an empty ingress list, a namespace-wide default-deny).
-	// Require it to select something, matching the "applies to the selected
-	// pods" contract in the type and DESIGN docs.
-	if len(sg.Spec.EndpointSelector.MatchLabels) == 0 && len(sg.Spec.EndpointSelector.MatchExpressions) == 0 {
-		errs = append(errs, field.Required(spec.Child("endpointSelector"),
-			"must select at least one pod; an empty selector would apply the policy to every pod in the namespace"))
-	}
+	errs = append(errs, validateTargetRef(spec.Child("targetRef"), &sg.Spec.TargetRef)...)
 
 	for i := range sg.Spec.Ingress {
 		in := &sg.Spec.Ingress[i]
@@ -58,6 +50,35 @@ func validateSecurityGroup(sg *sdnv1alpha1.SecurityGroup) error {
 	return apierrors.NewInvalid(
 		sdnv1alpha1.SchemeGroupVersion.WithKind(kindSG).GroupKind(),
 		sg.Name, errs)
+}
+
+// validateTargetRef requires kind and name and rejects any component that is
+// not a valid label value. The storage derives the backing endpointSelector's
+// matchLabels values from these fields, so a value Kubernetes would reject as a
+// label value (e.g. > 63 chars) must be caught here rather than producing an
+// unenforceable policy. Validating apiGroup too keeps the reverse projection
+// lossless: an over-length group would otherwise be truncated when stamped on
+// pods and never round-trip.
+func validateTargetRef(path *field.Path, ref *sdnv1alpha1.ApplicationReference) field.ErrorList {
+	var errs field.ErrorList
+	if ref.Kind == "" {
+		errs = append(errs, field.Required(path.Child("kind"), "must reference an application kind"))
+	}
+	if ref.Name == "" {
+		errs = append(errs, field.Required(path.Child("name"), "must reference an application name"))
+	}
+	for _, f := range []struct {
+		name  string
+		value string
+	}{{"apiGroup", ref.APIGroup}, {"kind", ref.Kind}, {"name", ref.Name}} {
+		if f.value == "" {
+			continue
+		}
+		for _, msg := range validation.IsValidLabelValue(f.value) {
+			errs = append(errs, field.Invalid(path.Child(f.name), f.value, msg))
+		}
+	}
+	return errs
 }
 
 func validateCIDRs(path *field.Path, cidrs []string) field.ErrorList {

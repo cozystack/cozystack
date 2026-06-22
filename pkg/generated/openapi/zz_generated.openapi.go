@@ -44,6 +44,7 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantNamespaceList":                  schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecret":                         schema_pkg_apis_core_v1alpha1_TenantSecret(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecretList":                     schema_pkg_apis_core_v1alpha1_TenantSecretList(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference":                  schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref),
 		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule":                            schema_pkg_apis_sdn_v1alpha1_EgressRule(ref),
 		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector":                          schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref),
 		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule":                           schema_pkg_apis_sdn_v1alpha1_IngressRule(ref),
@@ -781,6 +782,43 @@ func schema_pkg_apis_core_v1alpha1_TenantSecretList(ref common.ReferenceCallback
 	}
 }
 
+func schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ApplicationReference identifies a managed Cozystack application by its group, kind and name. The SecurityGroup projects this reference into an endpointSelector matching the application's lineage labels (apps.cozystack.io/application.{group,kind,name}).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"apiGroup": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIGroup of the referenced application. Defaults to apps.cozystack.io when empty, the group under which Cozystack serves its managed applications.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind of the referenced application, e.g. \"Postgres\".",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name of the referenced application.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"kind", "name"},
+			},
+		},
+	}
+}
+
 func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
@@ -1089,19 +1127,19 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "SecurityGroupSpec mirrors the subset of the CiliumNetworkPolicy rule that the SecurityGroup abstraction exposes. Field names and semantics match the backing CiliumNetworkPolicy so the projection is lossless and reversible.",
+				Description: "SecurityGroupSpec describes the traffic a SecurityGroup allows and the managed application it attaches to. The platform derives the backing CiliumNetworkPolicy's endpointSelector from TargetRef rather than copying a tenant-authored selector, so a SecurityGroup can only ever apply to the referenced application's own pods in the same namespace.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"endpointSelector": {
+					"targetRef": {
 						SchemaProps: spec.SchemaProps{
-							Description: "EndpointSelector selects the pods this SecurityGroup applies to. It maps directly to the endpointSelector of the backing CiliumNetworkPolicy.",
+							Description: "TargetRef references the managed application whose pods this SecurityGroup applies to. The backing CiliumNetworkPolicy's endpointSelector is derived from this reference via the application's lineage labels, so the selector is machine-generated and cannot be pointed at arbitrary or platform-owned pods.",
 							Default:     map[string]interface{}{},
-							Ref:         ref("k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"),
+							Ref:         ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
 						},
 					},
 					"ingress": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Ingress is the list of rules describing allowed inbound traffic. An empty list with a set EndpointSelector denies all ingress to the selected pods.",
+							Description: "Ingress is the list of rules describing allowed inbound traffic. An empty list denies all ingress to the targeted application's pods.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1115,7 +1153,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 					},
 					"egress": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Egress is the list of rules describing allowed outbound traffic. An empty list with a set EndpointSelector denies all egress from the selected pods.",
+							Description: "Egress is the list of rules describing allowed outbound traffic. An empty list denies all egress from the targeted application's pods.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1128,10 +1166,11 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 						},
 					},
 				},
+				Required: []string{"targetRef"},
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule", "k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"},
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule"},
 	}
 }
 

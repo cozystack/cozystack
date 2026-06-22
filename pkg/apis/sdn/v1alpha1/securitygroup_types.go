@@ -31,21 +31,42 @@ type SecurityGroup struct {
 	Spec SecurityGroupSpec `json:"spec,omitempty"`
 }
 
-// SecurityGroupSpec mirrors the subset of the CiliumNetworkPolicy rule that the
-// SecurityGroup abstraction exposes. Field names and semantics match the
-// backing CiliumNetworkPolicy so the projection is lossless and reversible.
+// SecurityGroupSpec describes the traffic a SecurityGroup allows and the
+// managed application it attaches to. The platform derives the backing
+// CiliumNetworkPolicy's endpointSelector from TargetRef rather than copying a
+// tenant-authored selector, so a SecurityGroup can only ever apply to the
+// referenced application's own pods in the same namespace.
 type SecurityGroupSpec struct {
-	// EndpointSelector selects the pods this SecurityGroup applies to. It maps
-	// directly to the endpointSelector of the backing CiliumNetworkPolicy.
-	EndpointSelector metav1.LabelSelector `json:"endpointSelector,omitempty"`
+	// TargetRef references the managed application whose pods this SecurityGroup
+	// applies to. The backing CiliumNetworkPolicy's endpointSelector is derived
+	// from this reference via the application's lineage labels, so the selector
+	// is machine-generated and cannot be pointed at arbitrary or platform-owned
+	// pods.
+	TargetRef ApplicationReference `json:"targetRef"`
 
 	// Ingress is the list of rules describing allowed inbound traffic. An empty
-	// list with a set EndpointSelector denies all ingress to the selected pods.
+	// list denies all ingress to the targeted application's pods.
 	Ingress []IngressRule `json:"ingress,omitempty"`
 
 	// Egress is the list of rules describing allowed outbound traffic. An empty
-	// list with a set EndpointSelector denies all egress from the selected pods.
+	// list denies all egress from the targeted application's pods.
 	Egress []EgressRule `json:"egress,omitempty"`
+}
+
+// ApplicationReference identifies a managed Cozystack application by its
+// group, kind and name. The SecurityGroup projects this reference into an
+// endpointSelector matching the application's lineage labels
+// (apps.cozystack.io/application.{group,kind,name}).
+type ApplicationReference struct {
+	// APIGroup of the referenced application. Defaults to apps.cozystack.io when
+	// empty, the group under which Cozystack serves its managed applications.
+	APIGroup string `json:"apiGroup,omitempty"`
+
+	// Kind of the referenced application, e.g. "Postgres".
+	Kind string `json:"kind"`
+
+	// Name of the referenced application.
+	Name string `json:"name"`
 }
 
 // IngressRule describes one set of allowed inbound sources and ports.

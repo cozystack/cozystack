@@ -46,10 +46,57 @@ const (
 	sgLabelKey   = "sdn.cozystack.io/securitygroup"
 	sgLabelValue = "true"
 
+	// appGroupLabelKey, appKindLabelKey and appNameLabelKey are the lineage
+	// labels the lineage mutating webhook stamps on every managed-app pod
+	// (see internal/lineagecontrollerwebhook/webhook.go ManagerGroupKey/
+	// ManagerKindKey/ManagerNameKey). The storage derives the backing
+	// CiliumNetworkPolicy's endpointSelector from these so a SecurityGroup only
+	// ever selects its referenced application's own pods. Mirrored here to keep
+	// this registry package from depending on internal/.
+	appGroupLabelKey = "apps.cozystack.io/application.group"
+	appKindLabelKey  = "apps.cozystack.io/application.kind"
+	appNameLabelKey  = "apps.cozystack.io/application.name"
+
+	// defaultAppGroup is the API group SecurityGroup TargetRefs default to when
+	// APIGroup is empty — the group under which Cozystack serves managed apps.
+	defaultAppGroup = "apps.cozystack.io"
+
 	singularName = sdnv1alpha1.SecurityGroupSingularName
 	kindSG       = sdnv1alpha1.SecurityGroupKind
 	kindSGList   = sdnv1alpha1.SecurityGroupListKind
 )
+
+// deriveTargetLabels projects a SecurityGroup TargetRef into the lineage labels
+// that select the referenced application's pods. An empty APIGroup defaults to
+// apps.cozystack.io. The result is the endpointSelector matchLabels of the
+// backing CiliumNetworkPolicy.
+func deriveTargetLabels(ref sdnv1alpha1.ApplicationReference) map[string]string {
+	group := ref.APIGroup
+	if group == "" {
+		group = defaultAppGroup
+	}
+	return map[string]string{
+		appGroupLabelKey: group,
+		appKindLabelKey:  ref.Kind,
+		appNameLabelKey:  ref.Name,
+	}
+}
+
+// reconstructTargetRef is the inverse of deriveTargetLabels: it reads the three
+// lineage matchLabels back into a TargetRef. Unknown keys are ignored and a nil
+// selector yields a zero-value reference, so a hand-edited or empty backing
+// policy degrades gracefully rather than erroring. The mapping is lossless for
+// the values deriveTargetLabels writes because validation rejects any component
+// that is not a valid label value (≤63 chars), and the lineage webhook truncates
+// only groups longer than 63 chars — so a valid value is stamped on pods, and
+// read back here, unchanged.
+func reconstructTargetRef(sel metav1.LabelSelector) sdnv1alpha1.ApplicationReference {
+	return sdnv1alpha1.ApplicationReference{
+		APIGroup: sel.MatchLabels[appGroupLabelKey],
+		Kind:     sel.MatchLabels[appKindLabelKey],
+		Name:     sel.MatchLabels[appNameLabelKey],
+	}
+}
 
 // stripInternal returns a copy of m without the SecurityGroup marker label.
 func stripInternal(m map[string]string) map[string]string {
@@ -85,7 +132,12 @@ func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
 		},
 	}
 	if np.Spec != nil {
-		sg.Spec = *np.Spec.DeepCopy()
+		spec := np.Spec.DeepCopy()
+		sg.Spec = sdnv1alpha1.SecurityGroupSpec{
+			TargetRef: reconstructTargetRef(spec.EndpointSelector),
+			Ingress:   spec.Ingress,
+			Egress:    spec.Egress,
+		}
 	}
 	return sg
 }
@@ -133,7 +185,14 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	out.OwnerReferences = sg.DeepCopy().OwnerReferences
 	out.Finalizers = append([]string(nil), sg.Finalizers...)
 
-	out.Spec = sg.Spec.DeepCopy()
+	// Derive the backing endpointSelector from the TargetRef rather than copying
+	// a tenant-authored selector. The rule lists project 1:1.
+	spec := sg.Spec.DeepCopy()
+	out.Spec = &CiliumNetworkPolicySpec{
+		EndpointSelector: metav1.LabelSelector{MatchLabels: deriveTargetLabels(spec.TargetRef)},
+		Ingress:          spec.Ingress,
+		Egress:           spec.Egress,
+	}
 	// Normalize the protocol to upper case: validation accepts it case
 	// insensitively, but the backing CiliumNetworkPolicy CRD enforces a strict
 	// upper-case enum, so a raw "tcp" would be rejected on the backing write.
@@ -143,7 +202,7 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 
 // normalizePortProtocols upper-cases every port protocol in place so the value
 // written to the backing CiliumNetworkPolicy matches its case-sensitive enum.
-func normalizePortProtocols(spec *sdnv1alpha1.SecurityGroupSpec) {
+func normalizePortProtocols(spec *CiliumNetworkPolicySpec) {
 	if spec == nil {
 		return
 	}
