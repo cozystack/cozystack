@@ -662,7 +662,12 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 
 			sg := policyToSecurityGroup(np)
 
-			if ev.Type == watch.Added && startingRV > 0 {
+			// De-dup ADDED events the client has already seen when resuming a plain
+			// watch from a resourceVersion. This must NOT run during a
+			// sendInitialEvents replay: there the backing API intentionally re-emits
+			// existing objects as initial ADDED events with RV <= startingRV, and
+			// dropping them would break the initial-state replay.
+			if !sendInitialEvents && ev.Type == watch.Added && startingRV > 0 {
 				objRV, parseErr := strconv.ParseUint(sg.ResourceVersion, 10, 64)
 				if parseErr == nil && objRV <= startingRV {
 					continue

@@ -5,6 +5,7 @@ package securitygroup
 
 import (
 	"context"
+	"strconv"
 	"testing"
 	"time"
 
@@ -200,5 +201,59 @@ func TestWatchClusterWide(t *testing.T) {
 	evs := collectEvents(t, w, 1, 2*time.Second)
 	if len(evs) != 1 || evs[0].Type != watch.Added {
 		t.Fatalf("cluster-wide watch did not stream the cross-namespace event: %+v", evs)
+	}
+}
+
+// TestWatchSendInitialEventsReplaysLowResourceVersionAdds asserts that with
+// sendInitialEvents=true the resourceVersion de-dup filter does not drop
+// initial ADDED events whose resourceVersion is <= the requested startingRV.
+// The backing WatchList intentionally replays existing objects (RV <=
+// startingRV) as the initial state; dropping them would break the replay.
+func TestWatchSendInitialEventsReplaysLowResourceVersionAdds(t *testing.T) {
+	r := newTestREST(t)
+	ctx, cancel := context.WithCancel(ctxNS())
+	defer cancel()
+
+	sendInitialEvents := true
+	// A startingRV far above any RV the fake store assigns, so the ADDED event
+	// below has objRV <= startingRV and exercises the de-dup filter.
+	const startingRV = "1000000000"
+	w, err := r.Watch(ctx, &metainternal.ListOptions{
+		SendInitialEvents: &sendInitialEvents,
+		ResourceVersion:   startingRV,
+	})
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+	defer w.Stop()
+
+	np := markedPolicy("sg-db")
+	if err := r.c.Create(ctx, np); err != nil {
+		t.Fatalf("create marked: %v", err)
+	}
+	// Precondition: the object RV must be <= startingRV, otherwise the filter
+	// would not apply and the test would not exercise the regression.
+	objRV, perr := strconv.ParseUint(np.ResourceVersion, 10, 64)
+	if perr != nil {
+		t.Fatalf("parse object RV %q: %v", np.ResourceVersion, perr)
+	}
+	if objRV > 1000000000 {
+		t.Fatalf("test precondition broken: object RV %d > startingRV", objRV)
+	}
+
+	// The ADDED event for sg-db must survive the initial replay, not be dropped.
+	evs := collectEvents(t, w, 3, 2*time.Second)
+	found := false
+	for _, ev := range evs {
+		if ev.Type != watch.Added {
+			continue
+		}
+		if sg, ok := ev.Object.(*sdnv1alpha1.SecurityGroup); ok && sg.Name == "sg-db" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected an Added event for sg-db during initial replay, got %+v", evs)
 	}
 }
