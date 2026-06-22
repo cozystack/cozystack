@@ -807,6 +807,11 @@ server:
       # Extra labels for the service definition.
       # This should be a YAML map of the labels to apply to the standby service
       extraLabels: {}
+    headless:
+      # Extra annotations for the headless service definition. This can either be YAML or a
+      # YAML-formatted multi-line templated string map of the annotations to apply
+      # to the headless service.
+      annotations: {}
     # If enabled, the service selectors will include `app.kubernetes.io/instance: {{ .Release.Name }}`
     # When disabled, services may select OpenBao pods not deployed from the chart.
     # Does not affect the headless openbao-internal service with `ClusterIP: None`
@@ -1524,7 +1529,7 @@ snapshotAgent:
   # The image settings for the snapshot agent
   image:
     repository: ghcr.io/openbao/openbao-snapshot-agent
-    tag: 0.2.4
+    tag: 0.3.0
 
   # -- List of extraVolumes made available to the snapshot cronjob container.
   extraVolumes: []

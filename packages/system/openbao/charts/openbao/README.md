@@ -1,6 +1,6 @@
 # openbao
 
-![Version: 0.25.3](https://img.shields.io/badge/Version-0.25.3-informational?style=flat-square) ![AppVersion: v2.5.0](https://img.shields.io/badge/AppVersion-v2.5.0-informational?style=flat-square)
+![Version: 0.25.7](https://img.shields.io/badge/Version-0.25.7-informational?style=flat-square) ![AppVersion: v2.5.1](https://img.shields.io/badge/AppVersion-v2.5.1-informational?style=flat-square)
 
 Official OpenBao Chart
 
@@ -280,6 +280,7 @@ Kubernetes: `>= 1.30.0-0`
 | server.service.externalTrafficPolicy | string | `"Cluster"` |  |
 | server.service.extraLabels | object | `{}` |  |
 | server.service.extraPorts | list | `[]` | extraPorts is a list of extra ports. Specified as a YAML list. This is useful if you need to add additional ports to the server service in dynamic way. |
+| server.service.headless.annotations | object | `{}` |  |
 | server.service.instanceSelector.enabled | bool | `true` |  |
 | server.service.ipFamilies | list | `[]` |  |
 | server.service.ipFamilyPolicy | string | `""` |  |
@@ -337,7 +338,7 @@ Kubernetes: `>= 1.30.0-0`
 | snapshotAgent.extraVolumeMounts | list | `[]` | List of additional volumeMounts for the snapshot cronjob container. |
 | snapshotAgent.extraVolumes | list | `[]` | List of extraVolumes made available to the snapshot cronjob container. |
 | snapshotAgent.image.repository | string | `"ghcr.io/openbao/openbao-snapshot-agent"` |  |
-| snapshotAgent.image.tag | string | `"0.2.4"` |  |
+| snapshotAgent.image.tag | string | `"0.3.0"` |  |
 | snapshotAgent.resources | object | `{}` |  |
 | snapshotAgent.restartPolicy | string | `"OnFailure"` |  |
 | snapshotAgent.s3CredentialsSecret | string | `"my-s3-credentials"` |  |
