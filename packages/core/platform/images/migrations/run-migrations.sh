@@ -14,7 +14,9 @@ echo "Starting migrations from version $CURRENT_VERSION to $TARGET_VERSION"
 if ! kubectl get configmap --namespace "$NAMESPACE" cozystack-version >/dev/null 2>&1; then
   echo "ConfigMap cozystack-version does not exist, creating it with version $TARGET_VERSION"
   # Stamp via the shared helper so the bootstrap ConfigMap carries the
-  # platform.cozystack.io/no-delete label like every migration-driven stamp.
+  # platform.cozystack.io/no-delete label, matching every go-forward stamp
+  # (migration 42 onward; migrations 1-41 stamp label-less and are backfilled
+  # by migration 42, so they are intentionally left as-is).
   stamp_cozystack_version "$TARGET_VERSION"
   echo "ConfigMap created with version $TARGET_VERSION"
   exit 0

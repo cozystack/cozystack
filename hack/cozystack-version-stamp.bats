@@ -103,3 +103,41 @@ EOF
         exit 1
     fi
 }
+
+@test "no go-forward stamp bypasses the helper (migrations >= 42 and run-migrations.sh)" {
+    # The helper exists so go-forward stamps cannot drift back to a label-less
+    # apply that drops the no-delete label. Migrations 1-41 are frozen and
+    # backfilled by 42, so they are exempt; migration 42 onward and the
+    # bootstrap path must each source the helper, call its API, and never stamp
+    # cozystack-version directly with kubectl. Blocking only the historical
+    # 'kubectl create configmap' shape is too weak — an inline 'kubectl apply'
+    # of a hand-rolled label-less manifest would slip past it.
+    mig_dir=packages/core/platform/images/migrations/migrations
+    files=""
+    for f in "$mig_dir"/*; do
+        n=$(basename "$f")
+        case "$n" in *[!0-9]*) continue ;; esac   # skip lib/ and other non-numeric
+        [ "$n" -ge 42 ] || continue
+        files="$files $f"
+    done
+    files="$files packages/core/platform/images/migrations/run-migrations.sh"
+
+    for f in $files; do
+        if ! grep -Eq 'cozystack-version\.sh' "$f"; then
+            echo "$f does not source the cozystack-version helper" >&2
+            exit 1
+        fi
+        if ! grep -Eq '(render_cozystack_version_manifest|stamp_cozystack_version)' "$f"; then
+            echo "$f does not call the cozystack-version helper API" >&2
+            exit 1
+        fi
+        # Strip full-comment lines first: a comment that explains why a stamp
+        # routes through the helper must not read as a direct stamp itself. A
+        # real bypass command never starts with '#', so the guard keeps its
+        # strength against actual direct stamping.
+        if grep -v '^[[:space:]]*#' "$f" | grep -Eq 'kubectl[[:space:]].*(create[[:space:]]+configmap|apply).*cozystack-version'; then
+            echo "$f stamps cozystack-version directly instead of via the helper" >&2
+            exit 1
+        fi
+    done
+}
