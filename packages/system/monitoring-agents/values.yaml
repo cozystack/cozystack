@@ -4,6 +4,13 @@ global:
 kube-state-metrics:
   extraArgs:
     - --metric-labels-allowlist=pods=[*],deployments=[*]
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
   rbac:
     extraRules:
       - apiGroups:
