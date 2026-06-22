@@ -18,16 +18,16 @@ System (non-tenant) HelmReleases are untouched: flux-aio keeps reconciling every
 
 ### Common parameters
 
-| Name                                  | Description                                                                              | Value                                                |
-| ------------------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `fluxShardOperator.image`             | Container image                                                                          | `ghcr.io/cozystack/cozystack/flux-shard-operator:*`  |
-| `fluxShardOperator.debug`             | Enable debug logging                                                                     | `false`                                              |
-| `fluxShardOperator.replicas`          | Operator replica count                                                                   | `2`                                                  |
-| `fluxShardOperator.shardCount`        | Number of helm-controller shards: `auto` sizes from the HelmRelease count, an integer pins it | `auto`                                          |
-| `fluxShardOperator.rebalanceThreshold`| Load spread ratio above which tenants are rebalanced                                     | `0.25`                                               |
-| `fluxShardOperator.pinnedTenants`     | Map of tenant namespace to shard, pins heavy tenants to dedicated shards                 | `{}`                                                 |
-| `fluxShardOperator.shard.concurrent`  | `--concurrent` of each shard helm-controller                                             | `5`                                                  |
-| `fluxShardOperator.shard.resources`   | Resources of each shard helm-controller (empty values inherit flux-aio)                  | `{requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 1Gi}}` |
+| Name                                   | Description                                                                                   | Value                                                          |
+| -------------------------------------- | --------------------------------------------------------------------------------------------- | -------------------------------------------------------------- |
+| `fluxShardOperator.image`              | Container image                                                                               | `ghcr.io/cozystack/cozystack/flux-shard-operator:*`            |
+| `fluxShardOperator.debug`              | Enable debug logging                                                                          | `false`                                                        |
+| `fluxShardOperator.replicas`           | Operator replica count                                                                        | `2`                                                            |
+| `fluxShardOperator.shardCount`         | Number of helm-controller shards: `auto` sizes from the HelmRelease count, an integer pins it | `auto`                                                         |
+| `fluxShardOperator.rebalanceThreshold` | Load spread ratio above which tenants are rebalanced                                          | `0.25`                                                         |
+| `fluxShardOperator.pinnedTenants`      | Map of tenant namespace to shard, pins heavy tenants to dedicated shards                      | `{}`                                                           |
+| `fluxShardOperator.shard.concurrent`   | `--concurrent` of each shard helm-controller                                                  | `5`                                                            |
+| `fluxShardOperator.shard.resources`    | Resources of each shard helm-controller (empty values inherit flux-aio)                       | `{requests: {cpu: 100m, memory: 64Mi}, limits: {memory: 1Gi}}` |
 
 ## Autosizing
 
