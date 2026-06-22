@@ -831,3 +831,53 @@ func TestCreateRejectsEmptyFQDNSelector(t *testing.T) {
 		t.Fatalf("Create with empty FQDNSelector: got err %v, want Invalid", err)
 	}
 }
+
+// TestCreateRejectsNamespaceMismatch asserts Create rejects a SecurityGroup
+// whose metadata.namespace differs from the request namespace, so a caller
+// cannot post to one namespace and persist into another. The aggregated
+// apiserver already enforces this before the storage is reached; binding it in
+// the storage too keeps the storage self-defending and pins the contract.
+func TestCreateRejectsNamespaceMismatch(t *testing.T) {
+	r := newTestREST(t)
+	in := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: "tenant-victim"},
+		Spec:       sampleSpec(),
+	}
+	if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); !apierrors.IsBadRequest(err) {
+		t.Fatalf("Create with mismatched namespace: got err %v, want BadRequest", err)
+	}
+	// Nothing must have been persisted in either namespace.
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: "tenant-victim", Name: "sg-db"}, np); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected no policy in tenant-victim, got err %v", err)
+	}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, np); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected no policy in %s, got err %v", testNamespace, err)
+	}
+}
+
+// TestUpdateRejectsNameMismatch asserts Update rejects an object whose
+// metadata.name differs from the URL name, so a force-create/update cannot
+// write a different object than the request target.
+func TestUpdateRejectsNameMismatch(t *testing.T) {
+	r := newTestREST(t)
+	createSG(t, r, &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: testNamespace},
+		Spec:       sampleSpec(),
+	})
+
+	mismatched := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-evil", Namespace: testNamespace},
+		Spec:       sampleSpec(),
+	}
+	_, _, err := r.Update(ctxNS(), "sg-db",
+		rest.DefaultUpdatedObjectInfo(mismatched), nil, nil, false, &metav1.UpdateOptions{})
+	if !apierrors.IsBadRequest(err) {
+		t.Fatalf("Update with mismatched name: got err %v, want BadRequest", err)
+	}
+	// The off-target name must not have been created.
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-evil"}, np); !apierrors.IsNotFound(err) {
+		t.Fatalf("expected no policy named sg-evil, got err %v", err)
+	}
+}

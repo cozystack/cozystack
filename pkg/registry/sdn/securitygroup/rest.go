@@ -287,6 +287,20 @@ func (r *REST) Create(
 		return nil, fmt.Errorf("expected SecurityGroup, got %T", obj)
 	}
 
+	// Bind the object to the request namespace. The aggregated apiserver already
+	// rejects a conflicting body namespace before reaching the storage, but
+	// enforcing it here keeps the storage self-defending against a cross-namespace
+	// write regardless of the calling path.
+	ns, err := nsFrom(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if in.Namespace != "" && in.Namespace != ns {
+		return nil, apierrors.NewBadRequest("metadata.namespace must match request namespace")
+	}
+	in = in.DeepCopy()
+	in.Namespace = ns
+
 	if err := validateSecurityGroup(in); err != nil {
 		return nil, err
 	}
@@ -432,6 +446,17 @@ func (r *REST) Update(
 	if !ok {
 		return nil, false, fmt.Errorf("expected SecurityGroup, got %T", newObj)
 	}
+
+	// Enforce name identity and bind the namespace to the request target. The
+	// aggregated apiserver already rejects a mismatched name/namespace before the
+	// storage, but enforcing it here stops a force-create/update from writing a
+	// different object than the request addressed, independent of the caller.
+	if in.Name != "" && in.Name != name {
+		return nil, false, apierrors.NewBadRequest("metadata.name must match request name")
+	}
+	in = in.DeepCopy()
+	in.Name = name
+	in.Namespace = ns
 
 	if err := validateSecurityGroup(in); err != nil {
 		return nil, false, err
