@@ -45,6 +45,7 @@ import (
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	fluxshard "github.com/cozystack/cozystack/internal/fluxshardoperator"
 	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
@@ -542,13 +543,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Ensure ResourceVersion
+	// Fetch the live HelmRelease: it backs the ResourceVersion when the
+	// converted object carries none, and runtime-managed labels are carried
+	// over from it below.
+	cur := &helmv2.HelmRelease{}
+	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+	}
 	if helmRelease.ResourceVersion == "" {
-		cur := &helmv2.HelmRelease{}
-		err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}})
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
-		}
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
 
@@ -564,6 +566,15 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels[ApplicationGroupLabel] = r.gvk.Group
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
+
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
+	}
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 

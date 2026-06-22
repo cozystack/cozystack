@@ -1,0 +1,110 @@
+suite: flux-shard-operator workload + PDB
+templates:
+  - templates/workload.yaml
+  - templates/pdb.yaml
+
+release:
+  name: flux-shard-operator
+  namespace: cozy-fluxcd
+
+tests:
+  - it: renders the default Deployment shape
+    template: templates/workload.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: flux-shard-operator
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --flux-namespace=cozy-fluxcd
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-count=auto
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-concurrent=5
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --rebalance-threshold=0.25
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-cpu-request=100m
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-memory-request=64Mi
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-memory-limit=1Gi
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-cpu-limit=
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --zap-log-level=info
+      - equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: flux-shard-operator-cert
+      # The metrics endpoint must stay reachable: the README-advertised
+      # cozy_flux_shard_* gauges (incl. the autosizing recommendation) are the
+      # operator's observability surface.
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8080
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-secure=false
+      - equal:
+          path: spec.template.metadata.annotations["prometheus.io/scrape"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+
+  - it: does not render --pinned-tenants by default
+    template: templates/workload.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --pinned-tenants=
+
+  - it: renders shardCount and pinned tenants from values
+    template: templates/workload.yaml
+    set:
+      fluxShardOperator:
+        shardCount: 4
+        pinnedTenants:
+          tenant-bigone: shard3
+          tenant-other: shard0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --shard-count=4
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --pinned-tenants=tenant-bigone=shard3,tenant-other=shard0
+
+  - it: renders debug log level when enabled
+    template: templates/workload.yaml
+    set:
+      fluxShardOperator:
+        debug: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --zap-log-level=debug
+
+  - it: renders the PDB
+    template: templates/pdb.yaml
+    asserts:
+      - equal:
+          path: spec.maxUnavailable
+          value: 1
