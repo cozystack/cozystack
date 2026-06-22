@@ -34,6 +34,8 @@ terminationGracePeriodSeconds: 30
 podAnnotations: {}
 #  cluster-autoscaler.kubernetes.io/safe-to-evict: "false"
 
+podLabels: {}
+
 serviceType: "ClusterIP"
 
 prometheus:
@@ -48,6 +50,12 @@ prometheus:
     additionalLabels: {}
     namespace: ""
     interval: ""
+    scrapeTimeout: ""
+    scheme: ""
+    honorLabels: false
+    tlsConfig: {}
+    relabelings: []
+    metricRelabelings: []
     selector: {}
 
 service:
@@ -403,6 +411,23 @@ deployment:
   annotations: {}
   ## Pod selector
   selector: {}
+  # dnsPolicy determines how DNS resolution is handled for the pod.
+  # When isClusterService is true, this defaults to "Default" to avoid circular DNS resolution.
+  # Options: Default, ClusterFirst, ClusterFirstWithHostNet, None
+  # If set to "None", you must provide dnsConfig.
+  dnsPolicy: "Default"
+  # dnsConfig allows fine-grained DNS configuration for the pod.
+  # Only used when dnsPolicy is set to "None" or when custom DNS settings are needed.
+  # Example:
+  #   dnsConfig:
+  #     nameservers:
+  #       - 8.8.8.8
+  #     searches:
+  #       - my.dns.search.suffix
+  #     options:
+  #       - name: ndots
+  #         value: "2"
+  dnsConfig: {}
 
 # Configures initcontainers for the coredns deployment.
 initContainers: []
