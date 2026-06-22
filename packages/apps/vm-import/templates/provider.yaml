@@ -12,6 +12,10 @@ spec:
   secret:
     name: {{ required "sourceSecretName is required" .Values.sourceSecretName }}
     namespace: {{ .Release.Namespace }}
+  {{- with .Values.vddkInitImage }}
+  settings:
+    vddkInitImage: {{ . | quote }}
+  {{- end }}
 ---
 apiVersion: forklift.konveyor.io/v1beta1
 kind: Provider
@@ -24,3 +28,4 @@ metadata:
 spec:
   type: openshift
   url: ""
+  secret: {}
