@@ -72,6 +72,20 @@ setup() {
   [ "$out" = '[]' ]
 }
 
+@test "seaweedfs change fans out to objectstorage-controller" {
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  echo "packages/system/seaweedfs/values.yaml" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/system/objectstorage-controller"]' ]
+}
+
+@test "seaweedfs change does not duplicate an already-selected objectstorage-controller" {
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  printf 'packages/system/seaweedfs/values.yaml\npackages/system/objectstorage-controller/values.yaml\n' > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$out" = '["packages/system/objectstorage-controller"]' ]
+}
+
 @test "cozy-lib change forces the full matrix" {
   tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
   echo "packages/library/cozy-lib/templates/_helpers.tpl" > "$tmp"

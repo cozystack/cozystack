@@ -72,4 +72,16 @@ for u in $units; do
     selected="$selected $u"
   fi
 done
+
+# Targeted cross-package fan-out that dir-scoping cannot see:
+#   objectstorage-controller derives its COSI sidecar tag from
+#   packages/system/seaweedfs/values.yaml, so a seaweedfs-only diff must still
+#   rebuild objectstorage-controller to regenerate that tag.
+if grep -qE '^packages/system/seaweedfs/' "$CHANGED"; then
+  case " $selected " in
+    *" packages/system/objectstorage-controller "*) : ;;
+    *) selected="$selected packages/system/objectstorage-controller" ;;
+  esac
+fi
+
 emit_json "$selected"
