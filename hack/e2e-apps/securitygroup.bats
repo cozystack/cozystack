@@ -12,7 +12,9 @@
   kubectl -n "$ns" delete securitygroup.sdn.cozystack.io "$name" --ignore-not-found --timeout=1m || true
   kubectl -n "$ns" delete ciliumnetworkpolicy "$plain" --ignore-not-found --timeout=1m || true
 
-  # Create a SecurityGroup through the aggregated API.
+  # Create a SecurityGroup through the aggregated API. It attaches to an
+  # application by reference; the backing endpointSelector is derived, not
+  # tenant-authored.
   kubectl apply -f- <<EOF
 apiVersion: sdn.cozystack.io/v1alpha1
 kind: SecurityGroup
@@ -20,9 +22,9 @@ metadata:
   name: $name
   namespace: $ns
 spec:
-  endpointSelector:
-    matchLabels:
-      app: $name
+  targetRef:
+    kind: Postgres
+    name: $name
   ingress:
     - fromEndpoints:
         - matchLabels:
@@ -39,14 +41,30 @@ EOF
   marker=$(kubectl -n "$ns" get ciliumnetworkpolicy "$name" -o jsonpath='{.metadata.labels.sdn\.cozystack\.io/securitygroup}')
   [ "$marker" = "true" ]
 
-  # The spec must be translated 1:1 (port carried through, protocol upper-cased).
+  # The endpointSelector must be DERIVED from the targetRef — the dotted-key
+  # lineage labels must serialise and be accepted by the real cilium.io/v2 CRD.
+  selGroup=$(kubectl -n "$ns" get ciliumnetworkpolicy "$name" -o jsonpath='{.spec.endpointSelector.matchLabels.apps\.cozystack\.io/application\.group}')
+  [ "$selGroup" = "apps.cozystack.io" ]
+  selKind=$(kubectl -n "$ns" get ciliumnetworkpolicy "$name" -o jsonpath='{.spec.endpointSelector.matchLabels.apps\.cozystack\.io/application\.kind}')
+  [ "$selKind" = "Postgres" ]
+  selName=$(kubectl -n "$ns" get ciliumnetworkpolicy "$name" -o jsonpath='{.spec.endpointSelector.matchLabels.apps\.cozystack\.io/application\.name}')
+  [ "$selName" = "$name" ]
+
+  # The rule list must be translated 1:1 (port carried through, protocol upper-cased).
   port=$(kubectl -n "$ns" get ciliumnetworkpolicy "$name" -o jsonpath='{.spec.ingress[0].toPorts[0].ports[0].port}')
   [ "$port" = "5432" ]
   proto=$(kubectl -n "$ns" get ciliumnetworkpolicy "$name" -o jsonpath='{.spec.ingress[0].toPorts[0].ports[0].protocol}')
   [ "$proto" = "TCP" ]
 
-  # The SecurityGroup view round-trips and hides the internal marker label.
+  # The SecurityGroup view reconstructs the targetRef, round-trips, and hides
+  # the internal marker label.
   kubectl -n "$ns" get securitygroup.sdn.cozystack.io "$name"
+  refKind=$(kubectl -n "$ns" get securitygroup.sdn.cozystack.io "$name" -o jsonpath='{.spec.targetRef.kind}')
+  [ "$refKind" = "Postgres" ]
+  refName=$(kubectl -n "$ns" get securitygroup.sdn.cozystack.io "$name" -o jsonpath='{.spec.targetRef.name}')
+  [ "$refName" = "$name" ]
+  refGroup=$(kubectl -n "$ns" get securitygroup.sdn.cozystack.io "$name" -o jsonpath='{.spec.targetRef.apiGroup}')
+  [ "$refGroup" = "apps.cozystack.io" ]
   viewMarker=$(kubectl -n "$ns" get securitygroup.sdn.cozystack.io "$name" -o jsonpath='{.metadata.labels.sdn\.cozystack\.io/securitygroup}')
   [ -z "$viewMarker" ]
 
