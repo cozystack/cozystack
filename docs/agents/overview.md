@@ -63,6 +63,47 @@ packages/<category>/<package-name>/
 └── values.schema.json                   # JSON schema for validation and UI
 ```
 
+## Build and Development Commands
+
+Root targets (run from the repo root):
+
+```bash
+make build          # Build all Docker images (needs: docker, skopeo, jq, gh, helm, yq, GNU tar/sed/awk)
+make unit-tests     # Run all unit tests (Helm, BATS, Go, etc.)
+make generate       # Code generation (hack/update-codegen.sh) — CRDs, DeepCopy, clients, RBAC
+make manifests      # Generate CRD manifests and operator YAML variants
+make cozypkg        # Build the cozypkg CLI
+make test           # Full E2E tests (requires a cluster)
+make prepare-env    # Prepare the E2E test environment (apply + prepare-cluster)
+```
+
+Per-package targets (run inside `packages/{apps,system,extra,core}/<name>/`):
+
+```bash
+make image          # Build the package image
+make show           # Render the Helm template
+make apply          # Apply the Helm release to a cluster (needs NAME, NAMESPACE)
+make diff           # Diff the template against the cluster
+make test           # Package-specific tests
+make generate       # Regenerate values.schema.json + README.md from values.yaml
+```
+
+Build environment variables:
+
+- `REGISTRY` — Docker registry (default `ghcr.io/cozystack/cozystack`).
+- `PUSH=1` / `LOAD=0` — control buildx push/load behaviour.
+- `LOAD=1 PUSH=0` — load images locally instead of pushing.
+
+### Values schema generation
+
+Package `values.yaml` files carry annotations (`@param`, `@typedef`, `@field`, `@enum`, `@section`) that `cozyvalues-gen` turns into `values.schema.json` and `README.md`. Run `make generate` in the package after editing annotations. A pre-commit hook runs `make generate` across `packages/apps/*` and `packages/extra/*` on every commit to keep these in sync — see [`contributing.md`](./contributing.md) for the regenerate-before-commit rule.
+
+## Testing
+
+- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). `make unit-tests` runs the full unit suite — Helm, BATS, Go, and the preset/readiness checks.
+- **E2E tests:** BATS suites in `hack/e2e-apps/` (one `.bats` per app), run through `hack/cozytest.sh`. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
+- **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
+
 ## Conventions
 
 ### Helm Charts
@@ -78,10 +119,8 @@ packages/<category>/<package-name>/
 - Add proper error handling and structured logging
 
 ### Git Commits
-- Follow [Conventional Commits](https://www.conventionalcommits.org/) format: `type(scope): description`
-- Always use `--signoff` flag
-- Reference PR numbers when available
-- Keep commits atomic and focused
+
+Conventional Commits (`type(scope): description`) with `--signoff`, kept atomic and focused. Full format, scopes, AI-attribution trailer, and PR workflow are in [`contributing.md`](./contributing.md) — the source of truth; do not duplicate them here.
 
 ### PackageSource CRD upgrade policy
 
@@ -98,6 +137,13 @@ Documentation is organized as follows:
 - `docs/agents/` - Instructions for AI agents
 - `docs/changelogs/` - Release changelogs
 - Main website: https://github.com/cozystack/website
+
+### Domain references for specific tasks
+
+Before working on these areas, read the relevant doc first:
+
+- **Backup subsystem design:** `api/backups/v1alpha1/DESIGN.md`
+- **A new app package:** copy the structure of an existing one (e.g. `packages/apps/postgres/`)
 
 ## Things Agents Should Not Do
 
