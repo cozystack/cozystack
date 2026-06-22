@@ -1,0 +1,21 @@
+apiVersion: v2
+appVersion: 3.2.0
+description: ECK operator Custom Resource Definitions
+home: https://github.com/elastic/cloud-on-k8s
+icon: https://helm.elastic.co/icons/eck.png
+keywords:
+- Logstash
+- Elasticsearch
+- Kibana
+- APM Server
+- Beats
+- Enterprise Search
+- Elastic Stack
+- Operator
+kubeVersion: '>=1.21.0-0'
+maintainers:
+- email: eck@elastic.co
+  name: Elastic
+name: eck-operator-crds
+type: application
+version: 3.2.0

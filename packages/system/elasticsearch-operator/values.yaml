@@ -1,0 +1,4 @@
+eck-operator:
+  managedNamespaces: []
+  installCRDs: true
+  createClusterScopedResources: true

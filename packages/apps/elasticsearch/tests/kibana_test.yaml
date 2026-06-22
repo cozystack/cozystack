@@ -1,0 +1,187 @@
+suite: kibana CR tests
+
+templates:
+  - templates/kibana.yaml
+
+tests:
+  ###################
+  # Basic rendering #
+  ###################
+
+  - it: does not render Kibana when disabled
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders Kibana when enabled
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Kibana
+
+  - it: sets correct CR name
+    release:
+      name: my-kibana
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-kibana
+
+  ##################
+  # Version        #
+  ##################
+
+  - it: uses same version as Elasticsearch (v9)
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v9
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.version
+          value: "9.0.0"
+
+  - it: uses same version as Elasticsearch (v8)
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v8
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.version
+          value: "8.17.0"
+
+  - it: uses same version as Elasticsearch (v7)
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      version: v7
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.version
+          value: "7.17.28"
+
+  #####################
+  # Replicas          #
+  #####################
+
+  - it: defaults to 1 replica
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.count
+          value: 1
+
+  - it: sets replica count from values
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+        replicas: 3
+    asserts:
+      - equal:
+          path: spec.count
+          value: 3
+
+  #####################
+  # Elasticsearch Ref #
+  #####################
+
+  - it: references the Elasticsearch cluster
+    release:
+      name: my-cluster
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.elasticsearchRef.name
+          value: my-cluster
+
+  #####################
+  # Config            #
+  #####################
+
+  - it: disables CCS monitoring
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.config["monitoring.ui.ccs.enabled"]
+          value: false
+
+  #####################
+  # TLS               #
+  #####################
+
+  - it: enables TLS with self-signed certificate
+    release:
+      name: test-es
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      kibana:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.http.tls.selfSignedCertificate.disabled
+          value: false
