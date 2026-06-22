@@ -4,6 +4,8 @@ nameOverride: ""
 fullnameOverride: ""
 # -- Override the deployment namespace
 namespaceOverride: ""
+# -- Override the default name of cluster - Can be found in /etc/kubernetes/admin.conf: clusters -> cluster -> name
+clusterName: "cluster.local"
 
 loglevel: info
 
@@ -22,9 +24,38 @@ plugins:
       readOnlyRootFilesystem: true
       runAsNonRoot: true
       runAsUser: 1000
+    # -- List of plugins to download, independent of `plugins.configs`.
+    # When specified, these plugins are downloaded regardless of what's in configs,
+    # which enables using `plugins.existingSecret` for credentials while still
+    # downloading plugin binaries. This list also drives which `<plugin>_config.json`
+    # subPaths the Deployment mounts, so each listed plugin MUST have a matching
+    # config source -- either a `plugins.configs.<plugin>` entry (when
+    # `plugins.existingSecret` is empty) or a `<plugin>_config.json` key in the
+    # Secret referenced by `plugins.existingSecret`. Missing entries cause Pod
+    # startup failures because the mounted subPath will not exist. When
+    # `plugins.existingSecret` is empty, the chart validates this at
+    # template-render time and fails with an actionable error; the check is
+    # skipped when `plugins.existingSecret` is set because the contents of an
+    # externally-managed Secret cannot be introspected from Helm.
+    # Example: ["datadog", "mongodb"].
+    # If empty, falls back to downloading plugins based on keys in configs (legacy behavior).
+    plugins: []
   folder: /opt/opencost/plugin
   # leave this commented to always download most recent version of plugins
   # version: <INSERT_SPECIFIC_PLUGINS_VERSION>
+  # -- Use an existing Secret for plugin configuration instead of generating
+  # one from `plugins.configs`. The referenced Secret MUST contain a
+  # `<plugin>_config.json` key for every entry in `plugins.install.plugins`
+  # (and for every plugin whose configs key would otherwise drive the
+  # install/mount list) -- the Deployment mounts those files via subPath and
+  # missing keys cause Pod startup failures. This is useful when using
+  # ExternalSecrets, Vault, or other secret-management tools so that plugin
+  # credentials do not have to be committed via `plugins.configs`. Mutually
+  # exclusive with `plugins.configs`: when `existingSecret` is set, the chart
+  # does not render a generated Secret and any `plugins.configs` entries would
+  # be silently ignored, so the chart will `fail` template rendering in that
+  # case.
+  existingSecret: ""
   configs:
     # datadog: |
     #   {
@@ -82,6 +113,8 @@ secretAnnotations: {}
 podLabels: {}
 # --  Pod priority
 priorityClassName: ~
+# --  Enable automounting of service account token at the pod level
+podAutomountServiceAccountToken: true
 
 # -- Holds pod-level security attributes and common container settings
 podSecurityContext: {}
@@ -112,10 +145,152 @@ service:
 rbac:
   enabled: true
 
+# PodDisruptionBudget for high availability
+pdb:
+  enabled: false
+  # -- Minimum number of pods that must be available after the eviction
+  minAvailable: ~
+  # -- Maximum number of pods that can be unavailable after the eviction
+  maxUnavailable: ~
+
 opencost:
-  # -- <SECRET_NAME> for the secret containing the Cloud Costs cloud-integration.json https://www.opencost.io/docs/configuration/#cloud-costs
-  # -- kubectl create secret generic <SECRET_NAME> --from-file=cloud-integration.json -n opencost
+  # -- Existing Secret containing `cloud-integration.json` for Cloud Costs. See
+  # https://www.opencost.io/docs/configuration/#cloud-costs.
+  # Create with: `kubectl create secret generic <SECRET_NAME> --from-file=cloud-integration.json -n opencost`.
+  # Mutually exclusive with `opencost.cloudIntegrationJSON`.
   cloudIntegrationSecret: ""
+  # -- Raw JSON for `cloud-integration.json`. Creates a Secret named
+  # `<fullname>-cloud-integration` in the release namespace.
+  # Mutually exclusive with `opencost.cloudIntegrationSecret`.
+  cloudIntegrationJSON: ""
+  # cloudIntegrationJSON: |-
+  #   {
+  #     "aws": [
+  #       {
+  #         "athenaBucketName": "s3://AWS_cloud_integration_athenaBucketName",
+  #         "athenaRegion": "AWS_cloud_integration_athenaRegion",
+  #         "athenaDatabase": "AWS_cloud_integration_athenaDatabase",
+  #         "athenaTable": "AWS_cloud_integration_athenaTable",
+  #         "projectID": "AWS_cloud_integration_athena_projectID",
+  #         "serviceKeyName": "AWS_cloud_integration_athena_serviceKeyName",
+  #         "serviceKeySecret": "AWS_cloud_integration_athena_serviceKeySecret"
+  #       }
+  #     ],
+  #     "azure": [
+  #       {
+  #         "azureSubscriptionID": "my-subscription-id",
+  #         "azureStorageAccount": "my-storage-account",
+  #         "azureStorageAccessKey": "my-storage-access-key",
+  #         "azureStorageContainer": "my-storage-container"
+  #       }
+  #     ],
+  #     "gcp": [
+  #       {
+  #         "projectID": "my-project-id",
+  #         "billingDataDataset": "detailedbilling.my-billing-dataset",
+  #         "key": {
+  #           "type": "service_account",
+  #           "project_id": "my-project-id",
+  #           "private_key_id": "my-private-key-id",
+  #           "private_key": "my-pem-encoded-private-key",
+  #           "client_email": "my-service-account-name@my-project-id.iam.gserviceaccount.com",
+  #           "client_id": "my-client-id",
+  #           "auth_uri": "auth-uri",
+  #           "token_uri": "token-uri",
+  #           "auth_provider_x509_cert_url": "my-x509-provider-cert",
+  #           "client_x509_cert_url": "my-x509-cert-url"
+  #         }
+  #       }
+  #     ],
+  #     "oci": {
+  #       "usageApi": [
+  #         {
+  #           "tenancyID": "ocid1.tenancy.oc1..my-tenancy-ocid",
+  #           "region": "us-ashburn-1",
+  #           "authorizer": {
+  #             "authorizerType": "OCIRawConfigProvider",
+  #             "tenancyID": "ocid1.tenancy.oc1..my-tenancy-ocid",
+  #             "userID": "ocid1.user.oc1..my-user-ocid",
+  #             "region": "us-ashburn-1",
+  #             "fingerprint": "xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx:xx",
+  #             "privateKey": "REPLACE_WITH_YOUR_OCI_KEY_FILE_CONTENTS"
+  #           }
+  #         }
+  #       ]
+  #     }
+  #   }
+
+  # -- MCP (Model Context Protocol) Server Configuration
+  # The MCP server provides AI agents with access to cost allocation and asset data
+  mcp:
+    # -- Enable MCP server for AI agent integration (default: true)
+    # Set to false to disable MCP server completely
+    enabled: true
+    # -- HTTP port for MCP server (default: 8081)
+    # Change this if port 8081 conflicts with other services
+    port: 8081
+    ingress:
+      # -- Ingress for MCP server
+      enabled: false
+      # -- Ingress controller which implements the resource
+      ingressClassName: ""
+      # -- Annotations for Ingress resource
+      annotations: {}
+        # kubernetes.io/tls-acme: "true"
+      # -- A list of host rules used to configure the Ingress
+      # @default -- See [values.yaml](values.yaml)
+      hosts:
+      - host: example.local
+        paths:
+        - path: /
+          pathType: Prefix
+      # -- Ingress TLS configuration
+      tls: []
+        #  - secretName: chart-example-tls
+        #    hosts:
+        #      - chart-example.local
+    # -- HTTPRoute for MCP server (Gateway API)
+    httpRoute:
+      # -- Enable HTTPRoute resource
+      enabled: false
+      # -- Gateway API parent references
+      # @default -- See [values.yaml](values.yaml)
+      parentRefs:
+        - name: ""
+          namespace: ""
+          sectionName: ""
+      # -- Hostnames for the HTTPRoute
+      hostnames: []
+        # - mcp.example.local
+      # -- Annotations for HTTPRoute resource
+      annotations: {}
+      # -- Labels for HTTPRoute resource
+      labels: {}
+      # -- HTTPRoute rules. Each rule supports an optional `filters` list at the rule level
+      # and per-backendRef `filters` for Gateway API filter configuration (e.g. basic auth
+      # via `ExtensionRef`, header modification via `RequestHeaderModifier`, etc.).
+      # @default -- See [values.yaml](values.yaml)
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          # filters:
+          #   - type: ExtensionRef
+          #     extensionRef:
+          #       group: gateway.envoyproxy.io
+          #       kind: SecurityPolicy
+          #       name: basic-auth-policy
+          backendRefs:
+            - name: ""  # Will default to service name
+              port: 8081
+              # filters:
+              #   - type: RequestHeaderModifier
+              #     requestHeaderModifier:
+              #       add:
+              #         - name: X-Custom-Header
+              #           value: my-value
+
   exporter:
     # API_PORT for the cost-model to listen on
     apiPort: 9003
@@ -124,19 +299,24 @@ opencost:
     cloudProviderApiKey: ""
     # -- Default cluster ID to use if cluster_id is not set in Prometheus metrics.
     defaultClusterId: 'default-cluster'
+    # -- If clusterIdConfigmap is defined, use user-generated ConfigMap with key CLUSTER_ID as default cluster ID.
+    # -- This overrides the above defaultClusterId. Ensure the ConfigMap exists and contains the required CLUSTER_ID key.
+    # clusterIdConfigmap: cluster-id-configmap
     image:
       # -- Exporter container image registry
       registry: ghcr.io
       # -- Exporter container image name
       repository: opencost/opencost
       # -- Exporter container image tag
-      tag: "1.111.0@sha256:6aa68e52a24b14ba41f23db08d1b9db1429a1c0300f4c0381ecc2c61fc311a97"
+      tag: "1.120.3@sha256:9f282400e59a4fc886e5fa3bca3c777b9dcae866b781641ca1d1271525d15f72"
       # -- Exporter container image pull policy
       pullPolicy: IfNotPresent
       # -- Override the full image name for development purposes
       fullImageName: null
     # -- List of extra arguments for the command, e.g.: log-format=json
     extraArgs: []
+    # -- Optional command to override the default container command
+    command: []
     # -- Number of OpenCost replicas to run
     replicas: 1
     resources:
@@ -146,7 +326,6 @@ opencost:
         memory: '55Mi'
       # -- CPU/Memory resource limits
       limits:
-        cpu: '999m'
         memory: '1Gi'
     # Startup probe configuration
     startupProbe:
@@ -196,9 +375,31 @@ opencost:
     # Path of CSV file
     csv_path: ""
 
+    prometheusDataSource:
+      # Set the resolution in second that prometheus queries will be performed at
+      queryResolutionSeconds: 300
+
+    # Collector DataSource collects cluster data without a dependency on Prometheus
+    # It is recommended that persistence is enabled alongside it to preserve the state
+    # between pod restarts
+    collectorDataSource:
+      enabled: false
+      # -- define the interval at which the collector scrapes for data points (10s, 15s, 1m)
+      scrapeInterval: 30s
+      # -- The port at which network pods are open to egress
+      networkPort: 3001
+      # -- The number of 10m intervals the Collector DataSource should maintain
+      retention10m: 36
+      # -- The number of 1h intervals the Collector DataSource should maintain
+      retention1h: 49
+      # -- The number of 1d intervals the Collector DataSource should maintain
+      retention1d: 15
+
     # Persistent volume claim for storing the data. eg: csv file
     persistence:
       enabled: false
+      # -- The path that the PV will be mounted to the exporter at
+      mountPath: /mnt/export
       # -- Annotations for persistent volume
       annotations: {}
       # -- Access mode for persistent volume
@@ -222,6 +423,81 @@ opencost:
       # FOO: BAR
       # For example, if accessing mimir directly and getting 401 Unauthorized
       # PROMETHEUS_HEADER_X_SCOPE_ORGID: anonymous
+    # Admin token for write operations (e.g. POST /serviceKey, cloud config endpoints).
+    # Set ADMIN_TOKEN env from a chart-created secret or an existing secret.
+    adminToken:
+      # -- When true, the chart creates the admin-token Secret (if value is set) or mounts existingSecret as ADMIN_TOKEN. When false, ADMIN_TOKEN is not set and no secret is deployed.
+      enabled: false
+      # -- If set, the chart creates a Secret with this value and sets ADMIN_TOKEN from it (not recommended for production; use existingSecret instead).
+      value: ""
+      # -- Use an existing Secret for the admin token (recommended). Secret must contain the key below.
+      existingSecret: ""
+      # -- Key in the Secret that holds the admin token (used for both value-created and existing secrets).
+      secretKey: "ADMIN_TOKEN"
+    apiIngress:
+      # -- Ingress for OpenCost API
+      enabled: false
+      # -- Ingress controller which implements the resource
+      ingressClassName: ""
+      # -- Annotations for Ingress resource
+      annotations: {}
+        # kubernetes.io/tls-acme: "true"
+      # -- A list of host rules used to configure the Ingress
+      # @default -- See [values.yaml](values.yaml)
+      hosts:
+      - host: example.local
+        paths:
+        - path: /
+          pathType: Prefix
+      # -- Redirect ingress to an extraPort defined on the service such as oauth-proxy
+      servicePort: http
+      # servicePort: oauth-proxy
+      # -- Ingress TLS configuration
+      tls: []
+        #  - secretName: chart-example-tls
+        #    hosts:
+        #      - chart-example.local
+    # -- HTTPRoute for OpenCost API (Gateway API)
+    apiHttpRoute:
+      # -- Enable HTTPRoute resource
+      enabled: false
+      # -- Gateway API parent references
+      # @default -- See [values.yaml](values.yaml)
+      parentRefs:
+        - name: ""
+          namespace: ""
+          sectionName: ""
+      # -- Hostnames for the HTTPRoute
+      hostnames: []
+        # - api.example.local
+      # -- Annotations for HTTPRoute resource
+      annotations: {}
+      # -- Labels for HTTPRoute resource
+      labels: {}
+      # -- HTTPRoute rules. Each rule supports an optional `filters` list at the rule level
+      # and per-backendRef `filters` for Gateway API filter configuration (e.g. basic auth
+      # via `ExtensionRef`, header modification via `RequestHeaderModifier`, etc.).
+      # @default -- See [values.yaml](values.yaml)
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          # filters:
+          #   - type: ExtensionRef
+          #     extensionRef:
+          #       group: gateway.envoyproxy.io
+          #       kind: SecurityPolicy
+          #       name: basic-auth-policy
+          backendRefs:
+            - name: ""  # Will default to service name
+              port: 9003
+              # filters:
+              #   - type: RequestHeaderModifier
+              #     requestHeaderModifier:
+              #       add:
+              #         - name: X-Custom-Header
+              #           value: my-value
   customPricing:
     # -- Enables custom pricing configuration
     enabled: false
@@ -246,8 +522,8 @@ opencost:
       regionNetworkEgress: 0.01
       internetNetworkEgress: 0.12
 
-  dataRetention:
-    dailyResolutionDays: 15
+  retention1d: 15
+  retention1h: 49
 
   carbonCost:
     # -- Enable carbon cost exposed in the API
@@ -264,7 +540,6 @@ opencost:
     monthToDateInterval: 6
     # -- The max number of days that any single query will be made to construct Cloud Costs
     queryWindowDays: 7
-
 
   metrics:
     kubeStateMetrics:
@@ -333,6 +608,10 @@ opencost:
     # -- Prometheus Bearer token
     bearer_token: ""
     bearer_token_key: DB_BEARER_TOKEN
+    # -- If true, opencost will use kube-rbac-proxy to authenticate with in cluster Prometheus for openshift
+    kubeRBACProxy: false
+    # -- Whether to disable SSL certificate verification
+    insecureSkipVerify: false
     external:
       # -- Use external Prometheus (eg. Grafana Cloud)
       enabled: false
@@ -347,9 +626,13 @@ opencost:
       namespaceName: prometheus-system
       # -- Service port of in-cluster Prometheus
       port: 80
+      # -- Path to access the Prometheus API, this is neccesary if the Prometheus server is behind a reverse proxy(mimir) or has a different path.
+      path: ""
+      # -- Scheme to use for in-cluster Prometheus
+      scheme: http
     amp:
       # -- Use Amazon Managed Service for Prometheus (AMP)
-      enabled: false  # If true, opencost will be configured to remote_write and query from Amazon Managed Service for Prometheus.
+      enabled: false # If true, opencost will be configured to remote_write and query from Amazon Managed Service for Prometheus.
       # -- Workspace ID for AMP
       workspaceId: ""
     thanos:
@@ -361,6 +644,7 @@ opencost:
         serviceName: my-thanos-query
         namespaceName: opencost
         port: 10901
+        scheme: http
       external:
         enabled: false
         url: 'https://thanos-query.example.com/thanos'
@@ -375,7 +659,7 @@ opencost:
       repository: opencost/opencost-ui
       # -- UI container image tag
       # @default -- `""` (use appVersion in Chart.yaml)
-      tag: "1.111.0@sha256:f7221e7a708d71663f5eca6c238268757eb4352f3e9f46b1029d33ab4e53fd8a"
+      tag: "1.120.3@sha256:12b6e7a844c17f9a4019cdd55e5bfe6c720c1a0961d8a9be2333a97c69bffcc9"
       # -- UI container image pull policy
       pullPolicy: IfNotPresent
       # -- Override the full image name for development purposes
@@ -387,11 +671,15 @@ opencost:
         memory: '55Mi'
       # -- CPU/Memory resource limits
       limits:
-        cpu: '999m'
         memory: '1Gi'
     # used in the default.nginx.conf if you want to switch for using with Docker
     # apiServer: 0.0.0.0
     uiPort: 9090
+    # Base path for serving the UI.
+    # Requires building a custom image using the build argument "ui_path".
+    uiPath: /
+    # Set to true to use IPv6
+    useIPv6: true
     # Liveness probe configuration
     livenessProbe:
       # -- Whether probe is enabled
@@ -431,6 +719,21 @@ opencost:
     # -- A list of volume mounts to be added to the pod
     extraVolumeMounts: []
 
+    # set to true to set upstream to use <service>.<namespace>.svc.cluster.local instead of just <service>.<namespace>
+    useDefaultFqdn: false
+
+    # -- Nginx proxy timeout settings (in seconds)
+    nginx:
+      # -- Timeout for establishing a connection with the proxied server
+      proxyConnectTimeout: 180
+      # -- Timeout for transmitting a request to the proxied server
+      proxySendTimeout: 180
+      # -- Timeout for reading a response from the proxied server
+      proxyReadTimeout: 180
+
+    # Set the model fqdn to use for the upstream
+    # modelFqdn: opencost.opencost.svc.cluster.local:9003
+
     ingress:
       # -- Ingress for OpenCost UI
       enabled: false
@@ -442,9 +745,9 @@ opencost:
       # -- A list of host rules used to configure the Ingress
       # @default -- See [values.yaml](values.yaml)
       hosts:
-        - host: example.local
-          paths:
-            - /
+      - host: example.local
+        paths:
+        - /
       # -- Redirect ingress to an extraPort defined on the service such as oauth-proxy
       servicePort: http-ui
       # servicePort: oauth-proxy
@@ -453,6 +756,63 @@ opencost:
         #  - secretName: chart-example-tls
         #    hosts:
         #      - chart-example.local
+    route:
+      # -- OpenShift route for OpenCost UI
+      enabled: false
+      # -- Annotations for Ingress resource
+      annotations: {}
+        # haproxy.router.openshift.io/timeout: 1m
+      # @default -- See [values.yaml](values.yaml)
+      host: example.local
+      path:
+      # -- Redirect ingress to an extraPort defined on the service such as oauth-proxy
+      targetPort: http-ui
+      # targetPort: oauth-proxy
+      # -- Route TLS configuration as a map (e.g. with `termination` and `insecureEdgeTerminationPolicy` fields)
+      tls: {}
+        # insecureEdgeTerminationPolicy: Redirect
+        # termination: edge
+    # -- HTTPRoute for OpenCost UI (Gateway API)
+    httpRoute:
+      # -- Enable HTTPRoute resource
+      enabled: false
+      # -- Gateway API parent references
+      # @default -- See [values.yaml](values.yaml)
+      parentRefs:
+        - name: ""
+          namespace: ""
+          sectionName: ""
+      # -- Hostnames for the HTTPRoute
+      hostnames: []
+        # - example.local
+      # -- Annotations for HTTPRoute resource
+      annotations: {}
+      # -- Labels for HTTPRoute resource
+      labels: {}
+      # -- HTTPRoute rules. Each rule supports an optional `filters` list at the rule level
+      # and per-backendRef `filters` for Gateway API filter configuration (e.g. basic auth
+      # via `ExtensionRef`, header modification via `RequestHeaderModifier`, etc.).
+      # @default -- See [values.yaml](values.yaml)
+      rules:
+        - matches:
+            - path:
+                type: PathPrefix
+                value: /
+          # filters:
+          #   - type: ExtensionRef
+          #     extensionRef:
+          #       group: gateway.envoyproxy.io
+          #       kind: SecurityPolicy
+          #       name: basic-auth-policy
+          backendRefs:
+            - name: ""  # Will default to service name
+              port: 9090
+              # filters:
+              #   - type: RequestHeaderModifier
+              #     requestHeaderModifier:
+              #       add:
+              #         - name: X-Custom-Header
+              #           value: my-value
 
   sigV4Proxy:
     image: public.ecr.aws/aws-observability/aws-sigv4-proxy:latest
@@ -508,5 +868,44 @@ opencost:
     #       protocol: TCP
     #   resources: {}
 
+  updateCaTrust:
+    enabled: false
+    ## Security context settings for the init container.
+    securityContext:
+      runAsUser: 0
+      runAsGroup: 0
+      runAsNonRoot: false
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      seccompProfile:
+        type: RuntimeDefault
+    caCertsSecret: ca-certs-secret # The name of the Secret containing custom CA certificates to mount to the opencost container.
+    # caCertsConfig: ca-certs-config  # The name of the ConfigMap containing the CA trust configuration.
+    resources: {}
+
+  platforms:
+    openshift:
+      # -- Enable OpenShift specific configurations
+      enabled: false
+      # OPTIONAL. The following configs only to be enabled when using a Prometheus instance already installed in the cluster.
+      # -- If true, the helm chart will create a ClusterRoleBinding to grant the OpenCost ServiceAccount access to query Prometheus.
+      createMonitoringClusterRoleBinding: false
+      # -- If true, create a Role and RoleBinding to allow Prometheus to list and watch OpenCost resources.
+      createMonitoringResourceReaderRoleBinding: false
+      # -- Name of the Prometheus serviceaccount to bind to the Resource Reader Role Binding.
+      monitoringServiceAccountName: prometheus-k8s
+      # -- Namespace of the Prometheus serviceaccount to bind to the Resource Reader Role Binding.
+      monitoringServiceAccountNamespace: openshift-monitoring
+      # -- If true, set Security Context Constraints on serviceaccount for read/write premissions
+      enableSCC: false
+      # -- If true, enable internal prom access
+      enablePromAccess: false
 # -- A list of volumes to be added to the pod
 extraVolumes: []
+
+# -- Array of extra K8s manifests rendered through `tpl` and owned by the release.
+extraObjects: []
+  # - apiVersion: external-secrets.io/v1beta1
+  #   kind: ExternalSecret
+  #   metadata:
+  #     name: '{{ include "opencost.fullname" . }}-cloud-integration'

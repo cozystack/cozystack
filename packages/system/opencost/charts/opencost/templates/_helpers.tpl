@@ -54,6 +54,85 @@ We truncate at 63 chars because some Kubernetes name fields are limited to this 
 {{- end -}}
 
 {{/*
+Resolve the secret name that stores plugin config files.
+*/}}
+{{- define "opencost.pluginsConfigSecretName" -}}
+  {{- if .Values.plugins.existingSecret -}}
+    {{- .Values.plugins.existingSecret -}}
+  {{- else -}}
+    {{- printf "%s-plugins-config" (include "opencost.fullname" .) -}}
+  {{- end -}}
+{{- end -}}
+
+{{/*
+Resolve plugin names to install/mount. Prefer explicit install list, then configs keys.
+*/}}
+{{- define "opencost.plugins.installList" -}}
+  {{- if .Values.plugins.install.plugins -}}
+    {{- toYaml .Values.plugins.install.plugins -}}
+  {{- else if .Values.plugins.configs -}}
+    {{- toYaml (keys .Values.plugins.configs | sortAlpha) -}}
+  {{- else -}}
+[]
+  {{- end -}}
+{{- end -}}
+
+{{/*
+Plugin configuration check. Fails fast on misconfigurations that would otherwise
+produce silent data loss or runtime Pod start failures:
+
+  1. plugins.existingSecret and plugins.configs are mutually exclusive. When
+     existingSecret is set, the chart no longer renders the generated Secret
+     from .Values.plugins.configs, so any configs entries would be silently
+     ignored.
+  2. When plugins.existingSecret is empty, every plugin listed in
+     plugins.install.plugins must have a matching key in plugins.configs --
+     otherwise the Deployment will mount a subPath that doesn't exist in the
+     generated Secret and the Pod will fail to start. (We intentionally skip
+     this check when existingSecret is set: the chart cannot introspect an
+     externally-managed secret at template-render time.)
+*/}}
+{{- define "opencost.plugins.configCheck" -}}
+  {{- if not .Values.plugins.enabled -}}
+    {{- /* nothing to validate when plugins are off */ -}}
+  {{- else -}}
+    {{- if and .Values.plugins.existingSecret .Values.plugins.configs -}}
+      {{- fail "plugins.existingSecret and plugins.configs are mutually exclusive. When plugins.existingSecret is set the chart does not render a generated Secret from plugins.configs, so any configs entries would be silently ignored. Please specify only one." -}}
+    {{- end -}}
+    {{- if and (not .Values.plugins.existingSecret) .Values.plugins.install.plugins -}}
+      {{- $configs := default (dict) .Values.plugins.configs -}}
+      {{- range $p := .Values.plugins.install.plugins -}}
+        {{- if not (hasKey $configs $p) -}}
+          {{- fail (printf "plugins.install.plugins contains %q but plugins.configs has no matching %q entry. The Deployment mounts %s_config.json from the generated plugin secret, so the Pod will fail to start with a missing subPath. Either add a plugins.configs.%s entry or set plugins.existingSecret to a Secret that contains %s_config.json." $p $p $p $p $p) -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{/*
+Cloud integration source contents check. Either the Secret must be specified or the JSON, not both.
+*/}}
+{{- define "opencost.cloudIntegration.secretConfigCheck" -}}
+  {{- if and .Values.opencost.cloudIntegrationSecret .Values.opencost.cloudIntegrationJSON -}}
+    {{- fail "opencost.cloudIntegrationSecret and opencost.cloudIntegrationJSON are mutually exclusive. Please specify only one." -}}
+  {{- end -}}
+{{- end -}}
+
+{{/*
+Compute the cloud integration secret name when enabled.
+*/}}
+{{- define "opencost.cloudIntegration.secretName" -}}
+  {{- if or .Values.opencost.cloudIntegrationSecret .Values.opencost.cloudIntegrationJSON -}}
+    {{- if .Values.opencost.cloudIntegrationSecret -}}
+      {{- .Values.opencost.cloudIntegrationSecret -}}
+    {{- else -}}
+      {{- printf "%s-cloud-integration" (include "opencost.fullname" .) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{/*
 Common labels
 */}}
 {{- define "opencost.labels" -}}
@@ -84,7 +163,7 @@ Create the name of the controller service account to use
   {{- if .Values.serviceAccount.create -}}
     {{- default (include "opencost.fullname" .) .Values.serviceAccount.name }}
   {{- else -}}
-    {{- default "default" .Values.serviceAccount.name }}
+    {{- default "opencost" .Values.serviceAccount.name }}
   {{- end -}}
 {{- end -}}
 
@@ -98,12 +177,19 @@ Create the name of the controller service account to use
     {{- $port := .Values.opencost.sigV4Proxy.port | int }}
     {{- $ws := .Values.opencost.prometheus.amp.workspaceId }}
     {{- printf "http://localhost:%d/workspaces/%v" $port $ws -}}
-  {{- else -}}
+{{- else -}}
     {{- $host := tpl .Values.opencost.prometheus.internal.serviceName . }}
     {{- $ns := tpl .Values.opencost.prometheus.internal.namespaceName . }}
+    {{- $clusterName := .Values.clusterName }}
+    {{- $scheme := .Values.opencost.prometheus.internal.scheme | default "http"}}
     {{- $port := .Values.opencost.prometheus.internal.port | int }}
-    {{- printf "http://%s.%s.svc.cluster.local:%d" $host $ns $port -}}
-  {{- end -}}
+    {{- $path := .Values.opencost.prometheus.internal.path | default "" }}
+    {{- if $path }}
+      {{- printf "%s://%s.%s.svc.%s:%d%s" $scheme $host $ns $clusterName $port $path -}}
+    {{- else }}
+      {{- printf "%s://%s.%s.svc.%s:%d" $scheme $host $ns $clusterName $port -}}
+    {{- end }}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -115,9 +201,20 @@ Check that either thanos external or internal is defined
   {{- else -}}
     {{- $host := .Values.opencost.prometheus.thanos.internal.serviceName }}
     {{- $ns := .Values.opencost.prometheus.thanos.internal.namespaceName }}
+    {{- $clusterName := .Values.clusterName }}
     {{- $port := .Values.opencost.prometheus.thanos.internal.port | int }}
-    {{- printf "http://%s.%s.svc.cluster.local:%d" $host $ns $port -}}
+    {{- $scheme := .Values.opencost.prometheus.thanos.internal.scheme | default "http"}}
+    {{- printf "%s://%s.%s.svc.%s:%d" $scheme $host $ns $clusterName $port -}}
   {{- end -}}
+{{- end -}}
+
+{{/*
+  Fail if both kube-rbac-proxy and bearer token are set
+*/}}
+{{- define "kubeRBACProxyBearerTokenCheck" -}}
+{{- if and .Values.opencost.prometheus.kubeRBACProxy .Values.opencost.prometheus.bearer_token }}
+  {{- fail "Both kubeRBACProxy and bearer_token are set. Please specify only one." -}}
+{{- end -}}
 {{- end -}}
 
 {{/*
@@ -180,3 +277,38 @@ apiVersion: networking.k8s.io/v1beta1
 {{- .Values.opencost.ui.image.registry -}}/{{- .Values.opencost.ui.image.repository -}}:{{- include "opencostUi.imageTag" . -}}
 {{- end -}}
 {{- end -}}
+
+
+{{- define "opencost.sccName" -}}
+{{include "opencost.fullname" .}}-scc
+{{- end -}}
+
+{{- /*
+  Compute a checksum based on the rendered content of specific ConfigMaps and Secrets.
+*/ -}}
+{{- define "configsChecksum" -}}
+{{- $files := list
+  "configmap-custom-pricing.yaml"
+  "configmap-frontend.yaml"
+  "configmap-metrics-config.yaml"
+  "secret-cloud-integration.yaml"
+  "secret.yaml"
+  "secret-admin-token.yaml"
+-}}
+{{- $checksum := "" -}}
+{{- range $files -}}
+  {{- $content := include (print $.Template.BasePath (printf "/%s" .)) $ -}}
+  {{- $checksum = printf "%s%s" $checksum $content | sha256sum -}}
+{{- end -}}
+{{- $checksum | sha256sum -}}
+{{- end -}}
+
+{{- define "opencost.caCertsSecretConfig.check" }}
+  {{- if .Values.opencost.updateCaTrust.enabled }}
+    {{- if and .Values.opencost.updateCaTrust.caCertsSecret .Values.opencost.updateCaTrust.caCertsConfig }}
+      {{- fail "Both caCertsSecret and caCertsConfig are defined. Please specify only one." }}
+    {{- else if and (not .Values.opencost.updateCaTrust.caCertsSecret) (not .Values.opencost.updateCaTrust.caCertsConfig) }}
+      {{- fail "Neither caCertsSecret nor caCertsConfig is defined, but updateCaTrust is enabled. Please specify one." }}
+    {{- end }}
+  {{- end }}
+{{- end }}

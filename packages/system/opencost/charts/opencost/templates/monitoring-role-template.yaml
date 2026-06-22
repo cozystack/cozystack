@@ -1,0 +1,17 @@
+{{- if and .Values.opencost.platforms.openshift.enabled .Values.opencost.platforms.openshift.createMonitoringResourceReaderRoleBinding }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: {{ include "opencost.namespace" . }}
+  name: {{ include "opencost.fullname" . }}-reader
+rules:
+  - apiGroups: 
+      - ''
+    resources:
+      - "pods"
+      - "services"
+      - "endpoints"
+    verbs:
+      - list
+      - watch
+{{- end -}}
