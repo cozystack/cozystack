@@ -1,6 +1,6 @@
-FROM --platform=$BUILDPLATFORM golang:1.24 AS build
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 
-ARG VERSION=v4.2.3
+ARG VERSION=v4.3.0
 ARG TARGETPLATFORM
 
 WORKDIR /usr/src/multus-cni
