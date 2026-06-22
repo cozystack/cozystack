@@ -1,6 +1,7 @@
 Pass IPv6 to the kernel stack when the IPv6 datapath is disabled.
 
-Generated against cilium v1.19.3 bpf/bpf_host.c. With ENABLE_HOST_FIREWALL
+Generated against cilium v1.19.5 bpf/bpf_host.c (refreshed from the v1.19.3
+original; identical changes, only context lines re-synced). With ENABLE_HOST_FIREWALL
 defined but ENABLE_IPV6 not compiled in, the protocol-switch default case
 drops all IPv6 as DROP_UNKNOWN_L3 ("Unsupported L3 protocol") before any
 policy evaluation, in both directions. That breaks ICMPv6 Neighbor Discovery
@@ -38,8 +39,8 @@ running `make update`, which dry-runs this patch against the new tag.
  	case bpf_htons(ETH_P_ARP):
  		if (is_defined(ENABLE_ARP_PASSTHROUGH) ||
  		    is_defined(ENABLE_ARP_RESPONDER) ||
-@@ -1411,6 +1423,14 @@
- 					    &trace, &ext_err);
+@@ -1412,6 +1424,14 @@
+ 					    src_sec_identity, &trace, &ext_err);
  		break;
  # endif
 +# ifndef ENABLE_IPV6
@@ -52,8 +53,8 @@ running `make update`, which dry-runs this patch against the new tag.
 +# endif /* !ENABLE_IPV6 */
  # ifdef ENABLE_IPV4
  	case bpf_htons(ETH_P_IP): {
- 		ret = handle_to_netdev_ipv4(ctx, src_sec_identity,
-@@ -1634,6 +1654,14 @@
+ 		ret = handle_to_netdev_ipv4(ctx, magic == MARK_MAGIC_PROXY_EGRESS,
+@@ -1635,6 +1655,14 @@
  
  		break;
  # endif
