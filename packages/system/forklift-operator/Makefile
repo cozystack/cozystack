@@ -21,6 +21,11 @@ update:
 	# OLM, so we substitute them statically against the kubev2v registry.
 	sed -i 's|namespace: forklift-operator-system|namespace: $(NAMESPACE)|g' templates/forklift-operator.yaml
 	sed -i 's|namespace: konveyor-forklift|namespace: $(NAMESPACE)|g' templates/forklift-operator.yaml
+	# Cozystack doesn't use OLM, so WATCH_NAMESPACE (sourced from the
+	# olm.targetNamespaces annotation) resolves empty and the Ansible role
+	# defaults app_namespace to `konveyor-forklift`, deploying the controller
+	# outside our RBAC scope. Pin it to our namespace.
+	python3 -c "import re; p='templates/forklift-operator.yaml'; c=open(p).read(); c=re.sub(r'- name: WATCH_NAMESPACE\n\s*valueFrom:\n\s*fieldRef:\n\s*fieldPath: metadata.annotations\[.olm.targetNamespaces.\]', '- name: WATCH_NAMESPACE\n          value: $(NAMESPACE)', c); open(p,'w').write(c)"
 	sed -i 's|$${OPERATOR_IMAGE}|quay.io/kubev2v/forklift-operator:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${CONTROLLER_IMAGE}|quay.io/kubev2v/forklift-controller:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${API_IMAGE}|quay.io/kubev2v/forklift-api:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
@@ -38,6 +43,7 @@ update:
 	sed -i 's|$${VSPHERE_XCOPY_VOLUME_POPULATOR_IMAGE}|quay.io/kubev2v/vsphere-xcopy-volume-populator:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${HYPERV_PROVIDER_SERVER_IMAGE}|quay.io/kubev2v/forklift-hyperv-provider-server:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	# Tunable env vars (defaults from upstream Ansible role).
+	sed -i 's|$${VIRT_V2V_DONT_REQUEST_KVM}|"false"|g' templates/forklift-operator.yaml
 	sed -i 's|$${SNAPSHOT_REMOVAL_TIMEOUT}|"120"|g' templates/forklift-operator.yaml
 	sed -i 's|$${SNAPSHOT_STATUS_CHECK_RATE}|"10"|g' templates/forklift-operator.yaml
 	sed -i 's|$${CLEANUP_RETRIES}|"10"|g' templates/forklift-operator.yaml
