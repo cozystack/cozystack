@@ -444,7 +444,7 @@ spec:
       {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
       {{- if $sec }}
         {{- range $key, $_ := $sec.data }}
-      - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
+      - path: /etc/containerd/certs.d/{{ regexReplaceAll "_([0-9]+)$" (trimSuffix ".toml" $key) ":${1}" }}/hosts.toml
         contentFrom:
           secret:
             name: {{ $.Release.Name }}-patch-containerd
@@ -474,6 +474,18 @@ spec:
       {{/* containerd 2.x renamed the CRI plugin from io.containerd.grpc.v1.cri to io.containerd.cri.v1.images; both seds run unconditionally and the wrong-version one is a no-op */}}
       - sed -i '/\[plugins\.[^]]*grpc\.v1\.cri[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
       - sed -i '/\[plugins\.[^]]*io\.containerd\.cri\.v1\.images[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
+      - |
+        for hosts_file in /etc/containerd/certs.d/*/hosts.toml; do
+          [ -f "$hosts_file" ] || continue
+          registry=$(basename "$(dirname "$hosts_file")")
+          username=$(awk -F'"' '/username =/ {print $2}' "$hosts_file" | tr -d '[:space:]')
+          password=$(awk -F'"' '/password =/ {print $2}' "$hosts_file" | tr -d '[:space:]')
+          if [ -n "$username" ] && [ -n "$password" ]; then
+            echo "Configuring auth for $registry in config.toml"
+            printf "\n[plugins.\"io.containerd.cri.v1.images\".registry.configs.\"%s\".auth]\n  username = \"%s\"\n  password = \"%s\"\n" "$registry" "$username" "$password" >> /etc/containerd/config.toml
+            printf "\n[plugins.\"io.containerd.grpc.v1.cri\".registry.configs.\"%s\".auth]\n  username = \"%s\"\n  password = \"%s\"\n" "$registry" "$username" "$password" >> /etc/containerd/config.toml
+          fi
+        done
       - systemctl start containerd.service
       joinConfiguration:
         nodeRegistration:
