@@ -32,6 +32,34 @@ func fluxAIODeployment() *appsv1.Deployment {
 					Tolerations: []corev1.Toleration{
 						{Key: "node.kubernetes.io/not-ready", Operator: corev1.TolerationOpExists},
 					},
+					// flux-aio pins itself off one node and to linux nodes; the
+					// required podAntiAffinity targets app.kubernetes.io/name=flux
+					// (internal/fluxinstall/manifests/fluxcd.yaml).
+					Affinity: &corev1.Affinity{
+						NodeAffinity: &corev1.NodeAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+								NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+									MatchExpressions: []corev1.NodeSelectorRequirement{{
+										Key:      "kubernetes.io/os",
+										Operator: corev1.NodeSelectorOpIn,
+										Values:   []string{"linux"},
+									}},
+								}},
+							},
+						},
+						PodAntiAffinity: &corev1.PodAntiAffinity{
+							RequiredDuringSchedulingIgnoredDuringExecution: []corev1.PodAffinityTerm{{
+								LabelSelector: &metav1.LabelSelector{
+									MatchExpressions: []metav1.LabelSelectorRequirement{{
+										Key:      "app.kubernetes.io/name",
+										Operator: metav1.LabelSelectorOpIn,
+										Values:   []string{"flux"},
+									}},
+								},
+								TopologyKey: "kubernetes.io/hostname",
+							}},
+						},
+					},
 					Volumes: []corev1.Volume{
 						{Name: "tmp", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 						{Name: "data", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
@@ -113,6 +141,13 @@ func TestBuildShardDeployment(t *testing.T) {
 	}
 	if len(ps.Tolerations) != 0 {
 		t.Fatalf("flux-aio bootstrap tolerations must be dropped: %v", ps.Tolerations)
+	}
+	if ps.Affinity != nil && ps.Affinity.PodAntiAffinity != nil {
+		t.Fatalf("inherited pod anti-affinity must be stripped so shards can co-locate with flux-aio: %v",
+			ps.Affinity.PodAntiAffinity)
+	}
+	if ps.Affinity == nil || ps.Affinity.NodeAffinity == nil {
+		t.Fatalf("benign nodeAffinity (e.g. os=linux) must be preserved: %+v", ps.Affinity)
 	}
 	if ps.ServiceAccountName != "flux" || ps.PriorityClassName != "system-cluster-critical" {
 		t.Fatalf("flux pod identity must be inherited: sa=%s prio=%s", ps.ServiceAccountName, ps.PriorityClassName)

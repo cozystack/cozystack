@@ -259,7 +259,11 @@ func mergeResourceList(dst *corev1.ResourceList, overrides corev1.ResourceList) 
 //   - --concurrent and resources come from the operator values;
 //   - SOURCE_*_LOCALHOST env wiring and tolerations for bootstrapping
 //     CNI-less nodes are flux-aio specifics and are removed (the hand-rolled
-//     flux-tenants shard had neither).
+//     flux-tenants shard had neither);
+//   - the required podAntiAffinity cloned from flux-aio (which keeps its own
+//     replicas off one node) is dropped, since it targets
+//     app.kubernetes.io/name=flux and would otherwise leave every shard
+//     Pending on a single-node cluster.
 func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv1.Deployment, error) {
 	var src *corev1.Container
 	for i := range flux.Spec.Template.Spec.Containers {
@@ -340,6 +344,15 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 	podSpec.HostNetwork = false
 	podSpec.DNSPolicy = corev1.DNSClusterFirst
 	podSpec.Tolerations = nil
+	// flux-aio carries a required podAntiAffinity on
+	// app.kubernetes.io/name=flux to keep its own replicas apart. Cloned onto a
+	// shard pod it becomes a hard rule against running on the flux-aio node, so
+	// on a single schedulable node every shard stays Pending and the tenant
+	// plane stalls. The legacy flux-tenants shard had none. Drop it while
+	// keeping any benign nodeAffinity (e.g. the os=linux constraint).
+	if podSpec.Affinity != nil {
+		podSpec.Affinity.PodAntiAffinity = nil
+	}
 
 	name := ShardDeploymentName(idx)
 	labels := map[string]string{
