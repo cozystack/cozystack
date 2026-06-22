@@ -70,6 +70,16 @@
     fi
 }
 
+@test "stamp_cozystack_version requires a version argument" {
+    # The guard fires before the kubectl pipe, so this needs no cluster: a
+    # missing version must abort rather than apply empty input to kubectl.
+    . packages/core/platform/images/migrations/migrations/lib/cozystack-version.sh
+    if ( stamp_cozystack_version ) 2>/dev/null; then
+        echo "expected non-zero exit when version arg is missing" >&2
+        exit 1
+    fi
+}
+
 @test "render output matches the canonical labeled manifest" {
     # Golden test: pins the exact bytes migrations 42/43/44 apply today, so the
     # refactor that routes them through this helper is provably manifest-stable.

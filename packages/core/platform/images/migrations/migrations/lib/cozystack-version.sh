@@ -39,5 +39,8 @@ EOF
 # stamp_cozystack_version <version>
 # Render and apply the labeled manifest under the default kubectl field manager.
 stamp_cozystack_version() {
+  # Guard the version here too, not only in render: without pipefail a render
+  # failure would not abort the pipeline and kubectl would apply empty input.
+  : "${1:?stamp_cozystack_version: version argument required}"
   render_cozystack_version_manifest "$1" | kubectl apply --filename -
 }
