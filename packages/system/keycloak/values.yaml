@@ -1,4 +1,4 @@
-image: quay.io/keycloak/keycloak:26.5.2
+image: quay.io/keycloak/keycloak:26.6.3
 
 ingress:
   # Custom hostname for the Keycloak Ingress.
