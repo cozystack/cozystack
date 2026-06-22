@@ -60,9 +60,18 @@ spec:
     spec:
       serviceAccountName: {{ include "tenant.name" . }}-cleanup
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: cleanup
         image: docker.io/clastix/kubectl:v1.32
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         command:
         - /bin/sh
         - -c

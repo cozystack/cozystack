@@ -57,3 +57,35 @@ tests:
         equal:
           path: spec.template.spec.containers[0].command[0]
           value: /bin/sh
+
+  - it: cleanup Job runs non-root under a restrictive securityContext
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        isKind:
+          of: Job
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
