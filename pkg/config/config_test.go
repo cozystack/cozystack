@@ -217,10 +217,19 @@ func TestParseHelmInstallDisableWaitAnnotation(t *testing.T) {
 			want:  false,
 		},
 		{
-			name:     "mixed-case rejected (Helm-style scrubbing not applied here)",
-			input:    "tRue",
-			wantErr:  true,
-			errMatch: `must be "true" or "false"`,
+			name:  "mixed-case true accepted (case-insensitive)",
+			input: "tRue",
+			want:  true,
+		},
+		{
+			name:  "mixed-case false accepted (case-insensitive)",
+			input: "fAlSe",
+			want:  false,
+		},
+		{
+			name:  "surrounding whitespace trimmed",
+			input: "  true  ",
+			want:  true,
 		},
 		{
 			name:     "integer rejected",

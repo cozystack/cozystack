@@ -29,6 +29,7 @@ update:
 	curl -sSL "https://github.com/siderolabs/cluster-api-bootstrap-provider-talos/releases/download/$(CABPT_UPSTREAM_VERSION)/bootstrap-components.yaml" \
 		-o .update-tmp/bootstrap-components.yaml
 	for p in patches/*.diff; do \
+		[ -e "$$p" ] || continue; \
 		(cd .update-tmp && patch bootstrap-components.yaml < ../$$p) || exit 1; \
 	done
 	mv .update-tmp/bootstrap-components.yaml files/bootstrap-components-talos.yaml

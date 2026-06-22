@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -103,12 +104,13 @@ func ParsePositiveDuration(flagName, raw string) (time.Duration, error) {
 // callers can leave HelmInstallDisableWait zero and let flux defaults
 // apply.
 func ParseHelmInstallDisableWaitAnnotation(raw string) (bool, error) {
-	switch raw {
-	case "":
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
 		return false, nil
-	case "true", "True", "TRUE":
+	case strings.EqualFold(raw, "true"):
 		return true, nil
-	case "false", "False", "FALSE":
+	case strings.EqualFold(raw, "false"):
 		return false, nil
 	default:
 		return false, fmt.Errorf("must be \"true\" or \"false\", got %q", raw)

@@ -50,6 +50,10 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      # This Job only talks to the tenant apiserver via the mounted admin
+      # kubeconfig (KUBECONFIG below); it never calls the management apiserver,
+      # so the management ServiceAccount token is not needed. Drop it.
+      automountServiceAccountToken: false
       serviceAccountName: {{ .Release.Name }}-bootstrap-token-tenant
       containers:
         - name: kubectl
@@ -71,6 +75,19 @@ spec:
             - name: tenant-admin
               mountPath: /tenant-admin
               readOnly: true
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
           command:
             - sh
             - -ec

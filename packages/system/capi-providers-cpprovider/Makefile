@@ -44,6 +44,7 @@ update:
 		| tar -xzf - --strip=1 -C .update-tmp
 	cd .update-tmp && git init -q && git add . && git commit -qm init && \
 		for p in ../images/cluster-api-control-plane-provider-kamaji/patches/*.diff; do \
+			[ -e "$$p" ] || continue; \
 			git apply --recount "$$p"; \
 		done
 	cd .update-tmp/config/manager && \

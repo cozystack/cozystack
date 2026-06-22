@@ -42,7 +42,11 @@ PATCHED=0
 SKIPPED=0
 
 KEEP_ANNOTATION="helm.sh/resource-policy=keep"
-HELM_RELEASE_LABEL="meta.helm.sh/release-name"
+# Helm injects the app.kubernetes.io/managed-by=Helm LABEL into every resource it
+# renders (e.g. the chart's KubeadmConfigTemplate). meta.helm.sh/release-name is an
+# ANNOTATION, not a label, so it cannot be used as a --selector — doing so silently
+# matches nothing and the keep annotation is never applied.
+HELM_MANAGED_SELECTOR="app.kubernetes.io/managed-by=Helm"
 
 annotate_object() {
   local kind="$1" ns="$2" name="$3"
@@ -76,7 +80,7 @@ annotate_object() {
 list_helm_managed() {
   local kind="$1" out
   if ! out=$(kubectl get "$kind" --all-namespaces \
-       --selector "$HELM_RELEASE_LABEL" \
+       --selector "$HELM_MANAGED_SELECTOR" \
        --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
        2>&1); then
     case "$out" in

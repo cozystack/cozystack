@@ -257,6 +257,7 @@ subjects:
 {{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
 {{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
 {{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -492,4 +493,10 @@ spec:
             limits:
               cpu: 100m
               memory: 256Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
 {{- end }}

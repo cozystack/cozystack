@@ -610,7 +610,17 @@ spec:
          rejects a quoted plain integer ("0"). Quote only when the operator
          supplied a percentage; otherwise render the value as a bare int so
          the admission webhook is happy with the chart-default "0". */}}
-  maxUnhealthy: {{ if hasSuffix "%" (toString $.Values.nodeHealthCheck.maxUnhealthy) }}{{ $.Values.nodeHealthCheck.maxUnhealthy | quote }}{{ else }}{{ $.Values.nodeHealthCheck.maxUnhealthy | int }}{{ end }}
+  {{- $maxUnhealthy := toString $.Values.nodeHealthCheck.maxUnhealthy }}
+  {{- if hasSuffix "%" $maxUnhealthy }}
+  {{-   if not (regexMatch "^[0-9]+%$" $maxUnhealthy) }}
+  {{-     fail (printf "nodeHealthCheck.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
+  {{-   end }}
+  maxUnhealthy: {{ $maxUnhealthy | quote }}
+  {{- else if regexMatch "^[0-9]+$" $maxUnhealthy }}
+  maxUnhealthy: {{ $maxUnhealthy | int }}
+  {{- else }}
+  {{-   fail (printf "nodeHealthCheck.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
+  {{- end }}
   nodeStartupTimeout: {{ $.Values.nodeHealthCheck.nodeStartupTimeout }}
   selector:
     matchLabels:
