@@ -10,10 +10,15 @@
 # stamp must re-emit the label by hand.
 #
 # Centralizing the manifest here means migration 45+ cannot drift back to a
-# label-less apply: each migration sources this file and calls the helper
-# instead of copy-pasting a heredoc.
+# label-less apply: every go-forward stamp (migration 42 onward and the
+# bootstrap path in run-migrations.sh) sources this file and calls the helper
+# instead of copy-pasting a heredoc. Migrations 1-41 predate the no-delete
+# label and stamp label-less on purpose; migration 42 backfills the label on
+# any upgrade path through them, so they are left frozen. The
+# cozystack-version-stamp.bats suite pins this — no migration numbered >= 42
+# (nor run-migrations.sh) may stamp cozystack-version without the helper.
 #
-# Sourced, not executed. Each migrations/<N> script does:
+# Sourced, not executed. Each migrations/<N> script (42+) does:
 #   . "$(dirname "$0")/lib/cozystack-version.sh"
 # and run-migrations.sh sources /migrations/lib/cozystack-version.sh.
 
