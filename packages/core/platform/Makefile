@@ -30,8 +30,7 @@ image: image-migrations
 image-migrations:
 	docker buildx build images/migrations \
 		$(call image-tags,platform-migrations,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/platform-migrations:latest \
-		--cache-to type=inline \
+		$(call cache-args,platform-migrations) \
 		--metadata-file images/migrations.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \

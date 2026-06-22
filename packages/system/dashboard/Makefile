@@ -34,8 +34,7 @@ build-console:
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
 		$(call image-tags,cozystack-ui,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-ui:latest \
-		--cache-to type=inline \
+		$(call cache-args,cozystack-ui) \
 		--metadata-file images/console.json \
 		--build-arg APP_VERSION=$(COZYSTACK_VERSION) \
 		--push=$(PUSH) \
@@ -55,8 +54,7 @@ image-token-proxy:
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
 		$(call image-tags,token-proxy,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/token-proxy:latest \
-		--cache-to type=inline \
+		$(call cache-args,token-proxy) \
 		--metadata-file images/token-proxy.json \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \

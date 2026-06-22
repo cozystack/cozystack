@@ -40,6 +40,7 @@ const (
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.apiGroup`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.kind`
 // +kubebuilder:selectablefield:JSONPath=`.spec.applicationRef.name`
+// +kubebuilder:metadata:annotations={"options.cozystack.io/source.applicationRef.kind=appkind","options.cozystack.io/source.backupClassName=backupclass"}
 
 // Plan describes the schedule, method and storage location for the
 // backup of a given target application.

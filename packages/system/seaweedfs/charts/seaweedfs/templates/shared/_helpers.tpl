@@ -18,6 +18,22 @@ be used as a full name.
 {{- end -}}
 
 {{/*
+Create a truncated component name.
+Usage: {{ include "seaweedfs.componentName" (list . "component-suffix") }}
+*/}}
+{{- define "seaweedfs.componentName" -}}
+{{- $context := index . 0 -}}
+{{- $suffix := index . 1 -}}
+{{- if gt (len $suffix) 61 -}}
+{{-   fail (printf "Suffix '%s' is too long for componentName helper. Max length is 61." $suffix) -}}
+{{- end -}}
+{{- $fullname := include "seaweedfs.fullname" $context -}}
+{{- $maxLen := sub 62 (len $suffix) | int -}}
+{{- $truncatedFullname := trunc $maxLen $fullname | trimSuffix "-" -}}
+{{- printf "%s-%s" $truncatedFullname $suffix -}}
+{{- end -}}
+
+{{/*
 Create chart name and version as used by the chart label.
 */}}
 {{- define "seaweedfs.chart" -}}
@@ -43,83 +59,97 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 {{- end -}}
 
+{{- define "seaweedfs.mergeExtraEnvironmentVars" -}}
+{{- $global := ((.global | default dict).extraEnvironmentVars | default dict) -}}
+{{- $component := ((.component | default dict).extraEnvironmentVars | default dict) -}}
+{{- $target := .target -}}
+{{- range $key, $value := $global }}
+{{- $_ := set $target $key $value }}
+{{- end }}
+{{- range $key, $value := $component }}
+{{- $_ := set $target $key $value }}
+{{- end }}
+{{- end -}}
+
 {{/* Return the proper filer image */}}
-{{- define "filer.image" -}}
+{{- define "seaweedfs.filer.image" -}}
 {{- if .Values.filer.imageOverride -}}
 {{- $imageOverride := .Values.filer.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Return the proper master image */}}
-{{- define "master.image" -}}
+{{- define "seaweedfs.master.image" -}}
 {{- if .Values.master.imageOverride -}}
 {{- $imageOverride := .Values.master.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Return the proper s3 image */}}
-{{- define "s3.image" -}}
+{{- define "seaweedfs.s3.image" -}}
 {{- if .Values.s3.imageOverride -}}
 {{- $imageOverride := .Values.s3.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Return the proper sftp image */}}
-{{- define "sftp.image" -}}
+{{- define "seaweedfs.sftp.image" -}}
 {{- if .Values.sftp.imageOverride -}}
 {{- $imageOverride := .Values.sftp.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Return the proper admin image */}}
-{{- define "admin.image" -}}
+{{- define "seaweedfs.admin.image" -}}
 {{- if .Values.admin.imageOverride -}}
 {{- $imageOverride := .Values.admin.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Return the proper worker image */}}
-{{- define "worker.image" -}}
+{{- define "seaweedfs.worker.image" -}}
 {{- if .Values.worker.imageOverride -}}
 {{- $imageOverride := .Values.worker.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Return the proper volume image */}}
-{{- define "volume.image" -}}
+{{- define "seaweedfs.volume.image" -}}
 {{- if .Values.volume.imageOverride -}}
 {{- $imageOverride := .Values.volume.imageOverride -}}
 {{- printf "%s" $imageOverride -}}
 {{- else -}}
-{{- include "common.image" . }}
+{{- include "seaweedfs.image" . }}
 {{- end -}}
 {{- end -}}
 
 {{/* Computes the container image name for all components (if they are not overridden) */}}
-{{- define "common.image" -}}
-{{- $registryName := default .Values.image.registry .Values.global.registry | toString -}}
-{{- $repositoryName := default .Values.image.repository .Values.global.repository | toString -}}
-{{- $name := .Values.global.imageName | toString -}}
+{{- define "seaweedfs.image" -}}
+{{- $registryName := default .Values.image.registry .Values.global.imageRegistry | toString -}}
+{{- $repositoryName := default .Values.image.repository .Values.global.seaweedfs.image.repository | toString -}}
+{{- $name := .Values.global.seaweedfs.image.name | toString -}}
 {{- $tag := default .Chart.AppVersion .Values.image.tag  | toString -}}
-{{- if $repositoryName -}}
+{{- if .Values.image.repository -}}
+{{-   $name = $repositoryName -}}
+{{- else if $repositoryName -}}
 {{-   $name = printf "%s/%s" (trimSuffix "/" $repositoryName) (base $name) -}}
 {{- end -}}
 {{- if $registryName -}}
@@ -130,7 +160,7 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 
 {{/* check if any Volume PVC exists */}}
-{{- define "volume.pvc_exists" -}}
+{{- define "seaweedfs.volume.pvc_exists" -}}
 {{- if or (or (eq .Values.volume.data.type "persistentVolumeClaim") (and (eq .Values.volume.idx.type "persistentVolumeClaim") .Values.volume.dir_idx )) (eq .Values.volume.logs.type "persistentVolumeClaim") -}}
 {{- printf "true" -}}
 {{- else -}}
@@ -139,7 +169,7 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 
 {{/* check if any Filer PVC exists */}}
-{{- define "filer.pvc_exists" -}}
+{{- define "seaweedfs.filer.pvc_exists" -}}
 {{- if or (eq .Values.filer.data.type "persistentVolumeClaim") (eq .Values.filer.logs.type "persistentVolumeClaim") -}}
 {{- printf "true" -}}
 {{- else -}}
@@ -148,7 +178,7 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 
 {{/* check if any Master PVC exists */}}
-{{- define "master.pvc_exists" -}}
+{{- define "seaweedfs.master.pvc_exists" -}}
 {{- if or (eq .Values.master.data.type "persistentVolumeClaim") (eq .Values.master.logs.type "persistentVolumeClaim") -}}
 {{- printf "true" -}}
 {{- else -}}
@@ -157,7 +187,7 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 
 {{/* check if any Admin PVC exists */}}
-{{- define "admin.pvc_exists" -}}
+{{- define "seaweedfs.admin.pvc_exists" -}}
 {{- if or (eq .Values.admin.data.type "persistentVolumeClaim") (eq .Values.admin.logs.type "persistentVolumeClaim") -}}
 {{- printf "true" -}}
 {{- else -}}
@@ -166,7 +196,7 @@ Inject extra environment vars in the format key:value, if populated
 {{- end -}}
 
 {{/* check if any InitContainers exist for Volumes */}}
-{{- define "volume.initContainers_exists" -}}
+{{- define "seaweedfs.volume.initContainers_exists" -}}
 {{- if or (not (empty .Values.volume.idx )) (not (empty .Values.volume.initContainers )) -}}
 {{- printf "true" -}}
 {{- else -}}
@@ -195,10 +225,10 @@ imagePullSecrets:
 {{/*
 Renders a value that contains template perhaps with scope if the scope is present.
 Usage:
-{{ include "common.tplvalues.render" ( dict "value" .Values.path.to.the.Value "context" $ ) }}
-{{ include "common.tplvalues.render" ( dict "value" .Values.path.to.the.Value "context" $ "scope" $app ) }}
+{{ include "seaweedfs.tplvalues.render" ( dict "value" .Values.path.to.the.Value "context" $ ) }}
+{{ include "seaweedfs.tplvalues.render" ( dict "value" .Values.path.to.the.Value "context" $ "scope" $app ) }}
 */}}
-{{- define "common.tplvalues.render" -}}
+{{- define "seaweedfs.tplvalues.render" -}}
 {{- $value := typeIs "string" .value | ternary .value (.value | toYaml) }}
 {{- if contains "{{" (toJson .value) }}
   {{- if .scope }}
@@ -215,9 +245,9 @@ Usage:
 Converts a Kubernetes quantity like "256Mi" or "2G" to a float64 in base units,
 handling both binary (Ki, Mi, Gi) and decimal (m, k, M) suffixes; numeric inputs
 Usage:
-{{ include "common.resource-quantity" "10Gi" }}
+{{ include "seaweedfs.resource-quantity" "10Gi" }}
 */}}
-{{- define "common.resource-quantity" -}}
+{{- define "seaweedfs.resource-quantity" -}}
     {{- $value := . -}}
     {{- $unit := 1.0 -}}
     {{- if typeIs "string" . -}}
@@ -237,14 +267,14 @@ Usage:
 getOrGeneratePassword will check if a password exists in a secret and return it,
 or generate a new random password if it doesn't exist.
 */}}
-{{- define "getOrGeneratePassword" -}}
+{{- define "seaweedfs.getOrGeneratePassword" -}}
 {{- $params := . -}}
 {{- $namespace := $params.namespace -}}
 {{- $secretName := $params.secretName -}}
 {{- $key := $params.key -}}
 {{- $length := default 16 $params.length -}}
 
-{{- $existingSecret := lookup "v1" "Secret" $namespace $secretName -}}
+{{- $existingSecret := default (lookup "v1" "Secret" $namespace $secretName) $params.existingSecret -}}
 {{- if and $existingSecret (index $existingSecret.data $key) -}}
   {{- index $existingSecret.data $key | b64dec -}}
 {{- else -}}
@@ -257,11 +287,8 @@ Compute the master service address to be used in cluster env vars.
 If allInOne is enabled, point to the all-in-one service; otherwise, point to the master service.
 */}}
 {{- define "seaweedfs.cluster.masterAddress" -}}
-{{- $serviceNameSuffix := "-master" -}}
-{{- if .Values.allInOne.enabled -}}
-{{-   $serviceNameSuffix = "-all-in-one" -}}
-{{- end -}}
-{{- printf "%s%s.%s:%d" (include "seaweedfs.name" .) $serviceNameSuffix .Release.Namespace (int .Values.master.port) -}}
+{{- $component := ternary "all-in-one" "master" .Values.allInOne.enabled -}}
+{{- printf "%s.%s:%d" (include "seaweedfs.componentName" (list . $component)) .Release.Namespace (int .Values.master.port) -}}
 {{- end -}}
 
 {{/*
@@ -269,23 +296,20 @@ Compute the filer service address to be used in cluster env vars.
 If allInOne is enabled, point to the all-in-one service; otherwise, point to the filer-client service.
 */}}
 {{- define "seaweedfs.cluster.filerAddress" -}}
-{{- $serviceNameSuffix := "-filer-client" -}}
-{{- if .Values.allInOne.enabled -}}
-{{-   $serviceNameSuffix = "-all-in-one" -}}
-{{- end -}}
-{{- printf "%s%s.%s:%d" (include "seaweedfs.name" .) $serviceNameSuffix .Release.Namespace (int .Values.filer.port) -}}
+{{- $component := ternary "all-in-one" "filer-client" .Values.allInOne.enabled -}}
+{{- printf "%s.%s:%d" (include "seaweedfs.componentName" (list . $component)) .Release.Namespace (int .Values.filer.port) -}}
 {{- end -}}
 
 {{/*
 Generate comma-separated list of master server addresses.
 Usage: {{ include "seaweedfs.masterServers" . }}
-Output example: ${SEAWEEDFS_FULLNAME}-master-0.${SEAWEEDFS_FULLNAME}-master.namespace:9333,${SEAWEEDFS_FULLNAME}-master-1...
+Output example: my-release-master-0.my-release-master.namespace:9333,my-release-master-1...
 */}}
 {{- define "seaweedfs.masterServers" -}}
-{{- $fullname := include "seaweedfs.name" . -}}
+{{- $masterName := include "seaweedfs.componentName" (list . "master") -}}
 {{- range $index := until (.Values.master.replicas | int) -}}
 {{- if $index }},{{ end -}}
-${SEAWEEDFS_FULLNAME}-master-{{ $index }}.${SEAWEEDFS_FULLNAME}-master.{{ $.Release.Namespace }}:{{ $.Values.master.port }}
+{{ $masterName }}-{{ $index }}.{{ $masterName }}.{{ $.Release.Namespace }}:{{ $.Values.master.port }}
 {{- end -}}
 {{- end -}}
 
@@ -294,9 +318,65 @@ Generate master server argument value, using global.masterServer if set, otherwi
 Usage: {{ include "seaweedfs.masterServerArg" . }}
 */}}
 {{- define "seaweedfs.masterServerArg" -}}
-{{- if .Values.global.masterServer -}}
-{{- .Values.global.masterServer -}}
+{{- if .Values.global.seaweedfs.masterServer -}}
+{{- .Values.global.seaweedfs.masterServer -}}
 {{- else -}}
 {{- include "seaweedfs.masterServers" . -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "seaweedfs.serviceAccountName" -}}
+{{- .Values.global.seaweedfs.serviceAccountName | default "seaweedfs" -}}
+{{- end -}}
+
+{{/* True when security.toml should be rendered and mounted. volumeWrite is
+     excluded since it defaults to true. */}}
+{{- define "seaweedfs.securityConfigEnabled" -}}
+{{- $sec := (.Values.global.seaweedfs).securityConfig | default dict -}}
+{{- $jwt := $sec.jwtSigning | default dict -}}
+{{- if or .Values.global.seaweedfs.enableSecurity $jwt.volumeRead $jwt.filerWrite $jwt.filerRead -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* S3 TLS cert/key arguments, using custom secret if s3.tlsSecret is set */}}
+{{- define "seaweedfs.s3.tlsArgs" -}}
+{{- $prefix := .prefix -}}
+{{- $root := .root -}}
+{{- if $root.Values.s3.tlsSecret -}}
+-{{ $prefix }}cert.file=/usr/local/share/ca-certificates/s3/tls.crt \
+-{{ $prefix }}key.file=/usr/local/share/ca-certificates/s3/tls.key \
+{{- else -}}
+-{{ $prefix }}cert.file=/usr/local/share/ca-certificates/client/tls.crt \
+-{{ $prefix }}key.file=/usr/local/share/ca-certificates/client/tls.key \
+{{- end -}}
+{{- end -}}
+
+{{/* S3 custom TLS volume mount */}}
+{{- define "seaweedfs.s3.tlsVolumeMount" -}}
+{{- if .Values.s3.tlsSecret }}
+- name: s3-tls-cert
+  readOnly: true
+  mountPath: /usr/local/share/ca-certificates/s3/
+{{- end }}
+{{- end -}}
+
+{{/* S3 custom TLS volume */}}
+{{- define "seaweedfs.s3.tlsVolume" -}}
+{{- if .Values.s3.tlsSecret }}
+- name: s3-tls-cert
+  secret:
+    secretName: {{ .Values.s3.tlsSecret }}
+{{- end }}
+{{- end -}}
+
+{{/* Generate a compatible trafficDistribution value due to "PreferClose" fast deprecation in k8s v1.35.
+     Accepts a dict with "value" (the trafficDistribution string) and "Capabilities". */}}
+{{- define "seaweedfs.trafficDistribution" -}}
+{{- if .value -}}
+{{- and (eq .value "PreferClose") (semverCompare ">=1.35-0" .Capabilities.KubeVersion.GitVersion) | ternary "PreferSameZone" .value -}}
 {{- end -}}
 {{- end -}}

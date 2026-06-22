@@ -23,8 +23,7 @@ image-matchbox:
 	test -f ../../../_out/assets/initramfs-metal-amd64.xz || make talos-initramfs
 	docker buildx build -f images/matchbox/Dockerfile ../../.. \
 		$(call image-tags,matchbox,$(TALOS_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/matchbox:latest \
-		--cache-to type=inline \
+		$(call cache-args,matchbox) \
 		--metadata-file images/matchbox.json \
 		$(BUILDX_ARGS)
 	echo "$(REGISTRY)/matchbox:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/matchbox.json -o json -r)" \

@@ -81,6 +81,7 @@ spec:
                 enum:
                 - http01
                 - dns01
+                - existingSecret
                 type: string
               dns01:
                 description: |-
@@ -276,6 +277,26 @@ spec:
                 items:
                   type: string
                 type: array
+              wildcardSecretRef:
+                description: |-
+                  WildcardSecretRef names a pre-existing TLS Secret in the
+                  TenantGateway's own namespace used for the wildcard and apex
+                  listeners when CertMode=existingSecret. Required in that mode;
+                  ignored otherwise. The Secret must be of type kubernetes.io/tls
+                  and cover the tenant apex (and *.apex). Cross-namespace refs are
+                  intentionally unsupported to avoid requiring a ReferenceGrant.
+                properties:
+                  name:
+                    default: ""
+                    description: |-
+                      Name of the referent.
+                      This field is effectively required, but due to backwards compatibility is
+                      allowed to be empty. Instances of this type with an empty value here are
+                      almost certainly wrong.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
             required:
             - apex
             type: object

@@ -1,0 +1,54 @@
+#!/usr/bin/env bash
+# Mock kubectl for check-readiness tests.
+#
+# Serves canned responses from $FIXTURE_DIR (falling back to $FIXTURE_BASE for
+# api-resources) and logs every invocation to $KUBECTL_LOG so tests can assert
+# argument propagation (-A / -n NS / -l SEL).
+#
+# Fixture files:
+#   api-resources.txt        -> output of `kubectl api-resources --no-headers`
+#   get_<kind>.out           -> rows for `kubectl get <kind> ... -o jsonpath=...`
+#
+# Row files use the literal token <US> as the field separator; the mock rewrites
+# it to a real ASCII Unit Separator (0x1f) byte on output, matching what the
+# script's jsonpath produces. One row per line.
+set -u
+
+# Log the full invocation (args only), one line, before doing anything.
+if [[ -n "${KUBECTL_LOG:-}" ]]; then
+  printf '%s\n' "$*" >>"$KUBECTL_LOG"
+fi
+
+args=("$@")
+# Strip a leading --kubeconfig=... (the script adds it when KUBECONFIG is set).
+if [[ "${args[0]:-}" == --kubeconfig=* ]]; then
+  args=("${args[@]:1}")
+fi
+
+cmd="${args[0]:-}"
+US=$(printf '\x1f')
+
+emit_rows() {
+  # $1 = fixture file. Rewrite <US> tokens to real 0x1f bytes.
+  awk -v us="$US" '{gsub(/<US>/, us); print}' "$1"
+}
+
+case "$cmd" in
+  api-resources)
+    if [[ -f "${FIXTURE_DIR:-}/api-resources.txt" ]]; then
+      cat "${FIXTURE_DIR}/api-resources.txt"
+    elif [[ -f "${FIXTURE_BASE:-}/api-resources.txt" ]]; then
+      cat "${FIXTURE_BASE}/api-resources.txt"
+    fi
+    exit 0
+    ;;
+  get)
+    kind="${args[1]:-}"
+    f="${FIXTURE_DIR:-}/get_${kind}.out"
+    [[ -f "$f" ]] && emit_rows "$f"
+    exit 0
+    ;;
+  *)
+    exit 0
+    ;;
+esac

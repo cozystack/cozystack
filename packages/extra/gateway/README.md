@@ -12,9 +12,9 @@ The `apps/tenant` chart writes a namespace label `namespace.cozystack.io/gateway
 
 Owning a separate Gateway makes sense for: a tenant that needs its own LB IP (DNS already pinned, firewall rule on a specific address), a tenant whose apex is not derived from the parent (custom `host`, e.g. `customer1.io` not under the platform apex — the ancestor's cert/Issuer can't cover it), or a tenant that wants its own ACME account / cert authority. Otherwise leave `gateway` unset and inherit.
 
-## Cert mode: HTTP-01 (default) vs DNS-01 (opt-in)
+## Cert mode: HTTP-01 (default) vs DNS-01 (opt-in) vs existing Secret
 
-The platform-wide `publishing.certificates.solver` value selects how the controller sources TLS certificates for the tenant Gateway.
+The platform-wide `publishing.certificates.solver` value selects how the controller sources TLS certificates for the tenant Gateway. Setting `publishing.certificates.wildcardSecretName` switches to a third mode (existing Secret) that overrides the solver entirely — see below.
 
 ### Default — HTTP-01
 
@@ -47,6 +47,17 @@ For inheriting child tenants under this Gateway: the controller extends the same
 Pick DNS-01 when you specifically want a wildcard cert (e.g. a long-lived staging cluster with many short-lived apps and tight LE rate limits). Otherwise stay on HTTP-01.
 
 > **Listener-cap considerations.** Gateway API caps `Gateway.spec.listeners` at 64. In HTTP-01 mode, every published hostname adds one HTTPS listener, plus the mandatory `http` listener and one extra per TLS-passthrough service — so a tenant approaching 60+ published apps on HTTP-01 hits the spec cap and the rendered `Gateway` fails admission. DNS-01 mode collapses every hostname under the apex into one wildcard listener and is the right choice for high-fanout single-tenant deployments.
+
+### Opt-in — existing wildcard Secret (operator-provided)
+
+Set `publishing.certificates.wildcardSecretName` in the platform chart values to point the tenant Gateway at a pre-existing wildcard TLS Secret instead of issuing anything via ACME. Use this when the operator already holds a wildcard certificate — purchased, or issued by a corporate CA — and wants platform services to serve under it. This mode takes precedence over `solver`: when `wildcardSecretName` is set, the solver / provider / issuer values are ignored.
+
+The platform chart writes the value into `_cluster.wildcard-secret-name` (the name only — the certificate and private key never travel on the values channel), and the gateway chart renders `certMode: existingSecret` with `wildcardSecretRef.name` on the `TenantGateway` CR. The controller then:
+
+- Mints no `Issuer` and no `Certificate`. Switching into this mode from HTTP-01 or DNS-01 garbage-collects the now-unused per-tenant `Issuer` and any per-listener / wildcard `Certificate` the controller previously owned.
+- Renders the same single-wildcard listener shape as DNS-01: a `https` (`*.<apex>`) listener and a `https-apex` (`<apex>`) listener (plus one `*.<child-apex>` listener per inheriting child), all with `certificateRefs` pointing at the operator-supplied Secret.
+
+The Secret must already exist in the `TenantGateway`'s own namespace (the publishing tenant namespace, e.g. `tenant-root`), be of type `kubernetes.io/tls`, and cover the apex (and `*.<apex>`). Cross-namespace references are intentionally unsupported, so coverage for inheriting child apexes depends on the operator-supplied certificate's SAN list — a single `*.<apex>` does not match `*.<child-apex>`. The controller still renders a `*.<child-apex>` listener bound to the operator Secret for each inheriting child, so if the SAN list does not cover that child apex, clients of the child subdomain are served the parent certificate and see a hostname-mismatch TLS error. This is why operator-wildcard support is scoped to the root tenant for now; extending it to child tenants needs the Secret replicated per tenant namespace (tracked separately). Like DNS-01, this mode collapses every hostname under the apex into one wildcard listener, so it is also a way to stay clear of the 64-listener cap.
 
 ## External IP allocation
 

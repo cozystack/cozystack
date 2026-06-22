@@ -3,6 +3,7 @@
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
 kind: Grafana
@@ -73,12 +74,15 @@ spec:
                     name: grafana-admin-password
   {{- if ne $gatewayEnabled "true" }}
   ingress:
+    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+    {{- if not $wildcardSecret }}
     metadata:
       annotations:
         {{- if eq $solver "http01" }}
         acme.cert-manager.io/http01-ingress-ingressclassname: "{{ $ingress }}"
         {{- end }}
         cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- end }}
     spec:
       ingressClassName: "{{ $ingress }}"
       rules:
@@ -95,5 +99,10 @@ spec:
       tls:
       - hosts:
         - "{{ printf "grafana.%s" (.Values.host | default $host) }}"
+        {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+               back to the default SSL certificate while the tls section keeps
+               the HTTP-to-HTTPS redirect enforced. */}}
+        {{- if not $wildcardSecret }}
         secretName: grafana-ingress-tls
+        {{- end }}
   {{- end }}

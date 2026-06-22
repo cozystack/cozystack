@@ -5,6 +5,15 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $provider := (index .Values._cluster "dns01-provider") | default "cloudflare" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+{{- /*
+  Operator-supplied wildcard mode wins over ACME. When
+  _cluster.wildcard-secret-name is set, the Gateway references that
+  pre-existing Secret directly (certMode=existingSecret) and the
+  controller mints no Issuer/Certificate — so the solver, provider,
+  and issuer-name validations below (all ACME concerns) are skipped.
+*/}}
+{{- if not $wildcardSecret }}
 {{- /*
   Validate solver early — same check the old issuer.yaml ran. The
   controller will refuse to render an Issuer with an unsupported
@@ -22,6 +31,7 @@
 {{- if and (ne $issuerName "letsencrypt-prod") (ne $issuerName "letsencrypt-stage") }}
   {{- fail (printf "packages/extra/gateway currently supports publishing.certificates.issuerName=letsencrypt-prod or letsencrypt-stage (got %q). For other issuers, extend the controller to map the name to the corresponding ACME server URL." $issuerName) }}
 {{- end }}
+{{- end }}
 {{- $extraNs := list }}
 {{- range splitList "," ((index .Values._cluster "gateway-attached-namespaces") | default "") }}
   {{- $ns := . | trim }}
@@ -37,6 +47,11 @@ metadata:
 spec:
   apex: {{ $host | quote }}
   gatewayClassName: {{ .Values.gatewayClassName | quote }}
+  {{- if $wildcardSecret }}
+  certMode: existingSecret
+  wildcardSecretRef:
+    name: {{ $wildcardSecret | quote }}
+  {{- else }}
   certMode: {{ $solver | quote }}
   issuerName: {{ $issuerName | quote }}
   {{- if eq $solver "dns01" }}
@@ -74,6 +89,7 @@ spec:
         name: {{ (index .Values._cluster "dns01-rfc2136-secret-name") | quote }}
         key: {{ (index .Values._cluster "dns01-rfc2136-secret-key") | default "tsig-secret-key" | quote }}
     {{- end }}
+  {{- end }}
   {{- end }}
   {{- with $extraNs }}
   attachedNamespaces:

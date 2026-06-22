@@ -1,3 +1,13 @@
+{{- /*
+  updateMode is Initial, not Auto. In Auto mode the VPA Updater evicts running
+  pods to apply new recommendations. During install that eviction churn
+  recreates pods faster than Cilium releases their endpoint IPs, tripping the
+  cluster-pool IPAM "IP already in use" (putEndpointIdInvalid) leak: a pod gets
+  wedged in ContainerCreating and the install stalls (e.g. vmstorage/vmagent
+  evictions wedging vmalertmanager / fluent-bit). Initial sets requests at pod
+  creation without ever evicting, which removes the trigger. Do not switch back
+  to Auto without first fixing the underlying Cilium IP-reuse race.
+*/ -}}
 {{- range .Values.metricsStorages }}
 ---
 apiVersion: autoscaling.k8s.io/v1
@@ -10,7 +20,7 @@ spec:
     kind: Deployment
     name: vminsert-{{ .name }}
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
       - containerName: vminsert
@@ -39,7 +49,7 @@ spec:
     kind: StatefulSet
     name: vmselect-{{ .name }}
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
       - containerName: vmselect
@@ -47,8 +57,8 @@ spec:
           {{- if and .vmselect .vmselect.minAllowed }}
           {{- toYaml .vmselect.minAllowed | nindent 10 }}
           {{- else }}
-          cpu: 25m
-          memory: 64Mi
+          cpu: 200m
+          memory: 512Mi
           {{- end }}
         maxAllowed:
           {{- if and .vmselect .vmselect.maxAllowed }}
@@ -68,7 +78,7 @@ spec:
     kind: StatefulSet
     name: vmstorage-{{ .name }}
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
       - containerName: vmstorage
@@ -76,8 +86,8 @@ spec:
           {{- if and .vmstorage .vmstorage.minAllowed }}
           {{- toYaml .vmstorage.minAllowed | nindent 10 }}
           {{- else }}
-          cpu: 25m
-          memory: 64Mi
+          cpu: 200m
+          memory: 512Mi
           {{- end }}
         maxAllowed:
           {{- if and .vmstorage .vmstorage.maxAllowed }}
@@ -99,7 +109,7 @@ spec:
     kind: Deployment
     name: vlinsert-{{ .name }}
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
       - containerName: vlinsert
@@ -128,7 +138,7 @@ spec:
     kind: Deployment
     name: vlselect-{{ .name }}
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
       - containerName: vlselect
@@ -157,7 +167,7 @@ spec:
     kind: StatefulSet
     name: vlstorage-{{ .name }}
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
       - containerName: vlstorage

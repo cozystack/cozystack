@@ -1,0 +1,23 @@
+Check readiness of cozystack / Flux / Kubernetes resources.
+Shows only non-ready resources, parsed from status conditions (not column heuristics).
+
+Fetches sequentially by default — intended to run during cozystack upgrades where
+the apiserver is already under heavy reconciler load, so we avoid bursts of N
+concurrent LIST requests. Use --parallel for one-shot interactive runs against a
+healthy cluster (3-4x faster wall-clock).
+
+Usage:
+  check-readiness [OPTIONS]
+
+Options:
+  -w, --watch [INTERVAL]    Watch mode; refresh every INTERVAL seconds (default: 10)
+      --wait                Block until everything is ready (exit 0) or timeout (exit 1)
+      --timeout DURATION    Timeout for --wait, e.g. 30m, 1h, 600s (default: 30m)
+      --parallel            Fire all fetches concurrently (faster, more apiserver load)
+      --core                Check only essential cozystack/Flux kinds (5 instead of 14)
+  -v, --verbose             Show condition reason/message for not-ready rows
+  -n, --namespace NS        Scope to a single namespace (cluster-scoped kinds ignore this)
+  -l, --selector SELECTOR   kubectl label selector to apply to every query
+      --no-color            Disable color output (auto-disabled on non-TTY)
+  -h, --help                Show this help
+

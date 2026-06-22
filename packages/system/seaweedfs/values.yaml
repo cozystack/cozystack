@@ -1,14 +1,27 @@
 global:
-  enableSecurity: true
-  serviceAccountName: "tenant-foo-seaweedfs"
-  extraEnvironmentVars:
-    WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
-    WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
-  monitoring:
-    enabled: true
+  # App-specific globals were namespaced under global.seaweedfs in chart 4.18
+  # (upstream commit moving global.* -> global.seaweedfs.* to avoid polluting the
+  # shared global namespace when the chart is used as a subchart).
+  seaweedfs:
+    enableSecurity: true
+    serviceAccountName: "tenant-foo-seaweedfs"
+    extraEnvironmentVars:
+      WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
+      WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
+    monitoring:
+      enabled: true
 seaweedfs:
   master:
-    volumeSizeLimitMB: 30000
+    # 30 GB per volume × 10 GiB PVC = 0 → rounded to 1 maxVolume per
+    # volume server. With defaultReplication=001 (one replica on a
+    # different node) two volume servers can host exactly one logical
+    # volume between them. The platform now ships a default
+    # bucket-cozy-backups Bucket that grabs that single slot, so any
+    # second collection (the bucket E2E, a tenant app bucket, etc.)
+    # blocks on `assign volume: No writable volumes` until the test
+    # times out. Smaller volumes = more parallel collections on a
+    # 10 GiB E2E sandbox PVC. The upstream chart default is 1000.
+    volumeSizeLimitMB: 1000
     replicas: 3
     #  replication type is XYZ:
     # X number of replica in other data centers
@@ -86,6 +99,10 @@ seaweedfs:
     enabled: true
     replicas: 2
     port: 8333
+    # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
+    # (replaces the former s3-traffic-distribution.patch); the chart gates the
+    # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
+    trafficDistribution: PreferClose
     extraArgs:
       - -idleTimeout=60
     enableAuth: false

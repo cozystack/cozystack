@@ -7,8 +7,7 @@ include ../../../hack/package.mk
 image:
 	docker buildx build images/kubeovn-webhook \
 		$(call image-tags,kubeovn-webhook,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/kubeovn-webhook:latest \
-		--cache-to type=inline \
+		$(call cache-args,kubeovn-webhook) \
 		--metadata-file images/kubeovn-webhook.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/kubeovn-webhook:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kubeovn-webhook.json -o json -r)" \

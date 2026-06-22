@@ -21,8 +21,7 @@ image-controller image-speaker:
 		--target $(TARGET) \
 		--build-arg VERSION=$(VERSION) \
 		$(call image-tags,metallb-$(TARGET),$(VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/metallb-$(TARGET):latest \
-		--cache-to type=inline \
+		$(call cache-args,metallb-$(TARGET)) \
 		--metadata-file images/$(TARGET).json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/metallb-$(TARGET)" \

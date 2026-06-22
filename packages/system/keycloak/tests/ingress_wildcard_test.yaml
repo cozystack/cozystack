@@ -1,0 +1,52 @@
+suite: keycloak ingress wildcard mode drops per-host ACME
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+# keycloak wraps its cert-manager annotations inside
+# `with .Values.ingress.annotations`; the chart ships default
+# session-cookie annotations, so the block always renders. In wildcard
+# mode the cert-manager + http01 annotations and the per-host tls
+# secretName are dropped (the tls section stays so the HTTPS redirect
+# keeps working against the default SSL certificate); the user
+# annotations are preserved.
+
+tests:
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
+    set:
+      _cluster:
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - exists:
+          path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
+
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
+    set:
+      _cluster:
+        root-host: example.org
+        issuer-name: letsencrypt-prod
+        solver: http01
+        expose-ingress: tenant-root
+        gateway-enabled: "false"
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: web-tls

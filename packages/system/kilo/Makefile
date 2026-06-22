@@ -11,8 +11,7 @@ update:
 image:
 	docker buildx build images/kilo \
 		$(call image-tags,kilo,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/kilo:latest \
-		--cache-to type=inline \
+		$(call cache-args,kilo) \
 		--metadata-file images/kilo.json \
 		$(BUILDX_ARGS)
 	REPOSITORY="$(REGISTRY)/kilo" \

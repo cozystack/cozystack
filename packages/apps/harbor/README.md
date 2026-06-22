@@ -2,6 +2,18 @@
 
 Harbor is an open-source trusted cloud-native registry project that stores, signs, and scans content.
 
+## Prerequisites
+
+The Cozystack Harbor app stores its registry data exclusively in S3-compatible object storage: the chart pins the registry backend to S3 and exposes no filesystem option. That bucket is provisioned through COSI (`objectstorage.k8s.io`) from a SeaweedFS deployment, so before deploying Harbor the tenant must have SeaweedFS available — enabled on the same tenant or inherited from a parent tenant (the resolved class is propagated down the tenant tree, surfaced as the `namespace.cozystack.io/seaweedfs` namespace annotation).
+
+Enable it by setting `seaweedfs: true` on the tenant (or a parent tenant):
+
+```yaml
+seaweedfs: true
+```
+
+Without object storage in the tenant chain, Harbor cannot provision its registry bucket: the `<release>-registry` `BucketClaim`/`BucketAccess` never produces the `<release>-registry-bucket` credentials secret, so the Harbor `HelmRelease` stays unreconciled, waiting on `BucketInfo`.
+
 > `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
 ## Parameters

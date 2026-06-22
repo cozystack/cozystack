@@ -24,8 +24,7 @@ image: image-cozystack-api
 image-cozystack-api:
 	docker buildx build -f images/cozystack-api/Dockerfile ../../.. \
 		$(call image-tags,cozystack-api,v$(COZYSTACK_VERSION)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-api:latest \
-		--cache-to type=inline \
+		$(call cache-args,cozystack-api) \
 		--metadata-file images/cozystack-api.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/cozystack-api:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/cozystack-api.json -o json -r)" \

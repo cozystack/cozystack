@@ -209,6 +209,43 @@ kubectl get pvc -A --no-headers | awk '$3 != "Bound"'  |
     kubectl describe pvc -n $NAMESPACE $NAME > $DIR/describe.txt 2>&1
   done
 
+# -- objectstorage (COSI) module
+
+if kubectl get crd bucketclaims.objectstorage.k8s.io >/dev/null 2>&1; then
+  echo "Collecting objectstorage (COSI) state..."
+  DIR=$REPORT_DIR/objectstorage
+  mkdir -p $DIR
+  # The COSI CRDs ship no printer columns, so plain `kubectl get` shows
+  # only NAME/AGE — pull the readiness fields explicitly.
+  kubectl get bucketclaims.objectstorage.k8s.io -A \
+    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName,CLASS:.spec.bucketClassName' \
+    > $DIR/bucketclaims.txt 2>&1
+  kubectl get bucketaccesses.objectstorage.k8s.io -A \
+    -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,ACCOUNT:.status.accountID,CLAIM:.spec.bucketClaimName' \
+    > $DIR/bucketaccesses.txt 2>&1
+  kubectl get buckets.objectstorage.k8s.io \
+    -o custom-columns='NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace,CLAIM:.spec.bucketClaim.name' \
+    > $DIR/buckets.txt 2>&1
+  for kind in bucketclaims.objectstorage.k8s.io bucketaccesses.objectstorage.k8s.io; do
+    short=${kind%%.*}
+    kubectl get $kind -A -o yaml > $DIR/$short.yaml 2>&1
+  done
+  for kind in buckets.objectstorage.k8s.io bucketclasses.objectstorage.k8s.io bucketaccessclasses.objectstorage.k8s.io; do
+    short=${kind%%.*}
+    kubectl get $kind -o yaml > $DIR/$short.yaml 2>&1
+  done
+  if kubectl get deploy -n cozy-objectstorage-controller container-object-storage-controller >/dev/null 2>&1; then
+    kubectl logs -n cozy-objectstorage-controller deploy/container-object-storage-controller --tail=2000 > $DIR/objectstorage-controller.log 2>&1
+    kubectl logs -n cozy-objectstorage-controller deploy/container-object-storage-controller --tail=2000 --previous > $DIR/objectstorage-controller-previous.log 2>&1 || true
+  fi
+  # seaweedfs COSI provisioners run per seaweedfs instance, one per namespace
+  kubectl get deploy -A --no-headers 2>/dev/null | awk '$2 ~ /objectstorage-provisioner$/ {print $1" "$2}' |
+    while read NAMESPACE NAME; do
+      kubectl logs -n $NAMESPACE deploy/$NAME --all-containers --tail=2000 > $DIR/provisioner-$NAMESPACE.log 2>&1
+      kubectl logs -n $NAMESPACE deploy/$NAME --all-containers --tail=2000 --previous > $DIR/provisioner-$NAMESPACE-previous.log 2>&1 || true
+    done
+fi
+
 # -- kamaji module
 
 if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
@@ -256,6 +293,12 @@ fi
 
 echo "Generating summary..."
 "$SCRIPT_DIR/cozyreport-summary.sh" > "$REPORT_DIR/summary.txt" 2>&1 || true
+
+# Fold in the per-test crust-gather snapshots cozytest.sh captured on failure
+# (host + each nested tenant cluster) so the uploaded artifact carries an
+# inspectable, `crust-gather serve`-able state for every failed test.
+SNAP_DIR="${COZY_REPORT_DIR:-_out/cozyreport}/snapshots"
+[ -d "$SNAP_DIR" ] && cp -a "$SNAP_DIR" "$REPORT_DIR/snapshots" 2>/dev/null || true
 
 echo "Creating archive..."
 tar -czf $REPORT_NAME.tgz -C $REPORT_PDIR .

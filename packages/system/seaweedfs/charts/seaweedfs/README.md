@@ -1,6 +1,5 @@
 # SEAWEEDFS - helm chart (2.x+)
 
-## Getting Started
 
 ### Add the helm repo
 
@@ -24,7 +23,7 @@ helm install --values=values.yaml seaweedfs seaweedfs/seaweedfs
 * master/filer/volume are stateful sets with anti-affinity on the hostname,
 so your deployment will be spread/HA.
 * chart is using memsql(mysql) as the filer backend to enable HA (multiple filer instances) and backup/HA memsql can provide.
-* mysql user/password are created in a k8s secret (secret-seaweedfs-db.yaml) and injected to the filer with ENV.
+* mysql user/password are created in a k8s secret (default: `<release>-seaweedfs-db-secret`) and injected to the filer with ENV.
 * cert config exists and can be enabled, but not been tested, requires cert-manager to be installed.
 
 ## Prerequisites
@@ -35,7 +34,9 @@ leveldb is the default database, this supports multiple filer replicas that will
 When the [limitations](https://github.com/seaweedfs/seaweedfs/wiki/Filer-Store-Replication#limitation) apply, or for a large number of filer replicas, an external datastore is recommended.
 
 Such as MySQL-compatible database, as specified in the `values.yaml` at `filer.extraEnvironmentVars`.
-This database should be pre-configured and initialized by running:
+This database should be pre-configured and initialized. If using the default `db-init-config`, the configmap name is now dynamic (e.g., `<release>-seaweedfs-db-init-config`). You can override this name via `filer.dbInitConfigName`.
+
+To initialize manually:
 ```sql
 CREATE TABLE IF NOT EXISTS `filemeta` (
   `dirhash`   BIGINT NOT NULL       COMMENT 'first 64 bits of MD5 hash value of directory field',
@@ -47,6 +48,35 @@ CREATE TABLE IF NOT EXISTS `filemeta` (
 ```
 
 Alternative database can also be configured (e.g. leveldb, postgres) following the instructions at `filer.extraEnvironmentVars`.
+
+#### RocksDB variant
+
+The `_large_disk_rocksdb` image tag ships with RocksDB pre-configured as the filer backend.
+To use this image with the Helm chart, override the image on all three components and disable
+the chart's default `WEED_LEVELDB2_ENABLED`, which would otherwise re-enable LevelDB2 and
+override the image's built-in RocksDB configuration:
+
+```yaml
+# Replace <VERSION> with the desired seaweedfs version, e.g. 3.80_large_disk_rocksdb.
+master:
+  imageOverride: chrislusf/seaweedfs:<VERSION>_large_disk_rocksdb
+
+volume:
+  imageOverride: chrislusf/seaweedfs:<VERSION>_large_disk_rocksdb
+
+filer:
+  enablePVC: true
+  imageOverride: chrislusf/seaweedfs:<VERSION>_large_disk_rocksdb
+  extraEnvironmentVars:
+    WEED_LEVELDB2_ENABLED: "false"
+```
+
+Notes:
+
+* `master` and `volume` use the same image tag so that all components share a consistent
+  SeaweedFS build; RocksDB itself is only used by the filer.
+* `filer.enablePVC: true` (or another form of persistent storage for the filer) is required
+  so that the RocksDB metadata store survives pod restarts — otherwise metadata will be lost.
 
 ### Node Labels
 Kubernetes nodes can have labels which help to define which node(Host) will run which pod:
@@ -164,8 +194,9 @@ admin:
   enabled: true
   port: 23646
   grpcPort: 33646  # For worker connections
-  adminUser: "admin"
-  adminPassword: "your-secure-password"  # Leave empty to disable auth
+  secret:
+    adminUser: "admin"
+    adminPassword: "your-secure-password"  # Leave empty to disable auth
   
   # Optional: persist admin data
   data:
@@ -190,6 +221,8 @@ If `adminPassword` is set, the admin interface requires authentication:
 
 If `adminPassword` is empty or not set, the admin interface runs without authentication (not recommended for production).
 
+As an alternative, a kubernetes Secret can be used (`admin.secret.existingSecret`).
+
 ### Admin Data Persistence
 
 The admin component can store configuration and maintenance data. You can configure storage in several ways:
@@ -211,8 +244,9 @@ To enable workers, add the following to your values.yaml:
 worker:
   enabled: true
   replicas: 2  # Scale based on workload
-  capabilities: "vacuum,balance,erasure_coding"  # Tasks this worker can handle
-  maxConcurrent: 3  # Maximum concurrent tasks per worker
+  jobType: "vacuum,volume_balance,erasure_coding"  # Job types this worker can handle
+  maxDetect: 1  # Maximum concurrent detection requests
+  maxExecute: 4  # Maximum concurrent execution jobs per worker
   
   # Working directory for task execution
   # Default: "/tmp/seaweedfs-worker"
@@ -247,14 +281,14 @@ worker:
       memory: "2Gi"
 ```
 
-### Worker Capabilities
+### Worker Job Types
 
-Workers can be configured with different capabilities:
+Workers can be configured with different job types:
 - **vacuum**: Reclaim deleted file space
-- **balance**: Balance volumes across volume servers
+- **volume_balance**: Balance volumes across volume servers
 - **erasure_coding**: Handle erasure coding operations
 
-You can configure workers with all capabilities or create specialized worker pools with specific capabilities.
+You can configure workers with all job types or create specialized worker pools with specific job types.
 
 ### Worker Deployment Strategy
 
@@ -263,11 +297,11 @@ For production deployments, consider:
 1. **Multiple Workers**: Deploy 2+ worker replicas for high availability
 2. **Resource Allocation**: Workers need sufficient CPU/memory for maintenance tasks
 3. **Storage**: Workers need temporary storage for vacuum and balance operations (size depends on volume size)
-4. **Specialized Workers**: Create separate worker deployments for different capabilities if needed
+4. **Specialized Workers**: Create separate worker deployments for different job types if needed
 
 Example specialized worker configuration:
 
-For specialized worker pools, deploy separate Helm releases with different capabilities:
+For specialized worker pools, deploy separate Helm releases with different job types:
 
 **values-worker-vacuum.yaml** (for vacuum operations):
 ```yaml
@@ -286,8 +320,8 @@ admin:
 worker:
   enabled: true
   replicas: 2
-  capabilities: "vacuum"
-  maxConcurrent: 2
+  jobType: "vacuum"
+  maxExecute: 2
   # REQUIRED: Point to the admin service of your main SeaweedFS release
   # Replace <namespace> with the namespace where your main seaweedfs is deployed
   # Example: If deploying in namespace "production":
@@ -312,8 +346,8 @@ admin:
 worker:
   enabled: true
   replicas: 1
-  capabilities: "balance"
-  maxConcurrent: 1
+  jobType: "volume_balance"
+  maxExecute: 1
   # REQUIRED: Point to the admin service of your main SeaweedFS release
   # Replace <namespace> with the namespace where your main seaweedfs is deployed
   # Example: If deploying in namespace "production":
@@ -322,6 +356,7 @@ worker:
 ```
 
 Deploy the specialized workers as separate releases:
+### Specialized Worker Deployment
 ```bash
 # Deploy vacuum workers
 helm install seaweedfs-worker-vacuum seaweedfs/seaweedfs -f values-worker-vacuum.yaml
@@ -330,7 +365,23 @@ helm install seaweedfs-worker-vacuum seaweedfs/seaweedfs -f values-worker-vacuum
 helm install seaweedfs-worker-balance seaweedfs/seaweedfs -f values-worker-balance.yaml
 ```
 
+## OpenShift Support
+
+SeaweedFS can be deployed on OpenShift or any cluster enforcing the Kubernetes "restricted" Pod Security Standard. By default, OpenShift blocks containers that run as root or use `hostPath` volumes.
+
+To deploy on OpenShift, use the provided `openshift-values.yaml` which overrides the default configuration to:
+1. Use `PersistentVolumeClaims` instead of `hostPath`.
+2. Enable `runAsNonRoot` and omit hardcoded UIDs to allow OpenShift to assign valid UIDs automatically.
+3. Apply appropriate `seccompProfile` and drop capabilities.
+
+Usage:
+```bash
+helm install seaweedfs seaweedfs/seaweedfs \
+  -n seaweedfs --create-namespace \
+  -f openshift-values.yaml
+```
+
 ## Enterprise
 
 For enterprise users, please visit [seaweedfs.com](https://seaweedfs.com) for the SeaweedFS Enterprise Edition, 
-which has a self-healing storage format with better data protection.
+which has advanced features, including data recovery, self-healing storage, customizable erasure coding, EC vacuum and repair, etc.

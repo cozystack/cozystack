@@ -1,1 +1,48 @@
+# CPU oversubscription ratio. When set, propagates to
+# spec.configuration.developerConfiguration.cpuAllocationRatio on the
+# KubeVirt CR. Driven by .Values.resources.cpuAllocationRatio at the
+# platform level.
+# cpuAllocationRatio: 10
 
+# Feature gates appended after the static defaults
+# (HotplugVolumes/ExpandDisks/LiveMigration/AutoResourceLimitsGate/CPUManager/GPU/VMExport).
+# Empty by default. Filled by the platform with "HostDevices" when the
+# gpu-operator package is enabled with the passthrough variant — the
+# admission webhook rejects spec.template.spec.domain.devices.hostDevices
+# without that gate even with the GPU gate on, since current KubeVirt
+# splits them.
+extraFeatureGates: []
+
+# Permitted host devices the KubeVirt admission webhook accepts under
+# spec.template.spec.domain.devices.hostDevices / gpus on a VirtualMachine.
+# Empty by default — leaves the CR's permittedHostDevices unset.
+#
+# Filled by the platform with NVIDIA PCI vendor:device → resourceName
+# pairs (vendor 10DE) when gpu-operator runs in vfio passthrough mode,
+# and with mediatedDevices entries when it runs in vGPU mode.
+# externalResourceProvider: true is required because the resource names
+# are published by gpu-operator's nvidia-sandbox-device-plugin DaemonSet,
+# not by KubeVirt itself.
+#
+# Shape (subset of kubevirt.io/v1 PermittedHostDevices):
+#   pciHostDevices:
+#   - pciVendorSelector: "10DE:2335"
+#     resourceName: nvidia.com/GH100_H200_SXM_141GB
+#     externalResourceProvider: true
+#   mediatedDevices:
+#   - mdevNameSelector: NVIDIA L40S-24Q
+#     resourceName: nvidia.com/L40S-24Q
+permittedHostDevices: {}
+
+# mediatedDevicesConfiguration for vGPU. Filled by the platform when the
+# gpu-operator package runs in vGPU mode; empty otherwise.
+#
+# Shape (subset of kubevirt.io/v1 MediatedDevicesConfiguration):
+#   mediatedDeviceTypes:
+#   - nvidia-740   # L40S-24Q
+#   nodeMediatedDeviceTypes:
+#   - nodeSelector:
+#       nvidia.com/gpu.product: NVIDIA-L40S
+#     mediatedDeviceTypes:
+#     - nvidia-740
+mediatedDevicesConfiguration: {}

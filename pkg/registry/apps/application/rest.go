@@ -41,6 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -577,8 +578,27 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Update the HelmRelease in Kubernetes
-	err = r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+	// Update the HelmRelease in Kubernetes.
+	//
+	// Flux's helm-controller (and other controllers) continuously write the
+	// HelmRelease's status, which shares the object's resourceVersion. When a
+	// caller updates an app CR while a prior reconcile is still in flight, the
+	// resourceVersion read above goes stale and the Update is rejected with a
+	// 409 Conflict. The HelmRelease spec is fully derived from the Application
+	// the caller just applied, so a stale-resourceVersion conflict is never a
+	// real spec conflict here: refresh the resourceVersion from the live object
+	// and retry.
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		if apierrors.IsConflict(updateErr) {
+			cur := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+				return getErr
+			}
+			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+		}
+		return updateErr
+	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
@@ -734,13 +754,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Handle SendInitialEvents for WatchList feature (Kubernetes 1.27+)
-	// When sendInitialEvents=true, the client expects:
-	// 1. All existing resources as ADDED events
-	// 2. A Bookmark event with "k8s.io/initial-events-end": "true" annotation
-	// controller-runtime cache already sends ADDED events for all cached objects,
-	// so we just need to send the bookmark after those initial events
+	// Honor SendInitialEvents (WatchList): the client expects all existing
+	// objects as ADDED events, then a Bookmark annotated with
+	// metav1.InitialEventsAnnotationKey. controller-runtime's cache already
+	// replays the ADDED events, so we just emit the terminating bookmark.
 	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
+	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
+		app := &appsv1alpha1.Application{}
+		app.TypeMeta = metav1.TypeMeta{
+			APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+			Kind:       r.kindName,
+		}
+		return app
+	})
 
 	// Create a custom watcher to transform events
 	customW := &customWatcher{
@@ -755,6 +781,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
 		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
+		// Ask the backing watch for bookmarks on a WatchList request; the
+		// apiserver omits them by default, leaving the terminating
+		// initial-events-end bookmark with no reliable trigger.
+		Raw: &metav1.ListOptions{AllowWatchBookmarks: sendInitialEvents},
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
@@ -791,10 +821,6 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			defer wmWatcherForCleanup.Stop()
 		}
 
-		// Track whether we've sent the initial-events-end bookmark
-		initialEventsEndSent := !sendInitialEvents // If not sendInitialEvents, consider it already sent
-		var lastResourceVersion string
-
 		// Buffer of WorkloadMonitor events that arrived before the initial
 		// snapshot finished. The watch-list contract requires the stream to
 		// deliver all ADDED events followed by the initial-events-end bookmark
@@ -815,48 +841,26 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			}
 		}
 
-		drainPendingWMEvents := func() {
+		// send forwards an event, returning false if the watch or context ended.
+		send := func(ev watch.Event) bool {
+			select {
+			case customW.resultChan <- ev:
+				return true
+			case <-customW.stopChan:
+				return false
+			case <-ctx.Done():
+				return false
+			}
+		}
+
+		drainPendingWMEvents := func() bool {
 			for _, ev := range pendingWMEvents {
-				select {
-				case customW.resultChan <- ev:
-				case <-customW.stopChan:
-					return
-				case <-ctx.Done():
-					return
+				if !send(ev) {
+					return false
 				}
 			}
 			pendingWMEvents = nil
-		}
-
-		// Helper function to send initial-events-end bookmark
-		sendInitialEventsEndBookmark := func() {
-			if initialEventsEndSent {
-				return
-			}
-			initialEventsEndSent = true
-
-			bookmarkApp := &appsv1alpha1.Application{}
-			bookmarkApp.SetResourceVersion(lastResourceVersion)
-			bookmarkApp.TypeMeta = metav1.TypeMeta{
-				APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
-				Kind:       r.kindName,
-			}
-			bookmarkApp.SetAnnotations(map[string]string{
-				"k8s.io/initial-events-end": "true",
-			})
-			bookmarkEvent := watch.Event{
-				Type:   watch.Bookmark,
-				Object: bookmarkApp,
-			}
-			klog.V(6).Infof("Sending initial-events-end bookmark with RV=%s", lastResourceVersion)
-			select {
-			case customW.resultChan <- bookmarkEvent:
-			case <-customW.stopChan:
-				return
-			case <-ctx.Done():
-				return
-			}
-			drainPendingWMEvents()
+			return true
 		}
 
 		// Process watch events
@@ -867,45 +871,25 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					// The watcher has been closed
 					klog.Warning("HelmRelease watcher closed")
 					// Send initial-events-end bookmark before closing if not yet sent
-					sendInitialEventsEndBookmark()
+					if bookmark, ok := bookmarker.OnClose(); ok {
+						if send(bookmark) {
+							drainPendingWMEvents()
+						}
+					}
 					return
 				}
 
 				// Handle bookmark events - these are critical for informer sync
 				if event.Type == watch.Bookmark {
 					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
-						lastResourceVersion = hr.GetResourceVersion()
-
-						// If sendInitialEvents and we haven't sent initial-events-end yet,
-						// add the annotation to this bookmark
-						bookmarkApp := &appsv1alpha1.Application{}
-						bookmarkApp.SetResourceVersion(lastResourceVersion)
-						bookmarkApp.TypeMeta = metav1.TypeMeta{
-							APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
-							Kind:       r.kindName,
-						}
-						justFlipped := false
-						if !initialEventsEndSent {
-							initialEventsEndSent = true
-							justFlipped = true
-							bookmarkApp.SetAnnotations(map[string]string{
-								"k8s.io/initial-events-end": "true",
-							})
-							klog.V(6).Infof("Sending initial-events-end bookmark with RV=%s", lastResourceVersion)
-						}
-						bookmarkEvent := watch.Event{
-							Type:   watch.Bookmark,
-							Object: bookmarkApp,
-						}
-						select {
-						case customW.resultChan <- bookmarkEvent:
-						case <-customW.stopChan:
-							return
-						case <-ctx.Done():
+						// controller-runtime bookmarks after the initial list
+						// replay; the first one becomes the terminating marker.
+						bookmark, initialEventsEnd := bookmarker.OnBackingBookmark(hr.GetResourceVersion())
+						if !send(bookmark) {
 							return
 						}
-						if justFlipped {
-							drainPendingWMEvents()
+						if initialEventsEnd && !drainPendingWMEvents() {
+							return
 						}
 					}
 					continue
@@ -924,8 +908,8 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue
 				}
 
-				// Update lastResourceVersion for bookmark
-				lastResourceVersion = hr.GetResourceVersion()
+				// Track resourceVersion for the eventual bookmark
+				bookmarker.Observe(hr.GetResourceVersion())
 
 				// Apply manual field selector filtering (metadata.name and metadata.namespace)
 				// controller-runtime cache doesn't support field selectors
@@ -962,9 +946,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					}
 				}
 
-				// If this is not an ADDED event and we haven't sent initial-events-end, send it now
-				if event.Type != watch.Added && !initialEventsEndSent {
-					sendInitialEventsEndBookmark()
+				// Emit the terminating bookmark before the first live event, then
+				// replay any buffered WorkloadMonitor events.
+				if bookmark, ok := bookmarker.BeforeLiveEvent(event.Type); ok {
+					if !send(bookmark) {
+						return
+					}
+					if !drainPendingWMEvents() {
+						return
+					}
 				}
 
 				// Skip ADDED events based on resourceVersion comparison
@@ -979,18 +969,8 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				}
 				// When startingRV == 0, always send ADDED events (client wants full state)
 
-				// Create watch event with Application object
-				appEvent := watch.Event{
-					Type:   event.Type,
-					Object: &app,
-				}
-
 				// Send event to custom watcher
-				select {
-				case customW.resultChan <- appEvent:
-				case <-customW.stopChan:
-					return
-				case <-ctx.Done():
+				if !send(watch.Event{Type: event.Type, Object: &app}) {
 					return
 				}
 
@@ -1079,16 +1059,12 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				// Buffer WM-triggered events that arrive before the
 				// initial-events-end bookmark. They will be replayed in order
 				// immediately after the bookmark is emitted.
-				if !initialEventsEndSent {
+				if !bookmarker.Sent() {
 					pendingWMEvents = append(pendingWMEvents, outEvent)
 					continue
 				}
-				lastResourceVersion = wm.GetResourceVersion()
-				select {
-				case customW.resultChan <- outEvent:
-				case <-customW.stopChan:
-					return
-				case <-ctx.Done():
+				bookmarker.Observe(wm.GetResourceVersion())
+				if !send(outEvent) {
 					return
 				}
 

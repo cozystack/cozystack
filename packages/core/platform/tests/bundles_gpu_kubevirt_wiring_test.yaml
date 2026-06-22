@@ -1,0 +1,703 @@
+suite: bundles.iaas gpu-operator → kubevirt wiring
+templates:
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: leaves cozystack.kubevirt with no extra gpu wiring when gpu-operator is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - notExists:
+          path: spec.components.kubevirt.values.extraFeatureGates
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: emits gpu-operator Package at default variant when only the package is enabled (no explicit variant override)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+
+  - it: wires HostDevices gate plus NVIDIA passthrough pciHostDevices into the kubevirt component when gpu-operator is enabled at the default (passthrough) variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:2335"
+            resourceName: nvidia.com/GH100_H200_SXM_141GB
+            externalResourceProvider: true
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: switches gpu-operator Package to vgpu variant when bundles.iaas.gpuOperatorVariant is "vgpu"
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.variant
+          value: vgpu
+
+  - it: exposes NVIDIA mediatedDevices by name in vgpu variant when gpu.vgpuDeviceManager.enabled is true, and does NOT default a numeric mediatedDevicesConfiguration (mdev creation is delegated to the vGPU Device Manager)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuDeviceManager:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+      # No numeric mediatedDeviceTypes is shipped by default — those ids are
+      # per-(SKU, driver) sysfs indices, and the vGPU Device Manager already
+      # creates the mdevs by name.
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: suppresses the NVIDIA mdev defaults in vgpu variant when gpu.vgpuDeviceManager.enabled is false (default — Ada Lovelace SR-IOV path), so KubeVirt does not advertise resources that no daemon can ever create
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: appends user-supplied pciHostDevices to the NVIDIA defaults when gpu.replaceDefaults is false
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        permittedHostDevices:
+          pciHostDevices:
+          - pciVendorSelector: "1002:744C"
+            resourceName: amd.com/MI300X
+            externalResourceProvider: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:2335"
+            resourceName: nvidia.com/GH100_H200_SXM_141GB
+            externalResourceProvider: true
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "1002:744C"
+            resourceName: amd.com/MI300X
+            externalResourceProvider: true
+
+  - it: drops NVIDIA defaults and keeps only the user list when gpu.replaceDefaults is true
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        replaceDefaults: true
+        permittedHostDevices:
+          pciHostDevices:
+          - pciVendorSelector: "1002:744C"
+            resourceName: amd.com/MI300X
+            externalResourceProvider: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          value:
+          - pciVendorSelector: "1002:744C"
+            resourceName: amd.com/MI300X
+            externalResourceProvider: true
+
+  - it: fails fast with a descriptive error when bundles.iaas.gpuOperatorVariant is set to an unsupported value
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: container
+        enabledPackages:
+        - cozystack.gpu-operator
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bundles.iaas.gpuOperatorVariant must be "default" or "vgpu", got "container"'
+
+  - it: rejects an invalid gpuOperatorVariant even when gpu-operator is not enabled so the typo is caught at edit time, not at gpu-enable time
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: passthrough
+        enabledPackages: []
+    asserts:
+      - failedTemplate:
+          errorMessage: 'bundles.iaas.gpuOperatorVariant must be "default" or "vgpu", got "passthrough"'
+
+  - it: emits the gpu-operator Package without component overrides for the passthrough variant so vfio-pci defaults from the chart apply unchanged
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+
+  - it: forwards vgpuManager image coordinates from gpu.vgpuManager into the gpu-operator Package CR when bundles.iaas.gpuOperatorVariant is vgpu
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuManager:
+          repository: registry.example.com/nvidia
+          image: vgpu-manager-custom
+          version: "595.58.02-ubuntu24.04"
+          imagePullSecrets:
+          - nvidia-registry-secret
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.variant
+          value: vgpu
+      - equal:
+          path: spec.components.gpu-operator.values.gpu-operator.vgpuManager.repository
+          value: registry.example.com/nvidia
+      - equal:
+          path: spec.components.gpu-operator.values.gpu-operator.vgpuManager.image
+          value: vgpu-manager-custom
+      - equal:
+          path: spec.components.gpu-operator.values.gpu-operator.vgpuManager.version
+          value: "595.58.02-ubuntu24.04"
+      - equal:
+          path: spec.components.gpu-operator.values.gpu-operator.vgpuManager.imagePullSecrets
+          value:
+          - nvidia-registry-secret
+
+  - it: forwards gpu.vgpuManager.imagePullSecrets even when repository/version/image are left at the platform defaults — private registries with the chart-default tag are a real config and must not be silently dropped
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuManager:
+          imagePullSecrets:
+          - nvidia-registry-secret
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.components.gpu-operator.values.gpu-operator.vgpuManager.imagePullSecrets
+          value:
+          - nvidia-registry-secret
+
+  - it: enables nvidia vgpu-device-manager in the gpu-operator Package CR when gpu.vgpuDeviceManager.enabled is true so mediated devices actually materialize on the node
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuDeviceManager:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.components.gpu-operator.values.gpu-operator.vgpuDeviceManager.enabled
+          value: true
+
+  - it: leaves the gpu-operator Package without vgpuManager overrides when gpu.vgpuManager.repository and .version are both blank — the operator can still hand-craft a Package CR override later
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.gpu-operator
+    asserts:
+      - equal:
+          path: spec.variant
+          value: vgpu
+      - notExists:
+          path: spec.components.gpu-operator
+
+  - it: propagates resources.cpuAllocationRatio into the kubevirt component values even when gpu-operator is not enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages: []
+      resources:
+        cpuAllocationRatio: 7
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values.cpuAllocationRatio
+          value: 7
+
+  - it: appends user-supplied pciHostDevices in vgpu mode so post-kubevirt#16890 SR-IOV vGPU VFs can be advertised alongside the platform mediated defaults
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuDeviceManager:
+          enabled: true
+        permittedHostDevices:
+          pciHostDevices:
+          - pciVendorSelector: "10DE:26B9"
+            resourceName: nvidia.com/L40S-24Q
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:26B9"
+            resourceName: nvidia.com/L40S-24Q
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+
+  - it: appends user-supplied mediatedDevices in vgpu mode on top of the platform NVIDIA defaults when the device manager is enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuDeviceManager:
+          enabled: true
+        permittedHostDevices:
+          mediatedDevices:
+          - mdevNameSelector: NVIDIA H100-80C
+            resourceName: nvidia.com/H100-80C
+            externalResourceProvider: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+          content:
+            mdevNameSelector: NVIDIA A100-40C
+            resourceName: nvidia.com/A100-40C
+            externalResourceProvider: true
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+          content:
+            mdevNameSelector: NVIDIA H100-80C
+            resourceName: nvidia.com/H100-80C
+            externalResourceProvider: true
+
+  - it: drops the NVIDIA vgpu defaults and keeps only the user mediatedDevices / mediatedDevicesConfiguration when gpu.replaceDefaults is true
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        replaceDefaults: true
+        permittedHostDevices:
+          mediatedDevices:
+          - mdevNameSelector: NVIDIA H100-80C
+            resourceName: nvidia.com/H100-80C
+            externalResourceProvider: true
+        mediatedDevicesConfiguration:
+          mediatedDeviceTypes:
+          - nvidia-1234
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - equal:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+          value:
+          - mdevNameSelector: NVIDIA H100-80C
+            resourceName: nvidia.com/H100-80C
+            externalResourceProvider: true
+      - equal:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration.mediatedDeviceTypes
+          value:
+          - nvidia-1234
+
+  - it: skips gpu wiring when cozystack.gpu-operator appears in both enabledPackages and disabledPackages — disabled wins, mirroring the optional-package helper
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+        disabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - notExists:
+          path: spec.components.kubevirt.values.extraFeatureGates
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: ignores user gpu.mediatedDevices and gpu.mediatedDevicesConfiguration in the passthrough variant — vGPU-only knobs must not leak into a vfio-pci CR
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        permittedHostDevices:
+          mediatedDevices:
+          - mdevNameSelector: NVIDIA A100-40C
+            resourceName: nvidia.com/A100-40C
+            externalResourceProvider: true
+        mediatedDevicesConfiguration:
+          mediatedDeviceTypes:
+          - nvidia-559
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+      - notExists:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+      - notExists:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration
+
+  - it: renders the passthrough wiring without a nil-pointer error when the whole gpu block is set to null and gpu-operator is enabled
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+
+  - it: renders the vgpu wiring without a nil-pointer error when the whole gpu block is set to null and gpu-operator runs in the vgpu variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+
+  - it: renders without a nil-pointer error when gpu sub-keys are empty (null) YAML keys
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        permittedHostDevices: null
+        mediatedDevicesConfiguration: null
+        vgpuDeviceManager: null
+        vgpuManager: null
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      - contains:
+          path: spec.components.kubevirt.values.extraFeatureGates
+          content: HostDevices
+      - exists:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+
+  - it: advertises GPUs under the exact resourceName the sandbox plugin generates from pci.ids (uppercase, with Tesla/GL/PCIE tokens) — the slugs that actually match the node
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+        enabledPackages:
+        - cozystack.gpu-operator
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      # Turing T4 — pci.ids "TU104GL [Tesla T4]" → TU104GL_TESLA_T4 (the
+      # plugin keeps the Tesla brand and upper-cases). The tidy TU104GL_T4
+      # form never matches a vanilla plugin.
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:1EB8"
+            resourceName: nvidia.com/TU104GL_TESLA_T4
+            externalResourceProvider: true
+      # Ampere A30 — pci.ids "GA100GL [A30 PCIe]" → GA100GL_A30_PCIE (GL die
+      # suffix and PCIE form factor are part of the slug).
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:20B7"
+            resourceName: nvidia.com/GA100GL_A30_PCIE
+            externalResourceProvider: true
+      # V100 SXM2 — 1DB1 is the 16GB part, 1DB5 the 32GB part (distinct
+      # device IDs); slug "GV100GL [Tesla V100 SXM2 NNGB]" → GV100GL_TESLA_...
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:1DB1"
+            resourceName: nvidia.com/GV100GL_TESLA_V100_SXM2_16GB
+            externalResourceProvider: true
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:1DB5"
+            resourceName: nvidia.com/GV100GL_TESLA_V100_SXM2_32GB
+            externalResourceProvider: true
+      # Regression guards: the tidy/short forms that do NOT match a vanilla
+      # plugin must never reappear.
+      - notContains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:1EB8"
+            resourceName: nvidia.com/TU104GL_T4
+            externalResourceProvider: true
+      - notContains:
+          path: spec.components.kubevirt.values.permittedHostDevices.pciHostDevices
+          content:
+            pciVendorSelector: "10DE:1DB1"
+            resourceName: nvidia.com/GV100_V100_SXM2_32GB
+            externalResourceProvider: true
+
+  - it: still forwards a user-supplied gpu.mediatedDevicesConfiguration into the CR in vgpu mode (the override escape hatch survives the name-based default), alongside the name-based mediatedDevices defaults
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+          gpuOperatorVariant: vgpu
+        enabledPackages:
+        - cozystack.gpu-operator
+      gpu:
+        vgpuDeviceManager:
+          enabled: true
+        mediatedDevicesConfiguration:
+          mediatedDeviceTypes:
+          - nvidia-473
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt
+    asserts:
+      # name-based exposure defaults still flow in...
+      - contains:
+          path: spec.components.kubevirt.values.permittedHostDevices.mediatedDevices
+          content:
+            mdevNameSelector: NVIDIA A100-40C
+            resourceName: nvidia.com/A100-40C
+            externalResourceProvider: true
+      # ...and the operator's explicit numeric config is honoured.
+      - contains:
+          path: spec.components.kubevirt.values.mediatedDevicesConfiguration.mediatedDeviceTypes
+          content: nvidia-473

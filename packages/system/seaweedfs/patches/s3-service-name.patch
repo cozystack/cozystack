@@ -1,12 +1,13 @@
 diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml
-index 8afd4865..86e0424e 100644
+index 063b1c59f..6e852ba63 100644
 --- a/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml
 +++ b/packages/system/seaweedfs/charts/seaweedfs/templates/s3/s3-service.yaml
-@@ -14,6 +14,7 @@ metadata:
-     {{- toYaml .Values.s3.annotations | nindent 4 }}
- {{- end }}
- spec:
-+  trafficDistribution: PreferClose
-   internalTrafficPolicy: {{ .Values.s3.internalTrafficPolicy | default "Cluster" }}
-   ports:
-   - name: "swfs-s3"
+@@ -2,7 +2,7 @@
+ apiVersion: v1
+ kind: Service
+ metadata:
+-  name: {{ include "seaweedfs.componentName" (list . "s3") }}
++  name: {{ template "seaweedfs.name" . }}-s3
+   namespace: {{ .Release.Namespace }}
+   labels:
+     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}

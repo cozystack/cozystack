@@ -1,5 +1,25 @@
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+{{- /* PROXY-protocol is enabled either explicitly per-app (.Values.proxyProtocol)
+       or, for the host control plane, via the platform-level publishing.proxyProtocol
+       switch carried in _cluster.proxy-protocol and applied only to the external-facing
+       ingress (the namespace named by expose-ingress, like expose-external-ips above).
+       toString normalises the _cluster value whether it arrives as string "true" or bool. */ -}}
+{{- $proxyProtocol := or .Values.proxyProtocol (and (eq $exposeIngress .Release.Namespace) (eq (toString (index .Values._cluster "proxy-protocol")) "true")) }}
+{{- /* The per-app proxyProtocol value is for tenant Ingress apps. On the
+       external-facing (host) ingress, PROXY-protocol must be enabled via the
+       platform-level publishing.proxyProtocol switch — only that path installs
+       ouroboros (hairpin handling) and arms the disable-hazard guard. */ -}}
+{{- if and .Values.proxyProtocol (eq $exposeIngress .Release.Namespace) }}
+{{- fail "On the host (external-facing) ingress, enable PROXY-protocol via publishing.proxyProtocol, not the per-app proxyProtocol value — the platform switch pairs it with ouroboros hairpin handling and the disable-hazard guard" }}
+{{- end }}
+{{- /* Cloudflare's HTTP proxy does not speak PROXY-protocol to origins, and its
+       real_ip_header server-snippet overrides real-ip-header: proxy_protocol —
+       the two together emit contradictory config. */ -}}
+{{- if and .Values.cloudflareProxy $proxyProtocol }}
+{{- fail "cloudflareProxy and proxyProtocol are mutually exclusive: Cloudflare's HTTP proxy does not send PROXY-protocol frames, and the cloudflareProxy server-snippet overrides real-ip-header proxy_protocol" }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -28,6 +48,19 @@ spec:
       controller:
         replicaCount: {{ .Values.replicas }}
         ingressClass: {{ .Release.Namespace }}
+        {{- /*
+          Operator-supplied wildcard mode. Serve the pre-existing
+          wildcard Secret as the default SSL certificate so per-host
+          ACME certs are unnecessary. Only the publishing controller
+          (Release.Namespace == expose-ingress) gets the flag: the
+          Secret lives in that namespace and ingress-nginx must read it
+          from its own namespace, so child-tenant controllers cannot
+          point at it. The reference is therefore always same-namespace.
+        */}}
+        {{- if and $wildcardSecret (eq .Release.Namespace $exposeIngress) }}
+        extraArgs:
+          default-ssl-certificate: "{{ $exposeIngress }}/{{ $wildcardSecret }}"
+        {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
         ingressClassResource:
           name: {{ .Release.Namespace }}
@@ -49,7 +82,7 @@ spec:
           type: LoadBalancer
           externalTrafficPolicy: Local
           {{- end }}
-        {{- if or .Values.whitelist .Values.cloudflareProxy }}
+        {{- if or .Values.whitelist .Values.cloudflareProxy $proxyProtocol }}
         config:
           {{- with .Values.whitelist }}
           whitelist-source-range: "{{ join "," . }}"
@@ -58,5 +91,14 @@ spec:
           set_real_ip_from: "{{ include "ingress.cloudflare-ips" . }}"
           use-forwarded-headers: "true"
           server-snippet: "real_ip_header CF-Connecting-IP;"
+          {{- end }}
+          {{- if $proxyProtocol }}
+          {{- /* real-ip-header + enable-real-ip make the PROXY-protocol frame the
+                 source of truth for $remote_addr. use-forwarded-headers /
+                 compute-full-forwarded-for are deliberately NOT set: without a
+                 paired proxy-real-ip-cidr they let clients spoof X-Forwarded-For. */}}
+          use-proxy-protocol: "true"
+          real-ip-header: "proxy_protocol"
+          enable-real-ip: "true"
           {{- end }}
         {{- end }}

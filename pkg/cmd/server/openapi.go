@@ -63,14 +63,90 @@ func findSpecContainer(s *spec.Schema) *spec.Schema {
 	return nil
 }
 
+// markOpenObject marks a schema as a free-form object that accepts arbitrary
+// properties, using the x-kubernetes-preserve-unknown-fields extension rather
+// than the boolean additionalProperties:true form.
+//
+// This distinction matters: a boolean additionalProperties node (the JSON
+// `true` or `false` form) carries a nil inner schema. The Kubernetes
+// ValidatingAdmissionPolicy status type-checker (run by kube-controller-manager)
+// dereferences that nil inner schema, crash-looping KCM cluster-wide as soon as
+// a VAP matches one of these aggregated resources (e.g.
+// cozystack-tenant-host-policy on tenants). The extension is semantically
+// equivalent ("arbitrary fields allowed") and the type-checker handles it
+// safely. See https://github.com/cozystack/cozystack/issues/2863.
+func markOpenObject(s *spec.Schema) {
+	if len(s.Type) == 0 {
+		s.Type = spec.StringOrArray{"object"}
+	}
+	s.AdditionalProperties = nil
+	if s.Extensions == nil {
+		s.Extensions = spec.Extensions{}
+	}
+	s.Extensions["x-kubernetes-preserve-unknown-fields"] = true
+}
+
+// sanitizeBooleanAdditionalProperties recursively rewrites every boolean-form
+// additionalProperties (one whose inner Schema is nil — both the JSON `true`
+// and `false` forms) anywhere in s, because both crash the VAP status
+// type-checker (#2863): additionalProperties:true becomes the equivalent
+// x-kubernetes-preserve-unknown-fields:true, and additionalProperties:false is
+// dropped (the published schema is consumed only for documentation and
+// type-checking, not for enforcement, so "declared properties only" is
+// preserved without the crash-prone node). Object-form additionalProperties (a
+// real map value schema) is safe; it is recursed into, never rewritten.
+//
+// ApplicationDefinition.openAPISchema is untrusted input — external-apps and
+// operator-authored definitions flow through here without validation — so this
+// closes the whole class of crash rather than only the schemas cozystack ships.
+func sanitizeBooleanAdditionalProperties(s *spec.Schema) {
+	if s == nil {
+		return
+	}
+	if ap := s.AdditionalProperties; ap != nil && ap.Schema == nil {
+		if ap.Allows {
+			markOpenObject(s) // additionalProperties:true -> preserve-unknown-fields
+		} else {
+			s.AdditionalProperties = nil // additionalProperties:false -> drop
+		}
+	} else if ap != nil && ap.Schema != nil {
+		sanitizeBooleanAdditionalProperties(ap.Schema)
+	}
+	for k := range s.Properties {
+		prop := s.Properties[k]
+		sanitizeBooleanAdditionalProperties(&prop)
+		s.Properties[k] = prop
+	}
+	if s.Items != nil {
+		sanitizeBooleanAdditionalProperties(s.Items.Schema)
+		for i := range s.Items.Schemas {
+			sanitizeBooleanAdditionalProperties(&s.Items.Schemas[i])
+		}
+	}
+	for i := range s.AllOf {
+		sanitizeBooleanAdditionalProperties(&s.AllOf[i])
+	}
+	for i := range s.AnyOf {
+		sanitizeBooleanAdditionalProperties(&s.AnyOf[i])
+	}
+	for i := range s.OneOf {
+		sanitizeBooleanAdditionalProperties(&s.OneOf[i])
+	}
+	sanitizeBooleanAdditionalProperties(s.Not)
+}
+
 // patchSpec injects/overrides ".spec" with user JSON (or schemaless object).
 func patchSpec(target *spec.Schema, raw string) error {
+	if target.Properties == nil {
+		target.Properties = map[string]spec.Schema{}
+	}
+
+	// Schemaless: publish a fresh, fully open object. Starting from a fresh
+	// schema (rather than mutating the cloned base) discards any inherited
+	// $ref or properties so the published spec is unambiguously open.
 	if strings.TrimSpace(raw) == "" {
-		if target.Properties == nil {
-			target.Properties = map[string]spec.Schema{}
-		}
-		prop := target.Properties["spec"]
-		prop.AdditionalProperties = &spec.SchemaOrBool{Allows: true}
+		prop := spec.Schema{}
+		markOpenObject(&prop)
 		target.Properties["spec"] = prop
 		return nil
 	}
@@ -79,12 +155,21 @@ func patchSpec(target *spec.Schema, raw string) error {
 	if err := json.Unmarshal([]byte(raw), &custom); err != nil {
 		return err
 	}
-	if custom.AdditionalProperties == nil {
-		custom.AdditionalProperties = &spec.SchemaOrBool{Allows: true}
+
+	// Neutralize any crash-prone boolean additionalProperties at any depth in
+	// the user-supplied schema before publishing it.
+	topLevelAPAbsent := custom.AdditionalProperties == nil
+	sanitizeBooleanAdditionalProperties(&custom)
+
+	// Preserve the historical "spec is a superset of the documented values"
+	// behavior: when the documented schema does not itself declare
+	// additionalProperties, mark the top level open so undocumented Helm
+	// values are accepted rather than rejected. A schema that explicitly
+	// declared additionalProperties (now sanitized) keeps its own intent.
+	if topLevelAPAbsent {
+		markOpenObject(&custom)
 	}
-	if target.Properties == nil {
-		target.Properties = map[string]spec.Schema{}
-	}
+
 	target.Properties["spec"] = custom
 	return nil
 }
@@ -299,7 +384,7 @@ func sanitizeForV2(s *spec.Schema) {
 		if hasIntAndStringAnyOf(s.AnyOf) {
 			s.Type = spec.StringOrArray{"string"}
 			if s.Extensions == nil {
-				s.Extensions = map[string]any{}
+				s.Extensions = spec.Extensions{}
 			}
 			s.Extensions["x-kubernetes-int-or-string"] = true
 		}

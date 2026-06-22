@@ -21,8 +21,7 @@ image-operator:
 	docker buildx build -f images/cozystack-operator/Dockerfile ../../.. \
 		$(call image-tags,cozystack-operator,v$(COZYSTACK_VERSION)) \
 		--build-arg VERSION=v$(COZYSTACK_VERSION) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-operator:latest \
-		--cache-to type=inline \
+		$(call cache-args,cozystack-operator) \
 		--metadata-file images/cozystack-operator.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/cozystack-operator:$(IMAGE_TAG)@$$(yq -e '.["containerimage.digest"]' images/cozystack-operator.json -o json -r)" \

@@ -1,10 +1,10 @@
+{{- include "seaweedfs.compat" . -}}
 {{- if .Values.admin.enabled }}
-{{- if .Values.admin.metricsPort }}
-{{- if .Values.global.monitoring.enabled }}
+{{- if .Values.global.seaweedfs.monitoring.enabled }}
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: {{ template "seaweedfs.name" . }}-admin
+  name: {{ include "seaweedfs.fullname" . }}-admin
   namespace: {{ .Release.Namespace }}
   labels:
     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
@@ -12,7 +12,7 @@ metadata:
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/component: admin
-    {{- with .Values.global.monitoring.additionalLabels }}
+    {{- with .Values.global.seaweedfs.monitoring.additionalLabels }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
 {{- with .Values.admin.serviceMonitor.annotations }}
@@ -22,12 +22,12 @@ metadata:
 spec:
   endpoints:
     - interval: 30s
-      port: metrics
+      port: http
       scrapeTimeout: 5s
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
       app.kubernetes.io/component: admin
-{{- end }}
 {{- end }}
 {{- end }}

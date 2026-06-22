@@ -10,8 +10,7 @@ image-cozystack-controller:
 	docker buildx build -f images/cozystack-controller/Dockerfile ../../.. \
 		$(call image-tags,cozystack-controller,v$(COZYSTACK_VERSION)) \
 		--build-arg VERSION=v$(COZYSTACK_VERSION) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-controller:latest \
-		--cache-to type=inline \
+		$(call cache-args,cozystack-controller) \
 		--metadata-file images/cozystack-controller.json \
 		$(BUILDX_ARGS)
 	IMAGE="$(REGISTRY)/cozystack-controller:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/cozystack-controller.json -o json -r)" \

@@ -1,5 +1,35 @@
 #!/usr/bin/env bats
 
+@test "Deploy cilium-leak-healer watchdog (best-effort)" {
+  # Interim mitigation for the Cilium in-memory endpoint leak (cilium/cilium#38313
+  # class): a deleted pod's endpoint is orphaned in the agent's registry, IPAM
+  # re-hands its IP to a new pod, and the agent then rejects the new sandbox with
+  # "IP <X> is already in use" until an agent restart. The watchdog runs as an
+  # in-cluster Job that surgically evicts only the orphaned endpoint, covering
+  # install and (the Job outlives this file) the whole app suite.
+  #
+  # This is a real @test, NOT a bats setup_file hook: the e2e runner
+  # (hack/cozytest.sh) only executes @test functions — it never invokes
+  # setup_file/teardown_file — so a hook would silently never run. It is placed
+  # first so the watchdog is up before the install churn. Best-effort: the leak's
+  # primary trigger (VPA Auto eviction) is removed separately by the
+  # monitoring/etcd VPA->Initial fixes, so this is only the reactive net for
+  # residual churn and must never fail the suite. The heal logic stays in
+  # hack/e2e-cilium-endpoint-leak-healer.sh (single source of truth), shipped to
+  # the pod via a ConfigMap built here. Remove this test, that script, and
+  # hack/e2e-cilium-leak-healer.yaml once a fixed Cilium ships.
+  kubectl create configmap cilium-leak-healer -n kube-system \
+    --from-file=heal.sh=hack/e2e-cilium-endpoint-leak-healer.sh \
+    --dry-run=client -o yaml | kubectl apply -f - || true
+  kubectl apply -f hack/e2e-cilium-leak-healer.yaml || true
+  # Confirm it landed (visible in the cozytest.sh trace); never fail on a band-aid.
+  if kubectl -n kube-system get job cilium-leak-healer >/dev/null 2>&1; then
+    echo "cilium-leak-healer Job created"
+  else
+    echo "WARNING: cilium-leak-healer Job NOT created — watchdog inactive this run"
+  fi
+}
+
 @test "Required installer chart exists" {
   if [ ! -f packages/core/installer/Chart.yaml ]; then
     echo "Missing: packages/core/installer/Chart.yaml" >&2
@@ -109,7 +139,9 @@ EOF
   # signal for "all platform HRs have been emitted" without hard-coding the
   # expected list, so the 5s pad lets a few late-arrivals join the snapshot.
   sleep 5
-  kubectl get hr -A | awk 'NR>1 {print "kubectl wait --timeout=15m --for=condition=ready -n "$1" hr/"$2" &"} END {print "wait"}' | sh -ex
+  # Pacing only: names every HR that timed out in the trace; the authoritative
+  # gate re-lists below, covering HRs created after this snapshot (#2822).
+  kubectl wait hr --all -A --timeout=15m --for=condition=ready || true
 
   echo "Waiting for post-install-prep to complete"
   if ! wait $POST_PREP_PID; then
@@ -119,10 +151,20 @@ EOF
   fi
   cat /tmp/post-install-prep.log
 
-  # Fail the test if any HelmRelease is not Ready
-  if kubectl get hr -A | grep -v " True " | grep -v NAME; then
-    kubectl get hr -A
+  # Fail the test if any HelmRelease is not Ready. Wait again on a fresh
+  # listing so HelmReleases created after the snapshot above are gated too;
+  # the window absorbs momentary Unknown flaps from drift reconciles.
+  if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
+    kubectl get hr -A || true
+    # kubectl's STATUS column truncates long messages; dump the full Ready
+    # condition per non-ready HR so the real error (e.g. a rejected CRD) is
+    # visible in the test output instead of only inside the cozyreport.
+    kubectl get hr -A --no-headers | awk '$4 != "True"' | while read -r ns name _; do
+      echo "--- Non-ready HelmRelease: $ns/$name" >&2
+      kubectl get hr -n "$ns" "$name" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' >&2 || true
+    done
     echo "Some HelmReleases failed to reconcile" >&2
+    exit 1
   fi
 }
 

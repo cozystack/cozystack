@@ -1,0 +1,84 @@
+suite: ingress proxyProtocol wiring
+templates:
+  - templates/nginx-ingress.yaml
+release:
+  name: ingress
+tests:
+  - it: emits PROXY-protocol nginx config keys when proxyProtocol is set per-app
+    set:
+      _cluster: {}
+      proxyProtocol: true
+    release:
+      namespace: tenant-foo
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.use-proxy-protocol
+          value: "true"
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.real-ip-header
+          value: proxy_protocol
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.enable-real-ip
+          value: "true"
+      # use-forwarded-headers is deliberately NOT set: without a paired
+      # proxy-real-ip-cidr it lets clients spoof X-Forwarded-For, and the
+      # PROXY-protocol frame is already the source of truth for $remote_addr.
+      - notExists:
+          path: spec.values.ingress-nginx.controller.config.use-forwarded-headers
+
+  - it: enables PROXY-protocol on the host ingress via the _cluster switch
+    set:
+      _cluster:
+        proxy-protocol: "true"
+    release:
+      namespace: tenant-root
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.use-proxy-protocol
+          value: "true"
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.real-ip-header
+          value: proxy_protocol
+      - equal:
+          path: spec.values.ingress-nginx.controller.config.enable-real-ip
+          value: "true"
+
+  - it: leaves a non-host ingress untouched by the host _cluster switch
+    set:
+      _cluster:
+        proxy-protocol: "true"
+    release:
+      namespace: tenant-foo
+    asserts:
+      - notExists:
+          path: spec.values.ingress-nginx.controller.config
+
+  - it: emits no config block when no proxy/whitelist features are enabled
+    set:
+      _cluster: {}
+    release:
+      namespace: tenant-root
+    asserts:
+      - notExists:
+          path: spec.values.ingress-nginx.controller.config
+
+  - it: refuses the per-app proxyProtocol value on the external-facing (host) ingress
+    set:
+      _cluster: {}
+      proxyProtocol: true
+    release:
+      namespace: tenant-root
+    asserts:
+      - failedTemplate:
+          errorMessage: "On the host (external-facing) ingress, enable PROXY-protocol via publishing.proxyProtocol, not the per-app proxyProtocol value — the platform switch pairs it with ouroboros hairpin handling and the disable-hazard guard"
+
+  - it: refuses cloudflareProxy and proxyProtocol together
+    set:
+      _cluster: {}
+      cloudflareProxy: true
+      proxyProtocol: true
+    release:
+      namespace: tenant-foo
+    asserts:
+      - failedTemplate:
+          errorMessage: "cloudflareProxy and proxyProtocol are mutually exclusive: Cloudflare's HTTP proxy does not send PROXY-protocol frames, and the cloudflareProxy server-snippet overrides real-ip-header proxy_protocol"

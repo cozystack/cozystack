@@ -20,6 +20,11 @@
       "type": "boolean",
       "default": false
     },
+    "proxyProtocol": {
+      "description": "Enable PROXY-protocol (use-proxy-protocol) on a tenant Ingress application. The upstream L4 load balancer in front of ingress-nginx MUST already inject PROXY-protocol v1 headers, otherwise all traffic to this ingress breaks — including in-cluster and direct-Service (hairpin) access to its public hostnames. Mutually exclusive with cloudflareProxy. For the host (external-facing) ingress use the platform-level publishing.proxyProtocol switch instead; the per-app value is rejected there because it would bypass the ouroboros hairpin handling and the disable-hazard guard.",
+      "type": "boolean",
+      "default": false
+    },
     "resources": {
       "description": "Explicit CPU and memory configuration for each ingress-nginx replica. When omitted, the preset defined in `resourcesPreset` is applied.",
       "type": "object",

@@ -97,6 +97,7 @@
 {{- $host := .Values._namespace.host }}
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -256,14 +257,22 @@ spec:
             nginx.ingress.kubernetes.io/client-body-timeout: "3600"
             nginx.ingress.kubernetes.io/client-header-timeout: "120"
             nginx.ingress.kubernetes.io/service-upstream: "true"
+            {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+            {{- if not $wildcardSecret }}
             {{- if eq $solver "http01" }}
             acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
             {{- end }}
             cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+            {{- end }}
           tls:
             - hosts:
               - {{ .Values.host | default (printf "s3.%s" $host) }}
+              {{- /* Operator wildcard mode: no per-host secret — ingress-nginx
+                     falls back to the default SSL certificate while the tls
+                     section keeps the HTTP-to-HTTPS redirect enforced. */}}
+              {{- if not $wildcardSecret }}
               secretName: {{ .Release.Name }}-s3-ingress-tls
+              {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.s3.resourcesPreset .Values.s3.resources $) | nindent 10 }}
       cosi:
         driverName: "{{ .Release.Namespace }}.seaweedfs.objectstorage.k8s.io"
