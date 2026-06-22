@@ -145,6 +145,50 @@ tests:
           path: spec.ingressClassName
           value: cozy-private
 
+  - it: admin Ingress drops per-host TLS in wildcard mode on the shared ingress
+    template: templates/ingress.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+        wildcard-secret-name: cozystack-wildcard
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-admin-ingress
+      # no per-host secret — relies on the operator default SSL cert
+      - notExists:
+          path: spec.tls[0].secretName
+      # no ACME / cluster-issuer annotations in wildcard mode
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - notExists:
+          path: metadata.annotations["acme.cert-manager.io/http01-ingress-ingressclassname"]
+
+  - it: admin Ingress keeps its own cert on a separate ingress even in wildcard mode
+    template: templates/ingress.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+        wildcard-secret-name: cozystack-wildcard
+        expose-ingress-admin: cozy-private
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-admin-ingress
+      # separate ingress has no wildcard default cert -> per-host secret stays
+      - equal:
+          path: spec.tls[0].secretName
+          value: keycloak-admin-tls
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
   # --- HTTPRoute (gateway enabled) ---
   - it: renders one HTTPRoute serving all paths when adminHost is empty
     template: templates/httproute.yaml

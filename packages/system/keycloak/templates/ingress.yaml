@@ -7,6 +7,12 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- $adminHost := .Values.ingress.adminHost }}
+{{- /* Wildcard mode applies to the admin Ingress only when it shares the
+       public ingressClass: the operator's default SSL cert covers it too, so
+       skip per-host ACME like the login Ingress. When admin is moved onto a
+       separate (e.g. private) ingress, that controller has no wildcard default
+       cert, so keep its own per-host certificate regardless of wildcard mode. */}}
+{{- $adminWildcard := and $wildcardSecret (eq $adminExposeIngress $exposeIngress) }}
 {{- if ne $gatewayEnabled "true" }}
 
 apiVersion: networking.k8s.io/v1
@@ -70,8 +76,9 @@ metadata:
   name: keycloak-admin-ingress
   {{- with .Values.ingress.annotations }}
   annotations:
-    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
-    {{- if not $wildcardSecret }}
+    {{- /* Operator wildcard mode (shared public ingress): nginx serves the
+           default SSL cert, so skip per-host ACME. */}}
+    {{- if not $adminWildcard }}
     {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-ingressclassname: {{ $adminExposeIngress }}
     {{- end }}
@@ -87,10 +94,9 @@ spec:
   tls:
   - hosts:
       - {{ $adminHost }}
-    {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
-           back to the default SSL certificate while the tls section keeps
-           the HTTP-to-HTTPS redirect enforced. */}}
-    {{- if not $wildcardSecret }}
+    {{- /* Wildcard mode on the shared public ingress: rely on the default SSL
+           cert, no per-host secret. A separate admin ingress keeps its own. */}}
+    {{- if not $adminWildcard }}
     secretName: keycloak-admin-tls
     {{- end }}
   rules:
