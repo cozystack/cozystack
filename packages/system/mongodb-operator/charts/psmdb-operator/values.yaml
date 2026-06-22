@@ -3,10 +3,11 @@
 # Declare variables to be passed into your templates.
 
 replicaCount: 1
+# revisionHistoryLimit: 10
 
 image:
   repository: percona/percona-server-mongodb-operator
-  tag: 1.21.1
+  tag: 1.22.0
   pullPolicy: IfNotPresent
 
 # disableTelemetry: according to
@@ -16,7 +17,7 @@ image:
 disableTelemetry: false
 
 # set if you want to specify a namespace to watch
-# defaults to `.Release.namespace` if left blank
+# defaults to the operator namespace (`namespaceOverride` or `.Release.Namespace`) if left blank
 # multiple namespaces can be specified and separated by comma
 # watchNamespace:
 # set if you want that watched namespaces are created by helm
@@ -72,6 +73,7 @@ securityContext: {}
 
 imagePullSecrets: []
 nameOverride: ""
+namespaceOverride: ""
 fullnameOverride: ""
 
 env:
@@ -98,6 +100,6 @@ affinity: {}
 logStructured: false
 logLevel: "INFO"
 
-# maxConcurrentReconciles controls the number of concurrent workers 
+# maxConcurrentReconciles controls the number of concurrent workers
 # that can reconcile resources in Percona Server for MongoDB clusters in parallel.
 maxConcurrentReconciles: "1"
