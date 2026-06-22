@@ -1,0 +1,93 @@
+suite: apps.yaml ACME wildcard issuance wiring
+
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# WS2 / #2400: on the default ingress-nginx path (gateway.enabled=false) a
+# DNS-01 solver lets the platform issue ONE shared wildcard certificate
+# (*.<root-host> + <root-host>) instead of minting a per-host ACME cert
+# for every system service. It is OPT-IN (publishing.certificates.wildcard,
+# default false): a single-label wildcard does not cover custom service
+# hosts outside *.<root-host>, so leaving it off keeps the safe per-host
+# behavior and never switches a dns01 cluster silently on upgrade.
+# apps.yaml computes the effective _cluster.wildcard-secret-name and an
+# _cluster.wildcard-issue signal the publishing ingress package reads to
+# render the Certificate. Operator-provided (BYO) wildcard names always
+# win and never trigger issuance; http01 cannot issue wildcards; the
+# Gateway API path issues its own wildcard via the controller, so issuance
+# here is gated to gateway.enabled=false.
+
+tests:
+  - it: does not issue a wildcard by default (http01)
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-secret-name:\s*""'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-issue:\s*"false"'
+
+  - it: does not auto-issue on dns01 unless explicitly opted in
+    set:
+      publishing.certificates.solver: dns01
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-secret-name:\s*""'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-issue:\s*"false"'
+
+  - it: issues a shared wildcard when opted in on the dns01 ingress path
+    set:
+      publishing.certificates.solver: dns01
+      publishing.certificates.wildcard: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-secret-name:\s*"cozystack-wildcard-tls"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-issue:\s*"true"'
+
+  - it: does not auto-issue on the ingress path when Gateway API is enabled
+    set:
+      publishing.certificates.solver: dns01
+      publishing.certificates.wildcard: true
+      gateway.enabled: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-secret-name:\s*""'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-issue:\s*"false"'
+
+  - it: operator-provided wildcard secret wins and never triggers issuance
+    set:
+      publishing.certificates.solver: dns01
+      publishing.certificates.wildcard: true
+      publishing.certificates.wildcardSecretName: byo-wildcard-tls
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-secret-name:\s*"byo-wildcard-tls"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-issue:\s*"false"'
+
+  - it: http01 never issues a wildcard even when opted in
+    set:
+      publishing.certificates.solver: http01
+      publishing.certificates.wildcard: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-secret-name:\s*""'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'wildcard-issue:\s*"false"'
