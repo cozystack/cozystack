@@ -1,0 +1,216 @@
+# ./tests/tls_cacert_test.yaml
+suite: tls caCertSecret helper
+
+templates:
+  - templates/tests/tls-cacert.yaml
+  - templates/tests/tls-cacert-params.yaml
+  - templates/tests/tls-cacert-nondict.yaml
+
+release:
+  name: myrelease
+  namespace: tenant-acme
+  revision: 1
+  isUpgrade: false
+
+tests:
+  - it: renders an Opaque Secret carrying only ca.crt
+    templates:
+      - templates/tests/tls-cacert.yaml
+    values:
+      - tls_cacert_values.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Secret
+      - equal:
+          path: apiVersion
+          value: v1
+      - equal:
+          path: metadata.name
+          value: myrelease-ca-cert
+      - equal:
+          path: metadata.namespace
+          value: tenant-acme
+      - equal:
+          path: type
+          value: Opaque
+      - isNotNullOrEmpty:
+          path: stringData["ca.crt"]
+      # The trust anchor must never carry private key material. The helper
+      # only ever emits stringData, so these are the meaningful assertions.
+      - notExists:
+          path: stringData["tls.key"]
+      - notExists:
+          path: stringData["tls.crt"]
+
+  - it: carries the tenantresource label so it is delivered via core.cozystack.io/tenantsecrets
+    templates:
+      - templates/tests/tls-cacert.yaml
+    values:
+      - tls_cacert_values.yaml
+    asserts:
+      # This label is the entire RBAC delivery mechanism: the tenantsecret
+      # registry surfaces only Secrets bearing it, and the base tenant roles
+      # grant read on core.cozystack.io/tenantsecrets (not raw core secrets).
+      - equal:
+          path: metadata.labels["internal.cozystack.io/tenantresource"]
+          value: "true"
+
+  - it: merges caller-supplied labels and annotations
+    templates:
+      - templates/tests/tls-cacert.yaml
+    values:
+      - tls_cacert_values.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["app.kubernetes.io/instance"]
+          value: myrelease
+      - equal:
+          path: metadata.annotations["cozystack.io/example"]
+          value: "yes"
+
+  - it: keeps the mandatory tenantresource label even when a caller tries to override it
+    templates:
+      - templates/tests/tls-cacert.yaml
+    values:
+      - tls_cacert_values.yaml
+    set:
+      # A caller (or a compromised values override) attempting to opt the object
+      # out of tenant delivery — or worse, flip the label onto a key-bearing
+      # Secret — must not win. The helper's mandatory label always overrides.
+      callerLabels:
+        internal.cozystack.io/tenantresource: "false"
+    asserts:
+      - equal:
+          path: metadata.labels["internal.cozystack.io/tenantresource"]
+          value: "true"
+
+  - it: fails closed when caCert is empty
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert is required and must be a non-empty PEM"
+
+  - it: refuses to publish private key material to tenants
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN EC PRIVATE KEY-----
+        MHcCAQEEexampleprivatekeymaterialthatmustneverreachtenants00000000
+        -----END EC PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+
+  - it: refuses private key material regardless of PEM header casing
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      # RFC 7468 mandates uppercase headers, but the guard must also catch
+      # malformed / hand-pasted input where the casing differs.
+      caCert: |
+        -----begin private key-----
+        MIIExampleLowercaseHeaderPrivateKeyMustStillBeRejected0000000000
+        -----end private key-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+
+  - it: refuses a certificate bundle that also carries a private key block
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      # The realistic accident: a full keypair pasted into the CA field. The
+      # guard must scan the entire blob, not merely reject key-only input — a
+      # valid leading certificate block must not let a trailing private key
+      # slip through to a tenant-readable trust anchor.
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        -----END CERTIFICATE-----
+        -----BEGIN PRIVATE KEY-----
+        MIIExamplePrivateKeyThatMustNeverReachTenantsViaCABundle00000000
+        -----END PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+
+  - it: rejects input that is not a PEM certificate
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        this is not a certificate at all
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a PEM certificate (BEGIN CERTIFICATE)"
+
+  - it: accepts a certificate even when the literal text PRIVATE KEY appears outside a PEM header
+    templates:
+      - templates/tests/tls-cacert-params.yaml
+    set:
+      useParams: true
+      name: my-ca-cert
+      namespace: tenant-acme
+      # "PRIVATE KEY" here is in a friendlyName line, not a PEM header — a free
+      # substring guard would wrongly reject this valid, key-free certificate.
+      caCert: |
+        Bag Attributes: friendlyName=acme PRIVATE KEY authority
+        -----BEGIN CERTIFICATE-----
+        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        -----END CERTIFICATE-----
+    asserts:
+      - isKind:
+          of: Secret
+      - isNotNullOrEmpty:
+          path: stringData["ca.crt"]
+
+  - it: fails closed when name is empty
+    templates:
+      - templates/tests/tls-cacert-params.yaml
+    set:
+      useParams: true
+      name: ""
+      namespace: tenant-acme
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: name is required"
+
+  - it: omits metadata.namespace when namespace is not supplied
+    templates:
+      - templates/tests/tls-cacert-params.yaml
+    set:
+      useParams: true
+      name: my-ca-cert
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        -----END CERTIFICATE-----
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-ca-cert
+      - notExists:
+          path: metadata.namespace
+
+  - it: fails closed when invoked with a non-dict argument
+    templates:
+      - templates/tests/tls-cacert-nondict.yaml
+    # A valid caCert keeps the other fixtures rendering cleanly so the only
+    # failure is the non-dict guard on this fixture.
+    values:
+      - tls_cacert_values.yaml
+    set:
+      nonDict: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: expected a single dict argument"

@@ -1,0 +1,7 @@
+{{ include "cozy-lib.tls.caCertSecret" (dict
+     "name" (printf "%s-ca-cert" .Release.Name)
+     "namespace" .Release.Namespace
+     "caCert" .Values.caCert
+     "labels" (merge (dict "app.kubernetes.io/instance" .Release.Name) (default (dict) .Values.callerLabels))
+     "annotations" (dict "cozystack.io/example" "yes")
+) }}

@@ -1,0 +1,4 @@
+caCert: |
+  -----BEGIN CERTIFICATE-----
+  MIIBExampleCACertificateOnlyNoPrivateKeyMaterialPresentHere00000000
+  -----END CERTIFICATE-----
