@@ -1,0 +1,143 @@
+name: Build parity (pre-cutover)
+
+# TEMPORARY — remove after #2937 parity is confirmed.
+#
+# One-time, manually-triggered gate that proves the parallel matrix build
+# reproduces the legacy serial `make build`. It builds BOTH ways on the same
+# commit and compares the set of tracked files each one patches.
+#
+# Why compare the file SET and not the patch bytes: image digests are not
+# guaranteed reproducible across two independent builds, so the digest VALUES in
+# pr.patch legitimately differ run-to-run. What must match is *which* files (and
+# therefore which packages) get patched — a missed package shows up as a missing
+# file, a mis-sequenced installer or a failed fragment shows up as a difference.
+# The full patches are uploaded as artifacts for manual inspection too.
+#
+# Also probes whether the build registry supports OCI referrers/attestations,
+# which gates turning on SBOM (--sbom=true) in the PR matrix.
+
+on:
+  workflow_dispatch:
+
+env:
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  parity:
+    name: Matrix vs legacy parity
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 90
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -s https://fluxcd.io/install.sh | sudo bash
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Set up Buildx (docker-container driver)
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      # ── Legacy: serial `make build` (talos + installer included) ──
+      - name: Legacy serial build
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          IMAGE_TAG: parity
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+        run: make build
+
+      - name: Record legacy result
+        run: |
+          mkdir -p _out/parity
+          git diff HEAD > _out/parity/legacy.patch
+          git diff HEAD --name-only | sort > _out/parity/legacy.files
+          echo "Legacy patched files:"; cat _out/parity/legacy.files
+          git checkout -- .
+
+      # ── Matrix: the exact decomposition the PR workflow runs ──
+      - name: Matrix decomposition build
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          IMAGE_TAG: parity
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+        run: |
+          set -e
+          # Per-package matrix units, then the dedicated talos + installer legs,
+          # mirroring plan -> build -> build-talos -> finalize ordering.
+          for pkg in $(hack/build-matrix.sh | jq -r '.[]'); do
+            echo "::group::build $pkg"
+            make -C "$pkg" image
+            echo "::endgroup::"
+          done
+          make -C packages/core/talos image
+          make -C packages/core/installer image
+
+      - name: Record matrix result
+        run: |
+          git diff HEAD > _out/parity/matrix.patch
+          git diff HEAD --name-only | sort > _out/parity/matrix.files
+
+      - name: Compare patched file sets
+        run: |
+          echo "── diff legacy vs matrix (patched file set) ──"
+          if diff -u _out/parity/legacy.files _out/parity/matrix.files; then
+            echo "✅ PARITY: matrix patches the same files as legacy make build"
+          else
+            echo "❌ PARITY MISMATCH: the matrix and legacy builds touch different files"
+            exit 1
+          fi
+
+      - name: Upload parity patches
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parity-patches
+          path: _out/parity/*.patch
+
+      # ── SBOM gating probe: does the registry accept referrers/attestations? ──
+      - name: Probe OCIR referrers/attestation support (SBOM gate)
+        continue-on-error: true
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+        run: |
+          printf 'FROM scratch\nCOPY README.md /README.md\n' > /tmp/sbom-probe.Dockerfile
+          if docker buildx build -f /tmp/sbom-probe.Dockerfile . \
+               --builder="$BUILDER" --provenance=false --sbom=true --push \
+               --tag "$REGISTRY/sbom-probe:parity"; then
+            echo "✅ Registry accepted an SBOM attestation — SBOM=1 can be enabled in the PR matrix."
+          else
+            echo "⚠️ Registry rejected the SBOM attestation — keep SBOM off and deliver SBOMs as artifacts instead."
+          fi
