@@ -142,6 +142,25 @@
       "type": "string",
       "default": ""
     },
+    "firmware": {
+      "description": "Firmware and boot configuration (UEFI/BIOS selection, Secure Boot, persistent EFI NVRAM).",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "bootloader": {
+          "description": "Bootloader to boot the VM with: \"uefi\" (OVMF) or \"bios\" (SeaBIOS). Empty inherits the instanceProfile default.",
+          "type": "string"
+        },
+        "efiPersistent": {
+          "description": "Persist EFI NVRAM (e.g. enrolled Secure Boot keys, such as an updated Microsoft UEFI CA) across reboots. Only applies when bootloader is \"uefi\". On default RWO storage the VM is node-pinned (no live-migration).",
+          "type": "boolean"
+        },
+        "secureBoot": {
+          "description": "Enable UEFI Secure Boot. Only applies when bootloader is \"uefi\".",
+          "type": "boolean"
+        }
+      }
+    },
     "resources": {
       "description": "Resource configuration for the virtual machine.",
       "type": "object",
