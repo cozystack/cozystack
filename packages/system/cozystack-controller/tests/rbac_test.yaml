@@ -1,0 +1,29 @@
+suite: cozystack-controller ClusterRole grants the wildcard-replication secrets write
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: cozystack-controller
+  namespace: cozy-system
+
+# The WildcardSecret reconciler replicates the operator wildcard TLS Secret
+# into tenant namespaces, so the platform controller's ServiceAccount needs
+# Secret write verbs (read was already covered by the catch-all rule). This
+# rule gates the whole feature, so pin it. It scopes the platform
+# controller's own SA only — it does not widen any tenant's RBAC.
+
+tests:
+  - it: grants secrets get/list/watch/create/update/patch/delete on the ClusterRole
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - equal:
+          path: metadata.name
+          value: cozystack-controller
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

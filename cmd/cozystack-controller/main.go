@@ -26,10 +26,13 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -43,6 +46,7 @@ import (
 	"github.com/cozystack/cozystack/internal/controller/serviceexposure"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
+	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -176,6 +180,16 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "19a0338c.cozystack.io",
+		// Scope the Secret informer so the WildcardSecret reconciler's
+		// cluster-wide Secret watch does not cache every Secret (and its key
+		// material) in memory. Only managed wildcard replicas and the values
+		// channel are cached; no other reconciler in this manager reads
+		// Secrets via the cache. See wildcardsecret.SecretCacheByObject.
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				&corev1.Secret{}: wildcardsecret.SecretCacheByObject(),
+			},
+		},
 		// LeaderElectionReleaseOnCancel defines if the leader should step down voluntarily
 		// when the Manager ends. This requires the binary to immediately end when the
 		// Manager is stopped, otherwise, this setting is unsafe. Setting this significantly
@@ -256,6 +270,16 @@ func main() {
 		BufferPercent: quotaBufferPercent,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
+		os.Exit(1)
+	}
+
+	if err = (&wildcardsecret.Reconciler{
+		Client:   mgr.GetClient(),
+		Reader:   mgr.GetAPIReader(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("wildcardsecret"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WildcardSecret")
 		os.Exit(1)
 	}
 
