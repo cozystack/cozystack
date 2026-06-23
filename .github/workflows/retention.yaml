@@ -1,0 +1,94 @@
+name: Nightly Retention
+
+# Prune old nightly release-candidates: keep the newest 14 per in-development
+# line, delete older nightly git tags and their GitHub releases. Delete-only,
+# scoped strictly to the *-nightly.* namespace — rc and stable tags are never
+# touched. Dry-run by default; flip the input (or the RETENTION_APPLY repo
+# variable) to actually delete.
+
+on:
+  schedule:
+    - cron: '30 4 * * *'   # daily 04:30 UTC, after nightly-rc
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually delete (false = dry-run, the default)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  KEEP: '14'
+
+concurrency:
+  group: nightly-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune old nightlies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # workflow_dispatch input wins; otherwise the repo variable; else dry-run.
+          APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
+        run: |
+          set -eu
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
+
+          if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
+
+          # Group nightly tags by their version prefix (the line), newest last.
+          lines="$(git tag --list 'v*-nightly.*' \
+            | sed -E 's/^(v[0-9]+\.[0-9]+\.[0-9]+)-nightly\..*$/\1/' | sort -u)"
+
+          for line in $lines; do
+            [ -n "$line" ] || continue
+            # Oldest -> newest by the YYYYMMDD(.N) suffix (lexical sort works).
+            tags="$(git tag --list "${line}-nightly.*" | sort)"
+            total="$(printf '%s\n' "$tags" | grep -c . || true)"
+            drop=$((total - KEEP))
+            echo "── ${line}: ${total} nightlies, keep ${KEEP}, drop ${drop:-0}"
+            [ "${drop:-0}" -gt 0 ] || continue
+
+            printf '%s\n' "$tags" | head -n "$drop" | while IFS= read -r tag; do
+              [ -n "$tag" ] || continue
+              if [ "$APPLY" = "true" ]; then
+                echo "  ✗ deleting ${tag} (tag + release)"
+                # Release first (if any), then the git tag.
+                gh release delete "$tag" --yes --cleanup-tag 2>/dev/null \
+                  || git push origin ":refs/tags/${tag}" 2>/dev/null || true
+              else
+                echo "  • would delete ${tag}"
+              fi
+            done
+          done
+
+          # TODO(registry): prune the matching *-nightly.* image tags from OCIR.
+          # OCIR has no GHCR-style delete API parity; needs the OCI registry CLI
+          # and is tracked separately. Git tags + releases are the cost driver.
+          echo "Done."
