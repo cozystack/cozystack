@@ -43,10 +43,10 @@ COZYSTACK_VERSION = $(patsubst v%,%,$(shell git describe --tags --match 'v*'))
 
 # SBOM=1 attaches a CycloneDX SBOM as a buildx build attestation (--sbom=true).
 # Requires the docker-container buildx driver and registry referrers/attestation
-# support. Kept OFF by default until the OCIR referrers probe in
-# build-parity.yaml confirms support — otherwise the attestation push fails the
-# build. (NB: the dashboard package's bespoke buildx calls don't read
-# BUILDX_ARGS, so they are not yet SBOM-covered — follow-up.) See #2937.
+# support. Kept OFF by default until an OCIR referrers/attestation probe confirms
+# support — otherwise the attestation push fails the build. (NB: the dashboard
+# package's bespoke buildx calls don't read BUILDX_ARGS, so they are not yet
+# SBOM-covered — follow-up.) See #2937.
 SBOM ?= 0
 
 BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
