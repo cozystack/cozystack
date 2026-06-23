@@ -19,7 +19,7 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
     openbao-internal: "true"
-{{ template "openbao.service.annotations" .}}
+{{- template "openbao.service.headless.annotations" .}}
 spec:
   {{- if (semverCompare ">= 1.23-0" .Capabilities.KubeVersion.Version) }}
   {{- if .Values.server.service.ipFamilyPolicy }}
