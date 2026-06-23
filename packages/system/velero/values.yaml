@@ -1,6 +1,8 @@
 velero:
-  # Disable CRD upgrade job - CRDs are installed as part of helm chart
-  # The upgrade job has issues with kubectl image compatibility
+  # Disable the upgrade-crds Job: CRDs ship via the chart's crds/ directory, so
+  # the Job is redundant. (The old kubectl-image-compatibility rationale is
+  # obsolete in velero 12.x — the Job now runs the velero image natively, not a
+  # kubectl one — but it stays disabled because cozystack manages CRDs via crds/.)
   upgradeCRDs: false
   initContainers:
     - name: velero-plugin-for-aws

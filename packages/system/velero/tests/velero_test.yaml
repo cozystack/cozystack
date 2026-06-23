@@ -26,9 +26,11 @@ tests:
           path: spec.template.spec.initContainers[1].image
           value: quay.io/kubevirt/kubevirt-velero-plugin:v0.9.0
 
-  # Cozystack disables the upgrade-crds Job (upgradeCRDs: false) because the
-  # job has kubectl-image compatibility issues; CRDs ship via the chart's
-  # crds/ directory instead. Pin that invariant — it silently regressed once.
+  # Cozystack disables the upgrade-crds Job (upgradeCRDs: false) because CRDs
+  # ship via the chart's crds/ directory, making the Job redundant. (The old
+  # kubectl-image-compatibility rationale is obsolete in velero 12.x, where the
+  # Job now runs the velero image natively.) Pin that invariant — it silently
+  # regressed once.
   - it: does not emit the upgrade-crds Job when upgradeCRDs is disabled
     template: charts/velero/templates/upgrade-crds/upgrade-crds.yaml
     asserts:
