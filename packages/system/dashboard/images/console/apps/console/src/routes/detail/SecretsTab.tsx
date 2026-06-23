@@ -96,8 +96,8 @@ function SecretRow({
         </button>
         <button
           type="button"
-          disabled={!revealed}
-          onClick={() => navigator.clipboard.writeText(fullValue)}
+          disabled={!revealed || !navigator.clipboard}
+          onClick={() => navigator.clipboard?.writeText(fullValue)}
           className="rounded p-1 text-slate-500 hover:bg-slate-100 disabled:opacity-30"
           title="Copy"
         >
