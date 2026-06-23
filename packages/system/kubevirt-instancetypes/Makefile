@@ -16,6 +16,12 @@ update:
 	mkdir templates
 	kustomize build https://github.com/kubevirt/common-instancetypes/preferences?ref=$(COMMON_INSTANCETYPES_REF) > templates/preferences.yaml
 	yq -i 'select(.kind != "VirtualMachinePreference")' templates/preferences.yaml
+	# TEMPORARY (see #3005): drop persistent EFI/TPM state. With persistence on,
+	# KubeVirt creates a backend-storage PVC that is RWO on the default StorageClass,
+	# which pins the VM to its node and blocks live-migration / drain. Use `del` (not
+	# `sed -d`) so an emptied preferredTPM stays `{}` rather than null, which the
+	# KubeVirt v1.8 CRD structural schema rejects. Revert once vm-state can request RWX.
+	yq -i 'del(.spec.firmware.preferredEfi.persistent) | del(.spec.devices.preferredTPM.persistent)' templates/preferences.yaml
 	kustomize build https://github.com/kubevirt/common-instancetypes/instancetypes?ref=$(COMMON_INSTANCETYPES_REF) > templates/instancetypes.yaml
 	yq -i 'select(.kind != "VirtualMachineInstancetype")' templates/instancetypes.yaml
 	# Re-append Cozystack-local instancetypes the pinned catalog no longer ships
