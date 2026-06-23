@@ -30,7 +30,7 @@ export function ExternalIpsPage() {
       plural: "services",
       namespace: tenantNamespace ?? undefined,
     },
-    { fieldSelector: "spec.type=LoadBalancer" },
+    { fieldSelector: "spec.type=LoadBalancer", enabled: !!tenantNamespace },
   )
 
   const items = data?.items ?? []
