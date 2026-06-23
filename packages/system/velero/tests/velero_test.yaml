@@ -1,0 +1,38 @@
+suite: cozy-velero chart rendering invariants
+release:
+  name: velero
+  namespace: cozy-velero
+tests:
+  - it: renders the velero server Deployment on the pinned upstream image
+    template: charts/velero/templates/deployment.yaml
+    documentSelector:
+      path: metadata.name
+      value: velero
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/velero/velero:v1.18.1
+
+  - it: pins the backup-plugin initContainers to velero-1.18-compatible releases
+    template: charts/velero/templates/deployment.yaml
+    documentSelector:
+      path: metadata.name
+      value: velero
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: velero/velero-plugin-for-aws:v1.14.1
+      - equal:
+          path: spec.template.spec.initContainers[1].image
+          value: quay.io/kubevirt/kubevirt-velero-plugin:v0.9.0
+
+  # Cozystack disables the upgrade-crds Job (upgradeCRDs: false) because CRDs
+  # ship via the chart's crds/ directory, making the Job redundant. (The old
+  # kubectl-image-compatibility rationale is obsolete in velero 12.x, where the
+  # Job now runs the velero image natively.) Pin that invariant — it silently
+  # regressed once.
+  - it: does not emit the upgrade-crds Job when upgradeCRDs is disabled
+    template: charts/velero/templates/upgrade-crds/upgrade-crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -12,6 +12,7 @@ metadata:
     app.kubernetes.io/name: {{ include "velero.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
     helm.sh/chart: {{ include "velero.chart" . }}
     {{- with .Values.metrics.service.labels }}
       {{- toYaml . | nindent 4 }}

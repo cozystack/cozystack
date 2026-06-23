@@ -35,8 +35,7 @@ spec:
       jsonPath: .status.progress.totalBytes
       name: Total Bytes
       type: integer
-    - description: Name of the Backup Storage Location where the backup data is
-        stored
+    - description: Name of the Backup Storage Location where the backup data is stored
       jsonPath: .spec.backupStorageLocation
       name: Storage Location
       type: string
@@ -96,8 +95,7 @@ spec:
                   If DataMover is "" or "velero", the built-in data mover will be used.
                 type: string
               nodeOS:
-                description: NodeOS is OS of the node where the DataDownload is
-                  processed.
+                description: NodeOS is OS of the node where the DataDownload is processed.
                 enum:
                 - auto
                 - linux
@@ -109,9 +107,13 @@ spec:
                   before returning error as timeout.
                 type: string
               snapshotID:
-                description: SnapshotID is the ID of the Velero backup snapshot
-                  to be restored from.
+                description: SnapshotID is the ID of the Velero backup snapshot to
+                  be restored from.
                 type: string
+              snapshotSize:
+                description: SnapshotSize is the logical size in Bytes of the snapshot.
+                format: int64
+                type: integer
               sourceNamespace:
                 description: |-
                   SourceNamespace is the original namespace where the volume is backed up from.
@@ -125,8 +127,8 @@ spec:
                     description: Namespace is the target namespace
                     type: string
                   pv:
-                    description: PV is the name of the target PV that is created
-                      by Velero restore
+                    description: PV is the name of the target PV that is created by
+                      Velero restore
                     type: string
                   pvc:
                     description: PVC is the name of the target PVC that is created
@@ -169,8 +171,7 @@ spec:
                 description: Message is a message about the DataDownload's status.
                 type: string
               node:
-                description: Node is name of the node where the DataDownload is
-                  processed.
+                description: Node is name of the node where the DataDownload is processed.
                 type: string
               phase:
                 description: Phase is the current state of the DataDownload.

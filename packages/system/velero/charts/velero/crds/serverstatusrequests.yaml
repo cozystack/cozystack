@@ -55,8 +55,8 @@ spec:
                 - Processed
                 type: string
               plugins:
-                description: Plugins list information about the plugins running
-                  on the Velero server
+                description: Plugins list information about the plugins running on
+                  the Velero server
                 items:
                   description: PluginInfo contains attributes of a Velero plugin
                   properties:
