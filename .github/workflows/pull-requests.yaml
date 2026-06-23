@@ -237,11 +237,16 @@ jobs:
   # already be applied here. e2e consumes the resulting pr.patch unchanged.
   finalize:
     name: Finalize (merge patches + installer)
-    needs: ["plan", "build", "build-talos"]
+    # Depends on `checks` too: gating finalize on unit/controller tests cascades
+    # to e2e (which needs finalize), so a red unit test skips the expensive
+    # install+e2e path instead of wasting ~1h on it. Restores the gating the old
+    # in-build-job tests gave, without re-coupling the cheap parallel builds.
+    needs: ["plan", "checks", "build", "build-talos"]
     if: |
       always()
       && needs.plan.outputs.code == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
+      && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && needs.build-talos.result == 'success'
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
