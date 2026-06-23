@@ -102,5 +102,4 @@ These are being explored on branches and may become conventions; do not assume t
 
 - **BATS → Kyverno Chainsaw migration** — declarative asserts replace the `until … wait` boilerplate, with automatic events/describe/podLogs capture. Imperative suites (openbao unseal, vminstance, gateway, the kubernetes cluster tests) stay as script steps. Gotcha: Chainsaw v0.2.15 needs condition assertions in **filter-as-list** form `(conditions[?type == 'Ready'])`; the `(...)[0]` indexed form throws "field not found".
 - **Cilium orphaned-endpoint self-heal** — an interim CI watchdog that evicts a single confirmed-orphan Cilium endpoint ("IP already in use", cilium/cilium#38313). Explicitly a mitigation to remove once a fixed Cilium ships; it refuses to touch an endpoint backing a live pod so real duplicate-IP bugs stay visible.
-- **Pin the e2e management cluster Kubernetes version** to dodge the kube-controller-manager ValidatingAdmissionPolicy type-checker panic on `additionalProperties: true` schemas (kubernetes/kubernetes#135155).
 - **Cluster state snapshot/restore** between test groups instead of reinstalling.
