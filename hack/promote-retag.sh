@@ -15,9 +15,8 @@
 # expected to be the rc's digest-vendored tree (the release-X.Y.Z-rc.N staging
 # branch). Requires: yq (mikefarah), skopeo, and a registry login already done.
 #
-# Registry-host assumption: the registry host carries no :port (true for the
-# current iad.ocir.io / ghcr.io registries), so the only ':' in a "repo:tag"
-# ref is the tag separator. Revisit the repo/tag split below if that changes.
+# The repo/tag split (ref_repo below) strips the :tag from the last path
+# component only, so registry hosts that carry a :port are preserved.
 set -eu
 
 STABLE="${1:?usage: promote-retag.sh <stable-version> [--dry-run]}"
@@ -45,7 +44,18 @@ collect_refs() {
 }
 
 # Split a "<repo>[:<tag>]@sha256:<digest>" ref into repo and digest.
-ref_repo()   { r="${1%@*}"; printf '%s' "${r%:*}"; }   # strip @digest, then :tag
+# ref_repo strips the :tag from the LAST path component only, so a registry
+# host that carries a :port (e.g. localhost:5000/cozystack/operator, with no
+# tag) keeps its port instead of being truncated to the host.
+ref_repo() {
+  r="${1%@*}"            # strip @digest
+  img="${r##*/}"         # last path component (may carry :tag)
+  if [ "$r" = "$img" ]; then
+    printf '%s' "${img%:*}"
+  else
+    printf '%s/%s' "${r%/*}" "${img%:*}"
+  fi
+}
 ref_digest() { printf '%s' "${1##*@}"; }               # sha256:...
 
 copy() {
