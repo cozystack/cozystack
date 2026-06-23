@@ -25,15 +25,17 @@ const KNOWN_KEYS = new Set(KNOWN_ROWS.map((r) => r.key))
 // Accepts count/<resource> and extended resource patterns like <resource>.<group>
 const VALID_CUSTOM_KEY = /^(?:count\/[a-z0-9]([a-z0-9._-]*[a-z0-9])?|[a-z0-9]([a-z0-9._/-]*[a-z0-9])?)$/
 
-function parseSize(val: string, units: readonly string[]): { num: string; unit: string } {
+function parseSize(val: string | number, units: readonly string[]): { num: string; unit: string } {
+  // val can arrive as a number from user-authored YAML (e.g. `cpu: 10`)
+  const valStr = String(val)
   // Match longest suffix first to avoid partial matches
   const sorted = [...units].sort((a, b) => b.length - a.length)
   for (const u of sorted) {
-    if (val.endsWith(u)) return { num: val.slice(0, -u.length), unit: u }
+    if (valStr.endsWith(u)) return { num: valStr.slice(0, -u.length), unit: u }
   }
   // Strip any trailing alphabetic chars so we don't corrupt data on save
-  const numericPart = val.replace(/[A-Za-z]+$/, "")
-  return { num: numericPart || val, unit: units[0] ?? "" }
+  const numericPart = valStr.replace(/[A-Za-z]+$/, "")
+  return { num: numericPart || valStr, unit: units[0] ?? "" }
 }
 
 function formatSize(num: string, unit: string): string {
