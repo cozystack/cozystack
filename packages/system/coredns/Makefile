@@ -10,7 +10,7 @@ update:
 	rm -rf charts
 	helm repo add cozy-coredns https://coredns.github.io/helm
 	helm repo update cozy-coredns
-	helm pull cozy-coredns/coredns --untar --untardir charts
+	helm pull cozy-coredns/coredns --untar --untardir charts --version 1.46.0
 	# Drop vendored upstream helm-unittest fixtures: they hard-code
 	# upstream defaults (test-release-coredns names, no
 	# k8sAppLabelOverride, no service.name override) and fail under

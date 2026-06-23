@@ -50,6 +50,9 @@ spec:
 {{- if .Values.customLabels }}
 {{ toYaml .Values.customLabels | indent 8 }}
 {{- end }}
+{{- if .Values.podLabels }}
+{{ toYaml .Values.podLabels | indent 8 }}
+{{- end }}
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
         {{- if .Values.isClusterService }}
@@ -66,15 +69,25 @@ spec:
       terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
       {{- end }}
       serviceAccountName: {{ template "coredns.serviceAccountName" . }}
+      {{- if eq .Values.automountServiceAccountToken false }}
+      automountServiceAccountToken: false
+      {{- end }}
       {{- if .Values.priorityClassName }}
       priorityClassName: {{ .Values.priorityClassName | quote }}
       {{- end }}
       {{- if .Values.isClusterService }}
-      dnsPolicy: Default
+      dnsPolicy: {{ .Values.deployment.dnsPolicy }}
+      {{- end }}
+      {{- if and (eq .Values.deployment.dnsPolicy "None") (not .Values.deployment.dnsConfig) }}
+      {{- fail "dnsConfig is required when dnsPolicy is set to None" }}
+      {{- end }}
+      {{- with .Values.deployment.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
       {{- end }}
       {{- if .Values.affinity }}
       affinity:
-{{ toYaml .Values.affinity | indent 8 }}
+{{ tpl (toYaml .Values.affinity) $ | indent 8 }}
       {{- end }}
       {{- if .Values.topologySpreadConstraints }}
       topologySpreadConstraints:
