@@ -51,3 +51,32 @@ tests:
           value: letsencrypt-prod
       - exists:
           path: spec.tls[0].secretName
+
+  # WS2 / #2400 child-tenant blast radius, pinned as a contract: the
+  # wildcard secret name rides _cluster, which packages/apps/tenant copies
+  # verbatim into every child tenant. A child inheriting the root ingress
+  # has nested service hosts (<svc>.<tenant>.<root-host>) that a
+  # single-label *.<root-host> does NOT cover, yet the service still drops
+  # its per-host cert and falls back to the root default certificate. This
+  # is the documented reason shared wildcard issuance is opt-in / off by
+  # default. Here _namespace.host is the child apex (alice.example.org),
+  # so the bucket host is two labels deep under the wildcard.
+  - it: nested child-tenant host drops per-host ACME when wildcard mode is active
+    set:
+      bucketName: data
+      _namespace:
+        host: alice.example.org
+        ingress: tenant-root
+        gateway: ""
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: dns01
+        wildcard-secret-name: cozystack-wildcard-tls
+    asserts:
+      - equal:
+          path: spec.rules[0].host
+          value: data.alice.example.org
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - notExists:
+          path: spec.tls[0].secretName
