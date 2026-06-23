@@ -24,6 +24,9 @@ DRY_RUN=0
 [ "${2:-}" = "--dry-run" ] && DRY_RUN=1
 
 command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1; }
+# The queries below use mikefarah syntax; reject python-yq and other variants
+# (mirrors the build-deps check in the Makefile).
+yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
 command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
 # Collect "repo@sha256:..." refs from every package values.yaml, across the
