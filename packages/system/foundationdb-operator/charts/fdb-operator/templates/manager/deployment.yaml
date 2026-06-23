@@ -71,13 +71,16 @@ spec:
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         command:
         - /manager
-        {{- if not .Values.globalMode.enabled }}
         env:
+        {{- if not .Values.globalMode.enabled }}
         - name: WATCH_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace
         {{- end }}
+        {{- with .Values.extraEnv }}
+        {{- toYaml . | nindent 8 }}
+        {{- end}}
         ports:
         - containerPort: 8080
           name: metrics
@@ -88,6 +91,9 @@ spec:
           mountPath: /var/log/fdb
         - name: fdb-binaries
           mountPath: /usr/bin/fdb
+        {{- with .Values.volumeMounts }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
         securityContext:
           {{- toYaml .Values.containerSecurityContext | nindent 10 }}
         livenessProbe:
@@ -115,3 +121,6 @@ spec:
         emptyDir: {}
       - name: fdb-binaries
         emptyDir: {}
+      {{- with .Values.volumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}

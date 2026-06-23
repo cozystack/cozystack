@@ -3,9 +3,12 @@ export NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
-	rm -rf charts
-	git clone --depth 1 --branch v2.13.0 https://github.com/FoundationDB/fdb-kubernetes-operator.git tmp-repo
+	rm -rf charts tmp-repo
+	git clone --depth 1 --branch v2.30.0 https://github.com/FoundationDB/fdb-kubernetes-operator.git tmp-repo
 	mkdir -p charts
 	cp -r tmp-repo/charts/fdb-operator charts/
 	# Remove symlinked CRDs and replace with actual files
