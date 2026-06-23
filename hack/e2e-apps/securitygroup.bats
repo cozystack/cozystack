@@ -79,6 +79,15 @@ spec:
   endpointSelector:
     matchLabels:
       app: untouched
+  # A rule is mandatory: the CiliumNetworkPolicy CRD requires at least one of
+  # ingress/ingressDeny/egress/egressDeny (spec anyOf), so a selector-only
+  # policy is rejected at apply time. This keeps the fixture a valid, applyable
+  # CNP while leaving it unmarked (no securitygroup label) — so it must stay
+  # invisible to the SecurityGroup API.
+  ingress:
+    - fromEndpoints:
+        - matchLabels:
+            app: peer
 EOF
   ! kubectl -n "$ns" get securitygroup.sdn.cozystack.io "$plain" 2>/dev/null
 
