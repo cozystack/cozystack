@@ -55,7 +55,7 @@ manifests:
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
 		--set bareNamespace=true \
-		--set cozystackOperator.platformVersion=v$(COZYSTACK_VERSION) \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
@@ -63,7 +63,7 @@ manifests:
 	helm template installer packages/core/installer -n cozy-system \
 		--set bareNamespace=true \
 		--set cozystackOperator.variant=generic \
-		--set cozystackOperator.platformVersion=v$(COZYSTACK_VERSION) \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--set cozystack.apiServerHost=REPLACE_ME \
 		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
@@ -72,7 +72,7 @@ manifests:
 	helm template installer packages/core/installer -n cozy-system \
 		--set bareNamespace=true \
 		--set cozystackOperator.variant=hosted \
-		--set cozystackOperator.platformVersion=v$(COZYSTACK_VERSION) \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
