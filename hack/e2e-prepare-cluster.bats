@@ -231,12 +231,14 @@ EOF
   fi
 
   rm -f controlplane.yaml worker.yaml talosconfig kubeconfig
-  # Pin Kubernetes to v1.33.12 instead of talosctl's bundled default (v1.33.1).
-  # v1.33.1 predates the fix for the kube-controller-manager VAP status
-  # type-checker nil-pointer panic on `additionalProperties: true` schemas
-  # (kubernetes/kubernetes#135155, backported to release-1.33 in #136958,
-  # first released in v1.33.10). On the older default, cozystack-api's
-  # aggregated Tenant schema crash-loops KCM during install. See cozystack#2863.
+  # Pin Kubernetes to v1.33.12. talosctl v1.13.5 now defaults to a much newer
+  # k8s (1.36.x) that is outside cozystack's supported range, so e2e pins back
+  # to the 1.33 line. v1.33.12 also carries the fix for the
+  # kube-controller-manager VAP status type-checker nil-pointer panic on
+  # `additionalProperties: true` schemas (kubernetes/kubernetes#135155,
+  # backported to release-1.33 in #136958, first released in v1.33.10); without
+  # it, cozystack-api's aggregated Tenant schema crash-loops KCM during install.
+  # See cozystack#2863.
   talosctl gen config --with-secrets secrets.yaml cozystack https://192.168.123.10:6443 \
            --kubernetes-version v1.33.12 \
            --config-patch=@patch.yaml --config-patch-control-plane @patch-controlplane.yaml
