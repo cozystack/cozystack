@@ -40,12 +40,15 @@ export function DynamicOptionsWidget(props: WidgetProps) {
     "x-cozystack-options"
   ]?.source
 
-  const { data: optionList, isLoading } = useK8sList<OptionObject>({
-    apiGroup: "core.cozystack.io",
-    apiVersion: "v1alpha1",
-    plural: "options",
-    namespace: tenantNamespace ?? undefined,
-  })
+  const { data: optionList, isLoading } = useK8sList<OptionObject>(
+    {
+      apiGroup: "core.cozystack.io",
+      apiVersion: "v1alpha1",
+      plural: "options",
+      namespace: tenantNamespace ?? undefined,
+    },
+    { enabled: !!tenantNamespace },
+  )
 
   const items: OptionItem[] =
     optionList?.items?.find((o) => o.metadata.name === source)?.spec?.items ?? []
