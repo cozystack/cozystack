@@ -3,6 +3,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "vertical-pod-autoscaler.updater.metrics.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.updater.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}

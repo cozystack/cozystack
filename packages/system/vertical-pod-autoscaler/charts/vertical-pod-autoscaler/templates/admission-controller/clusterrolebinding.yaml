@@ -18,5 +18,5 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ include "vertical-pod-autoscaler.admissionController.serviceAccountName" . }}
-    namespace: {{ .Release.Namespace | quote }}
+    namespace: {{ include "common.names.namespace" . | quote }}
 {{- end }}

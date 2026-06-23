@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ include "vertical-pod-autoscaler.recommender.metrics.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.recommender.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}

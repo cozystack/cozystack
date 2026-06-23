@@ -22,6 +22,9 @@ nameOverride: ""
 ## @param fullnameOverride Fully override `vertical-pod-autoscaler.fullname` template with a string
 fullnameOverride: ""
 
+## @param namespaceOverride Fully override `common.names.namespace` template with a string
+namespaceOverride: ""
+
 ## @param commonAnnotations Annotations to add to all deployed objects
 commonAnnotations: {}
 
@@ -34,11 +37,14 @@ extraDeploy: []
 ## @section Admission controller parameters
 
 admissionController:
-## @param admissionController.enabled Enable the component
+  ## @param admissionController.enabled Enable the component
   enabled: true
 
   ## @param admissionController.replicaCount Number of replicas
   replicaCount: 1
+
+  ## @param admissionController.revisionHistoryLimit Number of old history to retain to allow rollback
+  revisionHistoryLimit: 10
 
   image:
     ## @param admissionController.image.registry Image registry
@@ -48,7 +54,7 @@ admissionController:
     repository: autoscaling/vpa-admission-controller
 
     ## @param admissionController.image.tag Image tag
-    tag: 1.3.0
+    tag: 1.5.1
 
     ## @param admissionController.image.digest Image digest
     digest: ""
@@ -93,14 +99,10 @@ admissionController:
   podLabels: {}
 
   ## @extra admissionController.podSecurityContext Pod security context
-  ## @param admissionController.podSecurityContext.runAsNonRoot Whether the container must run as a non-root user
-  ## @param admissionController.podSecurityContext.runAsUser The UID to run the entrypoint of the container process
-  ## @param admissionController.podSecurityContext.runAsGroup The GID to run the entrypoint of the container process
+  ## @param admissionController.podSecurityContext.seccompProfile.type Set pod's Security Context seccomp profile
   podSecurityContext:
-    # fsGroup: 2000
-    runAsNonRoot: true
-    runAsUser: 65534
-    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
 
   ## @param admissionController.hostNetwork Use the host network
   hostNetwork: false
@@ -115,14 +117,22 @@ admissionController:
   ## @param admissionController.topologySpreadConstraints Topology Spread Constraints for pod assignment
   topologySpreadConstraints: []
 
-  ## @param admissionController.securityContext Container security context
-  securityContext: {}
-    # capabilities:
-    #   drop:
-    #   - ALL
-    # readOnlyRootFilesystem: true
-    # runAsNonRoot: true
-    # runAsUser: 1000
+  ## @extra admissionController.securityContext Container security context
+  ## @param admissionController.securityContext.allowPrivilegeEscalation Set container's Security Context allowPrivilegeEscalation
+  ## @param admissionController.securityContext.capabilities.drop List of capabilities to be dropped
+  ## @param admissionController.securityContext.readOnlyRootFilesystem Set container's Security Context readOnlyRootFilesystem
+  ## @param admissionController.securityContext.runAsNonRoot Whether the container must run as a non-root user
+  ## @param admissionController.securityContext.runAsUser The UID to run the entrypoint of the container process
+  ## @param admissionController.securityContext.runAsGroup The GID to run the entrypoint of the container process
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
 
   containerPorts:
     ## @param admissionController.containerPorts.https Container port for HTTPS
@@ -217,12 +227,12 @@ admissionController:
 
   ## @param admissionController.resources CPU/Memory resource requests/limits
   resources: {}
-    # limits:
-    #   cpu: 200m
-    #   memory: 512Mi
     # requests:
     #   cpu: 50m
     #   memory: 256Mi
+    # limits:
+    #   cpu: 200m
+    #   memory: 512Mi
 
   ## @param admissionController.nodeSelector Node labels for pod assignment
   nodeSelector: {}
@@ -236,8 +246,8 @@ admissionController:
   ## @extra admissionController.extraArgs [object] Additional container arguments
   ## @param admissionController.extraArgs.v Number for the log level verbosity
   extraArgs:
-    # kube-api-burst: 10
-    # kube-api-qps: 5
+    # kube-api-burst: 100
+    # kube-api-qps: 50
     v: 2
     # vpa-object-namespace: ""
     # webhook-timeout-seconds: 30
@@ -328,8 +338,11 @@ admissionController:
 ## @section Recommender parameters
 
 recommender:
-## @param recommender.replicaCount Number of replicas
+  ## @param recommender.replicaCount Number of replicas
   replicaCount: 1
+
+  ## @param recommender.revisionHistoryLimit Number of old history to retain to allow rollback
+  revisionHistoryLimit: 10
 
   image:
     ## @param recommender.image.registry Image registry
@@ -339,7 +352,7 @@ recommender:
     repository: autoscaling/vpa-recommender
 
     ## @param recommender.image.tag Image tag
-    tag: 1.3.0
+    tag: 1.5.1
 
     ## @param recommender.image.digest Image digest
     digest: ""
@@ -384,14 +397,10 @@ recommender:
   podLabels: {}
 
   ## @extra recommender.podSecurityContext Pod security context
-  ## @param recommender.podSecurityContext.runAsNonRoot Whether the container must run as a non-root user
-  ## @param recommender.podSecurityContext.runAsUser The UID to run the entrypoint of the container process
-  ## @param recommender.podSecurityContext.runAsGroup The GID to run the entrypoint of the container process
+  ## @param recommender.podSecurityContext.seccompProfile.type Set pod's Security Context seccomp profile
   podSecurityContext:
-    # fsGroup: 2000
-    runAsNonRoot: true
-    runAsUser: 65534
-    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
 
   ## @param recommender.priorityClassName Priority class name
   priorityClassName:
@@ -403,14 +412,22 @@ recommender:
   ## @param recommender.topologySpreadConstraints Topology Spread Constraints for pod assignment
   topologySpreadConstraints: []
 
-  ## @param recommender.securityContext Container security context
-  securityContext: {}
-    # capabilities:
-    #   drop:
-    #   - ALL
-    # readOnlyRootFilesystem: true
-    # runAsNonRoot: true
-    # runAsUser: 1000
+  ## @extra recommender.securityContext Container security context
+  ## @param recommender.securityContext.allowPrivilegeEscalation Set container's Security Context allowPrivilegeEscalation
+  ## @param recommender.securityContext.capabilities.drop List of capabilities to be dropped
+  ## @param recommender.securityContext.readOnlyRootFilesystem Set container's Security Context readOnlyRootFilesystem
+  ## @param recommender.securityContext.runAsNonRoot Whether the container must run as a non-root user
+  ## @param recommender.securityContext.runAsUser The UID to run the entrypoint of the container process
+  ## @param recommender.securityContext.runAsGroup The GID to run the entrypoint of the container process
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
 
   containerPorts:
     ## @param recommender.containerPorts.metrics Container port for Metrics
@@ -475,12 +492,12 @@ recommender:
 
   ## @param recommender.resources CPU/Memory resource requests/limits
   resources: {}
-    # limits:
-    #   cpu: 200m
-    #   memory: 1024Mi
     # requests:
     #   cpu: 50m
     #   memory: 512Mi
+    # limits:
+    #   cpu: 200m
+    #   memory: 1024Mi
 
   ## @param recommender.nodeSelector Node labels for pod assignment
   nodeSelector: {}
@@ -506,8 +523,8 @@ recommender:
     # history-length: 8d
     # history-resolution: 1h
     # ignored-vpa-object-namespaces: ""
-    # kube-api-burst: 10
-    # kube-api-qps: 5
+    # kube-api-burst: 100
+    # kube-api-qps: 50
     # leader-elect: false
     # leader-elect-lease-duration: 15s
     # leader-elect-renew-deadline: 10s
@@ -520,7 +537,6 @@ recommender:
     # memory-histogram-decay-half-life: 24h0m0s
     # memory-saver: false
     # metric-for-pod-labels: up{job="kubernetes-pods"}
-    # min-checkpoints: 10
     # oom-bump-up-ratio: 1.2
     # oom-min-bump-up-bytes: 104857600
     # password: ""
@@ -542,6 +558,7 @@ recommender:
     # storage: checkpoint
     # target-cpu-percentile: 0.9
     # target-memory-percentile: 0.9
+    # update-worker-count: 10
     # use-external-metrics: false
     # username: ""
     v: 2
@@ -620,11 +637,14 @@ recommender:
 ## @section Updater parameters
 
 updater:
-## @param updater.enabled Enable the component
+  ## @param updater.enabled Enable the component
   enabled: true
 
   ## @param updater.replicaCount Number of replicas
   replicaCount: 1
+
+  ## @param updater.revisionHistoryLimit Number of old history to retain to allow rollback
+  revisionHistoryLimit: 10
 
   image:
     ## @param updater.image.registry Image registry
@@ -634,7 +654,7 @@ updater:
     repository: autoscaling/vpa-updater
 
     ## @param updater.image.tag Image tag
-    tag: 1.3.0
+    tag: 1.5.1
 
     ## @param updater.image.digest Image digest
     digest: ""
@@ -679,14 +699,10 @@ updater:
   podLabels: {}
 
   ## @extra updater.podSecurityContext Pod security context
-  ## @param updater.podSecurityContext.runAsNonRoot Whether the container must run as a non-root user
-  ## @param updater.podSecurityContext.runAsUser The UID to run the entrypoint of the container process
-  ## @param updater.podSecurityContext.runAsGroup The GID to run the entrypoint of the container process
+  ## @param updater.podSecurityContext.seccompProfile.type Set pod's Security Context seccomp profile
   podSecurityContext:
-    # fsGroup: 2000
-    runAsNonRoot: true
-    runAsUser: 65534
-    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
 
   ## @param updater.priorityClassName Priority class name
   priorityClassName:
@@ -698,14 +714,22 @@ updater:
   ## @param updater.topologySpreadConstraints Topology Spread Constraints for pod assignment
   topologySpreadConstraints: []
 
-  ## @param updater.securityContext Container security context
-  securityContext: {}
-    # capabilities:
-    #   drop:
-    #   - ALL
-    # readOnlyRootFilesystem: true
-    # runAsNonRoot: true
-    # runAsUser: 1000
+  ## @extra updater.securityContext Container security context
+  ## @param updater.securityContext.allowPrivilegeEscalation Set container's Security Context allowPrivilegeEscalation
+  ## @param updater.securityContext.capabilities.drop List of capabilities to be dropped
+  ## @param updater.securityContext.readOnlyRootFilesystem Set container's Security Context readOnlyRootFilesystem
+  ## @param updater.securityContext.runAsNonRoot Whether the container must run as a non-root user
+  ## @param updater.securityContext.runAsUser The UID to run the entrypoint of the container process
+  ## @param updater.securityContext.runAsGroup The GID to run the entrypoint of the container process
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
 
   containerPorts:
     ## @param updater.containerPorts.metrics Container port for Metrics
@@ -770,12 +794,12 @@ updater:
 
   ## @param updater.resources CPU/Memory resource requests/limits
   resources: {}
-    # limits:
-    #   cpu: 200m
-    #   memory: 1024Mi
     # requests:
     #   cpu: 50m
     #   memory: 512Mi
+    # limits:
+    #   cpu: 200m
+    #   memory: 1024Mi
 
   ## @param updater.nodeSelector Node labels for pod assignment
   nodeSelector: {}
@@ -795,8 +819,8 @@ updater:
     # eviction-tolerance: 0.5
     # ignored-vpa-object-namespaces: ""
     # in-recommendation-bounds-eviction-lifetime-threshold: 12h0m0s
-    # kube-api-burst: 10
-    # kube-api-qps: 5
+    # kube-api-burst: 100
+    # kube-api-qps: 50
     # leader-elect: false
     # leader-elect-lease-duration: 15s
     # leader-elect-renew-deadline: 10s
@@ -892,7 +916,7 @@ crds:
     registry: docker.io
 
     ## @param crds.image.repository Image repository
-    repository: bitnami/kubectl
+    repository: bitnamilegacy/kubectl
 
     ## @param crds.image.tag Image tag
     tag: 1.29.3
@@ -910,30 +934,34 @@ crds:
   podLabels: {}
 
   ## @extra crds.podSecurityContext Pod security context
-  ## @param crds.podSecurityContext.runAsNonRoot Whether the container must run as a non-root user
-  ## @param crds.podSecurityContext.runAsUser The UID to run the entrypoint of the container process
-  ## @param crds.podSecurityContext.runAsGroup The GID to run the entrypoint of the container process
+  ## @param crds.podSecurityContext.seccompProfile.type Set pod's Security Context seccomp profile
   podSecurityContext:
-    # fsGroup: 2000
-    runAsNonRoot: true
-    runAsUser: 1001
-    runAsGroup: 1001
+    seccompProfile:
+      type: RuntimeDefault
 
-  ## @param crds.securityContext Container security context
-  securityContext: {}
-    # capabilities:
-    #   drop:
-    #   - ALL
-    # readOnlyRootFilesystem: true
-    # runAsNonRoot: true
-    # runAsUser: 1000
+  ## @extra crds.securityContext Container security context
+  ## @param crds.securityContext.allowPrivilegeEscalation Set container's Security Context allowPrivilegeEscalation
+  ## @param crds.securityContext.capabilities.drop List of capabilities to be dropped
+  ## @param crds.securityContext.readOnlyRootFilesystem Set container's Security Context readOnlyRootFilesystem
+  ## @param crds.securityContext.runAsNonRoot Whether the container must run as a non-root user
+  ## @param crds.securityContext.runAsUser The UID to run the entrypoint of the container process
+  ## @param crds.securityContext.runAsGroup The GID to run the entrypoint of the container process
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
 
   ## @param crds.resources CPU/Memory resource requests/limits
   resources: {}
-    # limits:
+    # requests:
     #   cpu: 100m
     #   memory: 128Mi
-    # requests:
+    # limits:
     #   cpu: 100m
     #   memory: 128Mi
 
@@ -957,7 +985,7 @@ tests:
     repository: cowboysysop/pytest
 
     ## @param tests.image.tag Image tag
-    tag: 1.0.41
+    tag: 1.2.0
 
     ## @param tests.image.digest Image digest
     digest: ""

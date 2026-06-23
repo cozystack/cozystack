@@ -21,10 +21,10 @@ app.kubernetes.io/component: recommender
 {{- end -}}
 
 {{/*
-Common labels
+Labels
 */}}
 {{- define "vertical-pod-autoscaler.recommender.labels" -}}
-{{ include "vertical-pod-autoscaler.labels" . }}
+{{ include "vertical-pod-autoscaler.commonLabels" . }}
 {{ include "vertical-pod-autoscaler.recommender.componentLabels" . }}
 {{- end -}}
 
@@ -32,7 +32,7 @@ Common labels
 Selector labels
 */}}
 {{- define "vertical-pod-autoscaler.recommender.selectorLabels" -}}
-{{ include "vertical-pod-autoscaler.selectorLabels" . }}
+{{ include "vertical-pod-autoscaler.commonSelectorLabels" . }}
 {{ include "vertical-pod-autoscaler.recommender.componentLabels" . }}
 {{- end -}}
 

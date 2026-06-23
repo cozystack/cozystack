@@ -14,9 +14,9 @@ app.kubernetes.io/component: tests
 {{- end -}}
 
 {{/*
-Common labels
+Labels
 */}}
 {{- define "vertical-pod-autoscaler.tests.labels" -}}
-{{ include "vertical-pod-autoscaler.labels" . }}
+{{ include "vertical-pod-autoscaler.commonLabels" . }}
 {{ include "vertical-pod-autoscaler.tests.componentLabels" . }}
 {{- end -}}
