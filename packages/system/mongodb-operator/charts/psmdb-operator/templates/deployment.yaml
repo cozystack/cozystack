@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "psmdb-operator.fullname" . }}
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "psmdb-operator.namespace" . }}
   labels:
     {{- include "psmdb-operator.labels" . | nindent 4 }}
     {{- with .Values.labels }}
@@ -14,6 +14,9 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- with .Values.revisionHistoryLimit }}
+  revisionHistoryLimit: {{ . }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ include "psmdb-operator.name" . }}
@@ -67,7 +70,7 @@ spec:
               {{- if .Values.watchAllNamespaces }}
               value: ""
               {{- else }}
-              value: "{{ default .Release.Namespace .Values.watchNamespace }}"
+              value: "{{ default (include "psmdb-operator.namespace" .) .Values.watchNamespace }}"
               {{- end }}
             - name: POD_NAME
               valueFrom:
