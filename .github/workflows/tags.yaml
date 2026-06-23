@@ -37,7 +37,14 @@ jobs:
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
 
-      # Check if a non-draft release with this tag already exists
+      # Skip the build when a release (draft OR published) already exists for
+      # this tag:
+      #   - re-runs of the same rc/nightly tag become idempotent no-ops;
+      #   - a stable tag prepared by the promote flow must NOT be rebuilt here.
+      #     promote-rc.yaml creates the draft vX.Y.Z from the already-built,
+      #     already-tested rc artifacts; promotion ships those exact bits, never
+      #     a fresh build. When finalize pushes the stable tag, this guard sees
+      #     the draft and skips straight to changelog/website.
       - name: Check if release already exists
         id: check_release
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
@@ -48,9 +55,9 @@ jobs:
               owner: context.repo.owner,
               repo:  context.repo.repo
             });
-            const exists = releases.data.some(r => r.tag_name === tag && !r.draft);
+            const exists = releases.data.some(r => r.tag_name === tag);
             core.setOutput('skip', exists);
-            console.log(exists ? `Release ${tag} already published` : `No published release ${tag}`);
+            console.log(exists ? `Release ${tag} already exists (draft or published)` : `No release ${tag} yet`);
 
       # If a published release already exists, skip the rest of the workflow
       - name: Skip if release already exists
@@ -141,20 +148,34 @@ jobs:
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
 
-      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev
-      - name: Tag API submodule
+      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev.
+      #
+      # Write-once: api/apps/v1alpha1/* tags feed the Go module proxy and
+      # pkg.go.dev, where a moved tag poisons caches irreversibly. Create the tag
+      # only when absent; if it already points at the same commit, no-op; if it
+      # exists pointing elsewhere, fail loudly rather than force-move it.
+      - name: Tag API submodule (write-once)
         if: steps.check_release.outputs.skip == 'false'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          VTAG: ${{ steps.tag.outputs.tag }}
         run: |
-          VTAG="${{ steps.tag.outputs.tag }}"
           SUBTAG="api/apps/v1alpha1/${VTAG}"
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           TARGET="$(git rev-parse "${VTAG}^{}")"
-          git tag -f "${SUBTAG}" "$TARGET"
-          git push -f origin "refs/tags/${SUBTAG}"
+          EXISTING="$(git ls-remote --tags origin "refs/tags/${SUBTAG}" | awk '{print $1}')"
+          if [ -z "$EXISTING" ]; then
+            git tag "${SUBTAG}" "$TARGET"
+            git push origin "refs/tags/${SUBTAG}"
+            echo "✅ Created ${SUBTAG} at ${TARGET}."
+          elif [ "$EXISTING" = "$TARGET" ]; then
+            echo "✅ ${SUBTAG} already at ${TARGET}; nothing to do."
+          else
+            echo "::error::${SUBTAG} already exists at ${EXISTING}; refusing to force-move it to ${TARGET} (tags are write-once)."
+            exit 1
+          fi
 
       # Create or reuse draft release
       - name: Create / reuse draft release
@@ -196,7 +217,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # Create release-X.Y.Z branch and push (force-update)
+      # Create the release-X.Y.Z staging branch (holds the digest-bake commit for
+      # this version's release PR).
+      #
+      # Compare-before-force: this is a mutable staging branch, not an immutable
+      # artifact — a re-run produces a fresh, non-reproducible bake commit. Skip
+      # the push when nothing changed; force-update (and log it) only when the
+      # branch genuinely moves. Unlike the tags above, force here is legitimate.
       - name: Create release branch
         if: steps.check_release.outputs.skip == 'false'
         env:
@@ -206,8 +233,17 @@ jobs:
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           BRANCH="release-${GITHUB_REF#refs/tags/v}"
-          git branch -f "$BRANCH"
-          git push -f origin "$BRANCH"
+          LOCAL="$(git rev-parse HEAD)"
+          REMOTE="$(git ls-remote --heads origin "$BRANCH" | awk '{print $1}')"
+          if [ -z "$REMOTE" ]; then
+            git push origin "HEAD:refs/heads/${BRANCH}"
+            echo "✅ Created staging branch ${BRANCH} at ${LOCAL}."
+          elif [ "$REMOTE" = "$LOCAL" ]; then
+            echo "✅ ${BRANCH} already at ${LOCAL}; nothing to do."
+          else
+            echo "::notice::Force-updating staging branch ${BRANCH}: ${REMOTE} -> ${LOCAL}."
+            git push -f origin "HEAD:refs/heads/${BRANCH}"
+          fi
 
       # Create pull request into original base branch (if absent)
       - name: Create pull request if not exists
