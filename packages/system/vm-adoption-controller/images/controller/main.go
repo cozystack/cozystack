@@ -509,8 +509,30 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		klog.V(3).Infof("VM %s/%s: added network %s (from %s)", vm.Namespace, vm.Name, netRef, networkName)
 	}
 
-	klog.Infof("VM %s/%s: extracted %d disk(s), %d network(s), instanceType=%s, preference=%s, runStrategy=%s",
-		vm.Namespace, vm.Name, len(disks), len(mappedNetworks), instanceType, preference, runStrategy)
+	// Map the source firmware (UEFI/BIOS) so guests installed in UEFI mode
+	// boot correctly. Forklift sets domain.firmware.bootloader on the imported
+	// VM; Helm adoption re-renders the VM from the chart, so the boot mode must
+	// be carried through VMInstance.spec.firmware.
+	// Depends on the vm-instance `firmware` API (cozystack/cozystack#3002);
+	// older vm-instance charts ignore the field (backward compatible).
+	var firmware map[string]interface{}
+	if domain, ok, _ := unstructured.NestedMap(templateSpec, "domain"); ok && domain != nil {
+		if bootloader, ok, _ := unstructured.NestedMap(domain, "firmware", "bootloader"); ok && bootloader != nil {
+			if efi, hasEFI := bootloader["efi"]; hasEFI {
+				firmware = map[string]interface{}{"bootloader": "uefi"}
+				if efiMap, ok := efi.(map[string]interface{}); ok {
+					if sb, ok := efiMap["secureBoot"].(bool); ok && sb {
+						firmware["secureBoot"] = true
+					}
+				}
+			} else if _, hasBIOS := bootloader["bios"]; hasBIOS {
+				firmware = map[string]interface{}{"bootloader": "bios"}
+			}
+		}
+	}
+
+	klog.Infof("VM %s/%s: extracted %d disk(s), %d network(s), instanceType=%s, preference=%s, runStrategy=%s, firmware=%v",
+		vm.Namespace, vm.Name, len(disks), len(mappedNetworks), instanceType, preference, runStrategy, firmware)
 
 	// Create VMInstance name
 	vmInstanceName := vm.Name
@@ -593,6 +615,13 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 				"cloudInitSeed":    "",
 			},
 		},
+	}
+
+	// Carry the source boot firmware through to the VMInstance (uefi/bios).
+	if firmware != nil {
+		if specMap, ok := vmInstance.Object["spec"].(map[string]interface{}); ok {
+			specMap["firmware"] = firmware
+		}
 	}
 
 	_, err = c.dynamicClient.Resource(vmInstanceGVR).Namespace(vm.Namespace).Create(ctx, vmInstance, metav1.CreateOptions{})
