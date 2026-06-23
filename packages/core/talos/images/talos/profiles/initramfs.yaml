@@ -3,24 +3,24 @@
 arch: amd64
 platform: metal
 secureboot: false
-version: v1.13.0
+version: v1.13.5
 input:
   kernel:
     path: /usr/install/amd64/vmlinuz
   initramfs:
     path: /usr/install/amd64/initramfs.xz
   baseInstaller:
-    imageRef: "ghcr.io/siderolabs/installer:v1.13.0"
+    imageRef: "ghcr.io/siderolabs/installer:v1.13.5"
   systemExtensions:
-    - imageRef: ghcr.io/siderolabs/amd-ucode:20260410@sha256:d5a0256846700ebb4fd2dba0107cfd944f6689d9bf96f47ab9dc35ef1e225179
-    - imageRef: ghcr.io/siderolabs/amdgpu:20260410-v1.13.0@sha256:48f121b8b6575b6c38e2dd459cbb022f6ef3e8aea6209255a14654d28aea8b8c
-    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20260410@sha256:5a481b38c305d2292e7b6e06750ec704ac1229602c75cf80535ff3561f0b29c3
-    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20260410@sha256:ef1cbec222fb2d2ae0db9c025e4b9b6b875d965d49ebb71d7ad9f0713133c299
-    - imageRef: ghcr.io/siderolabs/i915:20260410-v1.13.0@sha256:fa10ab5a7ab8e412ef8ead8d244cf1ba37c13c60ceb0150044e4682ff29b25af
-    - imageRef: ghcr.io/siderolabs/intel-ucode:20260227@sha256:6112f6426a7081727545f7c33dcf2a89ff672494847b180380b4c58f3544a7b2
-    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20260410@sha256:83593864ae91b16e9962258b5f0bd777d4c81846ece206bb84e9c37be023715c
-    - imageRef: ghcr.io/siderolabs/drbd:9.3.1-v1.13.0@sha256:414c94ab6c73c6f20b4dbfce53383fd9ea7bc485d76ceaee5eb6360d2bddcc40
-    - imageRef: ghcr.io/siderolabs/zfs:2.4.1-v1.13.0@sha256:301ae643b38d8b377c051ec0e52b9b03ea49bdc90ca7c49e0da83444a92c5619
+    - imageRef: ghcr.io/siderolabs/amd-ucode:20260519@sha256:4727bcdcd647ec48f4c3870559c2321a437e657ce993342ddb1ce3da6d91e827
+    - imageRef: ghcr.io/siderolabs/amdgpu:20260519-v1.13.5@sha256:c343cf183a792821f01bc77237aca499d9815b45ad2d09e6b7f22b518cb0c883
+    - imageRef: ghcr.io/siderolabs/bnx2-bnx2x:20260519@sha256:1f4b3e79f6606b06ef4ca686bd36770bd78e89caf6020e318dda2a37634bf06b
+    - imageRef: ghcr.io/siderolabs/intel-ice-firmware:20260519@sha256:e02a67edc3d55676ef9c6381d48a173c40f17bac0cf1d3dd3f5f258813203ac8
+    - imageRef: ghcr.io/siderolabs/i915:20260519-v1.13.5@sha256:3f8f8d45e4f543c6670bb65a269d841ed972ec6e5b1b5a7140c4f2cfe84c8990
+    - imageRef: ghcr.io/siderolabs/intel-ucode:20260512@sha256:4b7edc20e8eebbe288bc1add0f6e3dc1bc86285e084ca5814e8b650ac479f148
+    - imageRef: ghcr.io/siderolabs/qlogic-firmware:20260519@sha256:8c3a6e40d79f9d5a27b06dd785ccc140f76d228ede2562950dfac53ceb4518eb
+    - imageRef: ghcr.io/siderolabs/drbd:9.3.2-v1.13.5@sha256:aecfdaeb280d26be0e748af93514ad989a66ce707d4d9ac5d72fcc284604658b
+    - imageRef: ghcr.io/siderolabs/zfs:2.4.3-v1.13.5@sha256:de38940fea680ffc12d85f4d57210a1ef4fab873a7e51d86e62d3280e04b9ec1
 output:
   kind: initramfs
   imageOptions: {}
