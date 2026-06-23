@@ -118,9 +118,7 @@ All variables come from `00-helpers.sh`:
   override it by setting `ETCD_REGION` in your shell before sourcing
   `00-helpers.sh` if you point the demo at a non-SeaweedFS endpoint
   whose region differs.
-- Step 05 only verifies the happy path. Edge cases (stuck HR resume,
-  failed bootstrap, mid-restore controller crash) belong in the bats
-  e2e at `hack/e2e-apps/backup-etcd.bats`.
+- Step 05 only verifies the happy path. Edge cases (stuck HR resume, failed bootstrap, mid-restore controller crash) belong in the etcd Chainsaw suite at `hack/e2e-chainsaw/etcd/`.
 - The destructive in-place flow deletes the `EtcdCluster` (and the
   operator drops the member PVCs alongside it). All client traffic to
   etcd is unavailable for the duration of the restore. Plan a window.

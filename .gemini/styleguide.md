@@ -107,4 +107,4 @@ When reviewing `values.schema.json`:
 - Missing comments on generated code.
 - `go.sum` changes accompanying `go.mod` changes — expected and correct.
 - Fork relationships for vendored tooling images — intentional (e.g., `cozystack/kilo` fork is expected).
-- Absence of unit tests for vendored chart overrides — covered by E2E tests in `hack/e2e-apps/`.
+- Absence of unit tests for vendored chart overrides — covered by E2E tests in `hack/e2e-chainsaw/`.
