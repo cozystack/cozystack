@@ -170,6 +170,10 @@
   color: 'bfd4f2'
   description: Issues or PRs related to CI workflows, GitHub Actions, automation
 
+- name: area/dependencies
+  color: 'bfd4f2'
+  description: Dependency bumps (Renovate, go.mod); scope `deps`
+
 - name: area/dashboard
   color: 'bfd4f2'
   description: Issues or PRs related to the dashboard / UI

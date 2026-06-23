@@ -7,6 +7,8 @@
   "enabledManagers": ["gomod", "dockerfile", "github-actions"],
   "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "labels": ["automated", "do-not-merge/hold"],
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
   "automerge": false,
   "platformAutomerge": false,
   "prConcurrentLimit": 5,
@@ -46,6 +48,12 @@
       "matchUpdateTypes": ["digest", "pinDigest"],
       "groupName": "container image & action digests",
       "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "enabled": false
     }
   ]
 }
