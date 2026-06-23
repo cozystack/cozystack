@@ -265,8 +265,14 @@ The `vm-adoption-controller` must be extended to fully productize the flow:
   namespace, but the `VMInstance` (and its disk) must land in the user tenant.
   Clone/move the converted disk and create the `VMInstance` in the tenant.
 - **Preserve the source MAC** on the created VM so the guest's NIC config keeps
-  working.
-- **Map the source firmware** (`bios`/`efi`) to `VMInstance.spec.firmware`
-  (depends on #3002) — UEFI guests do not boot under SeaBIOS.
-- **Map instanceType / instanceProfile** from the source VM's CPU/RAM/OS.
+  working. Blocked: the `vm-instance` API has no per-NIC MAC field — adding one
+  is a prerequisite.
+- **Map the source firmware** (`bios`/`efi`) to `VMInstance.spec.firmware`:
+  *done* — the `vm-adoption-controller` now reads `domain.firmware.bootloader`
+  from the imported VM and sets `VMInstance.spec.firmware.bootloader`
+  (`uefi`/`bios`, + `secureBoot`). Requires the vm-instance firmware API from
+  [#3002](https://github.com/cozystack/cozystack/pull/3002) at runtime; older
+  charts ignore the field (backward compatible).
+- **Map instanceType / instanceProfile** from the source VM's CPU/RAM/OS
+  (currently a static default).
 - Ship the conversion-namespace + seccomp mechanism as part of the platform.
