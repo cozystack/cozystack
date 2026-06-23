@@ -1,0 +1,245 @@
+# Chainsaw port of hack/e2e-apps/backup.bats ("Create Backup for Virtual Machine").
+#
+# DISABLED ON PURPOSE. The filename ends in `.disabled` so chainsaw's default
+# test-file discovery (chainsaw-test.yaml) skips it and hack/select-e2e.sh does
+# not enumerate `backup` as a selectable suite — exactly matching the previous
+# `backup.bats.disabled` state. It is heavy (boots a VM, drives a Velero backup,
+# verifies S3) and depends on backup infrastructure that the standard e2e
+# sandbox install does not guarantee, so it stays opt-in.
+#
+# Run it by hand against a cozystack cluster that has the backup-controller,
+# backupstrategy-controller and Velero installed (see README.md):
+#   chainsaw test --test-file chainsaw-test.yaml.disabled hack/e2e-chainsaw/backup
+#
+# Deviation from the bats: the bats re-applied the BackupJob/Velero CRDs and the
+# default Velero strategy defensively (its Step 0). That belongs to the install,
+# not the test — this port assumes `velero-strategy-default` already exists, as
+# it does on any cluster with backups enabled.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: backup
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+      name: test-backup-job
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: virtual-machine-test-backup-vm
+  - describe:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: BucketClaim
+      name: bucket-test-backup-bucket
+  steps:
+  # Step 1 — backing object store for the backup target.
+  - name: create-bucket
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Bucket
+          metadata:
+            name: test-backup-bucket
+          spec: {}
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-test-backup-bucket
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: bucket-test-backup-bucket
+          status:
+            bucketReady: true
+    - assert:
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: bucket-test-backup-bucket
+          status:
+            accessGranted: true
+
+  # Step 2 — the application to back up: a small Ubuntu VM. Mirrors the
+  # readiness chain of the vminstance suite (HR -> DataVolume -> PVC -> VM).
+  - name: create-vm
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: VirtualMachine
+          metadata:
+            name: test-backup-vm
+          spec:
+            external: false
+            externalMethod: PortList
+            externalPorts:
+            - 22
+            instanceType: "u1.medium"
+            instanceProfile: ubuntu
+            systemDisk:
+              image: ubuntu
+              storage: 5Gi
+              storageClass: replicated
+            gpus: []
+            resources: {}
+            sshKeys:
+            - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPht0dPk5qQ+54g1hSX7A6AUxXJW5T6n/3d7Ga2F8gTF test@test
+            cloudInit: |
+              #cloud-config
+              users:
+                - name: test
+                  shell: /bin/bash
+                  sudo: ['ALL=(ALL) NOPASSWD: ALL']
+                  groups: sudo
+                  ssh_authorized_keys:
+                    - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPht0dPk5qQ+54g1hSX7A6AUxXJW5T6n/3d7Ga2F8gTF test@test
+            cloudInitSeed: ""
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: virtual-machine-test-backup-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: virtual-machine-test-backup-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 4m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: virtual-machine-test-backup-vm
+          status:
+            phase: Bound
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: virtual-machine-test-backup-vm
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  # Step 3 — trigger the backup and assert it reaches Succeeded with a backupRef.
+  - name: create-backupjob
+    try:
+    - apply:
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          metadata:
+            name: test-backup-job
+            labels:
+              backups.cozystack.io/triggered-by: e2e-test
+          spec:
+            applicationRef:
+              apiGroup: apps.cozystack.io
+              kind: VirtualMachine
+              name: test-backup-vm
+            storageRef:
+              apiGroup: apps.cozystack.io
+              kind: Bucket
+              name: test-backup-bucket
+            strategyRef:
+              apiGroup: strategy.backups.cozystack.io
+              kind: Velero
+              name: velero-strategy-default
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: backups.cozystack.io/v1alpha1
+          kind: BackupJob
+          metadata:
+            name: test-backup-job
+          status:
+            phase: Succeeded
+            (backupRef.name != null): true
+
+  # Step 4 — confirm the underlying Velero Backup completed and that the
+  # backup objects actually landed in S3. The port-forward + mc verification is
+  # imperative, so it stays a single script step (same shape as the bucket
+  # suite); $NAMESPACE is the chainsaw-managed test namespace (tenant-test).
+  - name: verify-velero-backup-in-s3
+    try:
+    - script:
+        timeout: 8m
+        content: |
+          set -eu
+          workdir=$(mktemp -d)
+          trap 'kill $pf_pid 2>/dev/null || true; rm -rf "$workdir"' EXIT
+
+          # Bucket S3 credentials for the verification client.
+          kubectl -n "$NAMESPACE" get secret bucket-test-backup-bucket \
+            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/bucket.json"
+          ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/bucket.json")
+          SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/bucket.json")
+          BUCKET_NAME=$(jq -r '.spec.bucketName' "$workdir/bucket.json")
+
+          # Find the Velero backup created for this job. Velero names it
+          # "<namespace>-<backupjob>-<timestamp>"; wait for it to appear.
+          echo "Waiting for the Velero backup to appear..."
+          VELERO_BACKUP_NAME=$(timeout 120 sh -ec '
+            while true; do
+              for b in $(kubectl -n cozy-velero get backups.velero.io \
+                  -o jsonpath="{.items[*].metadata.name}" 2>/dev/null); do
+                case "$b" in "'"$NAMESPACE"'-test-backup-job-"*) echo "$b"; exit 0;; esac
+              done
+              sleep 5
+            done')
+          [ -n "$VELERO_BACKUP_NAME" ]
+          echo "Velero backup: $VELERO_BACKUP_NAME"
+
+          # Wait for the Velero Backup to reach a terminal phase, then assert Completed.
+          timeout 300 sh -ec "
+            until kubectl -n cozy-velero get backups.velero.io '$VELERO_BACKUP_NAME' \
+                -o jsonpath='{.status.phase}' 2>/dev/null | grep -qE 'Completed|Failed|PartiallyFailed'; do
+              sleep 5
+            done"
+          PHASE=$(kubectl -n cozy-velero get backups.velero.io "$VELERO_BACKUP_NAME" \
+            -o jsonpath='{.status.phase}')
+          [ "$PHASE" = "Completed" ]
+
+          # Port-forward to the S3 endpoint; cleaned up by the trap.
+          kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
+          pf_pid=$!
+          timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+
+          mc alias set backup-s3 https://localhost:8333 "$ACCESS_KEY" "$SECRET_KEY" --insecure
+
+          # The backup directory must exist and hold at least the metadata objects.
+          BACKUP_PATH="$BUCKET_NAME/backups/$VELERO_BACKUP_NAME"
+          mc ls --insecure "backup-s3/$BACKUP_PATH/"
+          [ "$(mc ls --insecure "backup-s3/$BACKUP_PATH/" | wc -l)" -gt 0 ]
+        check:
+          ($error == null): true
+# Chainsaw deletes the Bucket / VirtualMachine / BackupJob CRs it applied during
+# cleanup. The Velero Backup + BackupStorageLocation + credentials secret in
+# cozy-velero are created by the backup-controller, not chainsaw, so an opt-in
+# run should prune them by hand afterwards (the bats teardown did this).
