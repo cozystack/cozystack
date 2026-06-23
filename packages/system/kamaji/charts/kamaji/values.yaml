@@ -104,6 +104,14 @@ kamaji-etcd:
   fullnameOverride: kamaji-etcd
   ## -- Important, this must match your management cluster's clusterDomain, otherwise the init jobs will fail
   clusterDomain: "cluster.local"
+  selfSignedCertificates:
+    enabled: false
+  certManager:
+    enabled: true
+    issuerRef:
+      name: kamaji-selfsigned-issuer
+      kind: Issuer
+      group: cert-manager.io
   datastore:
     enabled: true
     name: default
