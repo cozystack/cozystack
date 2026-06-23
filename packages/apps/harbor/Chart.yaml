@@ -4,4 +4,4 @@ description: Managed Harbor container registry
 icon: /logos/harbor.svg
 type: application
 version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process
-appVersion: "2.14.2"
+appVersion: "2.15.1"
