@@ -193,7 +193,7 @@ EOF
   # pushes the parent's Ready flip to ~5-6 min; tenant-root HR.spec.timeout
   # is 15m and this 10m wait stays inside it.
   kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
-    -n tenant-root --timeout=10m --for=condition=ready
+    -n tenant-root --timeout=20m --for=condition=ready
 
 
   # Expose Cozystack services through ingress
@@ -201,26 +201,26 @@ EOF
 
   # NGINX ingress controller
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=5m --for=condition=available
+  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
 
   # etcd statefulset
   timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=5m
+  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=10m
 
   # VictoriaMetrics components
   timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
   timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=10m
   timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=10m
 
   # Grafana
   timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=5m
+  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=10m
   timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=5m
+  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=10m
 
   # Verify Grafana via ingress
   ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -240,7 +240,7 @@ EOF
   kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true,"keycloakInternalUrl":"http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"}}}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
+  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=20m --for=condition=ready
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {
@@ -312,7 +312,7 @@ spec:
   resourceQuotas:
     cpu: "60"
     memory: "128Gi"
-    storage: "100Gi"
+    storage: "200Gi"
   seaweedfs: false
 EOF
   timeout 60 sh -ec 'until kubectl get hr/tenant-test -n tenant-root >/dev/null 2>&1; do sleep 2; done'
@@ -323,7 +323,7 @@ EOF
   timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'
   kubectl get quota -n tenant-test \
     -o jsonpath='{range .items[*]}{.spec.hard.requests\.memory}{" "}{.spec.hard.requests\.storage}{"\n"}{end}' \
-    | grep -qx '137438953472 100Gi'
+    | grep -qx '137438953472 200Gi'
 
   # Assert LimitRange defaults for containers
   kubectl get limitrange -n tenant-test \

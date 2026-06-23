@@ -1,0 +1,315 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: snapshots.blockstor.cozystack.io
+spec:
+  group: blockstor.cozystack.io
+  names:
+    kind: Snapshot
+    listKind: SnapshotList
+    plural: snapshots
+    singular: snapshot
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          Snapshot is the Schema for the snapshots API.
+
+          The CEL rule above enforces the cluster-wide naming convention every
+          composite-keyed CRD in the project follows: `metadata.name == <rd>.<snap>`.
+          Keeping the composite key encoded in the name lets the store's
+          `snapshotCRDName` helper round-trip the (rd, snap) pair through k8s
+          metadata without a sidecar index, and lets operators grep for
+          `<rd>.` across kinds (Resource, Snapshot, StoragePool) to find every
+          object bound to one parent. The `optionalOldSelf` escape makes the
+          rule create-only — finalizer-strip on a stale-named Snapshot
+          (e.g. one created before this marker existed) is never blocked.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Snapshot
+            properties:
+              groupID:
+                description: |-
+                  groupID, when non-empty, marks this Snapshot as a member of a
+                  transactional multi-RD batch — every Snapshot CRD stamped with
+                  the same GroupID participates in a SINGLE suspend-io broadcast
+                  across the UNION of every sibling's targeted nodes. Bug 353:
+                  `linstor s create-multiple` (POST /v1/actions/snapshot/multi)
+                  previously looped per-RD through the Bug-351 orchestrator and
+                  each Snapshot ran its own independent 3-phase suspend/take/
+                  resume — so per-RD suspend windows did not overlap and the
+                  cross-RD point-in-time consistency operators expect from a
+                  "group snapshot" (DB + WAL on separate RDs) was lost.
+
+                  Lifecycle (driven by the controller-side SnapshotReconciler):
+                    1. apiserver stamps every batched Snapshot with the same
+                       crypto/rand-generated GroupID + SuspendIO=true.
+                    2. Controller gates phase advancement on the FULL group:
+                       Phase 2 only fires when every sibling's every targeted
+                       node has acked the suspend.
+                    3. Phase 3 only fires when every sibling's every targeted
+                       node is Ready — or any sibling node Failed=true, in
+                       which case the abort cascade fires SuspendIO=false on
+                       every sibling immediately.
+
+                  Empty GroupID is the single-snap path (Bug 351 behaviour
+                  preserved verbatim — siblings denominator collapses to self).
+                type: string
+              groupSize:
+                description: |-
+                  groupSize is the number of Snapshot CRDs the apiserver fanned
+                  out for this transactional batch (len of the
+                  `snapshot create-multiple` entry list). It is the denominator the
+                  controller-side SnapshotReconciler uses to decide when the group
+                  is fully ASSEMBLED before it opens the suspend-io barrier.
+
+                  Bug 046 / Bug-353 atomicity fix: the apiserver creates the
+                  sibling CRDs SEQUENTIALLY (one Store.Create per entry, with
+                  hydration + an offline pre-check between each), so on a busy
+                  stand the last sibling's CRD can land ~15s after the first. If
+                  each satellite started `drbdsetup suspend-io` the instant its
+                  own sibling appeared (the old behaviour, with SuspendIO stamped
+                  at Create time), the group's volumes would freeze ~15s APART —
+                  well over the ≤5s consistency budget — so a DB's data volume and
+                  WAL volume on separate RDs would be captured at different
+                  instants and a group restore could be corrupt.
+
+                  With GroupSize the controller holds the WHOLE group at Phase 0
+                  (no SuspendIO) until it observes every member, then flips
+                  SuspendIO=true on every sibling in a single reconcile pass so
+                  they all enter suspend within one controller cycle (sub-second),
+                  bounding the suspend-entry slip far under budget.
+
+                  Zero means "not a coordinated batch" (the single-snap Bug-351
+                  path, or a legacy grouped Snapshot created before this field
+                  existed) — in that case the controller falls back to the
+                  observed-siblings count so a GroupID with no GroupSize still
+                  makes progress instead of hanging on a missing denominator.
+                format: int32
+                type: integer
+              nodes:
+                description: |-
+                  nodes are the satellites the snapshot should live on. Empty means
+                  "every node currently hosting the parent resource".
+                items:
+                  type: string
+                type: array
+              props:
+                additionalProperties:
+                  type: string
+                description: props is the LINSTOR property map for the snapshot.
+                type: object
+              resourceDefinitionName:
+                description: resourceDefinitionName is the parent ResourceDefinition.
+                type: string
+              snapshotName:
+                description: snapshotName is the user-facing snapshot identifier.
+                type: string
+              suspendIO:
+                description: |-
+                  suspendIO, when true, signals every satellite that hosts a
+                  diskful replica of the parent ResourceDefinition to call
+                  `drbdsetup suspend-io <rd>` before taking the local backing
+                  snapshot. Bug 351: two diskful replicas snapshotting
+                  independently would otherwise capture divergent bytes while
+                  the application writer's traffic is still streaming through
+                  DRBD; suspending I/O on every peer first freezes the
+                  replicated block stream at a single, common point so the
+                  per-node LV / zvol snapshots all reflect the same
+                  point-in-time bytes.
+
+                  Lifecycle (driven by the controller-side SnapshotReconciler):
+                    1. apiserver creates Snapshot CRD with SuspendIO=true,
+                       TakeSnapshot=false. Satellites stamp
+                       Status.NodeStatus[].SuspendIOAcked once their suspend-io
+                       call returns.
+                    2. Once every targeted node has acked, the controller stamps
+                       Spec.TakeSnapshot=true. Satellites then dispatch
+                       provider.CreateSnapshot and stamp Status.NodeStatus[].Ready.
+                    3. Once every targeted node is Ready (or any has Failed=true),
+                       the controller flips Spec.SuspendIO=false and satellites
+                       issue `drbdsetup resume-io <rd>`.
+
+                  Resume-on-failure is mandatory — a partially-acked suspend
+                  followed by an abort MUST still resume I/O on the nodes that
+                  did ack, otherwise application I/O hangs forever. The
+                  controller's abort path clears SuspendIO unconditionally.
+                type: boolean
+              takeSnapshot:
+                description: |-
+                  takeSnapshot, when true, signals each satellite that has
+                  already acked the suspend-io barrier (see SuspendIO above) to
+                  dispatch the local provider.CreateSnapshot. The flag is
+                  stamped by the controller-side SnapshotReconciler once every
+                  targeted node's Status.NodeStatus[].SuspendIOAcked is true —
+                  the two-step `suspend → take → resume` shape mirrors upstream
+                  LINSTOR's CtrlSnapshotCrtApiCallHandler 3-phase flow so the
+                  per-node backing snapshots all reflect the same point-in-time
+                  bytes.
+                type: boolean
+              volumeDefinitions:
+                description: volumeDefinitions records the size of each volume captured.
+                items:
+                  description: SnapshotVolumeRef is one volume slot inside a Snapshot.
+                  properties:
+                    sizeKib:
+                      format: int64
+                      type: integer
+                    volumeNumber:
+                      format: int32
+                      type: integer
+                  required:
+                  - sizeKib
+                  - volumeNumber
+                  type: object
+                type: array
+            required:
+            - resourceDefinitionName
+            - snapshotName
+            type: object
+          status:
+            description: status defines the observed state of Snapshot
+            properties:
+              conditions:
+                description: conditions represent the current state of the Snapshot.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              flags:
+                description: |-
+                  flags carries terminal-state markers. Currently only
+                  "FAILED" is meaningful — stamped by the satellite when
+                  CreateSnapshot returns a non-retryable error class.
+                items:
+                  type: string
+                type: array
+              nodeStatus:
+                description: nodeStatus reports per-node readiness from the satellites.
+                items:
+                  description: |-
+                    SnapshotPerNodeStatus is the satellite-reported state of one
+                    materialisation of the snapshot.
+                  properties:
+                    createTimestamp:
+                      format: int64
+                      type: integer
+                    failed:
+                      description: |-
+                        failed is stamped true when the local satellite hit a
+                        terminal failure while either suspending I/O, taking the
+                        per-node snapshot, or resuming I/O. The controller-side
+                        SnapshotReconciler treats any Failed=true entry as an abort
+                        signal: it flips Spec.SuspendIO=false immediately so the
+                        already-suspended siblings resume rather than wait
+                        indefinitely on the doomed node, and stamps the parent
+                        Snapshot's Status.Flags with FAILED. Bug 351.
+                      type: boolean
+                    nodeName:
+                      type: string
+                    ready:
+                      type: boolean
+                    suspendIOAcked:
+                      description: |-
+                        suspendIOAcked is stamped true by the local satellite once
+                        `drbdsetup suspend-io <rd>` has returned for the parent
+                        ResourceDefinition. The controller-side SnapshotReconciler
+                        gates the Phase-2 `TakeSnapshot` transition on every targeted
+                        node having acked. Cleared back to false when the controller
+                        flips Spec.SuspendIO=false and the satellite issues
+                        `drbdsetup resume-io <rd>`. Bug 351.
+                      type: boolean
+                  required:
+                  - nodeName
+                  type: object
+                type: array
+            type: object
+        required:
+        - spec
+        type: object
+        x-kubernetes-validations:
+        - message: metadata.name must equal <spec.resourceDefinitionName>.<spec.snapshotName>
+            (case-insensitive)
+          optionalOldSelf: true
+          rule: oldSelf.hasValue() || self.metadata.name.lowerAscii() == (self.spec.resourceDefinitionName
+            + '.' + self.spec.snapshotName).lowerAscii()
+    served: true
+    storage: true
+    subresources:
+      status: {}
