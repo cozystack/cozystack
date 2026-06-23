@@ -35,7 +35,7 @@ seaweedfs:
   volume:
     replicas: 2
     resizeHook:
-      image: docker.io/alpine/k8s:1.33.4
+      image: docker.io/alpine/k8s:1.36.2
     # minimum free disk space(in percents). If free disk space lower this value - all volumes marks as ReadOnly
     minFreeSpacePercent: 5
     dataDirs:
