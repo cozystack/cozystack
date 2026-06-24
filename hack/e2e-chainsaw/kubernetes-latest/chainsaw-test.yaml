@@ -35,3 +35,16 @@ spec:
           run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true'
         check:
           ($error == null): true
+    finally:
+    # Always runs after try/catch — i.e. after the crust-gather snapshots on a
+    # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
+    # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
+    # On success run_kubernetes_test already tore it down, so this is a no-op then.
+    - description: tear down the tenant Kubernetes cluster
+      script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          cozy_cleanup
