@@ -1,0 +1,85 @@
+suite: resources.sanitize CPU formatting
+
+# CPU requests must always be emitted as whole milliCPU. The VPA admission
+# webhook rejects MinAllowed/MaxAllowed when the value is not an integer
+# milliCPU (e.g. when cpuAllocationRatio does not evenly divide the input).
+# Pod resources.requests.cpu also gets the same integer-mCPU formatting for
+# consistency; kube-apiserver accepts both forms.
+#
+# Regression: https://github.com/cozystack/cozystack/issues/2917
+
+templates:
+  - templates/tests/resources.yaml
+
+release:
+  name: r
+  namespace: default
+  revision: 1
+  isUpgrade: false
+
+tests:
+  - it: emits whole milliCPU with the default cpuAllocationRatio (10)
+    set:
+      _cluster: {}
+      _namespace: {}
+      resources:
+        cpu: "250m"
+        memory: "256Mi"
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "25m"
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: "250m"
+
+  - it: rounds to the nearest milliCPU when cpuAllocationRatio does not divide the input evenly
+    set:
+      _cluster:
+        cpu-allocation-ratio: "7"
+      _namespace: {}
+      resources:
+        cpu: "250m"
+        memory: "256Mi"
+    asserts:
+      # 250m / 7 = 35.714...m, rounded to nearest = 36m (integer mCPU,
+      # accepted by VPA admission webhook).
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "36m"
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: "250m"
+
+  - it: rounds the upper bound to integer milliCPU too
+    set:
+      _cluster:
+        cpu-allocation-ratio: "7"
+      _namespace: {}
+      resources:
+        cpu: "5000m"
+        memory: "8Gi"
+    asserts:
+      # 5000m / 7 = 714.285...m, rounded to nearest = 714m.
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "714m"
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: "5000m"
+
+  - it: accepts whole-core CPU input and still emits milliCPU
+    set:
+      _cluster: {}
+      _namespace: {}
+      resources:
+        cpu: "2"
+        memory: "256Mi"
+    asserts:
+      # 2 cores / 10 = 0.2 cores = 200m.
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "200m"
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: "2"
