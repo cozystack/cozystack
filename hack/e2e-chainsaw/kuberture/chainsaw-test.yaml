@@ -82,6 +82,7 @@ spec:
   - name: assert-annotation-shape
     try:
     - script:
+        timeout: 2m
         content: |
           set -eu
           pub_host=kuberture-e2e-public.cozystack.test
@@ -89,8 +90,24 @@ spec:
           pub_prefix=external-dns.alpha.kubernetes.io/
           int_prefix=kuberture-e2e-internal-dns.io/
 
-          pub_json=$(kubectl -n cozy-kuberture get service kuberture-e2e-public -o json)
-          int_json=$(kubectl -n cozy-kuberture get service kuberture-e2e-internal -o json)
+          # The target annotation is copied off the EndpointSlice asynchronously,
+          # so it can lag the Service objects that wait-output-services gated on.
+          # Poll until both Services carry it before asserting the annotation
+          # shape, rather than failing one-shot under `set -e` on a slow cluster.
+          deadline=$(( $(date +%s) + 90 ))
+          until
+            pub_json=$(kubectl -n cozy-kuberture get service kuberture-e2e-public -o json) &&
+            int_json=$(kubectl -n cozy-kuberture get service kuberture-e2e-internal -o json) &&
+            [ -n "$(echo "$pub_json" | jq -r --arg k "${pub_prefix}target" '.metadata.annotations[$k] // ""')" ] &&
+            [ -n "$(echo "$int_json" | jq -r --arg k "${int_prefix}target" '.metadata.annotations[$k] // ""')" ]
+          do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "kuberture target annotation not populated within 90s" >&2
+              kubectl -n cozy-kuberture get service kuberture-e2e-public kuberture-e2e-internal -o yaml >&2 || true
+              exit 1
+            fi
+            sleep 3
+          done
 
           # Both Services must be headless.
           test "$(echo "$pub_json" | jq -r '.spec.clusterIP')" = "None"
@@ -101,10 +118,6 @@ spec:
           test "$(echo "$int_json" | jq -r --arg k "${int_prefix}hostname" '.metadata.annotations[$k]')" = "$int_host"
           test "$(echo "$pub_json" | jq -r --arg k "${pub_prefix}ttl" '.metadata.annotations[$k]')" = "60"
           test "$(echo "$int_json" | jq -r --arg k "${int_prefix}ttl" '.metadata.annotations[$k]')" = "300"
-
-          # target is populated from the EndpointSlice (value is cluster-specific).
-          test -n "$(echo "$pub_json" | jq -r --arg k "${pub_prefix}target" '.metadata.annotations[$k] // ""')"
-          test -n "$(echo "$int_json" | jq -r --arg k "${int_prefix}target" '.metadata.annotations[$k] // ""')"
 
           # Per-output isolation: neither Service carries the other prefix.
           test "$(echo "$pub_json" | jq -r --arg k "${int_prefix}hostname" '.metadata.annotations[$k] // "absent"')" = "absent"
@@ -127,7 +140,11 @@ spec:
               [ "$(date +%s)" -ge "$deadline" ] && break
               sleep 3
             done
-            phase=$(kubectl -n cozy-kuberture get pod "kuberture-e2e-edns-${probe}" -o jsonpath='{.status.phase}')
+            # Guard the capture: if the loop timed out before the Pod existed,
+            # an unguarded read fails under `set -e` and skips the dump below.
+            if ! phase=$(kubectl -n cozy-kuberture get pod "kuberture-e2e-edns-${probe}" -o jsonpath='{.status.phase}' 2>/dev/null); then
+              phase="Missing"
+            fi
             if [ "$phase" != "Succeeded" ]; then
               echo "==== probe ${probe} failed: phase=${phase} ===="
               kubectl -n cozy-kuberture describe pod "kuberture-e2e-edns-${probe}" || true

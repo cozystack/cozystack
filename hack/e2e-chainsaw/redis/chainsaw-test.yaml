@@ -61,4 +61,4 @@ spec:
           metadata:
             name: rfr-redis-test
           status:
-            replicas: 2
+            readyReplicas: 2
