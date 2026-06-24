@@ -31,9 +31,14 @@ var (
 )
 
 const (
-	// Forklift labels
-	forkliftPlanLabel = "forklift.konveyor.io/plan"
-	forkliftVMLabel   = "forklift.konveyor.io/vm-name"
+	// Forklift labels stamped on migrated VMs (release-2.11+).
+	// NOTE: the "plan" label value is the Plan UID, not its name; resolve
+	// it to a name with resolvePlanName before looking up the Plan/Migration.
+	forkliftPlanLabel = "plan"
+	forkliftVMLabel   = "vmID"
+
+	// Label recording the source Forklift plan name on the adopted VMInstance.
+	importPlanLabel = "vm-import.cozystack.io/plan"
 
 	// Cozystack adoption labels
 	adoptedLabel       = "cozystack.io/adopted"
@@ -228,10 +233,16 @@ func (c *AdoptionController) getForkliftVMs(ctx context.Context) ([]kubevirtv1.V
 			continue
 		}
 
-		// Check adoption enabled annotation on the Plan
-		planName := labels[forkliftPlanLabel]
-		if planName == "" {
+		// Resolve the Plan name from the Plan UID Forklift stamps on the VM.
+		planUID := labels[forkliftPlanLabel]
+		if planUID == "" {
 			klog.V(2).Infof("VM %s/%s has no forklift plan label, skipping", item.GetNamespace(), item.GetName())
+			continue
+		}
+
+		planName, ok := c.resolvePlanName(ctx, item.GetNamespace(), planUID)
+		if !ok {
+			klog.V(2).Infof("VM %s/%s: no Plan found for UID %s, skipping", item.GetNamespace(), item.GetName(), planUID)
 			continue
 		}
 
@@ -257,6 +268,28 @@ func (c *AdoptionController) getForkliftVMs(ctx context.Context) ([]kubevirtv1.V
 	}
 
 	return vms, nil
+}
+
+// resolvePlanName resolves the Forklift Plan name from the Plan UID that
+// Forklift stamps on migrated VMs via the "plan" label. Returns the Plan
+// name and true when a Plan with that UID exists in the namespace.
+func (c *AdoptionController) resolvePlanName(ctx context.Context, namespace, planUID string) (string, bool) {
+	gvr := schema.GroupVersionResource{
+		Group:    "forklift.konveyor.io",
+		Version:  "v1beta1",
+		Resource: "plans",
+	}
+	list, err := c.dynamicClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		klog.V(2).Infof("Failed to list Plans in %s: %v", namespace, err)
+		return "", false
+	}
+	for _, p := range list.Items {
+		if string(p.GetUID()) == planUID {
+			return p.GetName(), true
+		}
+	}
+	return "", false
 }
 
 // isMigrationComplete checks that the Forklift Migration for this plan has
@@ -346,6 +379,74 @@ func (c *AdoptionController) isAdoptionEnabled(ctx context.Context, namespace, p
 	return enabled
 }
 
+// getTargetNamespace returns the namespace the VMInstance should be created in.
+// Forklift conversion runs in a privileged system namespace, but the managed
+// VMInstance must land in the user's tenant. The target tenant is recorded on
+// the Plan via the `vm-import.cozystack.io/target-namespace` annotation.
+// Defaults to the VM's own namespace (same-namespace adoption) when unset.
+func (c *AdoptionController) getTargetNamespace(ctx context.Context, namespace, planName string) string {
+	gvr := schema.GroupVersionResource{Group: "forklift.konveyor.io", Version: "v1beta1", Resource: "plans"}
+	plan, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, planName, metav1.GetOptions{})
+	if err != nil {
+		return namespace
+	}
+	if ann := plan.GetAnnotations(); ann != nil {
+		if ns := ann["vm-import.cozystack.io/target-namespace"]; ns != "" {
+			return ns
+		}
+	}
+	return namespace
+}
+
+// cloneDataVolume creates a CDI cross-namespace clone of srcName (in srcNs) into
+// dstNs as dstName, sized from the source PVC. Idempotent: a no-op if the target
+// DataVolume already exists.
+func (c *AdoptionController) cloneDataVolume(ctx context.Context, srcNs, srcName, dstNs, dstName string) error {
+	dvGVR := schema.GroupVersionResource{Group: "cdi.kubevirt.io", Version: "v1beta1", Resource: "datavolumes"}
+	if _, err := c.dynamicClient.Resource(dvGVR).Namespace(dstNs).Get(ctx, dstName, metav1.GetOptions{}); err == nil {
+		return nil
+	}
+	pvcGVR := schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}
+	srcPVC, err := c.dynamicClient.Resource(pvcGVR).Namespace(srcNs).Get(ctx, srcName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("source PVC %s/%s not found: %w", srcNs, srcName, err)
+	}
+	size, _, _ := unstructured.NestedString(srcPVC.Object, "spec", "resources", "requests", "storage")
+	sc, _, _ := unstructured.NestedString(srcPVC.Object, "spec", "storageClassName")
+	volMode, _, _ := unstructured.NestedString(srcPVC.Object, "spec", "volumeMode")
+	accessModes, _, _ := unstructured.NestedStringSlice(srcPVC.Object, "spec", "accessModes")
+	storage := map[string]interface{}{
+		"resources": map[string]interface{}{"requests": map[string]interface{}{"storage": size}},
+	}
+	if sc != "" {
+		storage["storageClassName"] = sc
+	}
+	if volMode != "" {
+		storage["volumeMode"] = volMode
+	}
+	if len(accessModes) > 0 {
+		am := make([]interface{}, len(accessModes))
+		for i, a := range accessModes {
+			am[i] = a
+		}
+		storage["accessModes"] = am
+	}
+	dv := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": "cdi.kubevirt.io/v1beta1",
+		"kind":       "DataVolume",
+		"metadata":   map[string]interface{}{"name": dstName, "namespace": dstNs},
+		"spec": map[string]interface{}{
+			"source":  map[string]interface{}{"pvc": map[string]interface{}{"namespace": srcNs, "name": srcName}},
+			"storage": storage,
+		},
+	}}
+	if _, err := c.dynamicClient.Resource(dvGVR).Namespace(dstNs).Create(ctx, dv, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("failed to create clone DataVolume %s/%s: %w", dstNs, dstName, err)
+	}
+	klog.Infof("Cloning disk %s/%s -> %s/%s", srcNs, srcName, dstNs, dstName)
+	return nil
+}
+
 func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualMachine) error {
 	klog.Infof("Adopting VM %s/%s into Cozystack...", vm.Namespace, vm.Name)
 
@@ -425,27 +526,35 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 			continue
 		}
 
-		dv, hasDV := volMap["dataVolume"]
-		if !hasDV {
-			klog.V(3).Infof("VM %s/%s: skipping volume %d: no dataVolume", vm.Namespace, vm.Name, i)
-			continue
-		}
-
-		dvMap, ok := dv.(map[string]interface{})
-		if !ok {
-			klog.V(2).Infof("VM %s/%s: skipping volume %d: dataVolume has unexpected type %T", vm.Namespace, vm.Name, i, dv)
-			continue
-		}
-
-		dvNameRaw, hasName := dvMap["name"]
-		if !hasName {
-			klog.V(2).Infof("VM %s/%s: skipping volume %d: dataVolume has no name", vm.Namespace, vm.Name, i)
-			continue
-		}
-
-		dvName, ok := dvNameRaw.(string)
-		if !ok {
-			klog.V(2).Infof("VM %s/%s: skipping volume %d: dataVolume name has unexpected type %T", vm.Namespace, vm.Name, i, dvNameRaw)
+		// The source disk is backed either by a DataVolume (classic Forklift
+		// flow) or by a PVC populated by the CDI volume populator (the flow
+		// Forklift uses when it creates the VM itself). Resolve the source
+		// name for both; cloneDataVolume clones from a PVC source either way.
+		var dvName string
+		if dv, hasDV := volMap["dataVolume"]; hasDV {
+			dvMap, ok := dv.(map[string]interface{})
+			if !ok {
+				klog.V(2).Infof("VM %s/%s: skipping volume %d: dataVolume has unexpected type %T", vm.Namespace, vm.Name, i, dv)
+				continue
+			}
+			dvName, ok = dvMap["name"].(string)
+			if !ok || dvName == "" {
+				klog.V(2).Infof("VM %s/%s: skipping volume %d: dataVolume has no name", vm.Namespace, vm.Name, i)
+				continue
+			}
+		} else if pvc, hasPVC := volMap["persistentVolumeClaim"]; hasPVC {
+			pvcMap, ok := pvc.(map[string]interface{})
+			if !ok {
+				klog.V(2).Infof("VM %s/%s: skipping volume %d: persistentVolumeClaim has unexpected type %T", vm.Namespace, vm.Name, i, pvc)
+				continue
+			}
+			dvName, ok = pvcMap["claimName"].(string)
+			if !ok || dvName == "" {
+				klog.V(2).Infof("VM %s/%s: skipping volume %d: persistentVolumeClaim has no claimName", vm.Namespace, vm.Name, i)
+				continue
+			}
+		} else {
+			klog.V(3).Infof("VM %s/%s: skipping volume %d: no dataVolume or persistentVolumeClaim", vm.Namespace, vm.Name, i)
 			continue
 		}
 
@@ -552,6 +661,20 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 		return fmt.Errorf("HelmRelease name %q exceeds 63 characters", helmReleaseName)
 	}
 
+	// Cross-namespace adoption: when the Plan targets a different (tenant)
+	// namespace than where conversion ran, the disk(s) are cloned into the
+	// tenant and a fresh VMInstance is created there (the in-place Helm
+	// take-over below only works within a single namespace).
+	planName, ok := c.resolvePlanName(ctx, vm.Namespace, vm.Labels[forkliftPlanLabel])
+	if !ok {
+		return fmt.Errorf("could not resolve Forklift Plan for UID %q in namespace %s", vm.Labels[forkliftPlanLabel], vm.Namespace)
+	}
+	targetNamespace := c.getTargetNamespace(ctx, vm.Namespace, planName)
+	if targetNamespace != vm.Namespace {
+		return c.adoptVMCrossNamespace(ctx, vm, targetNamespace, vmInstanceName,
+			disks, mappedNetworks, firmware, instanceType, preference, runStrategy, planName)
+	}
+
 	// Check if VMInstance already exists
 	vmInstanceGVR := schema.GroupVersionResource{
 		Group:    vmInstanceGroup,
@@ -591,7 +714,7 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 				"namespace": vm.Namespace,
 				"labels": map[string]interface{}{
 					adoptedSourceLabel: "vm-import",
-					forkliftPlanLabel:  vm.Labels[forkliftPlanLabel],
+					importPlanLabel:    planName,
 				},
 				"annotations": map[string]interface{}{
 					"vm-import.cozystack.io/original-vm-name": vm.Name,
@@ -664,6 +787,95 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 	}
 
 	klog.Infof("Successfully adopted VM %s/%s", vm.Namespace, vm.Name)
+	return nil
+}
+
+// adoptVMCrossNamespace clones the imported VM's disks into the target tenant
+// namespace and creates a fresh VMInstance there referencing the clones. Used
+// when conversion ran in a privileged system namespace but the managed VM must
+// live in the user's tenant (the in-place Helm take-over only works in a
+// single namespace).
+func (c *AdoptionController) adoptVMCrossNamespace(ctx context.Context, vm kubevirtv1.VirtualMachine,
+	targetNamespace, vmInstanceName string, disks, networks []interface{},
+	firmware map[string]interface{}, instanceType, preference, runStrategy, planName string) error {
+
+	vmInstanceGVR := schema.GroupVersionResource{Group: vmInstanceGroup, Version: vmInstanceVersion, Resource: "vminstances"}
+
+	// Idempotency: if the VMInstance already exists in the tenant, just mark the source adopted.
+	if _, err := c.dynamicClient.Resource(vmInstanceGVR).Namespace(targetNamespace).Get(ctx, vmInstanceName, metav1.GetOptions{}); err == nil {
+		klog.Infof("VMInstance %s/%s already exists (cross-namespace), marking source VM adopted", targetNamespace, vmInstanceName)
+		return c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName, "vm-instance-"+vmInstanceName)
+	}
+
+	// Clone each disk into the target namespace and repoint the disk to the clone.
+	for _, d := range disks {
+		dm, ok := d.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		srcDV, _ := dm["dvName"].(string)
+		diskName, _ := dm["name"].(string)
+		if srcDV == "" {
+			continue
+		}
+		cloneName := vmInstanceName + "-" + diskName
+		if len(cloneName) > 63 {
+			return fmt.Errorf("clone DataVolume name %q exceeds 63 characters", cloneName)
+		}
+		if err := c.cloneDataVolume(ctx, vm.Namespace, srcDV, targetNamespace, cloneName); err != nil {
+			return fmt.Errorf("cross-namespace disk clone failed: %w", err)
+		}
+		dm["dvName"] = cloneName
+	}
+
+	spec := map[string]interface{}{
+		"fullnameOverride": vmInstanceName,
+		"runStrategy":      runStrategy,
+		"instanceType":     instanceType,
+		"instanceProfile":  preference,
+		"disks":            disks,
+		"external":         false,
+		"externalMethod":   "PortList",
+		"externalPorts":    []interface{}{int64(22)},
+		"gpus":             []interface{}{},
+		"resources":        map[string]interface{}{},
+		"sshKeys":          []interface{}{},
+		"networks":         networks,
+		"cloudInit":        "",
+		"cloudInitSeed":    "",
+	}
+	if firmware != nil {
+		spec["firmware"] = firmware
+	}
+
+	vmInstance := &unstructured.Unstructured{Object: map[string]interface{}{
+		"apiVersion": fmt.Sprintf("%s/%s", vmInstanceGroup, vmInstanceVersion),
+		"kind":       vmInstanceKind,
+		"metadata": map[string]interface{}{
+			"name":      vmInstanceName,
+			"namespace": targetNamespace,
+			"labels": map[string]interface{}{
+				adoptedSourceLabel: "vm-import",
+				importPlanLabel:    planName,
+			},
+			"annotations": map[string]interface{}{
+				"vm-import.cozystack.io/original-vm-name":      vm.Name,
+				"vm-import.cozystack.io/original-vm-namespace": vm.Namespace,
+				"vm-import.cozystack.io/adopted-at":            time.Now().Format(time.RFC3339),
+			},
+		},
+		"spec": spec,
+	}}
+
+	if _, err := c.dynamicClient.Resource(vmInstanceGVR).Namespace(targetNamespace).Create(ctx, vmInstance, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("failed to create VMInstance %s/%s: %w", targetNamespace, vmInstanceName, err)
+	}
+	klog.Infof("Created VMInstance %s/%s (cross-namespace from VM %s/%s)", targetNamespace, vmInstanceName, vm.Namespace, vm.Name)
+
+	// Mark the source VM as adopted so it is not processed again.
+	if err := c.labelVMAsAdopted(ctx, vm.Namespace, vm.Name, vmInstanceName, "vm-instance-"+vmInstanceName); err != nil {
+		klog.Warningf("VMInstance created but failed to label source VM %s/%s as adopted: %v", vm.Namespace, vm.Name, err)
+	}
 	return nil
 }
 
