@@ -33,9 +33,10 @@ cozystackOperator:
   # platform source. When non-empty, sets spec.secretRef on the generated
   # OCIRepository or GitRepository resource. Secret type depends on source kind:
   #   OCI (oci://...): kubernetes.io/dockerconfigjson with registry credentials.
-  #   Git over HTTPS:  Opaque/generic secret with `username` + `password` keys.
-  #   Git over SSH:    Opaque/generic secret with `identity`, `identity.pub`,
-  #                    and `known_hosts` keys.
+  #   Git over HTTPS:  Opaque secret with `username`+`password`, or `bearerToken`.
+  #   Git over SSH:    Opaque secret with `identity` (PEM private key) and `known_hosts`.
+  # The Secret must already exist in cozy-system before the operator reconciles;
+  # otherwise source-controller will report a failed condition until it is created.
   # See FluxCD source-controller docs for the exact key layout per scheme.
   platformSourceSecret: ''
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
