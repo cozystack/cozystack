@@ -29,7 +29,11 @@ _tenant_snapshot_on_fail() {
   [ "$_rc" -eq 0 ] && return 0
   command -v crust-gather >/dev/null 2>&1 || return 0
   [ -n "${CURRENT_TENANT_KC:-}" ] && [ -f "${CURRENT_TENANT_KC}" ] || return 0
-  _snap="${COZY_REPORT_DIR:-_out/cozyreport}/snapshots/$(basename "${TEST_FILE:-tenant}" .bats)"
+  # COZY_SNAPSHOT_NAME is the Chainsaw test name (set in the kubernetes-* test's
+  # script env), so the tenant snapshot co-locates with the host snapshot the
+  # global .chainsaw.yaml catch writes under snapshots/<test>/. Falls back to a
+  # generic name if sourced outside the Chainsaw harness.
+  _snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}"
   mkdir -p "$_snap" 2>/dev/null || true
   echo "» capturing tenant crust-gather snapshot (${CURRENT_TENANT_KC}) before teardown"
   # Bounded with a timeout for the same reason as the host snapshot in
