@@ -36,6 +36,12 @@ We welcome many types of contributions including:
 The best way to reach us with a question when contributing is to drop a line in
 our [Telegram channel](https://t.me/cozystack), or start a new GitHub discussion.
 
+## Reporting Security Vulnerabilities
+
+**Do not report security vulnerabilities through public GitHub issues.**
+
+Please use [GitHub Private Vulnerability Reporting](https://github.com/cozystack/cozystack/security/advisories/new) or email **cncf-cozystack-security@lists.cncf.io**. See [SECURITY.md](SECURITY.md) for full details.
+
 ## Raising Issues
 
 When raising issues, please specify the following:
