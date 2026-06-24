@@ -37,6 +37,21 @@
 #   - OVS/OVN on the node: `ovs-ofctl dump-flows br-int`, and the OVN
 #     Port_Binding / Logical_Switch_Port for the pod (LSP name = <pod>.<ns> in
 #     kube-ovn) plus a bounded `ovn-sbctl lflow-list`.
+#   - OVN flow-programming timing on the node (ovs-ovn pod, app=ovs -- its
+#     openvswitch container also runs ovn-controller): the tail of
+#     /var/log/ovn/ovn-controller.log plus a grep for the decisive lines
+#     (physical_flow_output, if_status_mgr, "took <N>ms", recompute,
+#     "Unreasonably long ... poll interval"); the per-interface ovn-installed
+#     flag + ovn-installed-ts on the pod's OVS interface; and the ovs-ovn
+#     container's cgroup cpu.stat (nr_throttled / throttled_usec). Why: the
+#     host->local-pod transient is consistent with OVN incremental-processing
+#     lag -- ovn-installed=true (the kubelet/CNI "port ready" barrier) is set by
+#     if_status_mgr BEFORE physical_flow_output installs the LSP's local-delivery
+#     OpenFlow under burst, aggravated when ovn-controller is CPU-throttled (it
+#     shares the ovs-ovn CPU limit with vswitchd). A `physical_flow_output ...
+#     took <N>ms` line spanning the failure window, an ovn-installed-ts that
+#     predates that flow, and non-zero cpu.stat throttling together make a
+#     recurrence dispositive.
 #
 # Robustness contract (matches docs/agents/e2e-testing.md): pure diagnostics,
 # no retries, no behavior change, no traps. Every live capture is time-boxed
@@ -149,6 +164,32 @@ capture_node() {
       echo "=== ovs-ofctl dump-flows br-int ==="
       timeout 25 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
         ovs-ofctl dump-flows br-int 2>&1 || true
+
+      echo
+      echo "=== ovn-controller.log decisive lines (flow-programming / I-P timing) ==="
+      # ovn-controller runs inside this ovs-ovn (app=ovs) pod's openvswitch
+      # container and logs to /var/log/ovn/ovn-controller.log. Grep the lines
+      # that pin OVN incremental-processing lag: physical_flow_output (installs
+      # the LSP local-delivery OpenFlow), if_status_mgr (sets ovn-installed --
+      # the CNI "port ready" barrier), and "took <N>ms" / recompute /
+      # "Unreasonably long ... poll interval" (ovn-controller stalls). A
+      # physical_flow_output "took <N>ms" spanning the failure window is proof.
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+        sh -c 'grep -E "physical_flow_output|if_status_mgr|took [0-9]+ ?ms|recompute|Unreasonably long" /var/log/ovn/ovn-controller.log 2>/dev/null | tail -n 400 || echo "no matching lines in /var/log/ovn/ovn-controller.log"' 2>&1 || true
+
+      echo
+      echo "=== ovn-controller.log tail (bounded) ==="
+      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+        sh -c 'tail -n 2000 /var/log/ovn/ovn-controller.log 2>/dev/null || echo "no /var/log/ovn/ovn-controller.log"' 2>&1 || true
+
+      echo
+      echo "=== ovs-ovn cgroup cpu.stat (ovn-controller/vswitchd CPU throttling) ==="
+      # ovs-ovn caps CPU (shared between ovn-controller and vswitchd); non-zero
+      # nr_throttled / throttled_usec means ovn-controller was CPU-starved, which
+      # aggravates the flow-programming lag above. cgroup v2 path first, v1
+      # fallback.
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+        sh -c 'cat /sys/fs/cgroup/cpu.stat 2>/dev/null || cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null || echo "no cpu.stat at /sys/fs/cgroup/cpu.stat (v2) or /sys/fs/cgroup/cpu/cpu.stat (v1)"' 2>&1 || true
     else
       echo
       echo "(no ovs pod found on node $node)"
@@ -194,6 +235,7 @@ printf '%s\n' "$affected" | {
     # Pod-specific state.
     pf="$OUT/pod-$ns-$pod.txt"
     agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$node")
+    ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$node")
     {
       echo "################################################################"
       echo "# POD $ns/$pod  podIP=$podip  node=$node  (Ready=$_ready)"
@@ -239,6 +281,27 @@ printf '%s\n' "$affected" | {
           ovn-sbctl --no-leader-only find port_binding "logical_port=$pod.$ns" 2>&1 || true
         timeout 20 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
           ovn-nbctl --no-leader-only find logical_switch_port "name=$pod.$ns" 2>&1 || true
+      fi
+
+      if [ -n "$ovs" ]; then
+        echo
+        echo "=== OVS interface ovn-installed flag + ts for iface-id=$pod.$ns (ovs pod $ovs) ==="
+        # kube-ovn stamps external_ids:ovn-installed (+ -ts) on the pod's OVS
+        # interface once ovn-controller reports the port programmed -- this is
+        # the barrier the CNI waits on. The OVS interface name is opaque, so
+        # look it up by iface-id (<pod>.<ns>), then read the flag + timestamp.
+        # An ovn-installed-ts set early (before physical_flow_output installed
+        # the local-delivery flow, see node-$node.txt) is the I-P-lag signature.
+        ovsif=$(timeout 20 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+          ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$pod.$ns" 2>/dev/null \
+          | head -n 1 | tr -d '" ')
+        if [ -n "$ovsif" ]; then
+          echo "ovs interface = $ovsif"
+          timeout 20 kubectl exec -n "$KUBEOVN_NS" "$ovs" -c openvswitch -- \
+            ovs-vsctl get interface "$ovsif" external_ids:ovn-installed external_ids:ovn-installed-ts 2>&1 || true
+        else
+          echo "no OVS interface with external_ids:iface-id=$pod.$ns"
+        fi
       fi
     } > "$pf" 2>&1 || true
   done
