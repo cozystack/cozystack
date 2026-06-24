@@ -21,6 +21,9 @@ skipGuestConversion: false
 ## @param {string} virtV2vImage - Override the virt-v2v conversion container image used by Forklift. Leave empty to use the operator default. Provided as an escape hatch for version mismatches in the conversion image.
 virtV2vImage: ""
 
+## @param {bool} xfsCompatibility - Use the XFS-capable virt-v2v image and omit the `--no-fstrim` flag. Works around an upstream Forklift inconsistency where the conversion entrypoint passes `--no-fstrim` to a `virt-v2v-inspector` that does not support it, which otherwise fails the migration after a successful disk conversion.
+xfsCompatibility: false
+
 ## @typedef {struct} VM - A virtual machine to migrate.
 ## @field {string} id - The managed object reference ID of the VM in vSphere (e.g. `vm-123`).
 ## @field {string} [name] - Optional target name for the VM in KubeVirt.
@@ -33,6 +36,9 @@ warm: false
 
 ## @param {bool} enableAdoption - Automatically label imported VMs for Cozystack adoption and dashboard visibility.
 enableAdoption: true
+
+## @param {string} tenantNamespace - Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption).
+tenantNamespace: ""
 
 ##
 ## @section Network Mapping
