@@ -1,4 +1,4 @@
-ARG VERSION=v1.19.3
+ARG VERSION=v1.19.5
 
 FROM quay.io/cilium/cilium:${VERSION} AS upstream
 
