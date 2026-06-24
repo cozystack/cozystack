@@ -1,13 +1,16 @@
+{{- if ne (include "tenant.name" .) "tenant-root" }}
 {{- $sourceSecret := lookup "v1" "Secret" "cozy-system" "patch-containerd" }}
 {{- if $sourceSecret }}
+---
 apiVersion: v1
 kind: Secret
 metadata:
-  name: {{ .Release.Name }}-patch-containerd
-  namespace: {{ .Release.Namespace }}
+  name: patch-containerd
+  namespace: {{ include "tenant.name" . }}
 type: {{ $sourceSecret.type }}
 data:
 {{- range $key, $value := $sourceSecret.data }}
-  {{ printf "%s: %s" $key ($value | quote) | indent 2 }}
+  {{ $key }}: {{ $value | quote }}
+{{- end }}
 {{- end }}
 {{- end }}
