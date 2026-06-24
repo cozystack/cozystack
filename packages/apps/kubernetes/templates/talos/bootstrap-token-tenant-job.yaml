@@ -88,6 +88,10 @@ spec:
               drop:
                 - ALL
             readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
           command:
             - sh
             - -ec

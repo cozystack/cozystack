@@ -68,16 +68,16 @@ spec:
     algorithm: Ed25519
   usages:
     - digital signature
-    - key encipherment
     - server auth
   dnsNames:
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
     - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "kubernetes.tenantClusterDomain" . }}
-  {{- /* spec.ipAddresses (Service ClusterIP) is patched in by the
-         talos-reconcile post-install hook once the Service exists.
-         Workers contact trustd at https://<ClusterIP>:50001 so the cert
-         must cover that IP — but the ClusterIP only exists after the
-         first Helm install pass, so a lookup-and-reuse here would race. */}}
+  {{- /* The cert intentionally carries DNS SANs only, no spec.ipAddresses.
+         Workers reach trustd via the Service DNS name (the worker's
+         machine.network.extraHostEntries injects the ClusterIP into
+         /etc/hosts), so the cert never needs an IP SAN patched in after the
+         ClusterIP becomes known — see the routing note in
+         talos-reconcile-job.yaml. */}}
   issuerRef:
     name: {{ .Release.Name }}-talos-ca
     kind: Issuer
