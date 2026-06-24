@@ -27,6 +27,7 @@ metadata:
 spec:
   realmName: cozy
   clusterKeycloakRef: keycloak-cozy
+  organizationsEnabled: {{ .Values.organizationsEnabled | default false }}
   {{- if $brandingConfig }}
   {{- if hasKey $brandingConfig "brandName" }}
   displayName: {{ $brandingConfig.brandName }}
