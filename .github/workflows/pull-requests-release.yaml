@@ -11,6 +11,10 @@ concurrency:
   group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+permissions:
+  contents: read
+
 jobs:
   finalize:
     name: Finalize Release
@@ -25,7 +29,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -34,7 +38,7 @@ jobs:
       # Extract tag from branch name  (branch = release-X.Y.Z*)
       - name: Extract tag from branch name
         id: get_tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -49,7 +53,7 @@ jobs:
 
       # Checkout repo & create / push annotated tag
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
@@ -65,7 +69,7 @@ jobs:
 
       # Ensure maintenance branch release-X.Y
       - name: Ensure maintenance branch release-X.Y
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -120,7 +124,7 @@ jobs:
 
       # Publish draft release and ensure correct latest flag
       - name: Publish draft release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |

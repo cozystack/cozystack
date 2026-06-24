@@ -4,9 +4,9 @@ on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: pr-size-${{ github.event.pull_request.number }}
@@ -15,8 +15,10 @@ concurrency:
 jobs:
   size:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
-      - uses: actions/github-script@v7
+      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const pr = context.payload.pull_request;

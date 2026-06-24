@@ -12,14 +12,21 @@ concurrency:
   group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+permissions:
+  contents: read
+
 jobs:
   detect-changes:
     name: Detect changes
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
         id: filter
         with:
           filters: |
@@ -52,7 +59,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -84,7 +91,7 @@ jobs:
 
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ secrets.OCIR_USER}}
           password: ${{ secrets.OCIR_TOKEN }}
@@ -112,13 +119,13 @@ jobs:
 
       - name: Upload git diff patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: pr-patch
           path: _out/assets/pr.patch
      
       - name: Upload Talos image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: talos-image
           path: _out/assets/nocloud-amd64.raw.xz
@@ -130,10 +137,12 @@ jobs:
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
+    permissions:
+      contents: read
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -141,7 +150,7 @@ jobs:
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -149,7 +158,7 @@ jobs:
       - name: Extract tag from PR branch (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         id: get_tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -163,7 +172,7 @@ jobs:
       - name: Find draft release & asset IDs (release PR)
         if: contains(github.event.pull_request.labels.*.name, 'release')
         id: fetch_assets
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -203,7 +212,7 @@ jobs:
       - name: Generate GitHub App token
         if: contains(github.event.pull_request.labels.*.name, 'release')
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -213,21 +222,21 @@ jobs:
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
       # `git diff origin/${BASE_REF}...HEAD` can resolve the base ref.
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       # ▸ Regular PR path – download artefacts produced by the *build* job
       - name: "Download Talos image (regular PR)"
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: talos-image
           path: _out/assets
 
       - name: Download PR patch
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: pr-patch
           path: _out/assets
@@ -376,7 +385,7 @@ jobs:
 
       - name: Upload cozyreport.tgz
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: cozyreport
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
@@ -389,7 +398,7 @@ jobs:
 
       - name: Upload image list
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: image-list
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
