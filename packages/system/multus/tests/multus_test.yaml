@@ -1,0 +1,31 @@
+suite: cozy-multus daemonset invariants
+release:
+  name: multus
+  namespace: cozy-multus
+tests:
+  # The daemonset image tag tracks the cozystack release version and is
+  # re-pinned by release-prep, so pin the repository (cozystack-built, not the
+  # upstream k8snetworkplumbingwg image) rather than the volatile tag.
+  - it: runs the cozystack-built multus image
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/cozystack/multus-cni:'
+
+  # Guards the cozystack CNI-ordering fix (multusMasterCNI pinned to the cilium
+  # conflist) so multus does not auto-detect kube-ovn ahead of cilium at node
+  # startup and bypass the cilium CNI chain. This is a hand-edit that lives in
+  # patches/customize-deployment.patch so it survives every make update.
+  - it: pins the master CNI to the cilium conflist
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["daemon-config.json"]
+          pattern: '"multusMasterCNI": "05-cilium\.conflist"'

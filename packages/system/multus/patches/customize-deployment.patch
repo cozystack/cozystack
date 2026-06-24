@@ -1,6 +1,6 @@
 --- a/packages/system/multus/templates/multus-daemonset-thick.yml
 +++ b/packages/system/multus/templates/multus-daemonset-thick.yml
-@@ -93,19 +93,19 @@ roleRef:
+@@ -94,19 +94,19 @@
  subjects:
    - kind: ServiceAccount
      name: multus
@@ -23,7 +23,14 @@
    labels:
      tier: node
      app: multus
-@@ -125,8 +125,8 @@ data:
+@@ -120,14 +120,15 @@
+         "cniConfigDir": "/host/etc/cni/net.d",
+         "multusAutoconfigDir": "/host/etc/cni/net.d",
+         "multusConfigFile": "auto",
++        "multusMasterCNI": "05-cilium.conflist",
+         "socketDir": "/host/run/multus/"
+     }
+ ---
  apiVersion: apps/v1
  kind: DaemonSet
  metadata:
@@ -34,7 +41,7 @@
    labels:
      tier: node
      app: multus
-@@ -159,10 +159,9 @@ spec:
+@@ -160,10 +161,9 @@
            resources:
              requests:
                cpu: "100m"

@@ -27,6 +27,11 @@ spec:
     - name: http
       port: {{ .Values.opencost.exporter.apiPort }}
       targetPort: {{ .Values.opencost.exporter.apiPort }}
+    {{- if .Values.opencost.mcp.enabled }}
+    - name: mcp-server
+      port: {{ .Values.opencost.mcp.port }}
+      targetPort: {{ .Values.opencost.mcp.port }}
+    {{- end }}
     {{- if .Values.opencost.ui.enabled }}
     - name: http-ui
       port: {{ .Values.opencost.ui.uiPort }}

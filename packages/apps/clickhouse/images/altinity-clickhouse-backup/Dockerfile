@@ -1,1 +1,1 @@
-FROM altinity/clickhouse-backup:2.6.32
+FROM altinity/clickhouse-backup:2.7.2

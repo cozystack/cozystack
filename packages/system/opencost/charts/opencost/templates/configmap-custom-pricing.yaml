@@ -5,7 +5,6 @@ metadata:
   name: {{ .Values.opencost.customPricing.configmapName }}
   namespace: {{ include "opencost.namespace" . }}
 data:
-  {{ include "opencost.configFileName" . }}.json: |-
     {
 {{- range $key, $val := .Values.opencost.customPricing.costModel }}
 {{ $key | quote | indent 6}}: {{ $val | quote }},
