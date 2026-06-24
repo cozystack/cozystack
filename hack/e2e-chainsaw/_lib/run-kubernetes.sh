@@ -1,12 +1,14 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 
-# Unconditional cleanup hook, invoked by cozytest.sh after this file's tests
-# (pass or fail). A failed run otherwise leaves the tenant cluster's worker-VM
-# PVCs (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
-# cascade-failing every storage-heavy app that runs afterwards. Delete the
-# cluster(s) and wait for teardown so the quota is freed. Defined at file scope
-# (not inside the @test) so cozytest.sh's parent-shell EXIT trap can reach it.
+# Unconditional cleanup hook, invoked from the kubernetes-* tests' Chainsaw
+# `finally` block (which always runs, after any crust-gather `catch`). The tenant
+# Kubernetes CR is applied imperatively (kubectl) inside run_kubernetes_test, so
+# Chainsaw's auto-cleanup does not track it — `finally` is where it gets
+# reclaimed. A failed run otherwise leaves the tenant cluster's worker-VM PVCs
+# (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
+# cascade-failing every storage-heavy suite that runs afterwards. Best-effort
+# (each delete is `|| true`) so a slow teardown never flips a passing test red.
 cozy_cleanup() {
   # Delete any test-scoped tenant API LoadBalancer Services left by a failed run
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
