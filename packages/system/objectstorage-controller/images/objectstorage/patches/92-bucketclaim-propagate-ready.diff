@@ -1,5 +1,5 @@
 diff --git a/controller/pkg/bucketclaim/bucketclaim.go b/controller/pkg/bucketclaim/bucketclaim.go
-index 2b55c49..e554761 100644
+index 2b55c49..9195195 100644
 --- a/controller/pkg/bucketclaim/bucketclaim.go
 +++ b/controller/pkg/bucketclaim/bucketclaim.go
 @@ -213,8 +213,23 @@ func (b *BucketClaimListener) provisionBucketClaimOperation(ctx context.Context,
@@ -27,7 +27,7 @@ index 2b55c49..e554761 100644
  	}
  
  	// Update status with retry logic for conflict errors
-@@ -282,6 +297,18 @@ func (b *BucketClaimListener) provisionBucketClaimOperation(ctx context.Context,
+@@ -282,6 +297,22 @@ func (b *BucketClaimListener) provisionBucketClaimOperation(ctx context.Context,
  		return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.FailedCreateBucket, err)
  	}
  
@@ -38,19 +38,31 @@ index 2b55c49..e554761 100644
 +	// internal/runtime/controller.go) and nothing mutates the BucketClaim after
 +	// this point. So while the Bucket is not ready, return an error to force a
 +	// rate-limited requeue; each retry re-reads the live Bucket above until its
-+	// readiness has been propagated onto the claim.
++	// readiness has been propagated onto the claim. Surface a Warning event so
++	// an operator can see why the claim is still pending (the returned error is
++	// logged at klog.V(3), suppressed at default verbosity); event aggregation
++	// folds the per-requeue repetition into a single counted entry.
 +	if !statusBucketReady {
-+		return fmt.Errorf("backend Bucket %q for BucketClaim %q not ready yet; requeuing", bucketName, bucketClaim.ObjectMeta.Name)
++		err := fmt.Errorf("backend Bucket %q for BucketClaim %q not ready yet; requeuing", bucketName, bucketClaim.ObjectMeta.Name)
++		return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.WaitingForBucket, err)
 +	}
 +
  	klog.V(3).Infof("Finished creating Bucket %v", bucketName)
  	return nil
  }
 diff --git a/controller/pkg/bucketclaim/bucketclaim_test.go b/controller/pkg/bucketclaim/bucketclaim_test.go
-index fea6f16..2a8149c 100644
+index fea6f16..837f7e5 100644
 --- a/controller/pkg/bucketclaim/bucketclaim_test.go
 +++ b/controller/pkg/bucketclaim/bucketclaim_test.go
-@@ -379,6 +379,18 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
+@@ -3,6 +3,7 @@ package bucketclaim
+ import (
+ 	"context"
+ 	"fmt"
++	"strings"
+ 	"sync"
+ 	"testing"
+ 
+@@ -379,6 +380,18 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
  		t.Fatalf("Error occurred when creating BucketClaim: %v", err)
  	}
  
@@ -69,7 +81,7 @@ index fea6f16..2a8149c 100644
  	// Cleanup
  	defer util.DeleteObjects(ctx, client, *bucketClaim, *bucketclass)
  
-@@ -436,8 +448,8 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
+@@ -436,8 +449,8 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
  		t.Errorf("Expected BucketName %s, got %s", expectedBucketName, updatedClaim.Status.BucketName)
  	}
  
@@ -80,7 +92,7 @@ index fea6f16..2a8149c 100644
  	}
  
  	// Verify finalizer was added
-@@ -445,3 +457,88 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
+@@ -445,3 +458,95 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
  		t.Errorf("Expected finalizer to be added, but it was not found")
  	}
  }
@@ -116,8 +128,15 @@ index fea6f16..2a8149c 100644
 +
 +		// The controller creates the Bucket with BucketReady=false and nothing
 +		// flips it here, so Add must report an error to force a requeue.
-+		if err := newListener(client).Add(ctx, bucketClaim); err == nil {
++		err = newListener(client).Add(ctx, bucketClaim)
++		if err == nil {
 +			t.Fatal("Add should return an error to requeue while the backend Bucket is not ready")
++		}
++		// Pin the stable substring the production requeue error carries. A
++		// refactor that drops the requeue (returning nil or a different error)
++		// would silently regress convergence; this keeps the contract loud.
++		if !strings.Contains(err.Error(), "not ready yet") {
++			t.Fatalf("Expected requeue error to contain %q, got: %v", "not ready yet", err)
 +		}
 +
 +		updated, err := client.ObjectstorageV1alpha1().BucketClaims(bucketClaim.Namespace).Get(ctx, bucketClaim.Name, metav1.GetOptions{})
