@@ -14,6 +14,12 @@ spec:
     try:
     - script:
         timeout: 40m
+        # Co-locate the tenant crust-gather snapshot (captured by
+        # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
+        # the global .chainsaw.yaml catch's host snapshot.
+        env:
+        - name: COZY_SNAPSHOT_NAME
+          value: ($test.metadata.name)
         content: |
           set -eu
           cd ../../..
