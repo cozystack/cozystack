@@ -31,12 +31,14 @@ EOF
     kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} -o yaml 2>&1 || true
     echo "=== backend Buckets (cluster-scoped) ==="
     kubectl get buckets.objectstorage.k8s.io -o wide 2>&1 || true
+    echo "=== objectstorage-controller ==="
+    kubectl -n cozy-objectstorage-controller get pods 2>&1 || true
     false
   }
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-admin >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
 
   # Get admin (readwrite) credentials
   kubectl -n tenant-test get secret bucket-${name}-admin -ojsonpath='{.data.BucketInfo}' | base64 -d > bucket-admin-credentials.json
