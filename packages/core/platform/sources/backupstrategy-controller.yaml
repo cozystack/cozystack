@@ -18,8 +18,16 @@ spec:
     # All three must be installed before the templates render, otherwise
     # the Helm release fails with "no matches for kind". Order is enforced
     # via dependsOn so a fresh-cluster bootstrap cannot race the CRDs.
+    #
+    # The cozy-backups Bucket is also created INTO the tenant-root namespace,
+    # which is provisioned by cozystack-basics (the static tenant-root release).
+    # Without the cozystack-basics edge the Bucket patch can race namespace
+    # creation on a fresh install and fail with `namespaces "tenant-root" not
+    # found`, which then races the install script's wait deadline. Depend on
+    # cozystack-basics so the target namespace exists first.
     dependsOn:
     - cozystack.networking
+    - cozystack.cozystack-basics
     - cozystack.backup-controller
     - cozystack.bucket-application
     - cozystack.objectstorage-controller

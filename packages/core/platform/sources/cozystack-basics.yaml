@@ -28,8 +28,11 @@ spec:
     # Drift detection is off on operator-generated HelmReleases, so a
     # capability gate in the templates would render the policy out at first
     # install and never add it back; ordering via dependsOn is the reliable
-    # fix. cozystack-basics is a dependency-graph leaf (nothing dependsOn it)
-    # and engine components consume none of its outputs, so this adds no cycle.
+    # fix. The cozystack-engine and gateway-api-crds packages it depends on
+    # consume none of cozystack-basics' outputs and do not depend back on it,
+    # so these edges add no cycle. (Downstream packages such as backupstrategy-
+    # controller dependsOn cozystack-basics, but those do not feed engine or
+    # gateway-api-crds, so they cannot close a loop here.)
     - cozystack.cozystack-engine
     - cozystack.gateway-api-crds
     components:
