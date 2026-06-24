@@ -4,6 +4,9 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	sha=$$(git ls-remote https://github.com/squat/kilo refs/heads/main | awk '{print $$1}') && \
 	sed -i "/ARG VERSION/ s|=.*|=$${sha}|g" images/kilo/Dockerfile

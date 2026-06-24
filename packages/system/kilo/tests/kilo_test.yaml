@@ -1,0 +1,66 @@
+suite: kilo DaemonSet image pin and mesh-arg wiring
+
+# Pins the surface this package owns on top of the vendored squat/kilo binary:
+#   - the kilo DaemonSet pulls the first-party image from the cozystack
+#     registry (repository is the load-bearing ref re-pinned by `make image`);
+#   - the default mesh args (location granularity, transit subnet, auto MTU,
+#     cni disabled, crosssubnet encapsulation) render as the kg binary expects;
+#   - meshGranularity plumbs through verbatim, including the `cross` value that
+#     the in-repo feat-add-cross-mesh-granularity.diff teaches the image to
+#     accept (the chart passes it straight to --mesh-granularity);
+#   - the cilium compatibility overlay adds --compatibility=cilium, and the
+#     default render carries no --compatibility arg.
+
+templates:
+  - templates/kilo.yaml
+
+tests:
+  - it: "DaemonSet pulls the first-party kilo image from the cozystack registry"
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "^ghcr\\.io/cozystack/cozystack/kilo:"
+
+  - it: "default mesh args render as the kg binary expects"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--cni=false"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--encapsulate=crosssubnet"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--mesh-granularity=location"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--subnet=100.66.0.0/16"
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--mtu=auto"
+
+  - it: "meshGranularity=cross plumbs through to the patched binary"
+    set:
+      kilo:
+        meshGranularity: cross
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--mesh-granularity=cross"
+
+  - it: "cilium compatibility overlay adds --compatibility=cilium"
+    set:
+      kilo:
+        compatibility: cilium
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: "--compatibility=cilium"
+
+  - it: "no --compatibility arg in the default render"
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: "--compatibility=cilium"
