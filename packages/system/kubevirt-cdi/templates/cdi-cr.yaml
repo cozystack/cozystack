@@ -3,7 +3,14 @@ kind: CDI
 metadata:
   name: cdi
 spec:
-  cloneStrategyOverride: csi-clone
+  # No cloneStrategyOverride: let CDI pick the clone strategy per StorageProfile.
+  # The previous global "csi-clone" override bypassed CDI's same-StorageClass
+  # guard, so cross-StorageClass clones (e.g. cloning a golden image from a
+  # replicated StorageClass into a node-local one) were issued as csi-clone
+  # and could never satisfy on the target driver — the PVC stayed unbound.
+  # Per-StorageProfile selection lets CSI-snapshot clones stay fast for the
+  # same-class case while falling back to host-assisted copy across classes.
+  # See https://github.com/cozystack/cozystack/issues/2908
   config:
     {{- with .Values.uploadProxyURL }}
     uploadProxyURLOverride: {{ quote . }}
