@@ -1,0 +1,21 @@
+# BuildKit daemon config for CI builds.
+#
+# Route docker.io base-image pulls through mirror.gcr.io, Google's public
+# pull-through cache for Docker Hub. The Build job authenticates only to the
+# push registry (OCIR), so every base image (golang, alpine, ubuntu, nginx, ...)
+# is otherwise pulled from Docker Hub ANONYMOUSLY and is subject to Docker Hub's
+# anonymous-pull rate limit -- which intermittently fails the build at
+# auth.docker.io/token with the base image left unresolved.
+#
+# mirror.gcr.io needs no auth, carries far higher limits, and transparently
+# falls through to Docker Hub on a cache miss. This config only takes effect on
+# a buildx builder created with `--config hack/buildkitd.toml` (CI wires this via
+# docker/setup-buildx-action `buildkitd-config:`); a plain local `make build` on
+# the default builder is unaffected.
+#
+# FAIL-SAFE: if mirror.gcr.io is unreachable, BuildKit logs "trying next host"
+# and falls back to registry-1.docker.io, so the build still succeeds (verified:
+# a build pointed at a non-resolving mirror fell back to Docker Hub and exited 0).
+# This strictly reduces build failures; it never introduces a new hard dependency.
+[registry."docker.io"]
+  mirrors = ["mirror.gcr.io"]

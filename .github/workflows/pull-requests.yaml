@@ -99,10 +99,32 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
+      # Build on a docker-container buildx builder whose buildkitd routes
+      # docker.io base-image pulls through mirror.gcr.io (hack/buildkitd.toml).
+      # The default embedded `docker` driver pulls base images from Docker Hub
+      # anonymously and intermittently trips its anonymous-pull rate limit
+      # (auth.docker.io/token failures leaving golang/ubuntu/nginx unresolved);
+      # the mirror sidesteps that and falls back to Docker Hub on a miss/outage.
+      # Mirrors build-main.yaml: create the builder under the SAME DOCKER_CONFIG
+      # the Build step reads (runner.temp/.docker, holding the OCIR auth) so
+      # buildx forwards push/cache auth to the container builder.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
       - name: Build
         run: make build
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Build on the docker-container builder created above so base-image
+          # pulls go through the docker.io mirror (BUILDX_ARGS adds
+          # --builder=$(BUILDER)).
+          BUILDER: ${{ steps.buildx.outputs.name }}
           # Unique per (PR, commit) so concurrent PR builds never push the same
           # tag. PUBLISH_VERSIONED/PUBLISH_FLOATING stay off — PR images are
           # consumed by digest, and :latest belongs to release builds.
