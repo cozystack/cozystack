@@ -1,3 +1,21 @@
+{{- if .Values.oidc.enabled }}
+{{- /*
+  Platform-level OIDC must be enabled before this tenant cluster can opt
+  in: apps/tenant only provisions the <tenant>-{view,use,admin,super-admin}
+  Keycloak realm groups (the subjects of the ClusterRoleBindings created
+  by templates/oidc-rbac-job.yaml) when _cluster.oidc-enabled=true, which
+  in turn is driven by authentication.oidc.enabled at the platform values.
+  Without those groups the apiserver gets OIDC args but every OIDC user
+  hits a silent 403 — fail render here instead.
+*/}}
+{{- $platformOidc := index .Values._cluster "oidc-enabled" | default "" | toString }}
+{{- if ne $platformOidc "true" }}
+{{- fail "oidc.enabled=true on this Kubernetes CR but the platform-level OIDC flag is not enabled (authentication.oidc.enabled=false at the cozystack platform → _cluster.oidc-enabled is not 'true'). The <tenant>-{view,use,admin,super-admin} Keycloak realm groups required by the tenant RBAC bindings are only provisioned by apps/tenant when the platform flag is true — enable authentication.oidc.enabled in the platform values first." }}
+{{- end }}
+{{- if and (not .Values.oidc.issuerUrl) (not (index .Values._cluster "root-host")) }}
+{{- fail "oidc.enabled=true but _cluster.root-host is not set; cannot derive OIDC issuer URL. Either set the platform root-host or pass oidc.issuerUrl explicitly." }}
+{{- end }}
+{{- end }}
 {{- $etcd := .Values._namespace.etcd }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
@@ -178,6 +196,13 @@ metadata:
 spec:
   apiServer:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
+    {{- if .Values.oidc.enabled }}
+    extraArgs:
+    - --oidc-issuer-url={{ include "kubernetes.oidcIssuerUrl" . }}
+    - --oidc-client-id={{ .Values.oidc.clientId }}
+    - --oidc-username-claim={{ .Values.oidc.usernameClaim }}
+    - --oidc-groups-claim={{ .Values.oidc.groupsClaim }}
+    {{- end }}
   controllerManager:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:

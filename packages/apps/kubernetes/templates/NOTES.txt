@@ -1,3 +1,43 @@
-To get kubeconfig for this cluster run:
+To get the admin kubeconfig (client-cert mTLS, full root) for this cluster run:
 
 kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-admin-kubeconfig -o go-template='{{`{{ printf "%s\n" (index .data "super-admin.conf" | base64decode) }}`}}'
+{{- if .Values.oidc.enabled }}
+
+OIDC authentication is enabled. End-users should use a Keycloak-issued
+identity instead of the admin kubeconfig above. Once `kubectl oidc-login`
+(github.com/int128/kubelogin) is installed, save the snippet below as
+~/.kube/config-{{ .Release.Name }} and run `export KUBECONFIG=~/.kube/config-{{ .Release.Name }}`:
+
+apiVersion: v1
+kind: Config
+clusters:
+- name: {{ .Release.Name }}
+  cluster:
+    server: https://{{ .Values.host | default (printf "%s.%s" .Release.Name (index .Values._cluster "root-host")) }}:443
+    # certificate-authority-data is the cluster CA;
+    # extract from {{ .Release.Name }}-admin-kubeconfig once and paste here.
+    certificate-authority-data: <base64 CA cert from admin kubeconfig>
+contexts:
+- name: {{ .Release.Name }}
+  context:
+    cluster: {{ .Release.Name }}
+    user: oidc
+current-context: {{ .Release.Name }}
+users:
+- name: oidc
+  user:
+    exec:
+      apiVersion: client.authentication.k8s.io/v1
+      command: kubectl
+      args:
+      - oidc-login
+      - get-token
+      - --oidc-issuer-url={{ include "kubernetes.oidcIssuerUrl" . }}
+      - --oidc-client-id={{ .Values.oidc.clientId }}
+
+Users in the Keycloak realm groups gain access via:
+  {{ include "kubernetes.tenantName" . }}-view        → kubectl verb-level: read-only
+  {{ include "kubernetes.tenantName" . }}-use         → CRUD on workloads
+  {{ include "kubernetes.tenantName" . }}-admin       → namespace admin
+  {{ include "kubernetes.tenantName" . }}-super-admin → cluster-admin (root)
+{{- end }}

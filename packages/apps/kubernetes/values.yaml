@@ -273,7 +273,41 @@ controlPlane:
 
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+## @field {string} [kubectl] - Image used by the OIDC RBAC bootstrap Job (kubectl apply against tenant API). Empty falls back to docker.io/clastix/kubectl:v1.32.
 
 ## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
 images:
   waitForKubeconfig: ""
+  kubectl: ""
+
+##
+## @section OIDC Authentication
+##
+
+## @typedef {struct} OIDC - OIDC authentication settings for the tenant kube-apiserver.
+## When enabled, the tenant API server validates Bearer tokens issued by the
+## platform Keycloak (realm `cozy`, public client `kubernetes`). Users in the
+## `<tenant-namespace>-{view,use,admin,super-admin}` realm groups gain access
+## via ClusterRoleBindings installed by a post-install Job into the tenant
+## cluster — binding those groups to the built-in `view`/`edit`/`admin`/
+## `cluster-admin` ClusterRoles respectively. Browser-flow logins are wired
+## through `kubectl oidc-login` (kubelogin); the post-install NOTES print a
+## ready-to-paste kubeconfig snippet with the matching exec block.
+##
+## Requires platform-level OIDC to be enabled (authentication.oidc.enabled at
+## the cozystack platform → _cluster.oidc-enabled=true) so that the parent
+## Tenant chart provisions the realm groups the apiserver expects; the chart
+## fails render with an actionable message otherwise.
+## @field {bool} enabled - Enable OIDC on the tenant kube-apiserver and provision tenant RBAC bindings.
+## @field {string} [issuerUrl] - Override OIDC issuer URL. When empty, derived as `https://keycloak.<_cluster.root-host>/realms/cozy` from the parent tenant metadata.
+## @field {string} [clientId] - OIDC client_id passed to the apiserver and embedded in the kubeconfig template. Defaults to `kubernetes` (the shared public client provisioned by `system/keycloak-configure`).
+## @field {string} [usernameClaim] - JWT claim used as the apiserver username. Defaults to `preferred_username`.
+## @field {string} [groupsClaim] - JWT claim used as the apiserver groups list. Defaults to `groups`.
+
+## @param {OIDC} oidc - OIDC authentication configuration for the tenant kube-apiserver.
+oidc:
+  enabled: false
+  issuerUrl: ""
+  clientId: "kubernetes"
+  usernameClaim: "preferred_username"
+  groupsClaim: "groups"

@@ -898,10 +898,50 @@
       "type": "object",
       "default": {},
       "properties": {
+        "kubectl": {
+          "description": "Image used by the OIDC RBAC bootstrap Job (kubectl apply against tenant API). Empty falls back to docker.io/clastix/kubectl:v1.32.",
+          "type": "string",
+          "default": ""
+        },
         "waitForKubeconfig": {
           "description": "Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.",
           "type": "string",
           "default": ""
+        }
+      }
+    },
+    "oidc": {
+      "description": "OIDC authentication configuration for the tenant kube-apiserver.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "clientId": {
+          "description": "OIDC client_id passed to the apiserver and embedded in the kubeconfig template. Defaults to `kubernetes` (the shared public client provisioned by `system/keycloak-configure`).",
+          "type": "string",
+          "default": "kubernetes"
+        },
+        "enabled": {
+          "description": "Enable OIDC on the tenant kube-apiserver and provision tenant RBAC bindings.",
+          "type": "boolean",
+          "default": false
+        },
+        "groupsClaim": {
+          "description": "JWT claim used as the apiserver groups list. Defaults to `groups`.",
+          "type": "string",
+          "default": "groups"
+        },
+        "issuerUrl": {
+          "description": "Override OIDC issuer URL. When empty, derived as `https://keycloak.\u003c_cluster.root-host\u003e/realms/cozy` from the parent tenant metadata.",
+          "type": "string",
+          "default": ""
+        },
+        "usernameClaim": {
+          "description": "JWT claim used as the apiserver username. Defaults to `preferred_username`.",
+          "type": "string",
+          "default": "preferred_username"
         }
       }
     }

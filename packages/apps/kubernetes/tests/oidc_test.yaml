@@ -1,0 +1,323 @@
+suite: oidc.yaml template tests
+
+templates:
+  - templates/cluster.yaml
+  - templates/oidc-rbac-job.yaml
+
+values:
+  - values/common.yaml
+
+# Document layout for templates/cluster.yaml when _namespace.etcd is set:
+#   index 0: Cluster
+#   index 1: KamajiControlPlane
+#   index 2: WorkloadMonitor (control-plane)
+#   index 3: KubevirtCluster
+#   index 4: KubeadmConfigTemplate (md0)
+#   index 5: KubevirtMachineTemplate (md0)
+#   index 6: MachineDeployment (md0)
+#   index 7: MachineHealthCheck (md0)
+#   index 8: WorkloadMonitor (md0)
+# templates/oidc-rbac-job.yaml documents (only when oidc.enabled=true):
+#   ServiceAccount, Role, RoleBinding, Job (under selectByKind below).
+
+tests:
+  ###############################################
+  # Backward compat: oidc.enabled=false (default) #
+  ###############################################
+
+  - it: KamajiControlPlane has no extraArgs block when oidc.enabled=false
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    template: templates/cluster.yaml
+    asserts:
+      - isKind:
+          of: KamajiControlPlane
+        documentIndex: 1
+      - notExists:
+          path: spec.apiServer.extraArgs
+        documentIndex: 1
+
+  - it: oidc-rbac Job templates render nothing when oidc.enabled=false
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###############################################
+  # oidc.enabled=true with defaults              #
+  ###############################################
+
+  - it: KamajiControlPlane gets OIDC extraArgs when oidc.enabled=true
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/cluster.yaml
+    asserts:
+      - isKind:
+          of: KamajiControlPlane
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-issuer-url=https://keycloak.example.com/realms/cozy
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-client-id=kubernetes
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-username-claim=preferred_username
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-groups-claim=groups
+        documentIndex: 1
+
+  - it: OIDC RBAC Job is rendered when oidc.enabled=true
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-oidc-rbac
+        documentIndex: 0
+      - isKind:
+          of: Role
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-oidc-rbac
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-oidc-rbac
+        documentIndex: 2
+      - isKind:
+          of: Job
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-oidc-rbac
+        documentIndex: 3
+
+  - it: OIDC Job binds all four group → ClusterRole pairs in tenant cluster
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: oidc-tenant-test-view[\s\S]*kind: ClusterRole[\s\S]*name: view'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: oidc-tenant-test-use[\s\S]*kind: ClusterRole[\s\S]*name: edit'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: oidc-tenant-test-admin[\s\S]*kind: ClusterRole[\s\S]*name: admin'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: oidc-tenant-test-super-admin[\s\S]*kind: ClusterRole[\s\S]*name: cluster-admin'
+        documentIndex: 3
+
+  ###############################################
+  # oidc.enabled=true with overrides             #
+  ###############################################
+
+  - it: oidc.issuerUrl override wins over auto-derived URL
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      oidc.issuerUrl: https://kc.custom.example/realms/custom
+      _cluster.root-host: ignored.example
+      _cluster.oidc-enabled: "true"
+    template: templates/cluster.yaml
+    asserts:
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-issuer-url=https://kc.custom.example/realms/custom
+        documentIndex: 1
+
+  - it: oidc.clientId override is reflected in apiserver flags
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      oidc.clientId: kubernetes-prod-a
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/cluster.yaml
+    asserts:
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-client-id=kubernetes-prod-a
+        documentIndex: 1
+
+  ###############################################
+  # Failure path: platform OIDC not enabled      #
+  ###############################################
+
+  - it: oidc.enabled=true without platform _cluster.oidc-enabled fails fast (from oidc-rbac-job.yaml)
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "platform-level OIDC flag is not enabled"
+
+  - it: platform-oidc=true but no root-host and no explicit issuerUrl still fails (from oidc-rbac-job.yaml)
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "_cluster.root-host is not set"
+
+  - it: platform-oidc=true and explicit issuerUrl works without root-host
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.oidc-enabled: "true"
+      oidc.issuerUrl: https://kc.custom.example/realms/custom
+    template: templates/cluster.yaml
+    asserts:
+      - isKind:
+          of: KamajiControlPlane
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: --oidc-issuer-url=https://kc.custom.example/realms/custom
+        documentIndex: 1
+
+  ###############################################
+  # RBAC Job mechanics                           #
+  ###############################################
+
+  - it: RBAC Job mounts the Kamaji admin-kubeconfig Secret
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: kubernetes-test-admin-kubeconfig
+        documentIndex: 3
+      - equal:
+          path: spec.template.spec.volumes[0].secret.optional
+          value: true
+        documentIndex: 3
+
+  - it: RBAC Job runs as the dedicated ServiceAccount
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: kubernetes-test-oidc-rbac
+        documentIndex: 3
+
+  - it: kubectl container has restricted-PSS-compatible securityContext
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+        documentIndex: 3
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+        documentIndex: 3
+
+  - it: RBAC Job is a post-install + post-upgrade hook
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+        documentIndex: 3
+
+  - it: RBAC Role grants only get on the specific admin-kubeconfig Secret
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      oidc.enabled: true
+      _cluster.root-host: example.com
+      _cluster.oidc-enabled: "true"
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - equal:
+          path: rules[0].resourceNames[0]
+          value: kubernetes-test-admin-kubeconfig
+        documentIndex: 1
+      - equal:
+          path: rules[0].verbs[0]
+          value: get
+        documentIndex: 1

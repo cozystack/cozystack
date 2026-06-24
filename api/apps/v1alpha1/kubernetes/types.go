@@ -40,6 +40,9 @@ type ConfigSpec struct {
 	// Optional image overrides for air-gapped or rate-limited registries.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
+	// OIDC authentication configuration for the tenant kube-apiserver.
+	// +kubebuilder:default:={}
+	Oidc OIDC `json:"oidc"`
 }
 
 type APIServer struct {
@@ -177,6 +180,9 @@ type HAMiAddon struct {
 }
 
 type Images struct {
+	// Image used by the OIDC RBAC bootstrap Job (kubectl apply against tenant API). Empty falls back to docker.io/clastix/kubectl:v1.32.
+	// +kubebuilder:default:=""
+	Kubectl string `json:"kubectl,omitempty"`
 	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 	// +kubebuilder:default:=""
 	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
@@ -261,6 +267,24 @@ type NodeGroup struct {
 	Roles []string `json:"roles,omitempty"`
 	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 	StorageClass string `json:"storageClass,omitempty"`
+}
+
+type OIDC struct {
+	// OIDC client_id passed to the apiserver and embedded in the kubeconfig template. Defaults to `kubernetes` (the shared public client provisioned by `system/keycloak-configure`).
+	// +kubebuilder:default:="kubernetes"
+	ClientId string `json:"clientId,omitempty"`
+	// Enable OIDC on the tenant kube-apiserver and provision tenant RBAC bindings.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// JWT claim used as the apiserver groups list. Defaults to `groups`.
+	// +kubebuilder:default:="groups"
+	GroupsClaim string `json:"groupsClaim,omitempty"`
+	// Override OIDC issuer URL. When empty, derived as `https://keycloak.<_cluster.root-host>/realms/cozy` from the parent tenant metadata.
+	// +kubebuilder:default:=""
+	IssuerUrl string `json:"issuerUrl,omitempty"`
+	// JWT claim used as the apiserver username. Defaults to `preferred_username`.
+	// +kubebuilder:default:="preferred_username"
+	UsernameClaim string `json:"usernameClaim,omitempty"`
 }
 
 type OuroborosAddon struct {

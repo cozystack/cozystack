@@ -76,6 +76,44 @@ back to the bundled digest pin, preserving the prior default.
 Call site owns the surrounding volumes block; the kubeconfig volume
 must exist on the pod and mount at /etc/kubernetes/kubeconfig.
 */}}
+{{/*
+OIDC issuer URL for the tenant kube-apiserver. Defaults to the platform
+Keycloak realm `cozy` derived from `_cluster.root-host`; can be overridden
+via `.Values.oidc.issuerUrl`. Callers are expected to have already
+validated that one of the two inputs is present (the inline guards at
+the top of cluster.yaml and oidc-rbac-job.yaml fail render otherwise),
+so this helper simply picks whichever is set.
+*/}}
+{{- define "kubernetes.oidcIssuerUrl" -}}
+{{- if .Values.oidc.issuerUrl -}}
+{{ .Values.oidc.issuerUrl }}
+{{- else -}}
+{{- $rootHost := index .Values._cluster "root-host" -}}
+https://keycloak.{{ $rootHost }}/realms/cozy
+{{- end -}}
+{{- end }}
+
+{{/*
+Tenant name used as the prefix of Keycloak realm groups (`<tenant>-view`,
+`<tenant>-use`, `<tenant>-admin`, `<tenant>-super-admin`). The Kubernetes CR
+chart is always installed into a tenant namespace named exactly after the
+parent Tenant CR, so the namespace doubles as the canonical tenant
+identifier — consistent with `cozy-lib.rbac.subjectsForTenantAndAccessLevel`
+which derives subject group names the same way.
+*/}}
+{{- define "kubernetes.tenantName" -}}
+{{ .Release.Namespace }}
+{{- end }}
+
+{{/*
+Image used by the OIDC RBAC bootstrap Job. Defaults to docker.io/clastix/kubectl:v1.32
+(the same image used elsewhere in the cozystack platform — keycloak-configure
+delete hook, dashboard adopt-configmap hook). Overridable via .Values.images.kubectl.
+*/}}
+{{- define "kubernetes.kubectlImage" -}}
+{{- default "docker.io/clastix/kubectl:v1.32" .Values.images.kubectl -}}
+{{- end }}
+
 {{- define "kubernetes.waitForAdminKubeconfig" -}}
 - name: wait-for-kubeconfig
   image: "{{ default (.Files.Get "images/busybox.tag" | trim) .Values.images.waitForKubeconfig }}"

@@ -1,0 +1,200 @@
+{{- if .Values.oidc.enabled }}
+{{- /* Mirror the platform-OIDC + issuer-URL preconditions from cluster.yaml so this
+       template renders an actionable error if used standalone (e.g. via --show-only). */}}
+{{- $platformOidc := index .Values._cluster "oidc-enabled" | default "" | toString }}
+{{- if ne $platformOidc "true" }}
+{{- fail "oidc.enabled=true on this Kubernetes CR but the platform-level OIDC flag is not enabled (authentication.oidc.enabled=false at the cozystack platform → _cluster.oidc-enabled is not 'true'). The <tenant>-{view,use,admin,super-admin} Keycloak realm groups required by the tenant RBAC bindings are only provisioned by apps/tenant when the platform flag is true — enable authentication.oidc.enabled in the platform values first." }}
+{{- end }}
+{{- if and (not .Values.oidc.issuerUrl) (not (index .Values._cluster "root-host")) }}
+{{- fail "oidc.enabled=true but _cluster.root-host is not set; cannot derive OIDC issuer URL. Either set the platform root-host or pass oidc.issuerUrl explicitly." }}
+{{- end }}
+{{- $tenant := include "kubernetes.tenantName" . }}
+{{- /*
+OIDC RBAC bootstrap Job.
+
+When OIDC is enabled on the tenant kube-apiserver, this Job is the bridge
+that wires the Keycloak realm groups (created at the parent Tenant chart
+when `_cluster.oidc-enabled=true`) to the built-in Kubernetes RBAC roles
+inside the tenant cluster:
+
+    <tenant>-view        → ClusterRole view
+    <tenant>-use         → ClusterRole edit
+    <tenant>-admin       → ClusterRole admin
+    <tenant>-super-admin → ClusterRole cluster-admin
+
+The Job runs in the management cluster's tenant namespace, mounts the
+Kamaji-provisioned admin kubeconfig Secret (super-admin.svc), and uses
+kubectl apply to materialise the ClusterRoleBindings inside the tenant
+cluster. apply is idempotent so reruns on helm upgrade are no-ops.
+
+Hook ordering:
+  - post-install  → runs after the KamajiControlPlane reconciles its
+                    admin-kubeconfig Secret;
+  - post-upgrade  → reruns on every upgrade so binding drift heals on the
+                    next reconcile loop;
+  - hook-delete-policy hook-succeeded + before-hook-creation → cleans up
+    the prior Job object so a new one can be (re)created with the same
+    name; failed Jobs are retained for diagnostics.
+*/}}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-oidc-rbac
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-oidc-rbac
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames:
+  - {{ .Release.Name }}-admin-kubeconfig
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-oidc-rbac
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation
+subjects:
+- kind: ServiceAccount
+  name: {{ .Release.Name }}-oidc-rbac
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-oidc-rbac
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-oidc-rbac
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "kubernetes.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: oidc-rbac
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Release.Name }}-oidc-rbac
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" . | nindent 6 }}
+      containers:
+      - name: kubectl
+        image: {{ include "kubernetes.kubectlImage" . | quote }}
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
+        command:
+        - sh
+        - -c
+        - |
+          set -euo pipefail
+          export KUBECONFIG=/etc/kubernetes/kubeconfig/super-admin.svc
+          # kubectl apply is idempotent — safe to rerun on every helm upgrade.
+          cat <<'EOF' | kubectl apply --filename=-
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: oidc-{{ $tenant }}-view
+            labels:
+              app.kubernetes.io/managed-by: {{ .Release.Service }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              cozystack.io/oidc-tenant: {{ $tenant }}
+          subjects:
+          - kind: Group
+            name: {{ $tenant }}-view
+            apiGroup: rbac.authorization.k8s.io
+          roleRef:
+            kind: ClusterRole
+            name: view
+            apiGroup: rbac.authorization.k8s.io
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: oidc-{{ $tenant }}-use
+            labels:
+              app.kubernetes.io/managed-by: {{ .Release.Service }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              cozystack.io/oidc-tenant: {{ $tenant }}
+          subjects:
+          - kind: Group
+            name: {{ $tenant }}-use
+            apiGroup: rbac.authorization.k8s.io
+          roleRef:
+            kind: ClusterRole
+            name: edit
+            apiGroup: rbac.authorization.k8s.io
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: oidc-{{ $tenant }}-admin
+            labels:
+              app.kubernetes.io/managed-by: {{ .Release.Service }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              cozystack.io/oidc-tenant: {{ $tenant }}
+          subjects:
+          - kind: Group
+            name: {{ $tenant }}-admin
+            apiGroup: rbac.authorization.k8s.io
+          roleRef:
+            kind: ClusterRole
+            name: admin
+            apiGroup: rbac.authorization.k8s.io
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: oidc-{{ $tenant }}-super-admin
+            labels:
+              app.kubernetes.io/managed-by: {{ .Release.Service }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
+              cozystack.io/oidc-tenant: {{ $tenant }}
+          subjects:
+          - kind: Group
+            name: {{ $tenant }}-super-admin
+            apiGroup: rbac.authorization.k8s.io
+          roleRef:
+            kind: ClusterRole
+            name: cluster-admin
+            apiGroup: rbac.authorization.k8s.io
+          EOF
+        volumeMounts:
+        - name: kubeconfig
+          mountPath: /etc/kubernetes/kubeconfig
+          readOnly: true
+      volumes:
+      - name: kubeconfig
+        secret:
+          secretName: {{ .Release.Name }}-admin-kubeconfig
+          optional: true
+{{- end }}
