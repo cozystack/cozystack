@@ -16,6 +16,8 @@ spec:
         - cozystack.postgres-operator
         - cozystack.redis-operator
         - cozystack.objectstorage-controller
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
