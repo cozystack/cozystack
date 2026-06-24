@@ -37,11 +37,11 @@ metallb:
   controller:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-controller
-      tag: v1.5.0@sha256:b290031f40bfc072c0b329e07d7c17eca3301e4aad2e1988fc962645d92b5fc0
+      tag: v1.5.1@sha256:b290031f40bfc072c0b329e07d7c17eca3301e4aad2e1988fc962645d92b5fc0
   speaker:
     image:
       repository: ghcr.io/cozystack/cozystack/metallb-speaker
-      tag: v1.5.0@sha256:3aad3ac50e8da94342332b363099c04316d8eda0dcb8cdc3d89f1bcf5dc04e7d
+      tag: v1.5.1@sha256:3aad3ac50e8da94342332b363099c04316d8eda0dcb8cdc3d89f1bcf5dc04e7d
   # The vendored metallb chart's values.yaml leaves `frr-k8s.prometheus:` as
   # a YAML block containing only commented examples — it parses to null.
   # Helm-controller's deep-merge then writes that null over the frr-k8s
