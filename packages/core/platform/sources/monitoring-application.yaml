@@ -16,6 +16,8 @@ spec:
         - cozystack.postgres-operator
         - cozystack.grafana-operator
         - cozystack.victoria-metrics-operator
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
