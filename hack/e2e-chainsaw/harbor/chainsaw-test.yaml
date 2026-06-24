@@ -50,8 +50,12 @@ spec:
 
   - name: wait-cosi-bucket
     try:
+    # 10m, not the default 5m: readiness on the namespaced BucketClaim can lag
+    # several minutes on a loaded runner (seaweedfs/COSI provisioning is the slow
+    # path), so allow the same budget the dependent harbor-test-system HR gets.
+    # Matches the BATS original (--timeout=600s); see docs/agents/e2e-testing.md §6.
     - assert:
-        timeout: 5m
+        timeout: 10m
         resource:
           apiVersion: objectstorage.k8s.io/v1alpha1
           kind: BucketClaim
