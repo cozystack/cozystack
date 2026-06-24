@@ -3,23 +3,29 @@
 # The etcd chart pins the Helm release name to 'etcd'
 # (packages/extra/etcd/templates/check-release-name.yaml), so every scenario
 # applies an Etcd with metadata.name: etcd and they share the cluster-scoped
-# DataStore/<namespace> the chart provisions for Kamaji.
+# DataStore/<namespace> the chart provisions for Kamaji. They therefore cannot
+# coexist and must run one fully-drained scenario at a time.
 #
 # Teardown is explicit (skipDelete: true), not Chainsaw auto-cleanup, because
 # the etcd chart's DataStore leaks a Kamaji finalizer on uninstall: once the
 # backing etcd is gone, the reconcile that would drop
 # kamaji.clastix.io/TenantControlPlane can't complete, so the DataStore wedges
 # in Terminating and the HelmRelease uninstall hangs. Letting Chainsaw wait on
-# that during cleanup is what errored every etcd case in CI. Instead each Test's
-# `ensure-clean` step drains the previous scenario itself — deleting the etcd and
-# force-clearing the orphaned finalizer (no TenantControlPlane uses this
-# per-namespace test DataStore) — so the next install starts from a clean slate.
+# that during cleanup is what errored every etcd case in CI.
+#
+# Each scenario is self-contained (clean-after-each): a single `run` step
+# pre-cleans any leftover etcd, installs, asserts, and then drains in a `finally`
+# that always runs (the step is always reached, so teardown fires on success and
+# on failure alike). This is deliberate — Chainsaw executes these Tests in name
+# order, not file order, and `finally` has no test-level form in v0.2.15, so the
+# only way to guarantee the last-run scenario is also reclaimed is to tear down
+# inside each scenario. The shared drain lives in _lib/etcd-cleanup.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
   name: etcd-basic
 spec:
-  # Teardown is handled by the next scenario's ensure-clean; see file header.
+  # Teardown is the `run` step's finally (see file header), not auto-cleanup.
   skipDelete: true
   catch:
   - events: {}
@@ -32,36 +38,17 @@ spec:
       kind: EtcdCluster
       name: etcd
   steps:
-  - name: ensure-clean
+  - name: run
     try:
+    # Pre-clean: isolate this scenario from any etcd a prior (failed) scenario
+    # left behind, since the release name 'etcd' is a singleton.
     - script:
         timeout: 5m
         content: |
           set -eu
-          # Singleton release name 'etcd'. Remove any etcd a prior scenario left
-          # and drain what it leaves behind before this scenario installs.
-          kubectl -n "$NAMESPACE" delete etcd.apps.cozystack.io etcd \
-            --ignore-not-found --wait=false >/dev/null 2>&1 || true
-          # The etcd chart provisions a cluster-scoped DataStore/$NAMESPACE
-          # (Kamaji). On teardown Kamaji leaks its
-          # kamaji.clastix.io/TenantControlPlane finalizer (the reconcile that
-          # would drop it needs the now-gone etcd), wedging the DataStore in
-          # Terminating and hanging the etcd HelmRelease uninstall. No
-          # TenantControlPlane uses this per-namespace test DataStore, so clear
-          # the finalizer each pass until the HR and DataStore are both gone.
-          deadline=$(( $(date +%s) + 240 ))
-          while kubectl -n "$NAMESPACE" get hr etcd >/dev/null 2>&1 \
-             || kubectl get datastore.kamaji.clastix.io "$NAMESPACE" >/dev/null 2>&1; do
-            kubectl patch datastore.kamaji.clastix.io "$NAMESPACE" \
-              --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "etcd/DataStore teardown did not settle within 4m" >&2
-              kubectl -n "$NAMESPACE" get hr,etcd.apps.cozystack.io >&2 2>&1 || true
-              kubectl get datastore.kamaji.clastix.io "$NAMESPACE" -o yaml >&2 2>&1 || true
-              exit 1
-            fi
-            sleep 5
-          done
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
         check:
           ($error == null): true
     # Backup artifacts tear down with the HelmRelease; confirm a clean slate.
@@ -71,12 +58,8 @@ spec:
     - error:
         timeout: 1m
         resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
-  - name: create-etcd
-    try:
     - apply:
         file: etcd-basic.yaml
-  - name: wait-ready
-    try:
     - assert:
         timeout: 6m
         resource:
@@ -97,6 +80,15 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+    finally:
+    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
+      script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -111,29 +103,15 @@ spec:
       kind: HelmRelease
       name: etcd
   steps:
-  - name: ensure-clean
+  - name: run
     try:
     - script:
         timeout: 5m
         content: |
           set -eu
-          kubectl -n "$NAMESPACE" delete etcd.apps.cozystack.io etcd \
-            --ignore-not-found --wait=false >/dev/null 2>&1 || true
-          # See etcd-basic ensure-clean: drain the leaked Kamaji DataStore
-          # finalizer so the next install starts clean.
-          deadline=$(( $(date +%s) + 240 ))
-          while kubectl -n "$NAMESPACE" get hr etcd >/dev/null 2>&1 \
-             || kubectl get datastore.kamaji.clastix.io "$NAMESPACE" >/dev/null 2>&1; do
-            kubectl patch datastore.kamaji.clastix.io "$NAMESPACE" \
-              --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "etcd/DataStore teardown did not settle within 4m" >&2
-              kubectl -n "$NAMESPACE" get hr,etcd.apps.cozystack.io >&2 2>&1 || true
-              kubectl get datastore.kamaji.clastix.io "$NAMESPACE" -o yaml >&2 2>&1 || true
-              exit 1
-            fi
-            sleep 5
-          done
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
         check:
           ($error == null): true
     - error:
@@ -142,12 +120,8 @@ spec:
     - error:
         timeout: 1m
         resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
-  - name: create-etcd
-    try:
     - apply:
         file: etcd-empty-backup.yaml
-  - name: wait-ready-and-assert-no-backup
-    try:
     - assert:
         timeout: 6m
         resource:
@@ -163,6 +137,15 @@ spec:
         resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
     - error:
         resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    finally:
+    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
+      script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
@@ -181,29 +164,15 @@ spec:
       kind: EtcdBackupSchedule
       name: etcd
   steps:
-  - name: ensure-clean
+  - name: run
     try:
     - script:
         timeout: 5m
         content: |
           set -eu
-          kubectl -n "$NAMESPACE" delete etcd.apps.cozystack.io etcd \
-            --ignore-not-found --wait=false >/dev/null 2>&1 || true
-          # See etcd-basic ensure-clean: drain the leaked Kamaji DataStore
-          # finalizer so the next install starts clean.
-          deadline=$(( $(date +%s) + 240 ))
-          while kubectl -n "$NAMESPACE" get hr etcd >/dev/null 2>&1 \
-             || kubectl get datastore.kamaji.clastix.io "$NAMESPACE" >/dev/null 2>&1; do
-            kubectl patch datastore.kamaji.clastix.io "$NAMESPACE" \
-              --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || true
-            if [ "$(date +%s)" -ge "$deadline" ]; then
-              echo "etcd/DataStore teardown did not settle within 4m" >&2
-              kubectl -n "$NAMESPACE" get hr,etcd.apps.cozystack.io >&2 2>&1 || true
-              kubectl get datastore.kamaji.clastix.io "$NAMESPACE" -o yaml >&2 2>&1 || true
-              exit 1
-            fi
-            sleep 5
-          done
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
         check:
           ($error == null): true
     - error:
@@ -212,12 +181,8 @@ spec:
     - error:
         timeout: 1m
         resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
-  - name: create-etcd
-    try:
     - apply:
         file: etcd-backup.yaml
-  - name: wait-ready
-    try:
     - assert:
         timeout: 6m
         resource:
@@ -238,8 +203,6 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
-  - name: verify-backup-resources
-    try:
     # Region field must propagate to the EtcdBackupSchedule.
     - assert:
         resource:
@@ -269,3 +232,12 @@ spec:
           metadata:
             labels:
               etcd.aenix.io/etcdbackupschedule-name: etcd
+    finally:
+    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
+      script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
