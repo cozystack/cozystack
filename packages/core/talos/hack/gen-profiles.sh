@@ -3,7 +3,7 @@ set -e
 set -u
 
 TMPDIR=$(mktemp -d)
-PROFILES="initramfs kernel iso installer nocloud metal"
+PROFILES="initramfs kernel iso installer nocloud metal openstack"
 FIRMWARES="amd-ucode amdgpu bnx2-bnx2x i915 intel-ice-firmware intel-ucode qlogic-firmware"
 EXTENSIONS="drbd zfs"
 
@@ -58,6 +58,12 @@ for profile in $PROFILES; do
       image_options="{ diskSize: 1306525696, diskFormat: raw }"
       out_format=".xz"
       platform="nocloud"
+      kind="image"
+      ;;
+    openstack)
+      image_options="{ diskSize: 1306525696, diskFormat: raw }"
+      out_format=".xz"
+      platform="openstack"
       kind="image"
       ;;
     *)

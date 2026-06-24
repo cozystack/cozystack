@@ -1,4 +1,4 @@
-{{- if or ( or .Values.autoDiscovery.clusterName .Values.autoDiscovery.namespace .Values.autoDiscovery.labels ) .Values.autoscalingGroups }}
+{{- if or ( or .Values.autoDiscovery.clusterName .Values.autoDiscovery.namespace .Values.autoDiscovery.labels ) .Values.autoscalingGroups (eq .Values.cloudProvider "externalgrpc") }}
 {{/* one of the above is required */}}
 apiVersion: {{ template "deployment.apiVersion" . }}
 kind: Deployment
@@ -322,6 +322,9 @@ spec:
             {{- toYaml .Values.extraVolumeMounts | nindent 12 }}
           {{- end }}
           {{- end }}
+        {{- with .Values.extraContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
     {{- if .Values.affinity }}
       affinity:
 {{ toYaml .Values.affinity | indent 8 }}
