@@ -1,10 +1,10 @@
 #!/bin/bash
 # Migration 45 --> 46
 # Pin KubeadmConfigTemplate / KubeadmConfig objects with helm.sh/resource-policy=keep
-# so the Talos migration (PR #2610) does not let Helm prune them while CAPI still
+# so the Talos worker migration does not let Helm prune them while CAPI still
 # references them from the existing kubeadm-backed MachineSet.
 #
-# PR #2610 drops KubeadmConfigTemplate from the kubernetes app chart templates
+# This release drops KubeadmConfigTemplate from the kubernetes app chart templates
 # entirely (workers move to TalosConfigTemplate). On upgrade Helm sees the
 # resource present in the previous release manifest but absent in the new one
 # and issues a delete. The old MachineSet, which is still around until CAPI
@@ -14,11 +14,14 @@
 # MachineHealthCheck remediation, etc.) workers can hang in pending state with
 # nothing to bootstrap from.
 #
-# The fix is to annotate every Helm-managed KubeadmConfigTemplate (and the
-# KubeadmConfig instances spawned from them) with helm.sh/resource-policy=keep
-# *before* the new chart renders. Helm then leaves the object alone, CAPI keeps
-# its references intact, and the resources disappear naturally when the old
-# MachineSet is finally garbage-collected after the Talos rollover completes.
+# The fix is to annotate every Helm-managed KubeadmConfigTemplate (and any
+# Helm-managed KubeadmConfig) with helm.sh/resource-policy=keep *before* the new
+# chart renders. The KubeadmConfig children CAPI spawns from the template are
+# owned by their Machine, not Helm (no app.kubernetes.io/managed-by=Helm label),
+# so Helm never prunes them and the managed-by selector below leaves them alone.
+# Helm then leaves the template alone, CAPI keeps its references intact, and the
+# resources disappear naturally when the old MachineSet is finally
+# garbage-collected after the Talos rollover completes.
 #
 # Idempotent: re-running on already-annotated objects is a no-op
 # (kubectl annotate --overwrite tolerates the existing value).

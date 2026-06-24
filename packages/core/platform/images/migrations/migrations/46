@@ -2,7 +2,7 @@
 # Migration 46 --> 47
 # Bump kuberneteses.apps.cozystack.io spec.version from "v1.30" to "v1.31".
 #
-# PR #2610 drops v1.30 from the Talos<->Kubernetes support matrix: Talos v1.13
+# This release drops v1.30 from the Talos<->Kubernetes support matrix: Talos v1.13
 # (the version this chart pins for worker images) supports only k8s 1.31-1.36.
 # The chart now refuses to render with version: "v1.30" via an explicit fail()
 # guard in templates/_versions.tpl. Without this migration, tenants that were
