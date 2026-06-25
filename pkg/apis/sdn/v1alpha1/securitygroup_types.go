@@ -14,6 +14,22 @@ const (
 	SecurityGroupSingularName = "securitygroup"
 	// SecurityGroupPluralName is the plural resource name.
 	SecurityGroupPluralName = "securitygroups"
+
+	// MembershipLabelPrefix is the prefix of a SecurityGroup's membership label
+	// key. The full key is MembershipLabelPrefix + <securitygroup name>; the
+	// value is always the empty string. The securitygroup-controller stamps this
+	// label onto the pods of the applications a SecurityGroup is attached to, and
+	// the backing CiliumNetworkPolicy's endpointSelector matches it. fromSG/toSG
+	// peers resolve to this same key on the referenced group, which lets the
+	// Cilium dataplane resolve group-to-group references live.
+	MembershipLabelPrefix = "securitygroup.sdn.cozystack.io/"
+
+	// MembershipFinalizer guards a SecurityGroup's backing CiliumNetworkPolicy so
+	// the securitygroup-controller can strip the membership labels off member
+	// pods before the policy is removed. The REST storage re-asserts it on every
+	// write (a full-replace PUT would otherwise strip it and orphan the labels),
+	// and the controller adds and removes it — both must use this one definition.
+	MembershipFinalizer = "sdn.cozystack.io/securitygroup-membership"
 )
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -23,39 +39,47 @@ const (
 // aggregated API: tenants manage SecurityGroups while the platform translates
 // each one 1:1 into a CiliumNetworkPolicy in the same namespace, without
 // granting tenants direct access to the cilium.io API group.
+//
+// A SecurityGroup is a membership group: it owns a membership label
+// (MembershipLabelPrefix + its name) that the securitygroup-controller stamps
+// onto the pods of the applications listed in spec.attachments. The backing
+// CiliumNetworkPolicy selects that membership label, so one SecurityGroup can
+// apply to several applications at once.
 type SecurityGroup struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// Spec describes the traffic the SecurityGroup allows.
+	// Spec describes the applications this SecurityGroup attaches to and the
+	// traffic it allows.
 	Spec SecurityGroupSpec `json:"spec,omitempty"`
 }
 
-// SecurityGroupSpec describes the traffic a SecurityGroup allows and the
-// managed application it attaches to. The platform derives the backing
-// CiliumNetworkPolicy's endpointSelector from TargetRef rather than copying a
-// tenant-authored selector, so a SecurityGroup can only ever apply to the
-// referenced application's own pods in the same namespace.
+// SecurityGroupSpec describes the managed applications a SecurityGroup attaches
+// to and the traffic it allows. The backing CiliumNetworkPolicy's
+// endpointSelector is the SecurityGroup's own membership label, which the
+// securitygroup-controller maintains on the attached applications' pods — so a
+// SecurityGroup can only ever apply to those applications' own pods in the same
+// namespace.
 type SecurityGroupSpec struct {
-	// TargetRef references the managed application whose pods this SecurityGroup
-	// applies to. The backing CiliumNetworkPolicy's endpointSelector is derived
-	// from this reference via the application's lineage labels, so the selector
-	// is machine-generated and cannot be pointed at arbitrary or platform-owned
-	// pods.
-	TargetRef ApplicationReference `json:"targetRef"`
+	// Attachments lists the managed applications whose pods join this group. The
+	// securitygroup-controller stamps the SecurityGroup's membership label
+	// (MembershipLabelPrefix + name) onto the pods of each referenced
+	// application in the same namespace, and removes it when the attachment is
+	// dropped. An empty list means the group selects no pods.
+	Attachments []ApplicationReference `json:"attachments,omitempty"`
 
 	// Ingress is the list of rules describing allowed inbound traffic. An empty
-	// list denies all ingress to the targeted application's pods.
+	// list denies all ingress to the group's member pods.
 	Ingress []IngressRule `json:"ingress,omitempty"`
 
 	// Egress is the list of rules describing allowed outbound traffic. An empty
-	// list denies all egress from the targeted application's pods.
+	// list denies all egress from the group's member pods.
 	Egress []EgressRule `json:"egress,omitempty"`
 }
 
 // ApplicationReference identifies a managed Cozystack application by its
-// group, kind and name. The SecurityGroup projects this reference into an
-// endpointSelector matching the application's lineage labels
+// group, kind and name. It is used both for SecurityGroup attachments and for
+// fromApp/toApp peers, and resolves to the application's lineage labels
 // (apps.cozystack.io/application.{group,kind,name}).
 type ApplicationReference struct {
 	// APIGroup of the referenced application. Defaults to apps.cozystack.io when
@@ -71,9 +95,14 @@ type ApplicationReference struct {
 
 // IngressRule describes one set of allowed inbound sources and ports.
 type IngressRule struct {
-	// FromEndpoints selects source pods by label. An empty selector matches all
-	// pods in the same namespace.
-	FromEndpoints []metav1.LabelSelector `json:"fromEndpoints,omitempty"`
+	// FromApp selects source pods belonging to the referenced managed
+	// applications, by their lineage labels.
+	FromApp []ApplicationReference `json:"fromApp,omitempty"`
+
+	// FromSG selects source pods that are members of the named SecurityGroups in
+	// the same namespace, by their membership label. The reference is live: it
+	// follows the other group's membership as attachments change.
+	FromSG []string `json:"fromSG,omitempty"`
 
 	// FromCIDR is a list of CIDR ranges allowed as traffic sources.
 	FromCIDR []string `json:"fromCIDR,omitempty"`
@@ -85,9 +114,14 @@ type IngressRule struct {
 
 // EgressRule describes one set of allowed outbound destinations and ports.
 type EgressRule struct {
-	// ToEndpoints selects destination pods by label. An empty selector matches
-	// all pods in the same namespace.
-	ToEndpoints []metav1.LabelSelector `json:"toEndpoints,omitempty"`
+	// ToApp selects destination pods belonging to the referenced managed
+	// applications, by their lineage labels.
+	ToApp []ApplicationReference `json:"toApp,omitempty"`
+
+	// ToSG selects destination pods that are members of the named SecurityGroups
+	// in the same namespace, by their membership label. The reference is live: it
+	// follows the other group's membership as attachments change.
+	ToSG []string `json:"toSG,omitempty"`
 
 	// ToCIDR is a list of CIDR ranges allowed as traffic destinations.
 	ToCIDR []string `json:"toCIDR,omitempty"`

@@ -9,6 +9,7 @@ package securitygroup
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -46,18 +47,28 @@ const (
 	sgLabelKey   = "sdn.cozystack.io/securitygroup"
 	sgLabelValue = "true"
 
+	// attachmentsAnnotation stores the SecurityGroup's spec.attachments on the
+	// backing CiliumNetworkPolicy as a JSON array of ApplicationReference. The
+	// attachment list has no home in the CiliumNetworkPolicy spec (the backing
+	// endpointSelector is the SecurityGroup's own membership label, not the
+	// attached apps' labels), so the storage owns this annotation: it is
+	// re-asserted from spec.attachments on every write and hidden from the
+	// SecurityGroup view on read, exactly like the marker label. The
+	// securitygroup-controller reads it to know which apps' pods to label.
+	attachmentsAnnotation = "sdn.cozystack.io/attachments"
+
 	// appGroupLabelKey, appKindLabelKey and appNameLabelKey are the lineage
 	// labels the lineage mutating webhook stamps on every managed-app pod
 	// (see internal/lineagecontrollerwebhook/webhook.go ManagerGroupKey/
-	// ManagerKindKey/ManagerNameKey). The storage derives the backing
-	// CiliumNetworkPolicy's endpointSelector from these so a SecurityGroup only
-	// ever selects its referenced application's own pods. Mirrored here to keep
-	// this registry package from depending on internal/.
+	// ManagerKindKey/ManagerNameKey). fromApp/toApp peers project into
+	// endpointSelectors on these keys, and the securitygroup-controller resolves
+	// attachments to pods by them. Mirrored here to keep this registry package
+	// from depending on internal/.
 	appGroupLabelKey = "apps.cozystack.io/application.group"
 	appKindLabelKey  = "apps.cozystack.io/application.kind"
 	appNameLabelKey  = "apps.cozystack.io/application.name"
 
-	// defaultAppGroup is the API group SecurityGroup TargetRefs default to when
+	// defaultAppGroup is the API group an ApplicationReference defaults to when
 	// APIGroup is empty — the group under which Cozystack serves managed apps.
 	defaultAppGroup = "apps.cozystack.io"
 
@@ -66,11 +77,24 @@ const (
 	kindSGList   = sdnv1alpha1.SecurityGroupListKind
 )
 
-// deriveTargetLabels projects a SecurityGroup TargetRef into the lineage labels
-// that select the referenced application's pods. An empty APIGroup defaults to
-// apps.cozystack.io. The result is the endpointSelector matchLabels of the
-// backing CiliumNetworkPolicy.
-func deriveTargetLabels(ref sdnv1alpha1.ApplicationReference) map[string]string {
+// membershipLabelKey returns the SecurityGroup's own membership label key, the
+// backing CiliumNetworkPolicy's endpointSelector match key and the key a
+// fromSG/toSG peer resolves to on the referenced group.
+func membershipLabelKey(name string) string {
+	return sdnv1alpha1.MembershipLabelPrefix + name
+}
+
+// buildEndpointSelector returns the backing endpointSelector — the
+// SecurityGroup's own membership label — so the policy applies to exactly the
+// pods the securitygroup-controller has stamped as members.
+func buildEndpointSelector(name string) metav1.LabelSelector {
+	return metav1.LabelSelector{MatchLabels: map[string]string{membershipLabelKey(name): ""}}
+}
+
+// appLabels projects an ApplicationReference into the lineage labels that select
+// the referenced application's pods. An empty APIGroup defaults to
+// apps.cozystack.io.
+func appLabels(ref sdnv1alpha1.ApplicationReference) map[string]string {
 	group := ref.APIGroup
 	if group == "" {
 		group = defaultAppGroup
@@ -82,24 +106,182 @@ func deriveTargetLabels(ref sdnv1alpha1.ApplicationReference) map[string]string 
 	}
 }
 
-// reconstructTargetRef is the inverse of deriveTargetLabels: it reads the three
-// lineage matchLabels back into a TargetRef. Unknown keys are ignored and a nil
-// selector yields a zero-value reference, so a hand-edited or empty backing
-// policy degrades gracefully rather than erroring. The mapping is lossless for
-// the values deriveTargetLabels writes because validation rejects any component
-// that is not a valid label value (≤63 chars), and the lineage webhook truncates
-// only groups longer than 63 chars — so a valid value is stamped on pods, and
-// read back here, unchanged.
-func reconstructTargetRef(sel metav1.LabelSelector) sdnv1alpha1.ApplicationReference {
-	return sdnv1alpha1.ApplicationReference{
-		APIGroup: sel.MatchLabels[appGroupLabelKey],
-		Kind:     sel.MatchLabels[appKindLabelKey],
-		Name:     sel.MatchLabels[appNameLabelKey],
+// appFromSelector reads an endpointSelector built from appLabels back into an
+// ApplicationReference. It matches only a selector carrying exactly the three
+// lineage keys, so a fromSG selector (a single membership key) is not mistaken
+// for an app peer.
+func appFromSelector(sel metav1.LabelSelector) (sdnv1alpha1.ApplicationReference, bool) {
+	if len(sel.MatchLabels) != 3 {
+		return sdnv1alpha1.ApplicationReference{}, false
 	}
+	g, gok := sel.MatchLabels[appGroupLabelKey]
+	k, kok := sel.MatchLabels[appKindLabelKey]
+	n, nok := sel.MatchLabels[appNameLabelKey]
+	if !gok || !kok || !nok {
+		return sdnv1alpha1.ApplicationReference{}, false
+	}
+	return sdnv1alpha1.ApplicationReference{APIGroup: g, Kind: k, Name: n}, true
 }
 
-// stripInternal returns a copy of m without the SecurityGroup marker label.
-func stripInternal(m map[string]string) map[string]string {
+// sgFromSelector reads a membership-label endpointSelector back into the name of
+// the referenced SecurityGroup. It matches only a selector carrying exactly one
+// membership key.
+func sgFromSelector(sel metav1.LabelSelector) (string, bool) {
+	if len(sel.MatchLabels) != 1 {
+		return "", false
+	}
+	for k := range sel.MatchLabels {
+		if strings.HasPrefix(k, sdnv1alpha1.MembershipLabelPrefix) {
+			return strings.TrimPrefix(k, sdnv1alpha1.MembershipLabelPrefix), true
+		}
+	}
+	return "", false
+}
+
+// projectIngress turns the SecurityGroup ingress rules into Cilium ingress
+// rules: fromApp peers become lineage-label endpointSelectors, fromSG peers
+// become membership-label endpointSelectors, and fromCIDR/toPorts carry over.
+func projectIngress(rules []sdnv1alpha1.IngressRule) []CiliumIngressRule {
+	if rules == nil {
+		return nil
+	}
+	out := make([]CiliumIngressRule, len(rules))
+	for i := range rules {
+		var eps []metav1.LabelSelector
+		for _, app := range rules[i].FromApp {
+			eps = append(eps, metav1.LabelSelector{MatchLabels: appLabels(app)})
+		}
+		for _, name := range rules[i].FromSG {
+			eps = append(eps, metav1.LabelSelector{MatchLabels: map[string]string{membershipLabelKey(name): ""}})
+		}
+		out[i] = CiliumIngressRule{
+			FromEndpoints: eps,
+			FromCIDR:      append([]string(nil), rules[i].FromCIDR...),
+			ToPorts:       rules[i].ToPorts,
+		}
+	}
+	return out
+}
+
+// projectEgress is the egress counterpart of projectIngress.
+func projectEgress(rules []sdnv1alpha1.EgressRule) []CiliumEgressRule {
+	if rules == nil {
+		return nil
+	}
+	out := make([]CiliumEgressRule, len(rules))
+	for i := range rules {
+		var eps []metav1.LabelSelector
+		for _, app := range rules[i].ToApp {
+			eps = append(eps, metav1.LabelSelector{MatchLabels: appLabels(app)})
+		}
+		for _, name := range rules[i].ToSG {
+			eps = append(eps, metav1.LabelSelector{MatchLabels: map[string]string{membershipLabelKey(name): ""}})
+		}
+		out[i] = CiliumEgressRule{
+			ToEndpoints: eps,
+			ToCIDR:      append([]string(nil), rules[i].ToCIDR...),
+			ToFQDNs:     rules[i].ToFQDNs,
+			ToPorts:     rules[i].ToPorts,
+		}
+	}
+	return out
+}
+
+// reconstructIngress is the inverse of projectIngress, reading Cilium ingress
+// rules back into the SecurityGroup view. Endpoint selectors that match neither
+// the lineage-label nor the membership-label shape are ignored, so a
+// hand-edited backing policy degrades gracefully rather than erroring.
+func reconstructIngress(rules []CiliumIngressRule) []sdnv1alpha1.IngressRule {
+	if rules == nil {
+		return nil
+	}
+	out := make([]sdnv1alpha1.IngressRule, len(rules))
+	for i := range rules {
+		var apps []sdnv1alpha1.ApplicationReference
+		var sgs []string
+		for _, ep := range rules[i].FromEndpoints {
+			if app, ok := appFromSelector(ep); ok {
+				apps = append(apps, app)
+			} else if name, ok := sgFromSelector(ep); ok {
+				sgs = append(sgs, name)
+			}
+		}
+		out[i] = sdnv1alpha1.IngressRule{
+			FromApp:  apps,
+			FromSG:   sgs,
+			FromCIDR: append([]string(nil), rules[i].FromCIDR...),
+			ToPorts:  rules[i].ToPorts,
+		}
+	}
+	return out
+}
+
+// reconstructEgress is the egress counterpart of reconstructIngress.
+func reconstructEgress(rules []CiliumEgressRule) []sdnv1alpha1.EgressRule {
+	if rules == nil {
+		return nil
+	}
+	out := make([]sdnv1alpha1.EgressRule, len(rules))
+	for i := range rules {
+		var apps []sdnv1alpha1.ApplicationReference
+		var sgs []string
+		for _, ep := range rules[i].ToEndpoints {
+			if app, ok := appFromSelector(ep); ok {
+				apps = append(apps, app)
+			} else if name, ok := sgFromSelector(ep); ok {
+				sgs = append(sgs, name)
+			}
+		}
+		out[i] = sdnv1alpha1.EgressRule{
+			ToApp:   apps,
+			ToSG:    sgs,
+			ToCIDR:  append([]string(nil), rules[i].ToCIDR...),
+			ToFQDNs: rules[i].ToFQDNs,
+			ToPorts: rules[i].ToPorts,
+		}
+	}
+	return out
+}
+
+// encodeAttachments serializes spec.attachments for the backing-policy
+// annotation. An empty APIGroup is canonicalized to apps.cozystack.io so the
+// stored value is unambiguous for the securitygroup-controller (and surfaced
+// that way on read). An empty list yields the empty string so the caller omits
+// the annotation entirely.
+func encodeAttachments(refs []sdnv1alpha1.ApplicationReference) string {
+	if len(refs) == 0 {
+		return ""
+	}
+	canon := make([]sdnv1alpha1.ApplicationReference, len(refs))
+	for i, r := range refs {
+		if r.APIGroup == "" {
+			r.APIGroup = defaultAppGroup
+		}
+		canon[i] = r
+	}
+	b, err := json.Marshal(canon)
+	if err != nil {
+		return ""
+	}
+	return string(b)
+}
+
+// decodeAttachments parses the backing-policy annotation back into
+// spec.attachments. A missing or malformed value yields nil, so a hand-edited
+// backing policy degrades gracefully rather than erroring.
+func decodeAttachments(s string) []sdnv1alpha1.ApplicationReference {
+	if s == "" {
+		return nil
+	}
+	var refs []sdnv1alpha1.ApplicationReference
+	if err := json.Unmarshal([]byte(s), &refs); err != nil {
+		return nil
+	}
+	return refs
+}
+
+// stripMarkerLabel returns a copy of m without the SecurityGroup marker label.
+func stripMarkerLabel(m map[string]string) map[string]string {
 	if m == nil {
 		return nil
 	}
@@ -111,6 +293,37 @@ func stripInternal(m map[string]string) map[string]string {
 		out[k] = v
 	}
 	return out
+}
+
+// stripInternalAnnotations returns a copy of m without the storage-owned
+// attachments annotation, which is surfaced as spec.attachments instead. A
+// result with no entries is returned as nil so the SecurityGroup view carries no
+// empty annotations map.
+func stripInternalAnnotations(m map[string]string) map[string]string {
+	if m == nil {
+		return nil
+	}
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if k == attachmentsAnnotation {
+			continue
+		}
+		out[k] = v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// hasFinalizer reports whether list contains the named finalizer.
+func hasFinalizer(list []string, name string) bool {
+	for _, f := range list {
+		if f == name {
+			return true
+		}
+	}
+	return false
 }
 
 func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
@@ -125,8 +338,12 @@ func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
 			UID:               np.UID,
 			ResourceVersion:   np.ResourceVersion,
 			CreationTimestamp: np.CreationTimestamp,
-			Labels:            stripInternal(np.Labels),
-			Annotations:       np.Annotations,
+			// Surface the deletion timestamp so a SecurityGroup whose backing
+			// policy is terminating (finalizer still pending) shows as Terminating
+			// to kubectl, instead of looking live.
+			DeletionTimestamp: np.DeletionTimestamp,
+			Labels:            stripMarkerLabel(np.Labels),
+			Annotations:       stripInternalAnnotations(np.Annotations),
 			OwnerReferences:   np.OwnerReferences,
 			Finalizers:        np.Finalizers,
 		},
@@ -134,9 +351,11 @@ func policyToSecurityGroup(np *CiliumNetworkPolicy) *sdnv1alpha1.SecurityGroup {
 	if np.Spec != nil {
 		spec := np.Spec.DeepCopy()
 		sg.Spec = sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: reconstructTargetRef(spec.EndpointSelector),
-			Ingress:   spec.Ingress,
-			Egress:    spec.Egress,
+			// Attachments live in a storage-owned annotation, not the
+			// endpointSelector (which is the SecurityGroup's own membership label).
+			Attachments: decodeAttachments(np.Annotations[attachmentsAnnotation]),
+			Ingress:     reconstructIngress(spec.Ingress),
+			Egress:      reconstructEgress(spec.Egress),
 		}
 	}
 	return sg
@@ -170,12 +389,20 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	// to (and so uncleanable through) the SecurityGroup API.
 	out.Labels[sgLabelKey] = sgLabelValue
 
-	if len(sg.Annotations) > 0 {
-		out.Annotations = make(map[string]string, len(sg.Annotations))
-		for k, v := range sg.Annotations {
-			out.Annotations[k] = v
-		}
+	// Rebuild annotations from exactly what the request carries, then re-assert
+	// the storage-owned attachments annotation last (like the marker label) from
+	// spec.attachments — so the tenant cannot set or clobber it directly, and a
+	// cleared attachments list drops the annotation rather than leaving it stale.
+	out.Annotations = make(map[string]string, len(sg.Annotations)+1)
+	for k, v := range sg.Annotations {
+		out.Annotations[k] = v
+	}
+	if enc := encodeAttachments(sg.Spec.Attachments); enc != "" {
+		out.Annotations[attachmentsAnnotation] = enc
 	} else {
+		delete(out.Annotations, attachmentsAnnotation)
+	}
+	if len(out.Annotations) == 0 {
 		out.Annotations = nil
 	}
 
@@ -185,13 +412,32 @@ func securityGroupToPolicy(sg *sdnv1alpha1.SecurityGroup, cur *CiliumNetworkPoli
 	out.OwnerReferences = sg.DeepCopy().OwnerReferences
 	out.Finalizers = append([]string(nil), sg.Finalizers...)
 
-	// Derive the backing endpointSelector from the TargetRef rather than copying
-	// a tenant-authored selector. The rule lists project 1:1.
+	// Re-assert the platform-owned membership finalizer the way the marker label
+	// and attachments annotation are re-asserted. The securitygroup-controller
+	// adds it via merge patch, so it is not in the tenant-facing request body; any
+	// tenant write that omits it (a full-replace PUT) would otherwise strip it.
+	// Removing this finalizer is exclusively the controller's job — it does so via
+	// its own merge patch during the deletion-cleanup reconcile, never through
+	// this projection — so re-assert it from cur unconditionally, INCLUDING while
+	// the object is terminating. Otherwise a tenant could delete then PUT the
+	// still-terminating object to drop the finalizer, hard-deleting the backing
+	// policy before the controller strips the membership labels off member pods
+	// and orphaning them.
+	if cur != nil &&
+		hasFinalizer(cur.Finalizers, sdnv1alpha1.MembershipFinalizer) &&
+		!hasFinalizer(out.Finalizers, sdnv1alpha1.MembershipFinalizer) {
+		out.Finalizers = append(out.Finalizers, sdnv1alpha1.MembershipFinalizer)
+	}
+
+	// The backing endpointSelector is the SecurityGroup's own membership label,
+	// not a tenant-authored selector: the securitygroup-controller stamps that
+	// label onto the attached applications' pods. Rules project app/SG peers into
+	// endpoint selectors.
 	spec := sg.Spec.DeepCopy()
 	out.Spec = &CiliumNetworkPolicySpec{
-		EndpointSelector: metav1.LabelSelector{MatchLabels: deriveTargetLabels(spec.TargetRef)},
-		Ingress:          spec.Ingress,
-		Egress:           spec.Egress,
+		EndpointSelector: buildEndpointSelector(sg.Name),
+		Ingress:          projectIngress(spec.Ingress),
+		Egress:           projectEgress(spec.Egress),
 	}
 	// Normalize the protocol to upper case: validation accepts it case
 	// insensitively, but the backing CiliumNetworkPolicy CRD enforces a strict

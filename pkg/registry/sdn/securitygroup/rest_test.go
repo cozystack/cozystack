@@ -82,16 +82,15 @@ func unmarkedPolicy(name string) *CiliumNetworkPolicy {
 
 func sampleSpec() sdnv1alpha1.SecurityGroupSpec {
 	return sdnv1alpha1.SecurityGroupSpec{
-		TargetRef: sdnv1alpha1.ApplicationReference{
-			APIGroup: "apps.cozystack.io",
-			Kind:     "Postgres",
-			Name:     "db",
+		Attachments: []sdnv1alpha1.ApplicationReference{
+			{APIGroup: "apps.cozystack.io", Kind: "Postgres", Name: "db"},
 		},
 		Ingress: []sdnv1alpha1.IngressRule{
 			{
-				FromEndpoints: []metav1.LabelSelector{
-					{MatchLabels: map[string]string{"app": "web"}},
-				},
+				// Explicit APIGroup keeps the round-trip exact (an empty group is
+				// surfaced as the defaulted apps.cozystack.io on read).
+				FromApp:  []sdnv1alpha1.ApplicationReference{{APIGroup: "apps.cozystack.io", Kind: "Kubernetes", Name: "web"}},
+				FromSG:   []string{"frontend"},
 				FromCIDR: []string{"10.0.0.0/8"},
 				ToPorts: []sdnv1alpha1.PortRule{
 					{Ports: []sdnv1alpha1.PortProtocol{{Port: "5432", Protocol: "TCP"}}},
@@ -149,21 +148,40 @@ func TestCreateTranslatesSpecAndMarksPolicy(t *testing.T) {
 	if np.Spec == nil {
 		t.Fatalf("backing policy has no spec")
 	}
-	// The endpointSelector must be derived from the TargetRef, not copied.
-	wantLabels := map[string]string{
+	// The endpointSelector must be the SecurityGroup's own membership label, not
+	// any attached app's labels.
+	wantSel := map[string]string{"securitygroup.sdn.cozystack.io/sg-db": ""}
+	if !reflect.DeepEqual(np.Spec.EndpointSelector.MatchLabels, wantSel) {
+		t.Fatalf("membership endpointSelector mismatch:\n got: %+v\nwant: %+v", np.Spec.EndpointSelector.MatchLabels, wantSel)
+	}
+	// The attachments are persisted as a storage-owned annotation on the backing
+	// policy and hidden from the SecurityGroup view.
+	if np.Annotations[attachmentsAnnotation] == "" {
+		t.Fatalf("backing policy missing attachments annotation: %v", np.Annotations)
+	}
+	if _, ok := got.Annotations[attachmentsAnnotation]; ok {
+		t.Fatalf("Create leaked attachments annotation into SecurityGroup view: %v", got.Annotations)
+	}
+	// fromApp projects to a lineage-label endpointSelector; fromSG to a
+	// membership-label endpointSelector; fromCIDR carries over.
+	ing := np.Spec.Ingress
+	if len(ing) != 1 || len(ing[0].FromEndpoints) != 2 {
+		t.Fatalf("ingress projection mismatch: %+v", ing)
+	}
+	wantApp := map[string]string{
 		"apps.cozystack.io/application.group": "apps.cozystack.io",
-		"apps.cozystack.io/application.kind":  "Postgres",
-		"apps.cozystack.io/application.name":  "db",
+		"apps.cozystack.io/application.kind":  "Kubernetes",
+		"apps.cozystack.io/application.name":  "web",
 	}
-	if !reflect.DeepEqual(np.Spec.EndpointSelector.MatchLabels, wantLabels) {
-		t.Fatalf("derived endpointSelector mismatch:\n got: %+v\nwant: %+v", np.Spec.EndpointSelector.MatchLabels, wantLabels)
+	if !reflect.DeepEqual(ing[0].FromEndpoints[0].MatchLabels, wantApp) {
+		t.Fatalf("fromApp not projected to lineage labels: %+v", ing[0].FromEndpoints[0].MatchLabels)
 	}
-	// The rule lists must project 1:1.
-	if !reflect.DeepEqual(np.Spec.Ingress, sampleSpec().Ingress) {
-		t.Fatalf("backing policy ingress mismatch: %+v", np.Spec.Ingress)
+	wantSG := map[string]string{"securitygroup.sdn.cozystack.io/frontend": ""}
+	if !reflect.DeepEqual(ing[0].FromEndpoints[1].MatchLabels, wantSG) {
+		t.Fatalf("fromSG not projected to membership label: %+v", ing[0].FromEndpoints[1].MatchLabels)
 	}
-	if !reflect.DeepEqual(np.Spec.Egress, sampleSpec().Egress) {
-		t.Fatalf("backing policy egress mismatch: %+v", np.Spec.Egress)
+	if len(ing[0].FromCIDR) != 1 || ing[0].FromCIDR[0] != "10.0.0.0/8" {
+		t.Fatalf("fromCIDR not carried over: %+v", ing[0].FromCIDR)
 	}
 }
 
@@ -185,32 +203,34 @@ func TestCreateGetSpecRoundTrip(t *testing.T) {
 	}
 }
 
-func TestCreateDefaultsTargetRefAPIGroup(t *testing.T) {
+func TestCreateDefaultsAttachmentAPIGroup(t *testing.T) {
 	r := newTestREST(t)
 	in := &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: sdnv1alpha1.ApplicationReference{Kind: "Postgres", Name: "db"},
+			Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "db"}},
 		},
 	}
 	createSG(t, r, in)
 
-	out, err := r.Get(ctxNS(), "sg-db", &metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("Get returned error: %v", err)
+	// The backing policy's attachments annotation defaults the empty APIGroup to
+	// apps.cozystack.io so the controller resolves the right lineage labels.
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, np); err != nil {
+		t.Fatalf("backing policy not found: %v", err)
 	}
-	// An empty APIGroup defaults to apps.cozystack.io and is surfaced on read.
-	if got := out.(*sdnv1alpha1.SecurityGroup).Spec.TargetRef.APIGroup; got != "apps.cozystack.io" {
-		t.Fatalf("TargetRef.APIGroup = %q, want apps.cozystack.io", got)
+	att := decodeAttachments(np.Annotations[attachmentsAnnotation])
+	if len(att) != 1 || att[0].APIGroup != "apps.cozystack.io" {
+		t.Fatalf("attachment APIGroup not defaulted: %+v", att)
 	}
 }
 
-func TestTargetRefDerivesEndpointSelector(t *testing.T) {
+func TestEndpointSelectorIsMembershipLabel(t *testing.T) {
 	r := newTestREST(t)
 	createSG(t, r, &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: sdnv1alpha1.ApplicationReference{Kind: "Postgres", Name: "db"},
+			Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "db"}},
 		},
 	})
 
@@ -218,16 +238,12 @@ func TestTargetRefDerivesEndpointSelector(t *testing.T) {
 	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, np); err != nil {
 		t.Fatalf("backing policy not found: %v", err)
 	}
-	want := map[string]string{
-		"apps.cozystack.io/application.group": "apps.cozystack.io",
-		"apps.cozystack.io/application.kind":  "Postgres",
-		"apps.cozystack.io/application.name":  "db",
-	}
+	want := map[string]string{"securitygroup.sdn.cozystack.io/sg-db": ""}
 	if np.Spec == nil || !reflect.DeepEqual(np.Spec.EndpointSelector.MatchLabels, want) {
-		t.Fatalf("derived endpointSelector = %+v, want matchLabels %+v", np.Spec, want)
+		t.Fatalf("membership endpointSelector = %+v, want matchLabels %+v", np.Spec, want)
 	}
 	if len(np.Spec.EndpointSelector.MatchExpressions) != 0 {
-		t.Fatalf("derived endpointSelector must carry no matchExpressions: %+v", np.Spec.EndpointSelector.MatchExpressions)
+		t.Fatalf("membership endpointSelector must carry no matchExpressions: %+v", np.Spec.EndpointSelector.MatchExpressions)
 	}
 }
 
@@ -276,7 +292,7 @@ func TestUpdateModifiesSpec(t *testing.T) {
 	updated := &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: sdnv1alpha1.ApplicationReference{APIGroup: "apps.cozystack.io", Kind: "Postgres", Name: "db"},
+			Attachments: []sdnv1alpha1.ApplicationReference{{APIGroup: "apps.cozystack.io", Kind: "Postgres", Name: "db"}},
 			Ingress: []sdnv1alpha1.IngressRule{
 				{ToPorts: []sdnv1alpha1.PortRule{{Ports: []sdnv1alpha1.PortProtocol{{Port: "6379", Protocol: "TCP"}}}}},
 			},
@@ -701,6 +717,77 @@ func TestOwnerReferencesAndFinalizersRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUpdatePreservesMembershipFinalizer(t *testing.T) {
+	// The securitygroup-controller adds the membership finalizer to the backing
+	// policy via a merge patch, so it is not in the tenant-facing request body. A
+	// full-replace update (kubectl replace) whose body omits finalizers must not
+	// strip it — otherwise a delete-before-reconcile would hard-delete the policy
+	// and orphan the membership labels on member pods.
+	cnp := markedPolicy("sg-db")
+	cnp.Finalizers = []string{sdnv1alpha1.MembershipFinalizer}
+	r := newTestREST(t, cnp)
+
+	updated := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: testNamespace},
+		Spec:       sampleSpec(),
+	}
+	if _, _, err := r.Update(ctxNS(), "sg-db",
+		rest.DefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, np); err != nil {
+		t.Fatalf("backing policy not found: %v", err)
+	}
+	found := false
+	for _, f := range np.Finalizers {
+		if f == sdnv1alpha1.MembershipFinalizer {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("a full-replace update stripped the membership finalizer: %+v", np.Finalizers)
+	}
+}
+
+func TestUpdateDuringDeletionPreservesMembershipFinalizer(t *testing.T) {
+	// A tenant has full verbs on securitygroups, so they can delete then PUT the
+	// still-terminating object with a finalizer-less body. Removing the membership
+	// finalizer is exclusively the controller's job; a tenant write must never
+	// strip it, even while the object is terminating — otherwise the backing
+	// policy is hard-deleted before member-pod labels are cleaned up.
+	cnp := markedPolicy("sg-db")
+	cnp.Finalizers = []string{sdnv1alpha1.MembershipFinalizer}
+	r := newTestREST(t, cnp)
+
+	// Transition the backing policy to terminating (the finalizer keeps it).
+	live := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, live); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if err := r.c.Delete(context.Background(), live); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	updated := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-db", Namespace: testNamespace},
+		Spec:       sampleSpec(),
+	}
+	if _, _, err := r.Update(ctxNS(), "sg-db",
+		rest.DefaultUpdatedObjectInfo(updated), nil, nil, false, &metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("Update returned error: %v", err)
+	}
+
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, np); err != nil {
+		t.Fatalf("backing policy not found — was it hard-deleted? %v", err)
+	}
+	if !hasFinalizer(np.Finalizers, sdnv1alpha1.MembershipFinalizer) {
+		t.Fatalf("a tenant update during deletion stripped the membership finalizer: %+v", np.Finalizers)
+	}
+}
+
 func TestWatchForwardsSendInitialEvents(t *testing.T) {
 	var captured *metav1.ListOptions
 	scheme := runtime.NewScheme()
@@ -783,31 +870,41 @@ func sgWithIngress(name string, in sdnv1alpha1.IngressRule) *sdnv1alpha1.Securit
 	return &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: sdnv1alpha1.ApplicationReference{Kind: "Postgres", Name: "x"},
-			Ingress:   []sdnv1alpha1.IngressRule{in},
+			Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "x"}},
+			Ingress:     []sdnv1alpha1.IngressRule{in},
 		},
 	}
 }
 
-func TestCreateRejectsEmptyTargetRef(t *testing.T) {
+func TestCreateAcceptsEmptyAttachments(t *testing.T) {
 	r := newTestREST(t)
-	// No targetRef — the SecurityGroup would have nothing to attach to.
+	// A group with no attachments selects no pods yet (members get added once it
+	// is attached); it is a valid resource, not an error.
 	in := &sdnv1alpha1.SecurityGroup{
-		ObjectMeta: metav1.ObjectMeta{Name: "sg-orphan", Namespace: testNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-empty", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
 			Ingress: []sdnv1alpha1.IngressRule{{ToPorts: []sdnv1alpha1.PortRule{{Ports: []sdnv1alpha1.PortProtocol{{Port: "443", Protocol: "TCP"}}}}}},
 		},
 	}
-	if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); !apierrors.IsInvalid(err) {
-		t.Fatalf("Create with empty targetRef: got err %v, want Invalid", err)
+	got := createSG(t, r, in)
+	if len(got.Spec.Attachments) != 0 {
+		t.Fatalf("empty attachments should round-trip empty: %+v", got.Spec.Attachments)
 	}
+	// The backing policy still carries the membership endpointSelector and omits
+	// the attachments annotation entirely.
 	np := &CiliumNetworkPolicy{}
-	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-orphan"}, np); !apierrors.IsNotFound(err) {
-		t.Fatalf("SecurityGroup with empty targetRef was persisted: err=%v", err)
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-empty"}, np); err != nil {
+		t.Fatalf("backing policy not found: %v", err)
+	}
+	if _, ok := np.Annotations[attachmentsAnnotation]; ok {
+		t.Fatalf("empty attachments should not write an annotation: %v", np.Annotations)
+	}
+	if np.Spec.EndpointSelector.MatchLabels["securitygroup.sdn.cozystack.io/sg-empty"] != "" {
+		t.Fatalf("membership selector missing for empty-attachment group: %+v", np.Spec.EndpointSelector)
 	}
 }
 
-func TestCreateRejectsInvalidTargetRefLabelValue(t *testing.T) {
+func TestCreateRejectsInvalidAttachmentLabelValue(t *testing.T) {
 	cases := map[string]sdnv1alpha1.ApplicationReference{
 		"name too long":     {Kind: "Postgres", Name: strings.Repeat("a", 64)},
 		"kind too long":     {Kind: strings.Repeat("a", 64), Name: "db"},
@@ -815,13 +912,14 @@ func TestCreateRejectsInvalidTargetRefLabelValue(t *testing.T) {
 		"apiGroup too long": {APIGroup: strings.Repeat("a", 64), Kind: "Postgres", Name: "db"},
 		"missing kind":      {Name: "db"},
 		"missing name":      {Kind: "Postgres"},
+		"reserved entity":   {Kind: "Postgres", Name: "world"},
 	}
 	for name, ref := range cases {
 		t.Run(name, func(t *testing.T) {
 			r := newTestREST(t)
 			in := &sdnv1alpha1.SecurityGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "sg-bad-ref", Namespace: testNamespace},
-				Spec:       sdnv1alpha1.SecurityGroupSpec{TargetRef: ref},
+				Spec:       sdnv1alpha1.SecurityGroupSpec{Attachments: []sdnv1alpha1.ApplicationReference{ref}},
 			}
 			if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); !apierrors.IsInvalid(err) {
 				t.Fatalf("Create with %s: got err %v, want Invalid", name, err)
@@ -831,6 +929,63 @@ func TestCreateRejectsInvalidTargetRefLabelValue(t *testing.T) {
 				t.Fatalf("invalid SecurityGroup was persisted: err=%v", err)
 			}
 		})
+	}
+}
+
+func TestCreateRejectsInvalidOwnName(t *testing.T) {
+	// The SecurityGroup name is projected into the backing policy's membership
+	// label key, so a name that is a valid resource name but an invalid label key
+	// (e.g. > 63 chars) must be rejected with a clean Invalid on metadata.name,
+	// not a confusing failure on the backing CiliumNetworkPolicy write.
+	r := newTestREST(t)
+	longName := strings.Repeat("a", 64)
+	in := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: longName, Namespace: testNamespace},
+		Spec:       sdnv1alpha1.SecurityGroupSpec{Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "db"}}},
+	}
+	if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); !apierrors.IsInvalid(err) {
+		t.Fatalf("Create with an over-long name: got err %v, want Invalid", err)
+	}
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: longName}, np); !apierrors.IsNotFound(err) {
+		t.Fatalf("invalid-named SecurityGroup was persisted: err=%v", err)
+	}
+}
+
+func TestCreateRejectsInvalidSGPeer(t *testing.T) {
+	cases := map[string]sdnv1alpha1.IngressRule{
+		"empty fromSG name": {FromSG: []string{""}},
+		"reserved entity":   {FromSG: []string{"cluster"}},
+		"over-long name":    {FromSG: []string{strings.Repeat("a", 64)}},
+	}
+	for name, rule := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := newTestREST(t)
+			if _, err := r.Create(ctxNS(), sgWithIngress("sg-bad-sg", rule), nil, &metav1.CreateOptions{}); !apierrors.IsInvalid(err) {
+				t.Fatalf("Create with %s: got err %v, want Invalid", name, err)
+			}
+		})
+	}
+}
+
+func TestMultipleAttachmentsRoundTrip(t *testing.T) {
+	r := newTestREST(t)
+	in := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-multi", Namespace: testNamespace},
+		Spec: sdnv1alpha1.SecurityGroupSpec{
+			Attachments: []sdnv1alpha1.ApplicationReference{
+				{APIGroup: "apps.cozystack.io", Kind: "Postgres", Name: "db"},
+				{APIGroup: "apps.cozystack.io", Kind: "Kubernetes", Name: "web"},
+			},
+		},
+	}
+	createSG(t, r, in)
+	out, err := r.Get(ctxNS(), "sg-multi", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !reflect.DeepEqual(out.(*sdnv1alpha1.SecurityGroup).Spec.Attachments, in.Spec.Attachments) {
+		t.Fatalf("multi-attachment round-trip mismatch: %+v", out.(*sdnv1alpha1.SecurityGroup).Spec.Attachments)
 	}
 }
 
@@ -866,9 +1021,9 @@ func TestCreateAcceptsBareIPCIDR(t *testing.T) {
 	in := &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "sg-host", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: sdnv1alpha1.ApplicationReference{Kind: "Postgres", Name: "x"},
-			Ingress:   []sdnv1alpha1.IngressRule{{FromCIDR: []string{"10.0.0.5"}}},
-			Egress:    []sdnv1alpha1.EgressRule{{ToCIDR: []string{"2001:db8::1"}}},
+			Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "x"}},
+			Ingress:     []sdnv1alpha1.IngressRule{{FromCIDR: []string{"10.0.0.5"}}},
+			Egress:      []sdnv1alpha1.EgressRule{{ToCIDR: []string{"2001:db8::1"}}},
 		},
 	}
 	if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); err != nil {
@@ -944,8 +1099,8 @@ func TestCreateRejectsEmptyFQDNSelector(t *testing.T) {
 	in := &sdnv1alpha1.SecurityGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "sg-fqdn", Namespace: testNamespace},
 		Spec: sdnv1alpha1.SecurityGroupSpec{
-			TargetRef: sdnv1alpha1.ApplicationReference{Kind: "Postgres", Name: "db"},
-			Egress:    []sdnv1alpha1.EgressRule{{ToFQDNs: []sdnv1alpha1.FQDNSelector{{}}}},
+			Attachments: []sdnv1alpha1.ApplicationReference{{Kind: "Postgres", Name: "db"}},
+			Egress:      []sdnv1alpha1.EgressRule{{ToFQDNs: []sdnv1alpha1.FQDNSelector{{}}}},
 		},
 	}
 	if _, err := r.Create(ctxNS(), in, nil, &metav1.CreateOptions{}); !apierrors.IsInvalid(err) {

@@ -786,7 +786,7 @@ func schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref common.ReferenceCallb
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "ApplicationReference identifies a managed Cozystack application by its group, kind and name. The SecurityGroup projects this reference into an endpointSelector matching the application's lineage labels (apps.cozystack.io/application.{group,kind,name}).",
+				Description: "ApplicationReference identifies a managed Cozystack application by its group, kind and name. It is used both for SecurityGroup attachments and for fromApp/toApp peers, and resolves to the application's lineage labels (apps.cozystack.io/application.{group,kind,name}).",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"apiGroup": {
@@ -826,15 +826,30 @@ func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) commo
 				Description: "EgressRule describes one set of allowed outbound destinations and ports.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"toEndpoints": {
+					"toApp": {
 						SchemaProps: spec.SchemaProps{
-							Description: "ToEndpoints selects destination pods by label. An empty selector matches all pods in the same namespace.",
+							Description: "ToApp selects destination pods belonging to the referenced managed applications, by their lineage labels.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"),
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+									},
+								},
+							},
+						},
+					},
+					"toSG": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToSG selects destination pods that are members of the named SecurityGroups in the same namespace, by their membership label. The reference is live: it follows the other group's membership as attachments change.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
 									},
 								},
 							},
@@ -887,7 +902,7 @@ func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) commo
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule", "k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"},
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"},
 	}
 }
 
@@ -925,15 +940,30 @@ func schema_pkg_apis_sdn_v1alpha1_IngressRule(ref common.ReferenceCallback) comm
 				Description: "IngressRule describes one set of allowed inbound sources and ports.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"fromEndpoints": {
+					"fromApp": {
 						SchemaProps: spec.SchemaProps{
-							Description: "FromEndpoints selects source pods by label. An empty selector matches all pods in the same namespace.",
+							Description: "FromApp selects source pods belonging to the referenced managed applications, by their lineage labels.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"),
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+									},
+								},
+							},
+						},
+					},
+					"fromSG": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FromSG selects source pods that are members of the named SecurityGroups in the same namespace, by their membership label. The reference is live: it follows the other group's membership as attachments change.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
 									},
 								},
 							},
@@ -972,7 +1002,7 @@ func schema_pkg_apis_sdn_v1alpha1_IngressRule(ref common.ReferenceCallback) comm
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule", "k8s.io/apimachinery/pkg/apis/meta/v1.LabelSelector"},
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"},
 	}
 }
 
@@ -1036,7 +1066,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref common.ReferenceCallback) co
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "SecurityGroup is a tenant-facing, namespace-scoped firewall object. It is a projection of a single CiliumNetworkPolicy served by the Cozystack aggregated API: tenants manage SecurityGroups while the platform translates each one 1:1 into a CiliumNetworkPolicy in the same namespace, without granting tenants direct access to the cilium.io API group.",
+				Description: "SecurityGroup is a tenant-facing, namespace-scoped firewall object. It is a projection of a single CiliumNetworkPolicy served by the Cozystack aggregated API: tenants manage SecurityGroups while the platform translates each one 1:1 into a CiliumNetworkPolicy in the same namespace, without granting tenants direct access to the cilium.io API group.\n\nA SecurityGroup is a membership group: it owns a membership label (MembershipLabelPrefix + its name) that the securitygroup-controller stamps onto the pods of the applications listed in spec.attachments. The backing CiliumNetworkPolicy selects that membership label, so one SecurityGroup can apply to several applications at once.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
 					"kind": {
@@ -1061,7 +1091,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref common.ReferenceCallback) co
 					},
 					"spec": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Spec describes the traffic the SecurityGroup allows.",
+							Description: "Spec describes the applications this SecurityGroup attaches to and the traffic it allows.",
 							Default:     map[string]interface{}{},
 							Ref:         ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec"),
 						},
@@ -1127,19 +1157,26 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 	return common.OpenAPIDefinition{
 		Schema: spec.Schema{
 			SchemaProps: spec.SchemaProps{
-				Description: "SecurityGroupSpec describes the traffic a SecurityGroup allows and the managed application it attaches to. The platform derives the backing CiliumNetworkPolicy's endpointSelector from TargetRef rather than copying a tenant-authored selector, so a SecurityGroup can only ever apply to the referenced application's own pods in the same namespace.",
+				Description: "SecurityGroupSpec describes the managed applications a SecurityGroup attaches to and the traffic it allows. The backing CiliumNetworkPolicy's endpointSelector is the SecurityGroup's own membership label, which the securitygroup-controller maintains on the attached applications' pods — so a SecurityGroup can only ever apply to those applications' own pods in the same namespace.",
 				Type:        []string{"object"},
 				Properties: map[string]spec.Schema{
-					"targetRef": {
+					"attachments": {
 						SchemaProps: spec.SchemaProps{
-							Description: "TargetRef references the managed application whose pods this SecurityGroup applies to. The backing CiliumNetworkPolicy's endpointSelector is derived from this reference via the application's lineage labels, so the selector is machine-generated and cannot be pointed at arbitrary or platform-owned pods.",
-							Default:     map[string]interface{}{},
-							Ref:         ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+							Description: "Attachments lists the managed applications whose pods join this group. The securitygroup-controller stamps the SecurityGroup's membership label (MembershipLabelPrefix + name) onto the pods of each referenced application in the same namespace, and removes it when the attachment is dropped. An empty list means the group selects no pods.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+									},
+								},
+							},
 						},
 					},
 					"ingress": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Ingress is the list of rules describing allowed inbound traffic. An empty list denies all ingress to the targeted application's pods.",
+							Description: "Ingress is the list of rules describing allowed inbound traffic. An empty list denies all ingress to the group's member pods.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1153,7 +1190,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 					},
 					"egress": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Egress is the list of rules describing allowed outbound traffic. An empty list denies all egress from the targeted application's pods.",
+							Description: "Egress is the list of rules describing allowed outbound traffic. An empty list denies all egress from the group's member pods.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1166,7 +1203,6 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 						},
 					},
 				},
-				Required: []string{"targetRef"},
 			},
 		},
 		Dependencies: []string{
