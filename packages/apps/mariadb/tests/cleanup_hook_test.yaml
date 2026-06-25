@@ -1,0 +1,52 @@
+suite: post-delete cleanup hook
+
+# Locks in the post-delete cleanup behaviour. The mariadb-operator creates
+# <release>-metrics-password and <release>-repl-password Secrets as a side
+# effect of metrics/replication being enabled. These Secrets are not
+# Helm-owned and survive `helm uninstall`, so the post-delete hook must
+# sweep them (issue #3056) alongside the orphaned PVCs. The hook Role also
+# needs RBAC on secrets to do so.
+
+templates:
+  - templates/hooks/cleanup-pvc.yaml
+
+release:
+  name: mariadb-test
+  namespace: tenant-test
+
+tests:
+  - it: "cleanup Job deletes the operator-generated password Secrets by name"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-metrics-password mariadb-test-repl-password --ignore-not-found"
+
+  - it: "cleanup Role grants get/list/delete on persistentvolumeclaims"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "delete"]
+
+  - it: "cleanup Role scopes secret access to the two named secrets only (least privilege)"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            resourceNames:
+              - mariadb-test-metrics-password
+              - mariadb-test-repl-password
+            verbs: ["get", "delete"]

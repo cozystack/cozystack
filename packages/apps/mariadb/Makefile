@@ -11,6 +11,10 @@ update:
 	hack/update-versions.sh
 	make generate
 
+.PHONY: test
+test:
+	helm unittest .
+
 image:
 	docker buildx build images/mariadb-backup \
 		$(call image-tags,mariadb-backup,$(MARIADB_BACKUP_TAG)) \

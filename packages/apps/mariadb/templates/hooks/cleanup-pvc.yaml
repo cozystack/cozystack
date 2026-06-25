@@ -18,16 +18,49 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-cleanup
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cleanup
           image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           command:
             - /bin/sh
             - -c
             - |
               echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} || true
+              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found \
+                || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
               echo "PVC cleanup complete."
+              echo "Deleting orphaned operator-generated Secrets for {{ .Release.Name }}..."
+              kubectl delete secret -n {{ .Release.Namespace }} \
+                {{ .Release.Name }}-metrics-password {{ .Release.Name }}-repl-password --ignore-not-found \
+                || echo "WARNING: Secret cleanup failed for {{ .Release.Name }}; orphaned Secrets may remain" >&2
+              echo "Secret cleanup complete."
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -51,9 +84,18 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+  # PVCs are deleted by label selector, which requires list.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "delete"]
+  # Operator-generated Secrets are deleted by name, so scope the rule to
+  # exactly those two resources (least privilege — no namespace-wide secret access).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ .Release.Name }}-metrics-password
+      - {{ .Release.Name }}-repl-password
+    verbs: ["get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
