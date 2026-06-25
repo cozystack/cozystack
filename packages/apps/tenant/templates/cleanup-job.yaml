@@ -21,7 +21,7 @@ metadata:
 rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
-  verbs: ["get", "list", "delete"]
+  verbs: ["get", "list", "watch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -60,11 +60,20 @@ spec:
     spec:
       serviceAccountName: {{ include "tenant.name" . }}-cleanup
       restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: cleanup
-        image: bitnami/kubectl:latest
+        image: docker.io/clastix/kubectl:v1.32
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop: ["ALL"]
         command:
-        - /bin/bash
+        - /bin/sh
         - -c
         - |
           set -e
