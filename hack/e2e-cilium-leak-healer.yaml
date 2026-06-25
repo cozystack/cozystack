@@ -24,9 +24,12 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
-  # inspect the wedged pod and the endpoint's claimed owner, and delete the
-  # wedged pod to reschedule it onto a free IP when the disputed IP is held by
-  # a reserved/infra endpoint (or a disconnect otherwise fails)
+  # inspect the wedged pod and the endpoint's claimed owner; delete the wedged
+  # pod to reschedule it onto a free IP (Tier 1, when the disputed IP is held by
+  # a reserved/infra endpoint or a disconnect otherwise fails); and delete the
+  # node's cilium-agent pod in cozy-cilium to restart it (Tier 2 escalation,
+  # which clears a stale in-memory endpoint leak the DaemonSet then rebuilds
+  # without). cluster-wide `delete` already covers cozy-cilium, so no extra verb.
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list", "delete"]
