@@ -55,9 +55,12 @@ jobs:
           # Tracked targets: main + every release-X.Y maintenance branch.
           targets="main"
           for b in $(git for-each-ref --format='%(refname:short)' refs/remotes/origin/release-* 2>/dev/null); do
-            case "$b" in
-              origin/release-[0-9]*.[0-9]*) targets="$targets ${b#origin/}" ;;
-            esac
+            br="${b#origin/}"
+            # Only exact two-component maintenance branches (release-X.Y). A bare
+            # shell glob also matches the per-tag staging branches tags.yaml
+            # creates (release-1.4.0, release-1.4.0-rc.2, release-1.5.0-nightly.<date>),
+            # so anchor with a regex to drop them.
+            printf '%s\n' "$br" | grep -qE '^release-[0-9]+\.[0-9]+$' && targets="$targets $br"
           done
 
           # Highest vX.Y.Z stable tag (ignores prereleases) for next-version math.

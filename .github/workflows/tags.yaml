@@ -83,6 +83,7 @@ jobs:
             core.setOutput('tag',     ref);                              // v0.31.5-rc.1
             core.setOutput('version', version);                          // 0.31.5-rc.1
             core.setOutput('is_rc',   isRc);                             // true
+            core.setOutput('is_stable', !isRc);                          // true only for a plain vX.Y.Z
             core.setOutput('line',    `${maj}.${min}`);                  // 0.31
 
       # Detect base branch (main or release-X.Y) the tag was pushed from
@@ -154,8 +155,12 @@ jobs:
       # pkg.go.dev, where a moved tag poisons caches irreversibly. Create the tag
       # only when absent; if it already points at the same commit, no-op; if it
       # exists pointing elsewhere, fail loudly rather than force-move it.
+      # Stable releases only: an immutable Go-module tag must never be cut for an
+      # rc/beta/alpha (is_stable=false) or a nightly (is_stable unset — Parse tag
+      # rejects -nightly before this), which would permanently pollute the module
+      # proxy with a prerelease version (#2677 goal 3).
       - name: Tag API submodule (write-once)
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.skip == 'false' && steps.tag.outputs.is_stable == 'true'
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
           VTAG: ${{ steps.tag.outputs.tag }}
@@ -245,9 +250,10 @@ jobs:
             git push -f origin "HEAD:refs/heads/${BRANCH}"
           fi
 
-      # Create pull request into original base branch (if absent)
+      # Create pull request into original base branch (if absent). Stable only —
+      # an rc/nightly must not auto-open a release PR (#2677 goal 3).
       - name: Create pull request if not exists
-        if: steps.check_release.outputs.skip == 'false'
+        if: steps.check_release.outputs.skip == 'false' && steps.tag.outputs.is_stable == 'true'
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
