@@ -108,6 +108,54 @@ E2E_CAPTURE_DATAPLANE_LIB=1
   [ -z "$out" ]
 }
 
+@test "lb_announcer_node excludes a node whose last own event is a withdraw" {
+  # Case A: node-a announces the IP then withdraws it and never re-announces.
+  # Its last own IP-event is the withdraw, so it is NOT the current announcer and
+  # nothing must be reported. The pre-polish logic kept node-a (a withdraw did
+  # not retract a prior announce), so this pins the failover fix.
+  logs="$(printf '%s\t%s\n' \
+    'node-a' '{"event":"serviceAnnounced","ips":["192.0.2.50"],"node":"node-a"}' \
+    'node-a' '{"event":"serviceWithdrawn","ips":["192.0.2.50"],"node":"node-a"}')"
+
+  out="$(printf '%s\n' "$logs" | lb_announcer_node '192.0.2.50')"
+
+  [ -z "$out" ]
+}
+
+@test "lb_announcer_node ignores a stale owner that appears later in concat order" {
+  # Case B: node-c is the true current owner (announce, never withdrawn). Later
+  # in the input -- speaker logs are concatenated per-pod, NOT globally time-
+  # sorted -- a stale node-a announce+withdraw block appears. node-a's last own
+  # event is a withdraw, so the announcer is node-c, NOT the later-in-input
+  # node-a. The pre-polish logic returned node-a (most recent announce by concat
+  # order), so this pins robustness to concat order.
+  logs="$(printf '%s\t%s\n' \
+    'node-c' '{"event":"serviceAnnounced","ips":["192.0.2.50"],"node":"node-c"}' \
+    'node-a' '{"event":"serviceAnnounced","ips":["192.0.2.50"],"node":"node-a"}' \
+    'node-a' '{"event":"serviceWithdrawn","ips":["192.0.2.50"],"node":"node-a"}')"
+
+  out="$(printf '%s\n' "$logs" | lb_announcer_node '192.0.2.50')"
+
+  [ "$out" = "node-c" ]
+}
+
+@test "lb_announcer_node matches the IP as a whole token not a substring" {
+  # Case C: querying 192.0.2.5 must NOT match a 192.0.2.50 announce (the
+  # pre-polish index()/substring match returned node-d here). The exact 192.0.2.5
+  # announce on node-e is matched and wins.
+  logs="$(printf '%s\t%s\n' \
+    'node-d' '{"event":"serviceAnnounced","ips":["192.0.2.50"],"node":"node-d"}' \
+    'node-e' '{"event":"serviceAnnounced","ips":["192.0.2.5"],"node":"node-e"}')"
+
+  no_substr="$(printf '%s\n' "$logs" | lb_announcer_node '192.0.2.5')"
+  no_match="$(printf '%s\t%s\n' \
+    'node-d' '{"event":"serviceAnnounced","ips":["192.0.2.50"],"node":"node-d"}' \
+    | lb_announcer_node '192.0.2.5')"
+
+  [ "$no_substr" = "node-e" ]
+  [ -z "$no_match" ]
+}
+
 @test "lb_capture_decision returns capture when every probe failed" {
   [ "$(printf 'fail\nfail\nfail\n' | lb_capture_decision)" = "capture" ]
   [ "$(printf 'fail\n' | lb_capture_decision)" = "capture" ]
@@ -120,4 +168,57 @@ E2E_CAPTURE_DATAPLANE_LIB=1
 
 @test "lb_capture_decision returns skip when no probe ran at all" {
   [ "$(printf '' | lb_capture_decision)" = "skip" ]
+}
+
+@test "lb_budget_ok yes below the cap and no once it is reached" {
+  [ "$(lb_budget_ok 0 6)" = "yes" ]
+  [ "$(lb_budget_ok 5 6)" = "yes" ]
+  [ "$(lb_budget_ok 6 6)" = "no" ]
+  [ "$(lb_budget_ok 7 6)" = "no" ]
+}
+
+@test "capture budget counts captured LBs so a late broken LB is still captured" {
+  # The MAX_LBS cap must bound LBs actually CAPTURED, not LBs enumerated: reachable
+  # (skipped) LBs must not consume the budget, so a broken LB enumerated after many
+  # reachable ones is still characterised. This mirrors the per-LB loop in
+  # capture_lb_datapath, which only consults lb_budget_ok / increments the counter
+  # on the capture branch -- here driven by a fixed decision sequence so no cluster
+  # is needed. With the pre-polish "increment per enumerated LB" logic and max=2,
+  # the loop would have broken at the 3rd LB and never reached the broken one.
+  max=2
+  captured=0
+  last=""
+  for decision in skip skip skip skip skip capture; do
+    if [ "$decision" != "capture" ]; then
+      last="skip"
+      continue
+    fi
+    if [ "$(lb_budget_ok "$captured" "$max")" != "yes" ]; then
+      last="dropped"
+      continue
+    fi
+    captured=$((captured + 1))
+    last="captured"
+  done
+
+  [ "$captured" -eq 1 ]
+  [ "$last" = "captured" ]
+}
+
+@test "capture budget stops after the cap worth of broken LBs" {
+  # Once MAX_LBS broken LBs are captured, further unreachable LBs are not
+  # characterised (left to the outer wall-clock backstop). max=2, three broken.
+  max=2
+  captured=0
+  dropped=0
+  for decision in capture capture capture; do
+    if [ "$(lb_budget_ok "$captured" "$max")" != "yes" ]; then
+      dropped=$((dropped + 1))
+      continue
+    fi
+    captured=$((captured + 1))
+  done
+
+  [ "$captured" -eq 2 ]
+  [ "$dropped" -eq 1 ]
 }

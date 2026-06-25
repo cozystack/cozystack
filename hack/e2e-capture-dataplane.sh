@@ -128,13 +128,44 @@ lb_first_ready_endpoint() {
 
 # lb_announcer_node <lbip>: stdin = MetalLB speaker logs, each line prefixed with
 # the emitting speaker pod's node and a TAB (`<node>\t<logline>`). The speaker is
-# hostNetwork and only the elected L2 owner logs an announce for the IP, so the
-# node of the most recent announce line (announce, not withdraw) is the current
-# announcer. Emits that node, or nothing when no announce for the IP is found.
+# hostNetwork and only the elected L2 owner currently announces the IP. Reports a
+# node ONLY IF that node's LAST own IP-event for this exact IP is an announce: per
+# node we track its most recent announce/withdraw line for the IP, so a node that
+# announced then withdrew (last event = withdraw) is excluded and a node that is
+# still announcing (last event = announce) qualifies. This is robust to the
+# per-pod (not globally time-sorted) concat order of the speaker logs and to L2
+# failover. If more than one node still qualifies (should not happen for an L2
+# announce), the one whose last announce appears latest in the input wins.
+# The IP is matched as a whole token (not a substring), so a query for
+# `192.0.2.5` does NOT match a `192.0.2.50` line. Emits the announcer node, or
+# nothing when no node currently announces the IP.
 lb_announcer_node() {
   awk -F'\t' -v ip="$1" '
-    index($0, ip) && /[Aa]nnounc/ && !/[Ww]ithdraw/ { node = $1 }
-    END { if (node != "") print node }'
+    BEGIN {
+      # Match the IP as a maximal IP-literal token: not flanked by another
+      # IP char (digit / dot / hex / colon), so `192.0.2.5` != `192.0.2.50`.
+      # `[.]` escapes each dot portably (no gsub-replacement backslash games).
+      ipre = ip
+      gsub(/\./, "[.]", ipre)
+      re = "(^|[^0-9A-Fa-f:.])" ipre "([^0-9A-Fa-f:.]|$)"
+    }
+    $0 ~ re {
+      if      ($0 ~ /[Ww]ithdraw/) ev = "withdraw"
+      else if ($0 ~ /[Aa]nnounc/)  ev = "announce"
+      else                         next
+      last_ev[$1]   = ev
+      last_line[$1] = NR
+    }
+    END {
+      best = ""; bestline = -1
+      for (n in last_ev) {
+        if (last_ev[n] == "announce" && last_line[n] > bestline) {
+          bestline = last_line[n]
+          best = n
+        }
+      }
+      if (best != "") print best
+    }'
 }
 
 # lb_capture_decision: stdin = one probe outcome token per line ("ok" / "fail").
@@ -152,6 +183,18 @@ lb_capture_decision() {
       if (ok > 0) { print "skip"; exit }
       print "capture"
     }'
+}
+
+# lb_budget_ok <captured-so-far> <max>: gate for the heavy per-LB capture budget.
+# Emits "yes" while fewer than <max> LBs have been CAPTURED, "no" once the cap is
+# reached. The cap bounds LBs actually captured -- the caller increments only on
+# the capture branch, so reachable/skipped LBs never consume it and a broken LB
+# enumerated after many reachable ones is still characterised. The cap bounds
+# WORK, not wall-clock: at >=2 unreachable LBs (each heavy capture takes tens of
+# seconds) the real wall-clock bound is the outer `timeout -k 30 600` backstop at
+# the call site, not this cap.
+lb_budget_ok() {
+  if [ "$1" -lt "$2" ]; then echo yes; else echo no; fi
 }
 
 # Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
@@ -180,8 +223,11 @@ MAX_PODS="${COZY_DATAPLANE_MAX_PODS:-12}"
 METALLB_NS="${COZY_METALLB_NS:-cozy-metallb}"
 SPEAKER_SELECTOR="${COZY_METALLB_SPEAKER_SELECTOR:-app.kubernetes.io/component=speaker}"
 GENEVE_IFACE="${COZY_GENEVE_IFACE:-genev_sys_6081}"
-# Cap failing-LB heavy captures so a cluster with many broken LBs cannot blow the
-# call-site wall-clock backstop; per-command timeouts are the other bound.
+# Cap how many UNREACHABLE LBs get the heavy datapath capture; reachable/skipped
+# LBs never count toward it (see the captured-budget gate in capture_lb_datapath).
+# This bounds WORK, not wall-clock: at >=2 unreachable LBs the real wall-clock
+# bound is the outer `timeout -k 30 600` backstop at the call site (truncate +
+# hard-kill), since each heavy capture itself takes tens of seconds.
 MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 
 command -v kubectl >/dev/null 2>&1 || exit 0
@@ -532,7 +578,7 @@ capture_lb_datapath() {
   fi
 
   _lbcount=$(printf '%s\n' "$_lbs" | wc -l | tr -d ' ')
-  log "characterising up to $MAX_LBS of $_lbcount LoadBalancer service(s) -> $OUT/lb-*.txt"
+  log "probing $_lbcount LoadBalancer service(s); heavy-capturing up to $MAX_LBS unreachable one(s) -> $OUT/lb-*.txt"
 
   # MetalLB speaker logs once, prefixed with each speaker's node (hostNetwork, so
   # .spec.nodeName IS the announcing node). Kept as an artifact file that
@@ -550,15 +596,14 @@ capture_lb_datapath() {
     done
   fi
 
-  _i=0
+  # Counts LBs actually CAPTURED (heavy capture performed), not enumerated, so the
+  # MAX_LBS cap only bounds failing LBs -- reachable/skipped ones below never
+  # increment it and a broken LB enumerated after many reachable ones still gets
+  # captured. The gate lives on the capture branch (lb_budget_ok), not here.
+  _captured=0
   printf '%s\n' "$_lbs" | {
     while IFS='|' read -r _ns _name _type _lbip _port _np _etp; do
       [ -n "$_lbip" ] || continue
-      _i=$((_i + 1))
-      if [ "$_i" -gt "$MAX_LBS" ]; then
-        log "reached MAX_LBS=$MAX_LBS cap; $((_lbcount - MAX_LBS)) more LB(s) NOT characterised"
-        break
-      fi
       _lbport="${_port:-0}"
 
       # EndpointSlice backend for this Service (first ready, addressed endpoint).
@@ -603,6 +648,16 @@ capture_lb_datapath() {
         log "LB $_ns/$_name ($_lbip) reachable or not probeable -- skipped"
         continue
       fi
+
+      # Heavy-capture budget: only failing LBs consume MAX_LBS (reachable ones
+      # skipped above without counting). Stop once the cap's worth of broken LBs
+      # have been captured; remaining ones are left to the outer wall-clock bound.
+      if [ "$(lb_budget_ok "$_captured" "$MAX_LBS")" != "yes" ]; then
+        echo "probe: LB IP unreachable from node $_probenode but MAX_LBS=$MAX_LBS captured cap reached -- NOT characterised" >> "$_of" 2>&1 || true
+        log "reached MAX_LBS=$MAX_LBS captured cap; further unreachable LB(s) NOT characterised"
+        break
+      fi
+      _captured=$((_captured + 1))
 
       log "LB $_ns/$_name ($_lbip) UNREACHABLE -- capturing announcer/endpoint datapath"
       {
