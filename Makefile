@@ -88,7 +88,7 @@ assets: assets-talos assets-cozypkg openapi-json
 
 openapi-json:
 	mkdir -p _out/assets
-	VERSION=$(shell git describe --tags --always 2>/dev/null || echo dev) go run ./tools/openapi-gen/ 2>/dev/null > _out/assets/openapi.json
+	VERSION=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),$(shell git describe --tags --always 2>/dev/null || echo dev)) go run ./tools/openapi-gen/ 2>/dev/null > _out/assets/openapi.json
 
 assets-talos:
 	make -C packages/core/talos assets
