@@ -141,7 +141,7 @@ images:
     architecture: amd64
     description: "openSUSE Leap 15.6 NoCloud image"
   - name: opensuse-leap-16.0
-    url: https://download.opensuse.org/repositories/openSUSE:/Leap:/16.0:/Images/images/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2
+    url: https://download.opensuse.org/distribution/leap/16.0/appliances/Leap-16.0-Minimal-VM.x86_64-Cloud.qcow2
     storage: 20Gi
     os:
       family: Linux
@@ -159,7 +159,7 @@ images:
     architecture: amd64
     description: "Ubuntu 20.04 LTS (Focal Fossa) cloud image"
   - name: alpine-3.21
-    url: https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.6-x86_64-bios-cloudinit-r0.qcow2
+    url: https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/cloud/nocloud_alpine-3.21.7-x86_64-bios-cloudinit-r0.qcow2
     storage: 20Gi
     os:
       family: Linux
