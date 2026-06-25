@@ -37,8 +37,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+	networkv1alpha1 "github.com/cozystack/cozystack/api/network/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/serviceexposure"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
@@ -60,6 +62,7 @@ func init() {
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(networkv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(gatewayv1alpha2.Install(scheme))
 	utilruntime.Must(cmv1.AddToScheme(scheme))
@@ -223,6 +226,22 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
+		os.Exit(1)
+	}
+
+	if err = (&serviceexposure.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ServiceExposure")
+		os.Exit(1)
+	}
+
+	if err = (&serviceexposure.ClassReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ExposureClass")
 		os.Exit(1)
 	}
 
