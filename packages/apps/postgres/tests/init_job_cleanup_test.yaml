@@ -9,9 +9,9 @@ suite: init-job is garbage-collected after completion
 # touching the hook-timeout semantics the recovery flow depends on. 1h leaves a
 # debugging window for a failed init Job before it is collected.
 
-# init-script.yaml is included alongside init-job.yaml because the Job's
-# checksum/config annotation does `include ".../init-script.yaml"`; the suite
-# must load both templates or the include fails to resolve.
+# Both templates are loaded so the Job's checksum/config annotation can resolve
+# its `include ".../init-script.yaml"`. Each test then pins assertions to a
+# single template via `template:` so the per-template document set is exact.
 templates:
   - templates/init-job.yaml
   - templates/init-script.yaml
@@ -20,36 +20,33 @@ release:
   name: pg-test
   namespace: tenant-test
 
+set:
+  _cluster:
+    scheduling: {}
+  users:
+    app:
+      password: secret
+
 tests:
   - it: "init-job sets ttlSecondsAfterFinished so Kubernetes GCs it after the run"
-    set:
-      _cluster:
-        scheduling: {}
-      users:
-        app:
-          password: secret
-    documentSelector:
-      path: metadata.name
-      value: pg-test-init-job
+    template: templates/init-job.yaml
     asserts:
+      - hasDocuments:
+          count: 1
       - isKind:
           of: Job
+      - equal:
+          path: metadata.name
+          value: pg-test-init-job
       - equal:
           path: spec.ttlSecondsAfterFinished
           value: 3600
 
   - it: "init-job is skipped entirely under bootstrap recovery"
+    template: templates/init-job.yaml
     set:
-      _cluster:
-        scheduling: {}
-      users:
-        app:
-          password: secret
       bootstrap:
         enabled: true
     asserts:
       - hasDocuments:
           count: 0
-        documentSelector:
-          path: kind
-          value: Job
