@@ -53,12 +53,115 @@
 #     predates that flow, and non-zero cpu.stat throttling together make a
 #     recurrence dispositive.
 #
+# What it ALSO captures (added section) -- an UNREACHABLE LoadBalancer datapath:
+#   The NotReady-pod trigger above misses a second, equally-recurrent flake. A
+#   tenant `Service type=LoadBalancer` IP goes unreachable while its backend
+#   pod/VMI stays Ready+Running -- so there is NO NotReady pod, the capture above
+#   no-ops, and the host->cross-node->bridged-worker-VMI->tenant-nodePort
+#   datapath (the suspected failing path) is never characterised. This section
+#   closes that gap. It is gated by a LIVE reachability probe so it only does the
+#   heavy capture for an LB that is actually broken; reachable LBs are enumerated
+#   and explicitly recorded as "reachable, skipped".
+#     - Enumerate every Service type=LoadBalancer that has a status ingress IP.
+#       For each, derive: the EndpointSlice backend (endpoint IP + node +
+#       targetPort), the Service nodePort + externalTrafficPolicy, and the
+#       ANNOUNCER node from the MetalLB speaker logs (the hostNetwork speaker is
+#       the L2 owner; the node of its most recent serviceAnnounced for the IP is
+#       the announcer).
+#     - Probe the LB IP:port a few times from a host netns (the kube-ovn
+#       cni-server, so the probe traverses the same host-sourced datapath the
+#       flake breaks). Only an LB whose every probe FAILS gets the heavy capture
+#       below, and that same probe is the traffic the tcpdumps observe.
+#     - For a FAILING LB, on BOTH the announcer node and the endpoint node
+#       (reusing pod_on_node), labelled by node + role (ANNOUNCER vs ENDPOINT):
+#         * `cilium-dbg bpf lb list` grepped for the LB IP + nodePort -- did the
+#           HOST cilium program the LB->backend translation? This is the first
+#           fork: host-cilium-not-programming vs kube-ovn-delivery-failure.
+#         * kernel `conntrack -L -d <LB IP>` + `ip neigh` (LB IP, endpoint IP)
+#           via the cni-server host netns.
+#         * `ovs-ofctl dump-flows br-int` filtered to the nodePort / endpoint IP.
+#         * a bounded `tcpdump` on the announcer node's geneve tunnel iface and
+#           the endpoint node's backend OVS/tap iface, run WHILE the probe is
+#           replayed, to show whether the packet crosses announcer->endpoint and
+#           reaches the backend's host-side interface.
+#         * the ovn-controller.log decisive lines for the window.
+#     In-guest capture INSIDE the worker VMI (tenant `cilium-dbg bpf lb list` /
+#     `tcpdump eth0`) is the one hop this cannot reach from the host; it is left
+#     as a documented stretch at the call site (it needs a tenant
+#     kubeconfig/virtctl this EXIT-trap diagnostic does not have). The host-side
+#     ANNOUNCER/ENDPOINT split is the deliverable and already localises the
+#     failing hop to host-cilium vs kube-ovn delivery.
+#
 # Robustness contract (matches docs/agents/e2e-testing.md): pure diagnostics,
 # no retries, no behavior change, no traps. Every live capture is time-boxed
 # and every command is `|| true`, so a missing tool, an absent pod, or a hung
 # exec can never fail or stall the job. A wall-clock backstop wraps the whole
 # run at the call site. It no-ops cleanly when there are no affected pods.
 set -u
+
+# --------------------------------------------------------------------------- #
+# Pure, side-effect-free helpers for the LoadBalancer-datapath section below.  #
+# Each takes text on stdin / in args and emits text -- no kubectl, no globals  #
+# -- so hack/capture-dataplane.bats can source this file (with                 #
+# E2E_CAPTURE_DATAPLANE_LIB set, see the guard below) and unit-test the        #
+# enumeration parsing, announcer-node detection, and capture-or-skip decision  #
+# against mock input without a cluster. Keep them above the guard and free of  #
+# any runtime state.                                                           #
+# --------------------------------------------------------------------------- #
+
+# lb_filter_services: stdin = `ns|name|type|lbip|port|nodePort|extPolicy` rows
+# (one Service per line, as emitted by the kubectl jsonpath in main). Emits only
+# the rows that are type=LoadBalancer AND carry a status ingress IP -- i.e. the
+# Services that actually have an external datapath to characterise.
+lb_filter_services() {
+  awk -F'|' '$3 == "LoadBalancer" && $4 != "" { print }'
+}
+
+# lb_first_ready_endpoint: stdin = `ip|node|targetNs|targetName|ready` rows (one
+# EndpointSlice endpoint per line). Emits `ip|node|targetNs|targetName` for the
+# first endpoint that has an address and is not explicitly NotReady, then stops.
+# A blank `ready` (slice without conditions) counts as ready; only "false" is
+# excluded. This is the backend the LB IP is supposed to reach.
+lb_first_ready_endpoint() {
+  awk -F'|' '$1 != "" && $5 != "false" { print $1 "|" $2 "|" $3 "|" $4; exit }'
+}
+
+# lb_announcer_node <lbip>: stdin = MetalLB speaker logs, each line prefixed with
+# the emitting speaker pod's node and a TAB (`<node>\t<logline>`). The speaker is
+# hostNetwork and only the elected L2 owner logs an announce for the IP, so the
+# node of the most recent announce line (announce, not withdraw) is the current
+# announcer. Emits that node, or nothing when no announce for the IP is found.
+lb_announcer_node() {
+  awk -F'\t' -v ip="$1" '
+    index($0, ip) && /[Aa]nnounc/ && !/[Ww]ithdraw/ { node = $1 }
+    END { if (node != "") print node }'
+}
+
+# lb_capture_decision: stdin = one probe outcome token per line ("ok" / "fail").
+# Emits the gate decision for the heavy per-node capture:
+#   - "capture" only when at least one probe ran AND every probe failed (the LB
+#     IP is unreachable -- the symptom we want characterised);
+#   - "skip" when any probe succeeded (LB reachable) OR no probe ran at all (no
+#     HTTP/TCP client in the host netns -> cannot conclude unreachable, so only
+#     the cheap metadata is kept, never the heavy capture).
+lb_capture_decision() {
+  awk '
+    { if ($0 == "") next; n++; if ($0 == "ok") ok++ }
+    END {
+      if (n == 0) { print "skip"; exit }
+      if (ok > 0) { print "skip"; exit }
+      print "capture"
+    }'
+}
+
+# Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
+# sources this file purely to reach the helpers above; return before touching $1
+# or running any capture so the unit test never needs a cluster. The script's
+# only executing caller (the cozytest.sh EXIT trap) never sets this, so the
+# guard is a no-op there.
+if [ -n "${E2E_CAPTURE_DATAPLANE_LIB:-}" ]; then
+  return 0 2>/dev/null
+fi
 
 OUT="${1:?Usage: e2e-capture-dataplane.sh <output-dir>}"
 
@@ -69,6 +172,17 @@ KUBEOVN_NS="${COZY_KUBEOVN_NS:-cozy-kubeovn}"
 # other two bounds. Node-global captures are deduped per node, so the effective
 # work is closer to (#affected-nodes) than (#affected-pods).
 MAX_PODS="${COZY_DATAPLANE_MAX_PODS:-12}"
+
+# LoadBalancer-datapath section tunables (see the header block and the
+# capture_lb_datapath function near the end of this file). The speaker selector
+# and geneve iface match the cozystack metallb/cilium+kube-ovn defaults but stay
+# overridable so a renamed component cannot silently blank the capture.
+METALLB_NS="${COZY_METALLB_NS:-cozy-metallb}"
+SPEAKER_SELECTOR="${COZY_METALLB_SPEAKER_SELECTOR:-app.kubernetes.io/component=speaker}"
+GENEVE_IFACE="${COZY_GENEVE_IFACE:-genev_sys_6081}"
+# Cap failing-LB heavy captures so a cluster with many broken LBs cannot blow the
+# call-site wall-clock backstop; per-command timeouts are the other bound.
+MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 
 command -v kubectl >/dev/null 2>&1 || exit 0
 mkdir -p "$OUT" 2>/dev/null || exit 0
@@ -307,5 +421,264 @@ printf '%s\n' "$affected" | {
   done
   log "host->pod data-plane capture complete"
 }
+
+# ============================================================================ #
+# LoadBalancer-datapath capture (see the header block for the full rationale).  #
+# Independent of the NotReady-pod path above: it fires for a Service            #
+# type=LoadBalancer whose external IP is unreachable even though its backend is #
+# Ready, which the pod path cannot see. Everything below is bounded + best-     #
+# effort and never changes the job outcome.                                     #
+# ============================================================================ #
+
+# host_http_probe <node> <lbip> <port> -- one bounded reachability probe of the
+# LB IP from <node>'s host netns (via the hostNetwork kube-ovn cni-server, so the
+# probe traverses the same host->cross-node->backend datapath the flake breaks).
+# Echoes "ok" / "fail" per the result, or nothing when the cni-server image ships
+# no probe client (the decision helper treats no-attempt as skip). Prefers a pure
+# TCP connect (nc -z) so a non-HTTP backend is not misread as unreachable; the
+# curl/wget fallbacks send HTTP and so fail-toward-capture on a non-HTTP port,
+# the safe direction (capture is cheap; a missed broken LB is not). Doubles as
+# the traffic generator for the tcpdumps.
+host_http_probe() {
+  _hp_node=$1; _hp_ip=$2; _hp_port=$3
+  _hp_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_hp_node")
+  [ -n "$_hp_cni" ] || return 0
+  # The LB IP/port are embedded as inner single-quoted literals (same idiom as
+  # the pod-path captures above) so the inner shell never re-splits them.
+  timeout 12 kubectl exec -n "$KUBEOVN_NS" "$_hp_cni" -c cni-server -- \
+    sh -c "
+      if command -v nc >/dev/null 2>&1; then
+        nc -z -w 5 '$_hp_ip' '$_hp_port' >/dev/null 2>&1 && echo ok || echo fail
+      elif command -v curl >/dev/null 2>&1; then
+        curl -sS -o /dev/null --max-time 6 --connect-timeout 5 'http://$_hp_ip:$_hp_port/' >/dev/null 2>&1 && echo ok || echo fail
+      elif command -v wget >/dev/null 2>&1; then
+        wget -q -T 6 -O /dev/null 'http://$_hp_ip:$_hp_port/' >/dev/null 2>&1 && echo ok || echo fail
+      fi
+    " 2>/dev/null || true
+}
+
+# ovs_iface_for <node> <iface-id> -- the OVS interface name on <node> whose
+# external_ids:iface-id matches (kube-ovn stamps <pod>.<ns>); empty if none. Used
+# to point the endpoint-node tcpdump at the backend's host-side tap.
+ovs_iface_for() {
+  _oi_ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$1")
+  [ -n "$_oi_ovs" ] || return 0
+  timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_oi_ovs" -c openvswitch -- \
+    ovs-vsctl --no-heading --columns=name find interface "external_ids:iface-id=$2" 2>/dev/null \
+    | head -n 1 | tr -d '" '
+}
+
+# capture_lb_node <node> <role> <lbip> <nodeport> <endpointip> <outfile>
+# -- the static (non-tcpdump) host-side captures on one node for a failing LB.
+# role is ANNOUNCER or ENDPOINT and is stamped on every block so the two halves
+# of the path are unambiguous in the artifact.
+capture_lb_node() {
+  _n=$1; _role=$2; _lbip=$3; _np=$4; _epip=$5; _of=$6
+  _agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_n")
+  _ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_n")
+  _cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_n")
+  {
+    echo
+    echo "---------------- $_role node=$_n (cilium=${_agent:-<none>} ovs=${_ovs:-<none>} cni=${_cni:-<none>}) ----------------"
+
+    if [ -n "$_agent" ]; then
+      echo
+      echo "=== [$_role $_n] cilium-dbg bpf lb list | grep LB IP / nodePort -- host cilium LB->backend programming ==="
+      # Answers the first fork: if the host cilium has NO LB map entry for the
+      # LB IP or the nodePort, the fault is host-cilium-not-programming; if it
+      # does, suspicion shifts to kube-ovn delivery (the captures below).
+      timeout 25 kubectl exec -n "$CILIUM_NS" "$_agent" -c cilium-agent -- \
+        sh -c "cilium-dbg bpf lb list 2>/dev/null | grep -E '$_lbip|:$_np' || echo 'no bpf lb entry for $_lbip or nodePort $_np'" 2>&1 || true
+    fi
+
+    if [ -n "$_cni" ]; then
+      echo
+      echo "=== [$_role $_n] host netns: kernel conntrack -d $_lbip (via cni-server) ==="
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cni" -c cni-server -- \
+        sh -c "if command -v conntrack >/dev/null 2>&1; then conntrack -L -d '$_lbip' 2>/dev/null || echo 'no conntrack entries for $_lbip'; else grep -F '$_lbip' /proc/net/nf_conntrack 2>/dev/null || echo 'no conntrack CLI; no /proc/net/nf_conntrack match for $_lbip'; fi" 2>&1 || true
+
+      echo
+      echo "=== [$_role $_n] host netns: ip neigh (LB IP $_lbip, endpoint IP $_epip) ==="
+      timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_cni" -c cni-server -- \
+        sh -c "ip neigh 2>/dev/null | grep -E '$_lbip|$_epip' || echo 'no neigh entry for $_lbip or $_epip'" 2>&1 || true
+    fi
+
+    if [ -n "$_ovs" ]; then
+      echo
+      echo "=== [$_role $_n] ovs-ofctl dump-flows br-int | grep nodePort $_np / endpoint $_epip ==="
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_ovs" -c openvswitch -- \
+        sh -c "ovs-ofctl dump-flows br-int 2>/dev/null | grep -E '$_np|$_epip' || echo 'no br-int flow matching nodePort $_np or endpoint $_epip'" 2>&1 || true
+
+      echo
+      echo "=== [$_role $_n] ovn-controller.log decisive lines ==="
+      timeout 20 kubectl exec -n "$KUBEOVN_NS" "$_ovs" -c openvswitch -- \
+        sh -c 'grep -E "physical_flow_output|if_status_mgr|took [0-9]+ ?ms|recompute|Unreasonably long" /var/log/ovn/ovn-controller.log 2>/dev/null | tail -n 200 || echo "no matching lines in /var/log/ovn/ovn-controller.log"' 2>&1 || true
+    fi
+  } >> "$_of" 2>&1 || true
+}
+
+# capture_lb_datapath: enumerate LBs, gate on a live probe, and characterise the
+# announcer/endpoint datapath for any LB whose every probe fails. Wraps the whole
+# per-LB body in `|| true`-guarded, time-boxed captures so it is always best-
+# effort and self-limiting (MAX_LBS cap + per-command timeouts).
+capture_lb_datapath() {
+  _raw=$(timeout 20 kubectl get svc -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.spec.type}{"|"}{.status.loadBalancer.ingress[0].ip}{"|"}{.spec.ports[0].port}{"|"}{.spec.ports[0].nodePort}{"|"}{.spec.externalTrafficPolicy}{"\n"}{end}' \
+    2>/dev/null)
+  _lbs=$(printf '%s\n' "$_raw" | lb_filter_services)
+  if [ -z "$_lbs" ]; then
+    log "no Service type=LoadBalancer with an ingress IP -- skipping LB-datapath capture"
+    return 0
+  fi
+
+  _lbcount=$(printf '%s\n' "$_lbs" | wc -l | tr -d ' ')
+  log "characterising up to $MAX_LBS of $_lbcount LoadBalancer service(s) -> $OUT/lb-*.txt"
+
+  # MetalLB speaker logs once, prefixed with each speaker's node (hostNetwork, so
+  # .spec.nodeName IS the announcing node). Kept as an artifact file that
+  # lb_announcer_node greps per LB. A blank file is fine -- the announcer just
+  # reports <unknown> and the probe falls back to the endpoint node.
+  _speakerlog="$OUT/lb-speaker-logs.txt"
+  : > "$_speakerlog" 2>/dev/null || _speakerlog=""
+  _speakers=$(kubectl get pod -n "$METALLB_NS" -l "$SPEAKER_SELECTOR" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.spec.nodeName}{"\n"}{end}' 2>/dev/null)
+  if [ -n "$_speakers" ] && [ -n "$_speakerlog" ]; then
+    printf '%s\n' "$_speakers" | while IFS='|' read -r _sp _spnode; do
+      [ -n "$_sp" ] && [ -n "$_spnode" ] || continue
+      timeout 15 kubectl logs -n "$METALLB_NS" "$_sp" -c speaker --tail=2000 2>/dev/null \
+        | awk -v n="$_spnode" '{ print n "\t" $0 }' >> "$_speakerlog" 2>/dev/null || true
+    done
+  fi
+
+  _i=0
+  printf '%s\n' "$_lbs" | {
+    while IFS='|' read -r _ns _name _type _lbip _port _np _etp; do
+      [ -n "$_lbip" ] || continue
+      _i=$((_i + 1))
+      if [ "$_i" -gt "$MAX_LBS" ]; then
+        log "reached MAX_LBS=$MAX_LBS cap; $((_lbcount - MAX_LBS)) more LB(s) NOT characterised"
+        break
+      fi
+      _lbport="${_port:-0}"
+
+      # EndpointSlice backend for this Service (first ready, addressed endpoint).
+      _eps=$(timeout 20 kubectl get endpointslices -n "$_ns" \
+        -l "kubernetes.io/service-name=$_name" \
+        -o jsonpath='{range .items[*]}{range .endpoints[*]}{.addresses[0]}{"|"}{.nodeName}{"|"}{.targetRef.namespace}{"|"}{.targetRef.name}{"|"}{.conditions.ready}{"\n"}{end}{end}' \
+        2>/dev/null)
+      _backend=$(printf '%s\n' "$_eps" | lb_first_ready_endpoint)
+      _epip=$(printf '%s' "$_backend" | cut -d'|' -f1)
+      _epnode=$(printf '%s' "$_backend" | cut -d'|' -f2)
+      _eptns=$(printf '%s' "$_backend" | cut -d'|' -f3)
+      _eptname=$(printf '%s' "$_backend" | cut -d'|' -f4)
+      _eptport=$(timeout 20 kubectl get endpointslices -n "$_ns" \
+        -l "kubernetes.io/service-name=$_name" \
+        -o jsonpath='{.items[0].ports[0].port}' 2>/dev/null)
+
+      # Announcer node = node of the most recent serviceAnnounced for the IP.
+      _annode=$(lb_announcer_node "$_lbip" < "${_speakerlog:-/dev/null}")
+
+      _of="$OUT/lb-$_ns-$_name.txt"
+      {
+        echo "################################################################"
+        echo "# LB $_ns/$_name  ip=$_lbip port=$_lbport nodePort=${_np:-<none>} etp=${_etp:-<default>}"
+        echo "# backend: ip=${_epip:-<none>} node=${_epnode:-<none>} pod=${_eptns:-?}/${_eptname:-?} targetPort=${_eptport:-<none>}"
+        echo "# announcer node: ${_annode:-<unknown>}"
+        echo "################################################################"
+      } > "$_of" 2>&1 || true
+
+      # Gate: probe the LB IP from the announcer node's host netns (fall back to
+      # the endpoint node if the announcer is unknown). Reachable -> record and
+      # skip the heavy capture; unreachable -> characterise both hops.
+      _probenode="${_annode:-$_epnode}"
+      _decision=skip
+      if [ -n "$_probenode" ] && [ "$_lbport" != "0" ]; then
+        _decision=$( { host_http_probe "$_probenode" "$_lbip" "$_lbport"
+                       host_http_probe "$_probenode" "$_lbip" "$_lbport"
+                       host_http_probe "$_probenode" "$_lbip" "$_lbport"; } | lb_capture_decision )
+      fi
+
+      if [ "$_decision" != "capture" ]; then
+        echo "probe: LB reachable or not probeable from ${_probenode:-<none>} -- reachable, skipped (no heavy capture)" >> "$_of" 2>&1 || true
+        log "LB $_ns/$_name ($_lbip) reachable or not probeable -- skipped"
+        continue
+      fi
+
+      log "LB $_ns/$_name ($_lbip) UNREACHABLE -- capturing announcer/endpoint datapath"
+      {
+        echo
+        echo "probe: LB IP unreachable from node $_probenode (every probe failed) -- heavy capture follows"
+      } >> "$_of" 2>&1 || true
+
+      # Static host-side captures on each hop.
+      if [ -n "$_annode" ]; then
+        capture_lb_node "$_annode" ANNOUNCER "$_lbip" "${_np:-0}" "${_epip:-0.0.0.0}" "$_of"
+      fi
+      if [ -n "$_epnode" ] && [ "$_epnode" != "$_annode" ]; then
+        capture_lb_node "$_epnode" ENDPOINT "$_lbip" "${_np:-0}" "${_epip:-0.0.0.0}" "$_of"
+      elif [ -n "$_epnode" ] && [ "$_epnode" = "$_annode" ]; then
+        echo "(endpoint node == announcer node $_annode -- single-node path, no cross-node hop)" >> "$_of" 2>&1 || true
+      fi
+
+      # Live tcpdump on both hops WHILE the probe is replayed: announcer geneve
+      # tunnel egress + endpoint backend tap ingress. Shows whether the packet
+      # crosses announcer->endpoint and reaches the backend's host-side iface.
+      _an_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "${_annode:-}")
+      _en_cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "${_epnode:-}")
+      _en_iface="$GENEVE_IFACE"
+      if [ -n "$_eptname" ] && [ -n "$_eptns" ]; then
+        _cand=$(ovs_iface_for "${_epnode:-}" "$_eptname.$_eptns")
+        [ -n "$_cand" ] && _en_iface="$_cand"
+      fi
+
+      _an_pcap="$OUT/lb-$_ns-$_name.tcpdump-announcer.txt"
+      _en_pcap="$OUT/lb-$_ns-$_name.tcpdump-endpoint.txt"
+      _an_td=""
+      _en_td=""
+      if [ -n "$_an_cni" ]; then
+        {
+          echo "# ANNOUNCER tcpdump node=${_annode:-<none>} iface=$GENEVE_IFACE filter='host $_lbip or host ${_epip:-0.0.0.0}'"
+          timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_an_cni" -c cni-server -- \
+            sh -c "timeout 10 tcpdump -n -i '$GENEVE_IFACE' -c 60 'host $_lbip or host ${_epip:-0.0.0.0}' 2>&1 || true"
+        } > "$_an_pcap" 2>&1 &
+        _an_td=$!
+      fi
+      if [ -n "$_en_cni" ]; then
+        {
+          echo "# ENDPOINT tcpdump node=${_epnode:-<none>} iface=$_en_iface filter='host $_lbip or host ${_epip:-0.0.0.0} or port ${_np:-0}'"
+          timeout 15 kubectl exec -n "$KUBEOVN_NS" "$_en_cni" -c cni-server -- \
+            sh -c "timeout 10 tcpdump -n -i '$_en_iface' -c 60 'host $_lbip or host ${_epip:-0.0.0.0} or port ${_np:-0}' 2>&1 || true"
+        } > "$_en_pcap" 2>&1 &
+        _en_td=$!
+      fi
+
+      # Give the captures a moment to attach, then drive the probe traffic and
+      # collect. Bounded by the inner tcpdump timeout/-c and the exec timeout.
+      if [ -n "$_an_td" ] || [ -n "$_en_td" ]; then
+        sleep 2
+        host_http_probe "$_probenode" "$_lbip" "$_lbport" >/dev/null 2>&1 || true
+        host_http_probe "$_probenode" "$_lbip" "$_lbport" >/dev/null 2>&1 || true
+        [ -n "$_an_td" ] && { wait "$_an_td" 2>/dev/null || true; }
+        [ -n "$_en_td" ] && { wait "$_en_td" 2>/dev/null || true; }
+      fi
+
+      # STRETCH / TODO (deferred -- needs tenant-cluster access, not host-side):
+      #   The one hop this cannot reach is INSIDE the worker VMI. To finish the
+      #   chain, exec/console into the tenant cluster (virtctl console / SSH to
+      #   the worker VMI) and capture, in-guest:
+      #     - `cilium-dbg bpf lb list | grep <tenant-nodePort>` -- did the TENANT
+      #       cilium program the nodePort->pod translation? (separates a
+      #       tenant-side miss from a host-side delivery miss);
+      #     - `tcpdump -ni eth0 port <tenant-nodePort>` -- did the packet even
+      #       arrive on the VMI's NIC?
+      #   Deferred because it needs a tenant kubeconfig/virtctl that this EXIT-
+      #   trap diagnostic does not have; the host-side ANNOUNCER/ENDPOINT split
+      #   already localises the failing hop to host-cilium vs kube-ovn delivery.
+    done
+    log "LoadBalancer-datapath capture complete"
+  }
+}
+
+capture_lb_datapath
 
 exit 0
