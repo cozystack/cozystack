@@ -39,3 +39,29 @@ extraEnv: []
 #     secretKeyRef:
 #       name: my-secret
 #       key: my-key
+
+# Database connection. By default Keycloak connects directly to the chart's
+# CNPG cluster using the keycloak-db-app secret. Override these to route the
+# connection through an external endpoint (e.g. a connection proxy such as
+# PgBouncer) without the chart needing to know about it.
+db:
+  # DB host. Empty = use the keycloak-db-app secret's "host" key.
+  host: ""
+  # DB port. Empty = use the keycloak-db-app secret's "port" key.
+  port: ""
+  # Extra JDBC URL properties, appended verbatim as KC_DB_URL_PROPERTIES, e.g.
+  #   "?sslmode=verify-full&prepareThreshold=0&sslrootcert=/etc/keycloak-db-ca/ca.crt"
+  # Empty = KC_DB_URL_PROPERTIES is not set.
+  urlProperties: ""
+
+# Extra volumes and volume mounts on the Keycloak container (in addition to
+# themes). Useful for mounting a CA so KC_DB_URL_PROPERTIES can reference an
+# sslrootcert when routing the DB connection through a proxy.
+extraVolumes: []
+# - name: keycloak-db-ca
+#   secret:
+#     secretName: keycloak-db-ca
+extraVolumeMounts: []
+# - name: keycloak-db-ca
+#   mountPath: /etc/keycloak-db-ca
+#   readOnly: true
