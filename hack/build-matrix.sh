@@ -22,7 +22,7 @@ MAKEFILE="${MAKEFILE:-Makefile}"
 
 # Paths that force a full rebuild when touched. Kept deliberately broad — a
 # false full-rebuild only costs time, a missed dependent ships a stale image.
-full_rebuild_pattern='^(packages/library/|hack/common-envs\.mk|hack/package\.mk|Makefile$|go\.mod$|go\.sum$|\.github/workflows/(pull-requests|build-main)\.yaml$|hack/build-matrix\.sh$)'
+full_rebuild_pattern='^(packages/library/|api/|cmd/|internal/|pkg/|hack/common-envs\.mk|hack/package\.mk|Makefile$|go\.mod$|go\.sum$|\.github/workflows/(pull-requests|build-main)\.yaml$|hack/build-matrix\.sh$)'
 
 # The build units, parsed from the `build:` recipe (from `build:` to the next
 # line that starts in column 0).

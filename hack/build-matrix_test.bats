@@ -115,6 +115,20 @@ setup() {
   [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
 }
 
+@test "root Go source change (api/) forces the full matrix" {
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  echo "api/apps/v1alpha1/kubernetes/types.go" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+}
+
+@test "root Go source change (pkg/) forces the full matrix" {
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  echo "pkg/cluster/reconciler.go" > "$tmp"
+  out=$(hack/build-matrix.sh "$tmp")
+  [ "$(echo "$out" | tr ',' '\n' | wc -l)" -gt 20 ]
+}
+
 @test "emitted JSON is parseable and matches make build's unit list" {
   out=$(hack/build-matrix.sh)
   # Valid JSON array.
