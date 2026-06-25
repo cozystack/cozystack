@@ -15,6 +15,9 @@ apply:
 diff:
 	cozyhr show --namespace $(NAMESPACE) $(NAME) --plain | kubectl diff -f -
 
+test:
+	helm unittest .
+
 image: pre-checks image-operator image-packages chart
 
 image-operator:
