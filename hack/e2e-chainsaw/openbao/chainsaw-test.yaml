@@ -1,0 +1,128 @@
+# Chainsaw port of hack/e2e-apps/openbao.bats ("Create OpenBAO (standalone)").
+#
+# The init/unseal sequence is inherently imperative (exec into the pod, parse
+# JSON, feed the key back), so it stays a script step. Everything around it —
+# HelmRelease readiness, container-started gate, StatefulSet/PVC state — is
+# declarative.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: openbao
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: openbao-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=openbao-test
+      tail: 100
+  steps:
+  - name: create-openbao
+    try:
+    - apply:
+        file: openbao.yaml
+
+  - name: wait-helmreleases-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: openbao-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: openbao-test-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-container-started
+    try:
+    # Pod Running does not guarantee the container is ready for exec on slow CI;
+    # gate on containerStatuses[0].started like the BATS test did.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            name: openbao-test-0
+          (status.containerStatuses[0].started): true
+
+  - name: init-and-unseal
+    try:
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          pod=openbao-test-0
+          # Wait for the API to accept connections. `bao status` exit codes:
+          # 0 = unsealed, 2 = sealed but responsive, 1 = error/not ready.
+          deadline=$(( $(date +%s) + 60 ))
+          until rc=0; kubectl -n "$ns" exec "$pod" -- bao status >/dev/null 2>&1 || rc=$?; \
+                [ "${rc:-0}" -eq 0 ] || [ "${rc:-0}" -eq 2 ]; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "OpenBAO API not responsive" >&2; exit 1; }
+            sleep 3
+          done
+          # Single key share for test simplicity.
+          init_output=$(kubectl -n "$ns" exec "$pod" -- \
+            bao operator init -key-shares=1 -key-threshold=1 -format=json)
+          unseal_key=$(echo "$init_output" | jq -r '.unseal_keys_b64[0]')
+          if [ -z "$unseal_key" ] || [ "$unseal_key" = "null" ]; then
+            echo "Failed to extract unseal key. Init output: $init_output" >&2
+            exit 1
+          fi
+          kubectl -n "$ns" exec "$pod" -- bao operator unseal "$unseal_key"
+        check:
+          ($error == null): true
+
+  - name: verify-statefulset-and-storage
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: openbao-test
+          status:
+            readyReplicas: 1
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: data-openbao-test-0
+          status:
+            phase: Bound
+    # Tear down the workload before the PVC. The PVC is StatefulSet-owned (not
+    # applied by chainsaw, so chainsaw's auto-cleanup never reclaims it) and is
+    # held by the running openbao-test-0 pod via kubernetes.io/pvc-protection.
+    # Deleting it first blocks for the full delete timeout (the pod still mounts
+    # it) and fails the test. Delete the OpenBAO CR first — it cascades to the
+    # HelmRelease, StatefulSet and pod — then remove the now-unmounted PVC,
+    # mirroring the BATS teardown order (delete openbao; delete pvc).
+    finally:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: OpenBAO
+          name: test
+    - delete:
+        ref:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          name: data-openbao-test-0

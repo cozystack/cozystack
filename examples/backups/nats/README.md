@@ -72,7 +72,7 @@ All variables come from `00-helpers.sh`:
 
 - **Not run in CI.** Like every other directory under `examples/backups/`, this
   demo is a runnable reference, not an automated regression test — the e2e
-  harness (`hack/e2e-apps/*.bats`) does not exercise backup examples. Run it by
+  harness (`hack/e2e-chainsaw/`) does not exercise backup examples. Run it by
   hand against a cluster.
 - **`nats` CLI specifics.** The strategy invokes `nats stream backup`/`nats
   stream restore`; flag names can vary across `nats` CLI versions. Pin

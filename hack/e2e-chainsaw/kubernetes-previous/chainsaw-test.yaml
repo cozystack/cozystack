@@ -1,0 +1,42 @@
+# Chainsaw port of hack/e2e-apps/kubernetes-previous.bats. See the sibling
+# kubernetes-latest test for why the logic stays a script wrapping
+# _lib/run-kubernetes.sh. This one targets the previous K8s version and skips
+# the ouroboros addon (no 4th arg).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-previous
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: tenant-kubernetes-previous-version
+    try:
+    - script:
+        timeout: 40m
+        # Co-locate the tenant crust-gather snapshot (captured by
+        # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
+        # the global .chainsaw.yaml catch's host snapshot.
+        env:
+        - name: COZY_SNAPSHOT_NAME
+          value: ($test.metadata.name)
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          run_kubernetes_test 'keys | sort_by(.) | .[-2]' 'test-previous-version' '59992'
+        check:
+          ($error == null): true
+    finally:
+    # Always runs after try/catch — i.e. after the crust-gather snapshots on a
+    # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
+    # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
+    # On success run_kubernetes_test already tore it down, so this is a no-op then.
+    - description: tear down the tenant Kubernetes cluster
+      script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          cozy_cleanup

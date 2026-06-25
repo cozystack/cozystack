@@ -1,0 +1,139 @@
+# Chainsaw port of hack/e2e-apps/harbor.bats ("Create Harbor").
+#
+# The BATS test hand-rolled a large diagnostic dump on the harbor-test-system
+# HelmRelease wait; here that becomes the test-wide catch block, which fires on
+# any step failure.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: harbor
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: harbor-test
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: harbor-test-system
+  - describe:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: BucketClaim
+      name: harbor-test-registry
+  - describe:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: BucketAccess
+      name: harbor-test-registry
+  - podLogs:
+      selector: app.kubernetes.io/instance=harbor-test
+      tail: 50
+  steps:
+  - name: create-harbor
+    try:
+    - apply:
+        file: harbor.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: harbor-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-cosi-bucket
+    try:
+    # 10m, not the default 5m: readiness on the namespaced BucketClaim can lag
+    # several minutes on a loaded runner (seaweedfs/COSI provisioning is the slow
+    # path), so allow the same budget the dependent harbor-test-system HR gets.
+    # Matches the BATS original (--timeout=600s); see docs/agents/e2e-testing.md §6.
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketClaim
+          metadata:
+            name: harbor-test-registry
+          status:
+            bucketReady: true
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: objectstorage.k8s.io/v1alpha1
+          kind: BucketAccess
+          metadata:
+            name: harbor-test-registry
+          status:
+            accessGranted: true
+
+  - name: wait-system-and-deployments
+    try:
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: harbor-test-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: harbor-test-core
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: harbor-test-registry
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: harbor-test-portal
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+
+  - name: verify-credentials-and-service
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: harbor-test
+          spec:
+            (ports[0].port): 80
+    - script:
+        content: |
+          set -eu
+          pw=$(kubectl -n "$NAMESPACE" get secret harbor-test-credentials \
+            -o jsonpath='{.data.admin-password}' | base64 -d)
+          url=$(kubectl -n "$NAMESPACE" get secret harbor-test-credentials \
+            -o jsonpath='{.data.url}' | base64 -d)
+          test -n "$pw"
+          echo "$url" | grep -q 'https://'
+        check:
+          ($error == null): true

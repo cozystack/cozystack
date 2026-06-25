@@ -24,7 +24,11 @@ image-e2e-sandbox:
 		yq -i '.e2e.image = strenv(IMAGE)' values.yaml
 	rm -f images/e2e-sandbox.json
 
-test: test-openapi test-apps ## Run the end-to-end tests in existing sandbox
+# Named `e2e` (not `test`) so hack/helm-unit-tests.sh — which runs the `test`
+# target of every package whose `make -n test` resolves — does not pick up this
+# sandbox-driven e2e flow and try to run it in the unit-test phase (no sandbox
+# exists then). The root `make test` target invokes this.
+e2e: test-openapi test-chainsaw ## Run the end-to-end tests in existing sandbox
 
 copy-nocloud-image:
 	docker cp ../../../_out/assets/nocloud-amd64.raw.xz "${SANDBOX_NAME}":/workspace/_out/assets/nocloud-amd64.raw.xz
@@ -38,8 +42,14 @@ install-cozystack:
 test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
-test-apps-%:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
+# Run the Chainsaw E2E app suite. Chainsaw loads .chainsaw.yaml from the cwd,
+# discovers every chainsaw-test.yaml under hack/e2e-chainsaw/, polls each
+# assertion to its own timeout, and writes a JUnit chainsaw-report.xml the CI
+# job uploads. CHAINSAW_SUITES restricts the run to the named suite dirs
+# (space-separated, e.g. "postgres bucket"); empty runs the whole suite. The
+# CI Test-Impact-Analysis step (hack/select-e2e.sh) sets it from the PR diff.
+test-chainsaw:
+	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace/hack/e2e-chainsaw && chainsaw test ${CHAINSAW_SUITES}'
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'

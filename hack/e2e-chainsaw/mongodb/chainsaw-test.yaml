@@ -1,0 +1,62 @@
+# Chainsaw port of hack/e2e-apps/mongodb.bats ("Create DB MongoDB").
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mongodb
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mongodb-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=mongodb-test
+      tail: 50
+  steps:
+  - name: create-mongodb
+    try:
+    - apply:
+        file: mongodb.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mongodb-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-service-and-statefulset
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mongodb-test-rs0
+          spec:
+            (ports[0].port): 27017
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mongodb-test-rs0
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: mongodb-test-rs0
+          status:
+            readyReplicas: 1

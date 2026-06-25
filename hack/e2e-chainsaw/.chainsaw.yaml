@@ -1,0 +1,69 @@
+apiVersion: chainsaw.kyverno.io/v1alpha2
+kind: Configuration
+metadata:
+  name: cozystack-e2e
+spec:
+  # All app tests run against the pre-existing tenant-test namespace
+  # (created by hack/e2e-install-cozystack.bats), matching the BATS suite.
+  # Chainsaw only deletes namespaces it created itself, so tenant-test is safe.
+  namespace:
+    name: tenant-test
+  # Run tests sequentially, matching the current BATS behavior. The bucket
+  # test uses a fixed local port-forward port, so parallelism is unsafe
+  # until ports are made dynamic.
+  execution:
+    parallel: 1
+  timeouts:
+    apply: 1m
+    assert: 5m
+    # delete/cleanup are generous: finalizer-draining CRs (VMDisk, FoundationDB,
+    # Tenant child namespaces) can take minutes to fully reclaim their backing
+    # resources, and Chainsaw waits for the delete to complete during cleanup.
+    delete: 5m
+    cleanup: 5m
+    error: 5m
+    exec: 5m
+  cleanup:
+    skipDelete: false
+  # Global failure handler: on any test error, capture a crust-gather snapshot of
+  # the HOST cluster BEFORE Chainsaw's cleanup deletes the test's resources. This
+  # is the Chainsaw analog of the per-failed-test EXIT-trap host snapshot in
+  # hack/cozytest.sh (which only covers the BATS install/openapi tests) — without
+  # it the Chainsaw app suite uploads a cozyreport.tgz with zero per-test
+  # snapshots. Combines additively with the per-test events/describe catches in
+  # each suite; the nested-tenant snapshot for the kubernetes-* tests is captured
+  # separately by hack/e2e-chainsaw/_lib/run-kubernetes.sh while its LB is alive.
+  # The snapshot lands under the _out/cozyreport/snapshots/<test>/ tree that
+  # hack/cozyreport.sh folds into the uploaded artifact, so each failed test
+  # keeps its own `crust-gather serve`-able cluster state.
+  error:
+    catch:
+    - description: crust-gather host snapshot on failure
+      script:
+        # $test.metadata.name is the individual Test name (e.g. etcd-basic), so
+        # cases sharing a suite dir get distinct snapshots.
+        env:
+        - name: TEST_NAME
+          value: ($test.metadata.name)
+        # COZY_REPORT_DIR mirrors hack/cozytest.sh. A Chainsaw catch script's cwd
+        # is the failing test's suite dir (not the repo root), so default to the
+        # sandbox-invariant absolute path where cozyreport.sh collects from.
+        content: |
+          set -u
+          command -v crust-gather >/dev/null 2>&1 || exit 0
+          name="${TEST_NAME:-unknown-test}"
+          snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${name}"
+          # The global catch can fire once per failed operation in a test; one
+          # host snapshot per test is enough, so skip if it already exists.
+          if [ -d "${snap}/host" ]; then exit 0; fi
+          mkdir -p "${snap}" 2>/dev/null || true
+          echo "» capturing crust-gather host snapshot of failed ${name} -> ${snap}/host"
+          # Bounded exactly like hack/cozytest.sh: an unbounded collect has hung
+          # for hours on a degraded cluster and wedged the whole job. 5m is ample
+          # for a host snapshot; a partial capture (timeout exits 124, swallowed
+          # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills a
+          # collect that ignores the SIGTERM.
+          timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "${snap}/host" >/dev/null 2>&1 || true
+  report:
+    format: XML
+    name: chainsaw-report

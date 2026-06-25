@@ -428,7 +428,6 @@ func (r *BackupJobReconciler) requeueWithReason(ctx context.Context, j *backupsv
 // Cleanup of the operator-side CR is therefore the framework's
 // responsibility, not Kubernetes ownerRef GC. See:
 //   - examples/backups/foundationdb/cleanup.sh (label-based reap),
-//   - hack/e2e-apps/backup-foundationdb.bats teardown(),
 //   - stopFoundationDBBackupForJob (deadline-expiry cleanup in this file).
 //
 // The `TestEnsureFoundationDBBackup_DoesNotSetOwnerReference` test pins

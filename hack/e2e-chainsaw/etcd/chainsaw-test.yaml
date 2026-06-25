@@ -1,0 +1,243 @@
+# Chainsaw port of hack/e2e-apps/etcd.bats. Three scenarios as separate Tests.
+#
+# The etcd chart pins the Helm release name to 'etcd'
+# (packages/extra/etcd/templates/check-release-name.yaml), so every scenario
+# applies an Etcd with metadata.name: etcd and they share the cluster-scoped
+# DataStore/<namespace> the chart provisions for Kamaji. They therefore cannot
+# coexist and must run one fully-drained scenario at a time.
+#
+# Teardown is explicit (skipDelete: true), not Chainsaw auto-cleanup, because
+# the etcd chart's DataStore leaks a Kamaji finalizer on uninstall: once the
+# backing etcd is gone, the reconcile that would drop
+# kamaji.clastix.io/TenantControlPlane can't complete, so the DataStore wedges
+# in Terminating and the HelmRelease uninstall hangs. Letting Chainsaw wait on
+# that during cleanup is what errored every etcd case in CI.
+#
+# Each scenario is self-contained (clean-after-each): a single `run` step
+# pre-cleans any leftover etcd, installs, asserts, and then drains in a `finally`
+# that always runs (the step is always reached, so teardown fires on success and
+# on failure alike). This is deliberate — Chainsaw executes these Tests in name
+# order, not file order, and `finally` has no test-level form in v0.2.15, so the
+# only way to guarantee the last-run scenario is also reclaimed is to tear down
+# inside each scenario. The shared drain lives in _lib/etcd-cleanup.sh.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-basic
+spec:
+  # Teardown is the `run` step's finally (see file header), not auto-cleanup.
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  - describe:
+      apiVersion: etcd.aenix.io/v1alpha1
+      kind: EtcdCluster
+      name: etcd
+  steps:
+  - name: run
+    try:
+    # Pre-clean: isolate this scenario from any etcd a prior (failed) scenario
+    # left behind, since the release name 'etcd' is a singleton.
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
+        check:
+          ($error == null): true
+    # Backup artifacts tear down with the HelmRelease; confirm a clean slate.
+    - error:
+        timeout: 1m
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+    - apply:
+        file: etcd-basic.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: etcd.aenix.io/v1alpha1
+          kind: EtcdCluster
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    finally:
+    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
+      script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-empty-backup
+spec:
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  steps:
+  - name: run
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
+        check:
+          ($error == null): true
+    - error:
+        timeout: 1m
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+    - apply:
+        file: etcd-empty-backup.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # With backup disabled, neither the schedule nor the secret should exist.
+    - error:
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+    - error:
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    finally:
+    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
+      script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-backup-schedule
+spec:
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  - describe:
+      apiVersion: etcd.aenix.io/v1alpha1
+      kind: EtcdBackupSchedule
+      name: etcd
+  steps:
+  - name: run
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
+        check:
+          ($error == null): true
+    - error:
+        timeout: 1m
+        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
+    - error:
+        timeout: 1m
+        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
+    - apply:
+        file: etcd-backup.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: etcd.aenix.io/v1alpha1
+          kind: EtcdCluster
+          metadata:
+            name: etcd
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    # Region field must propagate to the EtcdBackupSchedule.
+    - assert:
+        resource:
+          apiVersion: etcd.aenix.io/v1alpha1
+          kind: EtcdBackupSchedule
+          metadata:
+            name: etcd
+          spec:
+            destination:
+              s3:
+                region: us-east-1
+    # The S3 secret carries the access key (base64 of "e2e-access-key").
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: etcd-s3-creds
+          data:
+            AWS_ACCESS_KEY_ID: ZTJlLWFjY2Vzcy1rZXk=
+    # The operator generates a CronJob from the EtcdBackupSchedule.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: CronJob
+          metadata:
+            labels:
+              etcd.aenix.io/etcdbackupschedule-name: etcd
+    finally:
+    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
+      script:
+        timeout: 5m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup

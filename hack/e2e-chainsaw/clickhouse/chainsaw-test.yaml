@@ -1,0 +1,90 @@
+# Chainsaw port of hack/e2e-apps/clickhouse.bats ("Create DB ClickHouse").
+#
+# The BATS test asserted service ports via a grep on the jsonpath port list.
+# Here the asserts compare the full ports[*].port projection to the expected
+# list; chainsaw v0.2.15 mis-evaluates JMESPath number-literal port filters.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clickhouse
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-test
+      tail: 50
+  steps:
+  - name: create-clickhouse
+    try:
+    - apply:
+        file: clickhouse.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: clickhouse-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-endpoint-service
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: chendpoint-clickhouse-test
+          spec:
+            (ports[*].port): [8123, 9000]
+
+  - name: verify-replica-0
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: chi-clickhouse-test-clickhouse-0-0
+          status:
+            replicas: 1
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: chi-clickhouse-test-clickhouse-0-0
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: chi-clickhouse-test-clickhouse-0-0
+          spec:
+            (ports[*].port): [9000, 8123, 9009]
+
+  - name: verify-replica-1
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: chi-clickhouse-test-clickhouse-0-1
+          status:
+            replicas: 1

@@ -1,0 +1,123 @@
+# Chainsaw port of hack/e2e-apps/postgres.bats ("Create DB PostgreSQL").
+#
+# Every `timeout N sh -ec "until kubectl get ..."` + `kubectl wait` pair from
+# the BATS test collapses into a single assert: chainsaw polls until the
+# resource exists AND matches, or the timeout expires. Failure output is a
+# structured diff of the assertion tree against the live object.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: postgres
+spec:
+  # Diagnostics collected automatically when any step fails. The BATS suite
+  # only does this in harbor.bats, by hand.
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-test
+  - podLogs:
+      selector: cnpg.io/cluster=postgres-test
+      tail: 50
+  steps:
+  - name: create-postgres
+    try:
+    - apply:
+        file: postgres.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-test
+          status:
+            # JMESPath filter: condition order in the array does not matter
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-init-job-complete
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: postgres-test-init-job
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+
+  - name: verify-services-and-endpoints
+    try:
+    # Replaces three `until kubectl get svc ... | grep -q 5432` loops
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-test-r
+          spec:
+            (ports[0].port): 5432
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-test-ro
+          spec:
+            (ports[0].port): 5432
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: postgres-test-rw
+          spec:
+            (ports[0].port): 5432
+    # Replaces `until kubectl get endpoints ... | grep -q '[0-9]'` loops.
+    # The read-only endpoint is skipped, same as in the BATS test.
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: postgres-test-r
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: postgres-test-rw
+          (subsets[0].addresses[0].ip != null): true
+    # Functional probe — the BATS test never actually talks to the database.
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
+            -o name | head -n1)
+          kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            psql -U postgres -tAc 'SELECT 1'
+        check:
+          ($error == null): true
+          (contains($stdout, '1')): true
+    # The init-job is operator-created (not applied by chainsaw), so it is
+    # not part of automatic cleanup — delete it explicitly, as BATS does.
+    finally:
+    - delete:
+        ref:
+          apiVersion: batch/v1
+          kind: Job
+          name: postgres-test-init-job
+# The Postgres CR itself was applied by chainsaw and is deleted (and waited
+# on) automatically during cleanup — no explicit teardown step needed.

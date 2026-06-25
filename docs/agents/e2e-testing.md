@@ -1,44 +1,54 @@
 # E2E Testing Conventions
 
-Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflows (`.github/workflows/pull-requests.yaml`, `.github/workflows/release-e2e.yaml`), or `packages/core/testing/`.
+Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-chainsaw/`, the bootstrap/OpenAPI BATS (`hack/e2e-*.bats`), `hack/*.sh` test helpers, the E2E CI workflows (`.github/workflows/pull-requests.yaml`, `.github/workflows/release-e2e.yaml`), or `packages/core/testing/`.
+
+The app suite is **Kyverno Chainsaw** (`hack/e2e-chainsaw/`, one directory per app, each with a `chainsaw-test.yaml`). Cluster bootstrap (`hack/e2e-install-cozystack.bats`, `hack/e2e-prepare-cluster.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
 
 ## The core principle
 
 **Retries do not recover flakes — they hide deterministic bugs and triple diagnostic wall-time.** An audit of 30 PR runs found that across sampled failures, **25/25 retry attempts failed**: the retry loop never once turned a red run green, it only delayed surfacing real bugs (Helm namespace conflicts, seaweedfs/harbor races, a vminstance disk race) that *looked* like flakes because the retry sometimes coincided with transient state clearing.
 
-Every convention below follows from that finding: **fail fast, fail loud, make the failure legible.** A test that flakes is a test (or a product) with a real race to fix, not a test to wrap in a retry.
+Every convention below follows from that finding: **fail fast, fail loud, make the failure legible.** A test that flakes is a test (or a product) with a real race to fix, not a test to wrap in a retry. Chainsaw's per-assertion polling is the structural expression of this: each `assert` waits on its own condition to its own timeout, and a failure is reported as a structured diff plus auto-captured events/describe/logs — not a generic non-zero exit.
 
 ## Conventions
 
 ### 1. No retries on deterministic steps; retry only pure infrastructure
 
-- `Run E2E tests` and `Install Cozystack` run **once**. On failure they print `❌ ... (no retry — see diagnostics below)` and dump state. Do not reintroduce a retry loop around them.
+- `Run E2E tests` and `Install Cozystack` run **once**. On failure they print `❌ ... (no retry — see diagnostics below)` and dump state. Do not reintroduce a retry loop around them. The E2E step is a single `chainsaw test` invocation — there is no per-app retry loop to bring back, because Chainsaw already polls each assertion to its own timeout.
 - `Prepare environment` keeps its 3× retry — and *only* it — because it is pure infrastructure (Talos image download, sandbox VM boot, network) where a transient runner hiccup is a genuine flake with no application logic involved.
 - Rule of thumb: retry is justified only for a step that contains **no product or test logic**.
 
-### 2. Replace fixed `sleep`/`timeout` with event-driven backstops
+### 2. Prefer declarative asserts over imperative waits
 
-The canonical wait pattern — an **existence backstop** before every `kubectl wait`:
+A Chainsaw `assert` polls until the resource matches its expected shape or the per-operation timeout fires, so it subsumes both "the resource exists" and "the field/condition reached this value" in one operation — the old `until kubectl get …; do sleep 2; done` existence backstop followed by `kubectl wait --for=…` is no longer needed.
 
-```bash
-timeout 60 sh -ec "until kubectl -n tenant-test get hr postgres-$name >/dev/null 2>&1; do sleep 2; done"
-kubectl -n tenant-test wait hr postgres-$name --timeout=5m --for=condition=ready
+```yaml
+- assert:
+    timeout: 6m
+    resource:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      metadata:
+        name: postgres-test
+      status:
+        (conditions[?type == 'Ready']):
+        - status: "True"
 ```
 
-- `kubectl wait` against a not-yet-created resource sits **silent for the full timeout**. The `until kubectl get` backstop makes "resource never appeared" fail in seconds with a clear message.
-- A bare `sleep N` is allowed **only** when no Kubernetes API condition models the thing being awaited (external LB HTTP path, MetalLB advertisement, the "all platform HRs emitted" heuristic). When you must use one, annotate it with a `TODO(e2e-replace-fixed-timeouts):` comment explaining why no condition exists. See `hack/e2e-install-cozystack.bats` and `hack/e2e-apps/run-kubernetes.sh` for the sanctioned exceptions.
+- Condition checks use the **filter-as-list** form `(conditions[?type == 'Ready'])`. Chainsaw v0.2.15 throws "field not found" on the indexed `(...)[0]` form.
+- Imperative checks that no Kubernetes API condition models — S3 reachability through a port-forward, an external LB HTTP path, MetalLB advertisement — stay in a `script` step. A bare `sleep N` inside such a script is allowed **only** when nothing better models the wait; annotate it with a `TODO(e2e-replace-fixed-timeouts):` comment. The bootstrap BATS (`hack/e2e-install-cozystack.bats`, `hack/e2e-chainsaw/_lib/run-kubernetes.sh`) carries the sanctioned `until kubectl get` exceptions.
 
-### 3. No `EXIT`/`RETURN` traps for cleanup
+### 3. Let Chainsaw own cleanup; no test-level EXIT/RETURN traps
 
-Trap-based cleanup was the single biggest source of false failures: an `EXIT` trap ran cleanup in a context where shell variables were unset, `set -u` killed it, and a **successful** test was marked failed — then retried twice into real failures.
+Trap-based cleanup was the single biggest source of false failures in the BATS suite: an `EXIT` trap ran cleanup in a context where shell variables were unset, `set -u` killed it, and a **successful** test was marked failed — then retried twice into real failures.
 
-- Do **pre-cleanup at test start** (delete stale resources, blocking) plus **inline cleanup at test end**.
-- Do not manage port-forwards or temp files via `EXIT`/`RETURN` traps.
+- Chainsaw deletes the resources it `apply`-ed during its cleanup phase (bounded by the `delete`/`cleanup` timeouts in `hack/e2e-chainsaw/.chainsaw.yaml`). Do not hand-roll teardown for resources Chainsaw created.
+- A self-contained `trap '… ' EXIT` **inside a single `script` step** — to kill a port-forward or remove a temp dir — is fine, because it runs in a contained subprocess with its variables in scope. See `hack/e2e-chainsaw/bucket/chainsaw-test.yaml`. What is banned is test-level trap-based cleanup of the BATS kind.
 
 ### 4. Do not mask cleanup or teardown failures
 
-- Drop `|| true` from teardown deletes — a stuck finalizer, RBAC error, or wait timeout must fail the test, not leave stale state (HelmRelease, Secret, PVC) for the next test to trip over. `--ignore-not-found` still covers the legitimate clean-run case.
-- For nested tenants, tear down **child → parent with a hard `kubectl wait ... --for=delete` between** each. Deleting the parent while a child is still uninstalling wedges the parent's cleanup Job on the child namespace, and both stuck uninstalls occupy helm-controller workers past the end of the test file — starving whichever app test runs next. See `hack/e2e-apps/gateway.bats`.
+- Resources a test creates that Chainsaw cannot reclaim — because a controller, not the test, owns them (e.g. the Velero `Backup`, `BackupStorageLocation`, and credentials secret in `cozy-velero` in the disabled `hack/e2e-chainsaw/backup/` suite) — must be pruned explicitly. Do not `|| true` over a stuck delete and leave stale state for the next run.
+- For nested tenants, tear down **child → parent with a hard wait for deletion between** each. Deleting the parent while a child is still uninstalling wedges the parent's cleanup Job on the child namespace, and both stuck uninstalls occupy helm-controller workers past the end of the test — starving whichever suite runs next. The kubernetes suites encode this ordering in `hack/e2e-chainsaw/_lib/run-kubernetes.sh`.
 
 ### 5. The install gate must have teeth
 
@@ -51,33 +61,35 @@ The install test fails if **any** HelmRelease is not Ready. A toothless gate (ba
 
 A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is a silent race we want to catch. **Do not** check `.status.installFailures` / `.status.upgradeFailures`: Flux's `ClearFailures()` zeroes those on every successful reconcile, so checking them after the HR is Ready is **vacuous** and passes against a reverted fix.
 
-- Inspect `.status.history` instead — a `failed` or `uninstalled` Snapshot survives a later successful reconcile. Use the shared helper in `hack/e2e-apps/remediation-guard.sh` (`helmrelease_has_remediation_cycle`).
+- Inspect `.status.history` instead — a `failed` or `uninstalled` Snapshot survives a later successful reconcile. Use the shared helper in `hack/e2e-chainsaw/_lib/remediation-guard.sh` (`helmrelease_has_remediation_cycle`) from a `script` step.
 
 ### 7. Test-Impact Analysis (TIA), default-on
 
-`hack/select-e2e.sh` walks the `packages/core/platform/sources/*.yaml` dependency graph and runs only the bats files affected by a diff.
+`hack/select-e2e.sh` walks the `packages/core/platform/sources/*.yaml` dependency graph and runs only the Chainsaw suites affected by a diff. A suite is a directory under `hack/e2e-chainsaw/` containing a `chainsaw-test.yaml`.
 
-- Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, shared `hack/*.sh|*.bats` helpers, the `Makefile`, or the E2E workflows escalate to the **full suite**. A per-app bats edit selects **only** that app.
+- Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, top-level `hack/*.sh|*.bats` helpers, the shared `hack/e2e-chainsaw/_lib/`, the chainsaw config `hack/e2e-chainsaw/.chainsaw.yaml`, the `Makefile`, or the E2E workflows escalate to the **full suite**. A per-suite edit (any file under `hack/e2e-chainsaw/<app>/`) selects **only** that suite.
 - The `full-e2e` PR label forces the whole suite.
+- The selection is passed to `make test-chainsaw CHAINSAW_SUITES="<names>"`, which runs `chainsaw test <names>` from `hack/e2e-chainsaw/` (empty = the whole suite).
 - Companion: `.github/workflows/release-e2e.yaml` runs the **full** suite on every release tag, closing the coverage gap TIA opens on PRs.
 
-When adding a new app package, confirm `select-e2e.sh` maps it correctly (it has a unit test, `hack/select-e2e_test.bats`).
+When adding a new app package, confirm `select-e2e.sh` maps it correctly (it has a unit test, `hack/select-e2e_test.bats`). A new app whose suite directory does not yet exist will not be selected — add `hack/e2e-chainsaw/<app>/chainsaw-test.yaml` first.
 
 #### What TIA does and does not do
 
 Be precise about TIA's scope — it is narrower than "skip E2E for unrelated PRs," and the wiring has consequences worth knowing before you rely on it or change it.
 
-- **It trims only the per-app test loop, not the expensive stages.** The `build` job (image + Talos build, unit/Go tests), `Prepare environment`, and `Install Cozystack` all run regardless of the selection. TIA only decides which `make test-apps-<app>` targets run in the final step. A perfect narrow saves the matrix tail, not the bulk of wall-time.
+- **It trims only which suites `chainsaw test` runs, not the expensive stages.** The `build` job (image + Talos build, unit/Go tests), `Prepare environment`, and `Install Cozystack` all run regardless of the selection. TIA only decides the `CHAINSAW_SUITES` passed to the final E2E step. A perfect narrow saves the suite tail, not the bulk of wall-time.
 - **`Select E2E tests` runs *after* `Install Cozystack` and has no `always()`.** GitHub implicitly ANDs a step's `if:` with `success()`, so if install fails the selector (and `Run E2E tests`) are skipped entirely. On a red install you will not see TIA narrow anything — that is the ordering, not a selector bug.
-- **Most PRs legitimately escalate to the full suite.** Platform manifests live under `packages/core/`, Go under `api/`/`internal/`, helpers under `hack/`, plus the `Makefile` — touching any one triggers the full suite. So "all apps selected" is usually correct, not a failure to narrow.
-- **Two skip layers, with a gap.** The coarse `detect-changes` job (`dorny/paths-filter`, filter `code: '!docs/**'`) skips the whole build+E2E pipeline only for `docs/**`-only PRs. TIA's finer skip (`select-e2e.sh` ignoring `docs/`, `dashboards/`, and `*.md`) only trims the app loop. A PR touching only `dashboards/*.json` therefore still runs the full build + install, then skips just the app tests — near-zero savings. If you need such PRs to skip the pipeline, widen the `detect-changes` filter, not `select-e2e.sh`.
+- **Most PRs legitimately escalate to the full suite.** Platform manifests live under `packages/core/`, Go under `api/`/`internal/`, helpers under `hack/`, plus the `Makefile` — touching any one triggers the full suite. So "all suites selected" is usually correct, not a failure to narrow.
+- **Two skip layers, with a gap.** The coarse `detect-changes` job (`dorny/paths-filter`, filter `code: '!docs/**'`) skips the whole build+E2E pipeline only for `docs/**`-only PRs. TIA's finer skip (`select-e2e.sh` ignoring `docs/`, `dashboards/`, and `*.md`) only trims the suite selection. A PR touching only `dashboards/*.json` therefore still runs the full build + install, then skips just the app tests — near-zero savings. If you need such PRs to skip the pipeline, widen the `detect-changes` filter, not `select-e2e.sh`.
 
 ### 8. Failure must be self-explanatory — diagnostics are first-class
 
 - On install failure, the CI step dumps `kubectl get hr -A -o wide`, a `describe` of each non-Ready HR, and sorted events, all under collapsible `::group::` blocks.
-- Per-app failures additionally dump COSI bucket/claim/access readiness columns (those CRDs ship no printer columns, so plain `get` shows only NAME/AGE).
-- `make collect-report` → `hack/cozyreport.sh` uploads a full `cozyreport.tgz` (operator/Flux/cert-manager logs, LINSTOR, Kamaji, Talos dmesg, COSI YAML) on every run.
-- Inside a test, dump **scoped** state on assertion failure with a `... || { echo ...; kubectl get/describe ...; false; }` block rather than letting a bare failure through. See `hack/e2e-apps/harbor.bats`.
+- On E2E failure, the CI step dumps `kubectl get hr -A`, sorted events, and COSI bucket/claim/access readiness columns (those CRDs ship no printer columns, so plain `get` shows only NAME/AGE). The `chainsaw test` run is one step, so this dump is at run level; Chainsaw's own per-`Test` `catch` blocks add scoped events/describe/podLogs for the failing suite.
+- Inside a suite, attach scoped diagnostics with a top-level `catch:` block (`events`, `describe`, `podLogs`, `get`) rather than letting a bare assert failure through — see `hack/e2e-chainsaw/bucket/chainsaw-test.yaml` and `hack/e2e-chainsaw/harbor/chainsaw-test.yaml`. This replaces the BATS `... || { echo …; kubectl get/describe …; false; }` idiom.
+- `make collect-report` → `hack/cozyreport.sh` uploads a full `cozyreport.tgz` (operator/Flux/cert-manager logs, LINSTOR, Kamaji, Talos dmesg, COSI YAML) on every run, and the Chainsaw JUnit report (`chainsaw-report.xml`) is uploaded as its own artifact.
+- **Per-failed-test crust-gather snapshots** are the richest diagnostic — a `crust-gather serve`-able archive of the cluster *at the moment of failure*, before cleanup. The global `error.catch` in `hack/e2e-chainsaw/.chainsaw.yaml` captures the **host** cluster into `_out/cozyreport/snapshots/<test>/host` on any failure (the Chainsaw analog of the `hack/cozytest.sh` EXIT-trap snapshot used by the BATS tests); the kubernetes suites additionally snapshot their **tenant** cluster from `hack/e2e-chainsaw/_lib/run-kubernetes.sh` while the tenant API LB is still routable. `hack/cozyreport.sh` folds `snapshots/` into the artifact. Do not remove the global catch — without it the Chainsaw suite uploads a report with no per-test cluster state.
 
 ### 9. Keep the test environment deterministic
 
@@ -88,18 +100,17 @@ Be precise about TIA's scope — it is narrower than "skip E2E for unrelated PRs
 ## Reviewer checklist for a new or changed E2E test
 
 1. No new retry loop unless the step is pure infra (image pull / VM boot / network).
-2. Every `kubectl wait` is preceded by an `until kubectl get …; do sleep 2; done` existence backstop.
-3. Any bare `sleep` carries a `TODO(e2e-replace-fixed-timeouts):` justification.
-4. No `EXIT`/`RETURN` trap — pre-cleanup at start, inline cleanup at end.
-5. Teardown deletes drop `|| true`, keep `--ignore-not-found`; nested tenants delete child → parent with `wait --for=delete` between.
-6. Standard HR-Ready wait is **5m**; longer waits (harbor 10m, NFS 10m, platform-wide install 15m) are justified in-line.
-7. Failure path dumps scoped diagnostics (`|| { …; false; }`), never a silent pass.
-8. If it touches parent-HR behavior, add the `status.history` remediation guard.
+2. Resource readiness uses a Chainsaw `assert` (not an imperative `until kubectl get …; kubectl wait`); condition checks use the filter-as-list form `(conditions[?type == 'Ready'])`.
+3. Imperative-only waits live in a `script` step; any bare `sleep` carries a `TODO(e2e-replace-fixed-timeouts):` justification.
+4. No test-level `EXIT`/`RETURN` trap — rely on Chainsaw cleanup; a self-contained trap is allowed only inside a single `script` step (port-forward / temp dir).
+5. Controller-created artifacts the test cannot reclaim are pruned explicitly; nested tenants delete child → parent with a wait-for-deletion between.
+6. Standard HR-Ready assert timeout is **5–6m**; longer waits (harbor 10m, NFS 10m, VM image pulls, platform-wide install 15m) are justified in-line.
+7. Failure path attaches scoped diagnostics via a `catch:` block, never a silent pass.
+8. If it touches parent-HR behavior, add the `status.history` remediation guard (`hack/e2e-chainsaw/_lib/remediation-guard.sh`).
 
 ## In-flight direction (not yet the merged standard)
 
 These are being explored on branches and may become conventions; do not assume they are the current `main` behavior:
 
-- **BATS → Kyverno Chainsaw migration** — declarative asserts replace the `until … wait` boilerplate, with automatic events/describe/podLogs capture. Imperative suites (openbao unseal, vminstance, gateway, the kubernetes cluster tests) stay as script steps. Gotcha: Chainsaw v0.2.15 needs condition assertions in **filter-as-list** form `(conditions[?type == 'Ready'])`; the `(...)[0]` indexed form throws "field not found".
 - **Cilium orphaned-endpoint self-heal** — an interim CI watchdog that evicts a single confirmed-orphan Cilium endpoint ("IP already in use", cilium/cilium#38313). Explicitly a mitigation to remove once a fixed Cilium ships; it refuses to touch an endpoint backing a live pod so real duplicate-IP bugs stay visible.
 - **Cluster state snapshot/restore** between test groups instead of reinstalling.

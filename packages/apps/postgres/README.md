@@ -133,9 +133,9 @@ On a to-copy restore the controller replaces the target app's
 in `Backup.status.underlyingResources`, so the chart's post-install
 init-job does not drop the recovered roles or databases.
 
-> **e2e coverage:** the CI e2e (`hack/e2e-apps/backup-postgres.bats`)
-> exercises the same-namespace to-copy restore (Steps 0-7), which leaves
-> the source running and is therefore the deterministic end-to-end signal.
+> **e2e coverage:** the same-namespace to-copy restore (Steps 0-7) leaves
+> the source running and is the deterministic end-to-end signal; it stays
+> a manual / dev-cluster reference flow, not part of the automated e2e suite.
 > The cross-tenant variant (target Postgres in a different tenant from
 > the source's seaweedfs) stays a manual / dev-cluster exercise —
 > reachability is blocked by the per-tenant Cilium egress policy. The

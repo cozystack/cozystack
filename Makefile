@@ -97,7 +97,7 @@ assets-cozypkg-%:
 
 test:
 	make -C packages/core/testing apply
-	make -C packages/core/testing test
+	make -C packages/core/testing e2e
 
 unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness
 
