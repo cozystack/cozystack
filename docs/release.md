@@ -80,7 +80,7 @@ A regular release sequence starts in the following way:
 
 4. Maintainer merges the PR. GitHub removes the merged branch `release-1.2.0`.
 5. CI workflow triggers on merge:
-   1. Moves the tag `v1.2.0` to the newly created merge commit by force-pushing a tag to GitHub.
+   1. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Publishes the release page (`draft` → `latest`).
 6. The maintainer can now announce the release to the community.
 
@@ -174,7 +174,7 @@ gitGraph
 
 5. Maintainer merges the PR. GitHub removes the merged branch `release-1.2.1`.
 6. CI workflow triggers on merge:
-   1. Moves the tag `v1.2.1` to the newly created merge commit by force-pushing a tag to GitHub.
+   1. Creates the tag `v1.2.1` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Publishes the release page (`draft` → `latest`).
 7. The maintainer can now announce the release to the community.
 
@@ -236,29 +236,23 @@ Reviewer checklist:
 
 Fires on merge of a PR with the `release` label and head branch matching `release-X.Y.Z[-suffix]`. Three steps:
 
-1. **Force-move the tag** to the merge commit (`git tag -f <vX.Y.Z> <github.sha> && git push -f`). Intentional and load-bearing for the digest-bake flow — see [Force-retagging](#force-retagging).
-2. **Ensure the maintenance branch `release-X.Y` exists** at the tag commit. Created if missing, force-updated if newer.
+1. **Create the tag at the merge commit** (write-once). The merge commit of `Prepare release vX.Y.Z` did not exist before the PR opened, so there is nothing to move — the tag is created here for the first time. A pre-existing tag at a different commit fails the step loudly rather than being force-moved (see [Tag immutability](#tag-immutability)).
+2. **Ensure the maintenance branch `release-X.Y` exists** at the tag commit. Created if missing; updated fast-forward-only — a non-fast-forward update warns and is left for a maintainer rather than being force-updated.
 3. **Publish the draft release.** `make_latest` is computed against published-non-prerelease tags: prereleases stay `false`; tags older than the current max stay `false` (and the current max is force-restored to `latest` if necessary, so an older patch tag cut after a newer minor won't downgrade `latest`).
 
 ### Phase 6 — `update-releasenotes.yaml` (sync GitHub Release body)
 
 Fires on every push to `main`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHes the matching GitHub Release's `body` if it differs. So edits to a published changelog file land on the GitHub Release on the next push to `main`, without re-running the release flow.
 
-## Automated patch tag (`auto-release.yaml`)
+## Stable tags come from rc promotion
 
-Cron: daily at 01:00 UTC. It only auto-releases the **2 newest minor `release-X.Y` lines** (`SUPPORTED_LINE_COUNT` in the workflow); older lines are treated as EOL and skipped, so long-unmaintained branches no longer accumulate stray patch tags and broken release PRs. The window is derived from the live branch list, so it slides automatically — once `release-1.5` exists the window becomes `{1.5, 1.4}` and the trailing line retires with no edits.
+There is no nightly auto-bump of stable patch tags. A stable `vX.Y.Z` is created only by **promoting an existing release-candidate** that already passed e2e — never by rebuilding and never by a cron.
 
-For each supported line:
+- [`nightly-rc.yaml`](../.github/workflows/nightly-rc.yaml) cuts a write-once `vX.Y.Z-nightly.<date>` rc tag for each tracked target (`main` plus every `release-X.Y` maintenance branch) whose HEAD moved since the last nightly. These drive the normal rc build/e2e path and are never moved or deleted.
+- [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) is triggered manually once an rc has gone green. It retags the rc's already-built, e2e-passed image digests to the stable tag **by digest** (no rebuild — see [`hack/promote-retag.sh`](../hack/promote-retag.sh)), rewrites the rc version substring in the vendored `values.yaml` tags, and opens the `release-X.Y.Z` staging PR. Merging that PR creates the write-once stable tag at the merge commit (Phase 5) and publishes the release. Because the copy source is the immutable rc digest, the stable image is bit-for-bit the rc image that passed e2e.
+- [`retention.yaml`](../.github/workflows/retention.yaml) prunes old nightly rc tags (keeps the newest 14 per in-development line); rc and stable tags are never touched.
 
-1. Find the latest published `vX.Y.*` GA release tag.
-2. If the branch has commits ahead of that tag, increment Z and push a new `vX.Y.(Z+1)` tag.
-3. Push via `git push origin HEAD:refs/tags/<tag>` so `base_ref` is set and `tags.yaml` runs.
-
-So **any commit that lands on a supported `release-X.Y` line triggers a patch release on the next nightly run.** If you want to batch backports across a couple of days before cutting, hold the cherry-picks. Conversely, if a critical fix lands you can do nothing and it ships in <24h.
-
-To skip the nightly cut: don't merge to `release-X.Y` yet. There is no "block this branch this cycle" knob.
-
-**Cutting a patch on an EOL line.** The window only governs *automatic* tagging. A maintainer can still release any branch by pushing a `vX.Y.Z` tag manually — [`tags.yaml`](../.github/workflows/tags.yaml) fires on any `v*.*.*` tag push, so the full pipeline runs regardless of whether the line is inside the auto-release window.
+So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. A maintainer can also cut any branch directly by pushing a `vX.Y.Z` tag; [`tags.yaml`](../.github/workflows/tags.yaml) fires on any `v*.*.*` tag push.
 
 ## Backports
 
@@ -379,7 +373,7 @@ Output should be empty.
 
 **3. Wrong PR author.** The squash-merge commit's author is whoever clicked "Merge" — not the person who wrote the code. **Always** resolve via `gh pr view <N> --json author --jq .author.login`, never `git log --format=%an`. This bites hardest for website-repo entries where the same merger handles most PRs.
 
-**4. Re-cut tag, stale changelog.** If you re-tag (force-move `vX.Y.Z` to a new commit because a critical fix landed), the changelog PR may already exist for the old tag. Compare `git log <prev>..<new>` against what the existing `changelog-vX.Y.Z` branch already documents; only add/remove the deltas. If the only new commits are CI-internal or a revert of a feature that never reached a stable tag, no changelog edit is needed.
+**4. Superseding patch, stale changelog.** Tags are write-once, so a critical fix after `vX.Y.Z` ships as the next patch `vX.Y.(Z+1)` rather than moving the tag. If a changelog PR already exists for a tag you are superseding, the changelog work transfers to the new patch. Compare `git log <prev>..<new>` against what the existing `changelog-vX.Y.Z` branch already documents; only add/remove the deltas. If the only new commits are CI-internal or a revert of a feature that never reached a stable tag, no changelog edit is needed.
 
 **5. PR numbers swapped inside prose.** The entry-format validator checks bullet entries but ignores Feature Highlights paragraphs and Upgrade Notes. Both have caused wrong PR references in shipped changelogs. Verify every `#NNNN` in prose with `gh pr view <N>`.
 
@@ -528,24 +522,17 @@ For RCs and final releases, run this before merging the release PR. Each item is
 
 If you find yourself doing the same manual fixup on two consecutive releases (e.g. "undraft the release"), open a workflow-regression issue. Workflow bugs with known manual workarounds rot silently for months.
 
-## Force-retagging
+## Tag immutability
 
-Four places in CI force-update tags or branches:
+Published tags are **write-once** — once a `vX.Y.Z`, rc, or nightly tag is pushed it is never moved or deleted. Moving a tag silently poisons the Go module proxy / pkg.go.dev cache for `api/apps/v1alpha1/vX.Y.Z` and drifts SBOM/provenance toolchains, so the release flow is built so a move is impossible by construction:
 
-| File | Operation |
-|------|-----------|
-| [`tags.yaml`](../.github/workflows/tags.yaml) | `git tag -f api/apps/v1alpha1/<vTAG>` + `git push -f` (Go submodule tag for `pkg.go.dev`) |
-| [`tags.yaml`](../.github/workflows/tags.yaml) | `git branch -f release-X.Y.Z && git push -f` |
-| [`auto-release.yaml`](../.github/workflows/auto-release.yaml) | Delete-then-recreate the auto-bumped patch tag |
-| [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) | `git tag -f vX.Y.Z` to move the tag onto the merge commit of `Prepare release vX.Y.Z`; force-update `release-X.Y` ref |
+| File | Tag / branch handling |
+|------|------------------------|
+| [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) | Creates `vX.Y.Z` at the PR merge commit **write-once** (create if absent, no-op if unchanged, fail loudly if it would move — the merge commit is new, so there is nothing to move). The `release-X.Y` maintenance branch is fast-forward-only. |
+| [`tags.yaml`](../.github/workflows/tags.yaml) | The `api/apps/v1alpha1/<vTAG>` Go-submodule tag is write-once and created **only for stable tags** (never rc/nightly). The `release-X.Y.Z` staging branch is a mutable staging ref (compare-before-force: skipped when unchanged, force+log only when it genuinely moves). |
+| [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) | Creates the stable tag by promoting an rc — retags image digests by digest, no rebuild. |
 
-Why it exists: the maintainer pushes `vX.Y.Z` first, CI bakes vendored image digests onto a side branch `release-X.Y.Z`, and on PR merge the workflow **moves** `vX.Y.Z` from the original commit to the merge commit. This makes the tag point at the "Prepare release" commit with reproducible digests — load-bearing for the release model described in the [Regular Releases](#regular-releases) and [Patch Releases](#patch-releases) sections above.
-
-Why it's a smell: Go module proxy and pkg.go.dev cache `api/apps/v1alpha1/vX.Y.Z` immutably. Retagging causes silent downstream version skew. The same applies to SBOM/provenance toolchains.
-
-There is an open RFC ([#2677](https://github.com/cozystack/cozystack/issues/2677), labels `release` + `epic`) to move to immutable tags via an rc-promotion flow. Stable `vX.Y.Z` would become bot-only, created by promoting an existing rc; rc and nightly tags would be write-once; `api/apps/v1alpha1/vX.Y.Z` would only be created on stable. Stage 1 of that rollout (idempotent guards on the defensive force-pushes) is independent and revertible.
-
-Capacity sanity-check for the rc-promotion model: GitHub has no documented per-repo tag cap; performance pain begins around 10k tags. Nightly RC tags would produce ~365/yr → ~1,800 in 5 years, well under. Real cost vectors are GHCR storage, GitHub Release assets, and self-hosted runner compute — needs explicit retention from day one if/when this lands.
+This is the immutable-tag + rc-promotion model from [#2677](https://github.com/cozystack/cozystack/issues/2677): stable `vX.Y.Z` is created only by promoting an existing rc, rc and nightly tags are write-once, and `api/apps/v1alpha1/vX.Y.Z` is created only on a stable release. The old nightly `auto-release.yaml` (which delete-recreated auto-bumped patch tags) has been removed; [`retention.yaml`](../.github/workflows/retention.yaml) prunes only the `*-nightly.*` namespace, so rc and stable tags accrete permanently — GHCR storage and Release assets are the cost vectors to watch (nightly rc tags alone would be ~365/yr without the retention prune).
 
 ## Splitting a release-blocking bundle PR
 
@@ -572,6 +559,8 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 - [`agents/releasing.md`](./agents/releasing.md) — pointer file for AI agents handling release tasks.
 - [`.github/workflows/tags.yaml`](../.github/workflows/tags.yaml) — tag-push pipeline.
 - [`.github/workflows/pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — merge-finalize pipeline.
-- [`.github/workflows/auto-release.yaml`](../.github/workflows/auto-release.yaml) — nightly auto-patch.
+- [`.github/workflows/nightly-rc.yaml`](../.github/workflows/nightly-rc.yaml) — nightly rc tag cutter.
+- [`.github/workflows/promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — rc → stable promotion.
+- [`.github/workflows/retention.yaml`](../.github/workflows/retention.yaml) — nightly rc tag pruning.
 - [`.github/workflows/backport.yaml`](../.github/workflows/backport.yaml) — automatic cherry-pick bot.
 - [`.github/workflows/update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — sync changelog → GitHub Release body.
