@@ -1,0 +1,146 @@
+suite: bucket post-delete ACME cleanup hook
+templates:
+  - templates/hooks/cleanup-acme.yaml
+
+release:
+  name: my-bucket
+  namespace: tenant-root
+
+set:
+  _namespace:
+    host: example.org
+
+tests:
+  - it: renders a post-delete cleanup Job with the expected name and SA
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: kind
+          value: Job
+      - equal:
+          path: metadata.name
+          value: my-bucket-cleanup-acme
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: my-bucket-cleanup-acme
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+
+  - it: deletes release-scoped cert-manager resources with a host-scoped solver sweep
+    documentIndex: 0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete certificate my-bucket-ui-tls -n tenant-root"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete certificate,order,challenge -n tenant-root -l app.kubernetes.io/instance=my-bucket"
+      # Host derived from <release>.<_namespace.host> == my-bucket.example.org
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'HOST="my-bucket\.example\.org"'
+      # Host-scoped challenge sweep filtering on .spec.dnsName == our host
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl get challenge -n tenant-root -o jsonpath=.*@.spec.dnsName=='\\$HOST'"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete challenge -n tenant-root "\$ch" --ignore-not-found'
+      # Host-scoped orphaned solver Ingress sweep filtering on rules[0].host
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl get ingress -n tenant-root -l acme.cert-manager.io/http01-solver=true -o jsonpath=.*@.spec.rules\\[0\\].host=='\\$HOST'"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete ingress -n tenant-root "\$ing" --ignore-not-found'
+      # NO namespace-wide blanket solver sweep
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete ingress,svc,pod"
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "delete .*-l acme.cert-manager.io/http01-solver=true"
+
+  - it: sets resource requests and limits on the cleanup container
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: creates a ServiceAccount for the cleanup job
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: my-bucket-cleanup-acme
+
+  - it: grants RBAC limited to cert-manager and acme resources
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cert-manager.io"]
+            resources: ["certificates"]
+            verbs: ["get", "list", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["acme.cert-manager.io"]
+            resources: ["orders", "challenges"]
+            verbs: ["get", "list", "delete"]
+      # Ingresses re-added: we list+delete this release's orphaned solver
+      # Ingress objects by host.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["networking.k8s.io"]
+            resources: ["ingresses"]
+            verbs: ["get", "list", "delete"]
+      # Services/Pods stay OUT: solver Service/Pod cascade-delete with their
+      # owning Challenge, so the hook never deletes them directly.
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["services", "pods"]
+            verbs: ["get", "list", "delete"]
+      - lengthEqual:
+          path: rules
+          count: 3
+
+  - it: binds the Role to the cleanup ServiceAccount
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: kind
+          value: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: my-bucket-cleanup-acme
+      - equal:
+          path: subjects[0].name
+          value: my-bucket-cleanup-acme

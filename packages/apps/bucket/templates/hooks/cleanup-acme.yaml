@@ -1,0 +1,149 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-cleanup-acme
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-cleanup-acme
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          env:
+            - name: HOME
+              value: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Cleaning up orphaned cert-manager ACME resources for {{ .Release.Name }}..."
+              # This release's TLS host. The bucket-system chart renders its
+              # Ingress / Certificate for "<bucketName>.<_namespace.host>", and
+              # bucketName is set to .Release.Name in the HelmRelease. cert-manager
+              # stamps this exact value onto its Challenge .spec.dnsName and onto
+              # the orphaned solver Ingress .spec.rules[].host, so the host is the
+              # one reliable per-release identifier for ACME solver objects (they
+              # carry no app/release label of their own).
+              HOST="{{ .Release.Name }}.{{ .Values._namespace.host }}"
+              # Delete the per-bucket Certificate/Order/Challenge. cert-manager
+              # then cascade-removes the cm-acme-http-solver-* solver objects it
+              # owns. The release's TLS Certificate is named after the secret it
+              # populates ({{ .Release.Name }}-ui-tls).
+              kubectl delete certificate {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found \
+                || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
+              kubectl delete certificate,order,challenge -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found \
+                || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
+              # Release-scoped solver sweep. We deliberately do NOT delete
+              # ingress/service/pod objects namespace-wide by the
+              # acme.cert-manager.io/http01-solver=true label: that label is set
+              # on EVERY app's solver objects in this shared tenant namespace, so
+              # a blanket delete would tear down sibling apps' in-flight ACME
+              # challenges. Instead we scope by HOST, which is unique to this
+              # release, so we only ever touch our own solver objects.
+              #
+              # Delete Challenges for our host (cascades the solver
+              # Ingress/Service/Pod they own).
+              for ch in $(kubectl get challenge -n {{ .Release.Namespace }} -o jsonpath="{range .items[?(@.spec.dnsName=='$HOST')]}{.metadata.name} {end}" 2>/dev/null); do
+                kubectl delete challenge -n {{ .Release.Namespace }} "$ch" --ignore-not-found \
+                  || echo "WARNING: failed to delete challenge $ch for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
+              done
+              # Delete any orphaned solver Ingress for our host (no live owner
+              # left to cascade it). Its solver Service/Pod are owned by a
+              # Challenge and are cascade-deleted with it; truly owner-less
+              # solver Service/Pod with no matching Challenge are not expected
+              # and are not swept namespace-wide.
+              for ing in $(kubectl get ingress -n {{ .Release.Namespace }} -l acme.cert-manager.io/http01-solver=true -o jsonpath="{range .items[?(@.spec.rules[0].host=='$HOST')]}{.metadata.name} {end}" 2>/dev/null); do
+                kubectl delete ingress -n {{ .Release.Namespace }} "$ing" --ignore-not-found \
+                  || echo "WARNING: failed to delete solver ingress $ing for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
+              done
+              echo "ACME cleanup complete."
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cleanup-acme
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-cleanup-acme
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: ["cert-manager.io"]
+    resources: ["certificates"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["acme.cert-manager.io"]
+    resources: ["orders", "challenges"]
+    verbs: ["get", "list", "delete"]
+  # Needed to list+delete this release's orphaned http01 solver Ingress objects
+  # by host. Services/Pods are intentionally omitted: the solver Service/Pod are
+  # owned by their Challenge and cascade-delete with it, so we never delete them
+  # directly (and thus never sweep them namespace-wide).
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-cleanup-acme
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cleanup-acme
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-cleanup-acme
