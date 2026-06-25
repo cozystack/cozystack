@@ -4,7 +4,7 @@
     "config:recommended",
     ":semanticCommits"
   ],
-  "enabledManagers": ["gomod"],
+  "enabledManagers": ["gomod", "dockerfile", "github-actions"],
   "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "labels": ["automated", "do-not-merge/hold"],
   "automerge": false,
@@ -22,6 +22,18 @@
       "matchManagers": ["gomod"],
       "matchDepTypes": ["golang"],
       "enabled": false
+    },
+    {
+      "description": "Pin Dockerfile base images and GitHub Actions to immutable digests so OpenSSF Scorecard Pinned-Dependencies passes and supply-chain refs stay reproducible. The tag is kept in front of the digest so it stays human-readable and trackable.",
+      "matchManagers": ["dockerfile", "github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Batch the initial pin and all digest-only refreshes (same tag, rebuilt upstream) into a single weekly PR. Without this, frequently-rebuilt bases (alpine, debian, golang, distroless) would trickle in one rebuild-triggering PR each, loading the shared CI runner. Real tag bumps (major/minor/patch) are intentionally left out of this group so they get individual review.",
+      "matchManagers": ["dockerfile", "github-actions"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": "container image & action digests",
+      "schedule": ["before 6am on monday"]
     }
   ]
 }
