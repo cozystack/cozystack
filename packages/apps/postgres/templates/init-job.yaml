@@ -20,11 +20,6 @@ metadata:
     "helm.sh/hook-weight": "-5"
     "helm.sh/hook-delete-policy": before-hook-creation
 spec:
-  # One-shot reconciler Job: once it has applied users/databases/roles it is no
-  # longer needed. Let the Kubernetes TTL controller garbage-collect the Job and
-  # its Pod ~2 minutes after completion so it does not linger after the release
-  # is deleted (cozystack/cozystack#3055). This does not touch the Helm hook
-  # lifecycle the bootstrap.recovery path relies on.
   ttlSecondsAfterFinished: 120
   template:
     metadata:
