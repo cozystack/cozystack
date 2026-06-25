@@ -64,6 +64,9 @@ spec:
 
     volumeClaimTemplates:
       - name: default
+        metadata:
+          labels:
+            app.kubernetes.io/instance: "{{ .Release.Name }}"
         spec:
           accessModes:
             - ReadWriteOnce
