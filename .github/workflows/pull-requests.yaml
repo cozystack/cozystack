@@ -21,6 +21,8 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       code: ${{ steps.p.outputs.code }}
       matrix: ${{ steps.p.outputs.matrix }}
@@ -57,6 +59,8 @@ jobs:
     name: Unit & controller tests
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 30
+    permissions:
+      contents: read
     needs: ["plan"]
     if: |
       needs.plan.outputs.code == 'true'
@@ -76,6 +80,10 @@ jobs:
         run: make unit-tests
       - name: Run controller Go tests
         run: make test-controllers
+      - name: Run selector unit tests (bats)
+        run: |
+          command -v bats >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y bats; }
+          bats hack/build-matrix_test.bats hack/select-e2e_test.bats
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
@@ -109,7 +117,7 @@ jobs:
       - name: Set up build toolchain
         run: |
           command -v flux >/dev/null \
-            || curl -s https://fluxcd.io/install.sh | sudo bash
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then
@@ -263,7 +271,7 @@ jobs:
       - name: Set up build toolchain
         run: |
           command -v flux >/dev/null \
-            || curl -s https://fluxcd.io/install.sh | sudo bash
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
       - name: Download patch fragments
         uses: actions/download-artifact@v4
         with:
@@ -273,10 +281,14 @@ jobs:
       - name: Apply digest fragments
         run: |
           applied=0
+          # Each fragment patches only its own package's files; --3way lets two
+          # fragments that touch adjacent lines of a shared file (e.g. a package
+          # Makefile that writes a sibling package's values.yaml) merge cleanly
+          # instead of the second apply aborting the whole finalize.
           for f in _out/fragments/*.patch; do
             [ -s "$f" ] || continue
             echo "Applying $f"
-            git apply "$f"
+            git apply --3way "$f"
             applied=$((applied + 1))
           done
           echo "Applied $applied fragment(s)"

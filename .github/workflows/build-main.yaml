@@ -60,7 +60,7 @@ jobs:
       - name: Set up build toolchain
         run: |
           command -v flux >/dev/null \
-            || curl -s https://fluxcd.io/install.sh | sudo bash
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
 
       - name: Set up Docker config
         run: |
