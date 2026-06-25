@@ -1,0 +1,74 @@
+suite: qdrant data PVC cleanup on delete
+
+# Guards the fix for issue #3059: the upstream Qdrant chart does NOT support
+# persistentVolumeClaimRetentionPolicy, so its StatefulSet-templated data PVC
+# (qdrant-storage-<release>-0) is orphaned when the StatefulSet is deleted.
+#
+# The fix has two parts:
+#   1. The HelmRelease passes persistence.additionalLabels through to the
+#      upstream chart so the data PVC carries a release-unique label
+#      (app.kubernetes.io/instance=<release>). Without it the volumeClaimTemplate
+#      only stamps `app: qdrant` (the chart name), shared by every Qdrant in the
+#      namespace.
+#   2. A post-delete hook deletes PVCs matching that label so the data is
+#      reclaimed on release deletion.
+
+release:
+  name: qdrant-test
+  namespace: tenant-test
+
+tests:
+  #####################################################
+  # PVC label passthrough on the HelmRelease values   #
+  #####################################################
+
+  - it: "stamps a release-unique instance label onto the data PVC"
+    templates:
+      - templates/qdrant.yaml
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.qdrant.persistence.additionalLabels["app.kubernetes.io/instance"]
+          value: qdrant-test
+
+  #####################################################
+  # post-delete cleanup hook                          #
+  #####################################################
+
+  - it: "renders a post-delete Job that deletes the data PVC by instance label"
+    templates:
+      - templates/hooks/cleanup-pvc.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: qdrant-test-qdrant-cleanup
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete pvc -n tenant-test -l app\\.kubernetes\\.io/instance=qdrant-test --ignore-not-found"
+
+  - it: "creates qdrant-scoped RBAC for the cleanup hook"
+    templates:
+      - templates/hooks/cleanup-pvc.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: qdrant-test-qdrant-cleanup
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "delete"]
