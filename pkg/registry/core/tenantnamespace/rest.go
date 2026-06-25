@@ -139,6 +139,11 @@ func (r *REST) Get(
 	ns := &corev1.Namespace{}
 	err = r.c.Get(ctx, types.NamespacedName{Namespace: "", Name: name}, ns, &client.GetOptions{Raw: opts})
 	if err != nil {
+		// Repackage NotFound so the Status reports this resource, not the
+		// backing Namespace one.
+		if apierrors.IsNotFound(err) {
+			return nil, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+		}
 		return nil, err
 	}
 
@@ -437,7 +442,7 @@ func (r *REST) filterAccessible(
 ) ([]string, error) {
 	u, ok := request.UserFrom(ctx)
 	if !ok {
-		return []string{}, fmt.Errorf("user missing in context")
+		return nil, apierrors.NewUnauthorized("user missing in context")
 	}
 	groups := make(map[string]struct{})
 	for _, group := range u.GetGroups() {
@@ -456,7 +461,7 @@ func (r *REST) filterAccessible(
 	rbs := &rbacv1.RoleBindingList{}
 	err := r.c.List(ctx, rbs)
 	if err != nil {
-		return []string{}, fmt.Errorf("failed to list rolebindings: %w", err)
+		return nil, apierrors.NewInternalError(fmt.Errorf("failed to list rolebindings: %w", err))
 	}
 	allowedNameSet := make(map[string]struct{})
 	for i := range rbs.Items {
@@ -491,7 +496,7 @@ func (r *REST) hasAccessToNamespace(
 ) (bool, error) {
 	u, ok := request.UserFrom(ctx)
 	if !ok {
-		return false, fmt.Errorf("user missing in context")
+		return false, apierrors.NewUnauthorized("user missing in context")
 	}
 	groups := make(map[string]struct{})
 	for _, group := range u.GetGroups() {
@@ -520,7 +525,7 @@ func (r *REST) hasAccessToNamespaceForUser(
 	rbs := &rbacv1.RoleBindingList{}
 	err := r.c.List(ctx, rbs, client.InNamespace(namespace))
 	if err != nil {
-		return false, fmt.Errorf("failed to list rolebindings in %s: %w", namespace, err)
+		return false, apierrors.NewInternalError(fmt.Errorf("failed to list rolebindings in %s: %w", namespace, err))
 	}
 
 	// Check if user is in any RoleBinding subjects
