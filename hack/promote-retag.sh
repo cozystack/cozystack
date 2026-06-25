@@ -23,11 +23,19 @@ STABLE="${1:?usage: promote-retag.sh <stable-version> [--dry-run]}"
 DRY_RUN=0
 [ "${2:-}" = "--dry-run" ] && DRY_RUN=1
 
+# Only cozystack-owned images (those the build pushed to $REGISTRY) are
+# retagged. Everything else vendored by digest — third-party images and bare
+# upstream tags — lives in registries this job cannot push to. Override
+# REGISTRY to match a fork's build registry; the default mirrors
+# hack/common-envs.mk.
+REGISTRY="${REGISTRY:-ghcr.io/cozystack/cozystack}"
+
 command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1; }
 # The queries below use mikefarah syntax; reject python-yq and other variants
 # (mirrors the build-deps check in the Makefile).
 yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
-command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
+# skopeo is only needed to actually copy; a --dry-run just prints the plan.
+[ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
 # Collect "repo@sha256:..." refs from every package values.yaml, across the
 # three shapes the build writes:
@@ -78,11 +86,21 @@ copy() {
 refs=""
 for raw in $(collect_refs); do
   [ -n "$raw" ] || continue
-  refs="${refs}$(ref_repo "$raw")@$(ref_digest "$raw")
+  _repo="$(ref_repo "$raw")"
+  # Retag only cozystack-owned images. This drops third-party images
+  # (docker.io/clastix/kubectl, ghcr.io/kvaps/...), bare upstream tags
+  # (kube-ovn/keycloak/kilo) and non-ref scalars (e.g. a "--migrate-image=..."
+  # arg string) — all vendored by digest but not pushed to $REGISTRY, so a
+  # skopeo copy to them would fail and (under set -e) abort the whole promotion.
+  case "$_repo" in
+    "${REGISTRY}/"*) ;;
+    *) continue ;;
+  esac
+  refs="${refs}${_repo}@$(ref_digest "$raw")
 "
 done
 refs="$(printf '%s' "$refs" | sort -u)"
-[ -n "$refs" ] || { echo "No digest-pinned image refs found — is this the rc's baked tree?" >&2; exit 1; }
+[ -n "$refs" ] || { echo "No cozystack-owned digest-pinned image refs found under ${REGISTRY}/ — is this the rc's baked tree?" >&2; exit 1; }
 
 echo "$refs" | while IFS= read -r ref; do
   [ -n "$ref" ] || continue
