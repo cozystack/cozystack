@@ -3,13 +3,18 @@ suite: init-job is garbage-collected after completion
 # Locks in cozystack/cozystack#3055: the post-install/post-upgrade init Job
 # is a one-shot reconciler of users/databases/roles. Without a TTL it lingers
 # in the namespace forever after the Postgres CR is deleted (its hook-delete-policy
-# is `before-hook-creation` only, which never fires on uninstall). A native
+# is 'before-hook-creation' only, which never fires on uninstall). A native
 # ttlSecondsAfterFinished lets the Kubernetes TTL controller GC the Job and its
-# Pod ~2 minutes after it completes, regardless of Helm hook lifecycle — without
-# touching the hook-timeout semantics the recovery flow depends on.
+# Pod ~1 hour after it completes, regardless of Helm hook lifecycle — without
+# touching the hook-timeout semantics the recovery flow depends on. 1h leaves a
+# debugging window for a failed init Job before it is collected.
 
+# init-script.yaml is included alongside init-job.yaml because the Job's
+# checksum/config annotation does `include ".../init-script.yaml"`; the suite
+# must load both templates or the include fails to resolve.
 templates:
   - templates/init-job.yaml
+  - templates/init-script.yaml
 
 release:
   name: pg-test
@@ -23,21 +28,28 @@ tests:
       users:
         app:
           password: secret
+    documentSelector:
+      path: metadata.name
+      value: pg-test-init-job
     asserts:
-      - hasDocuments:
-          count: 1
       - isKind:
           of: Job
       - equal:
           path: spec.ttlSecondsAfterFinished
-          value: 120
+          value: 3600
 
   - it: "init-job is skipped entirely under bootstrap recovery"
     set:
       _cluster:
         scheduling: {}
+      users:
+        app:
+          password: secret
       bootstrap:
         enabled: true
     asserts:
       - hasDocuments:
           count: 0
+        documentSelector:
+          path: kind
+          value: Job
