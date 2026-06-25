@@ -18,6 +18,8 @@ spec:
         - cozystack.capi-provider-core
         - cozystack.capi-provider-cp-kamaji
         - cozystack.capi-provider-infra-kubevirt
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

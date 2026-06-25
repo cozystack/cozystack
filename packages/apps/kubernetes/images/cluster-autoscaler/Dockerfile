@@ -1,5 +1,5 @@
 # Source: https://raw.githubusercontent.com/kubernetes/autoscaler/refs/heads/master/cluster-autoscaler/Dockerfile.amd64
-ARG builder_image=docker.io/library/golang:1.23.4
+ARG builder_image=docker.io/library/golang:1.26
 ARG BASEIMAGE=gcr.io/distroless/static:nonroot-${TARGETARCH}
 
 FROM ${builder_image} AS builder

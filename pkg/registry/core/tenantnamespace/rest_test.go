@@ -457,8 +457,9 @@ func TestList_NamespaceListError_Propagates(t *testing.T) {
 }
 
 // TestList_RoleBindingListError_Propagates asserts a failure to list
-// RoleBindings during access filtering fails the List instead of returning an
-// unfiltered or silently truncated result.
+// RoleBindings during access filtering fails the List with a typed
+// InternalError instead of returning an unfiltered or silently truncated
+// result.
 func TestList_RoleBindingListError_Propagates(t *testing.T) {
 	wantErr := errors.New("rolebinding list failed")
 	fc := fake.NewClientBuilder().
@@ -482,8 +483,12 @@ func TestList_RoleBindingListError_Propagates(t *testing.T) {
 	u := &user.DefaultInfo{Name: "test-user", Groups: []string{"system:authenticated"}}
 	ctx := request.WithUser(context.Background(), u)
 
-	if _, err := r.List(ctx, nil); !errors.Is(err, wantErr) {
-		t.Fatalf("expected %v, got %v", wantErr, err)
+	_, err := r.List(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !apierrors.IsInternalError(err) {
+		t.Fatalf("expected InternalError, got %v", err)
 	}
 }
 
@@ -796,5 +801,265 @@ func TestGet_NonTenantNamespace(t *testing.T) {
 	}
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("expected NotFound error, got %v", err)
+	}
+}
+
+// Typed-error tests: helpers must return apierrors so the apiserver maps
+// failures to accurate status codes instead of coercing everything to 500.
+
+// newRoleBindingListErrorClient returns a fake client whose List fails for
+// RoleBindingList only, simulating an RBAC listing outage.
+func newRoleBindingListErrorClient(scheme *runtime.Scheme, listErr error, objs ...client.Object) client.Client {
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(objs...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				if _, ok := list.(*rbacv1.RoleBindingList); ok {
+					return listErr
+				}
+				return c.List(ctx, list, opts...)
+			},
+		}).
+		Build()
+}
+
+func TestHasAccessToNamespace_NoUserInContext(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	_, err := r.hasAccessToNamespace(context.Background(), "tenant-test")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !apierrors.IsUnauthorized(err) {
+		t.Errorf("expected Unauthorized error, got %v", err)
+	}
+}
+
+func TestHasAccessToNamespace_RoleBindingListError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	c := newRoleBindingListErrorClient(scheme, errors.New("etcd is on fire"))
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	u := &user.DefaultInfo{
+		Name:   "test-user",
+		Groups: []string{"system:authenticated"},
+	}
+	ctx := request.WithUser(context.Background(), u)
+
+	_, err := r.hasAccessToNamespace(ctx, "tenant-test")
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !apierrors.IsInternalError(err) {
+		t.Errorf("expected InternalError, got %v", err)
+	}
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected *apierrors.StatusError, got %T", err)
+	}
+	if statusErr.Status().Code != 500 {
+		t.Errorf("expected status code 500, got %d", statusErr.Status().Code)
+	}
+}
+
+func TestFilterAccessible_NoUserInContext(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	_, err := r.filterAccessible(context.Background(), []string{"tenant-test"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !apierrors.IsUnauthorized(err) {
+		t.Errorf("expected Unauthorized error, got %v", err)
+	}
+}
+
+func TestFilterAccessible_RoleBindingListError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	c := newRoleBindingListErrorClient(scheme, errors.New("etcd is on fire"))
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	u := &user.DefaultInfo{
+		Name:   "test-user",
+		Groups: []string{"system:authenticated"},
+	}
+	ctx := request.WithUser(context.Background(), u)
+
+	_, err := r.filterAccessible(ctx, []string{"tenant-test"})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !apierrors.IsInternalError(err) {
+		t.Errorf("expected InternalError, got %v", err)
+	}
+}
+
+func TestGet_NotFoundReportsTenantNamespaceResource(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	u := &user.DefaultInfo{
+		Name:   "admin-user",
+		Groups: []string{"system:masters"},
+	}
+	ctx := request.WithUser(context.Background(), u)
+
+	_, err := r.Get(ctx, "tenant-missing", &metav1.GetOptions{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("expected NotFound error, got %v", err)
+	}
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		t.Fatalf("expected *apierrors.StatusError, got %T", err)
+	}
+	details := statusErr.Status().Details
+	if details == nil {
+		t.Fatal("expected status details, got nil")
+	}
+	if details.Group != "core.cozystack.io" || details.Kind != "tenantnamespaces" {
+		t.Errorf("expected NotFound for core.cozystack.io/tenantnamespaces, got %s/%s", details.Group, details.Kind)
+	}
+}
+
+func TestList_RoleBindingListError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"},
+	}
+
+	c := newRoleBindingListErrorClient(scheme, errors.New("etcd is on fire"), ns)
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	u := &user.DefaultInfo{
+		Name:   "test-user",
+		Groups: []string{"system:authenticated"},
+	}
+	ctx := request.WithUser(context.Background(), u)
+
+	obj, err := r.List(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if obj != nil {
+		t.Errorf("expected nil object, got %v", obj)
+	}
+	if !apierrors.IsInternalError(err) {
+		t.Errorf("expected InternalError, got %v", err)
+	}
+}
+
+func TestGet_NoUserInContext(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(ns).
+		Build()
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	obj, err := r.Get(context.Background(), "tenant-test", &metav1.GetOptions{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if obj != nil {
+		t.Errorf("expected nil object, got %v", obj)
+	}
+	if !apierrors.IsUnauthorized(err) {
+		t.Errorf("expected Unauthorized error, got %v", err)
+	}
+}
+
+func TestGet_RoleBindingListError(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	_ = rbacv1.AddToScheme(scheme)
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"},
+	}
+
+	c := newRoleBindingListErrorClient(scheme, errors.New("etcd is on fire"), ns)
+
+	r := &REST{
+		c:   c,
+		gvr: schema.GroupVersionResource{Group: "core.cozystack.io", Version: "v1alpha1", Resource: "tenantnamespaces"},
+	}
+
+	u := &user.DefaultInfo{
+		Name:   "test-user",
+		Groups: []string{"system:authenticated"},
+	}
+	ctx := request.WithUser(context.Background(), u)
+
+	obj, err := r.Get(ctx, "tenant-test", &metav1.GetOptions{})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if obj != nil {
+		t.Errorf("expected nil object, got %v", obj)
+	}
+	if !apierrors.IsInternalError(err) {
+		t.Errorf("expected InternalError, got %v", err)
 	}
 }

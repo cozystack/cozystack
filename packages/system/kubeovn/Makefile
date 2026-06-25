@@ -4,6 +4,9 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts values.yaml Chart.yaml
 	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/cozystack/kubeovn-chart | awk -F'[/^]' 'END{print $$3}') && \

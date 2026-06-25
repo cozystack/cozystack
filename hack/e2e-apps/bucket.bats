@@ -21,11 +21,24 @@ EOF
   # Wait for the bucket to be ready
   kubectl -n tenant-test wait hr bucket-${name} --timeout=5m --for=condition=ready
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=300s --for=jsonpath='{.status.bucketReady}'
+  # The COSI controller requeues the BucketClaim until the backend Bucket's
+  # readiness propagates, so this converges within tens of seconds. Assert
+  # bucketReady=true explicitly: a bare jsonpath match also matches the literal
+  # "false", so the unqualified form passed against an unready claim. The tight
+  # bound makes a propagation-race regression fail fast instead of hiding.
+  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=120s --for=jsonpath='{.status.bucketReady}'=true || {
+    echo "=== BucketClaim did not converge to bucketReady=true ==="
+    kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} -o yaml 2>&1 || true
+    echo "=== backend Buckets (cluster-scoped) ==="
+    kubectl get buckets.objectstorage.k8s.io -o wide 2>&1 || true
+    echo "=== objectstorage-controller ==="
+    kubectl -n cozy-objectstorage-controller get pods 2>&1 || true
+    false
+  }
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-admin >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer >/dev/null 2>&1; do sleep 2; done"
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
 
   # Get admin (readwrite) credentials
   kubectl -n tenant-test get secret bucket-${name}-admin -ojsonpath='{.data.BucketInfo}' | base64 -d > bucket-admin-credentials.json
