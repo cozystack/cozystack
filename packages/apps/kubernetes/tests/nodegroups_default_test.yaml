@@ -1,0 +1,88 @@
+suite: default md0 node group rendering
+
+# When nodeGroups is left empty (chart default `nodeGroups: {}`), the
+# kubernetes.nodeGroups helper must emit the built-in md0 group — this is the
+# else-branch that makes md0 removable (an operator can drop md0 from their own
+# nodeGroups) while a cluster that sets nothing still gets the default topology.
+# A minimal VirtualMachineClusterInstancetype is mocked so the per-group
+# instanceType lookup (u1.medium) returns non-nil; with no spec the template
+# falls back to the default kubelet reservations, which is all this test needs.
+
+templates:
+  - templates/cluster.yaml
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr:
+        group: instancetype.kubevirt.io
+        version: v1beta1
+        resource: virtualmachineclusterinstancetypes
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr:
+        group: cluster.x-k8s.io
+        version: v1beta1
+        resource: machinesets
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr:
+        group: infrastructure.cluster.x-k8s.io
+        version: v1alpha1
+        resource: kubevirtmachinetemplates
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata:
+        name: u1.medium
+    # Dummy CAPI objects so the MachineSet / KubevirtMachineTemplate LIST kinds
+    # are registered with the fake client. Shaped to be ignored by the
+    # old-template preservation loop (MachineSet infraRef is not a
+    # KubevirtMachineTemplate; the KubevirtMachineTemplate has no Cluster owner).
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata:
+        name: ignored-ms
+        namespace: tenant-test
+      spec:
+        template:
+          spec:
+            infrastructureRef:
+              kind: Other
+              name: ignored
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata:
+        name: ignored-kmt
+        namespace: tenant-test
+
+tests:
+  - it: renders the default md0 group when nodeGroups is empty
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      # nodeGroups intentionally left at the chart default ({}) so the helper
+      # emits the built-in md0.
+    asserts:
+      # The default md0 MachineDeployment renders (helper else-branch).
+      - equal:
+          path: metadata.name
+          value: test-k8s-md0
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+      # Default values flow through (e.g. the built-in 20Gi system disk).
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: "20Gi"
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
