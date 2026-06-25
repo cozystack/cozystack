@@ -56,6 +56,23 @@ publishing:
     - cdi-uploadproxy
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
+  # Mechanism-agnostic LoadBalancer exposure — the foundation for migrating
+  # the host ingress off the deprecated Service.spec.externalIPs (KEP-5707).
+  # When name is set, the platform renders a cluster-scoped ExposureClass
+  # and the host ingress (with externalIPs empty) publishes its Service as
+  # type: LoadBalancer; the cozystack-controller translates the class into
+  # the chosen backend's VIP pool and announcer:
+  #   externalIPs - node-IP pin, no pool/announcer (the historical default)
+  #   metallb     - metallb.io IPAddressPool + L2Advertisement
+  #   cilium      - CiliumLoadBalancerIPPool + CiliumL2AnnouncementPolicy
+  #   robotlb     - cloud (Hetzner) LB; allocation/announcement off-cluster
+  # Leave name empty (default) to keep the externalIPs path unchanged.
+  exposureClass:
+    name: ""
+    backend: externalIPs # externalIPs (default) | metallb | cilium | robotlb
+    addresses: [] # VIP CIDRs or start-end ranges (metallb, cilium backends)
+    l2: true # L2 (ARP/NDP) announcement for bare-metal backends
+    isDefault: true # resolve no-class ServiceExposures to this class
   # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
   # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
   # problem (intra-cluster traffic to the cluster's own public hostnames

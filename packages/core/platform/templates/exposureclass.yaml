@@ -1,0 +1,36 @@
+{{- /*
+  Render the cluster-scoped ExposureClass that binds the operator's chosen
+  LoadBalancer backend to a logical class name. The cozystack-controller
+  resolves ServiceExposures to this class and provisions the backend's VIP
+  pool and announcer. Only rendered when an explicit name is set, so the
+  default externalIPs path stays untouched.
+*/}}
+{{- with .Values.publishing.exposureClass }}
+{{- if .name }}
+{{- /*
+  Guard: a pool/cloud backend (metallb, cilium, robotlb) needs the host
+  ingress Service to be type LoadBalancer, but publishing.externalIPs
+  forces it to ClusterIP + spec.externalIPs (extra/ingress). The two
+  together leave the pool allocated but never consumed and the exposure
+  stuck Ready=False forever — fail loudly instead of shipping the dead end.
+*/}}
+{{- if and (ne (.backend | default "externalIPs") "externalIPs") $.Values.publishing.externalIPs }}
+{{- fail "publishing.exposureClass with a pool/cloud backend (metallb/cilium/robotlb) is mutually exclusive with publishing.externalIPs: the host ingress Service renders as ClusterIP+externalIPs and never becomes type LoadBalancer, so the backend pool is allocated but never used. Clear publishing.externalIPs to migrate onto the LoadBalancer path, or set exposureClass.backend=externalIPs." }}
+{{- end }}
+apiVersion: network.cozystack.io/v1alpha1
+kind: ExposureClass
+metadata:
+  name: {{ .name | quote }}
+  {{- if .isDefault }}
+  annotations:
+    exposureclass.network.cozystack.io/is-default-class: "true"
+  {{- end }}
+spec:
+  backend: {{ .backend | default "externalIPs" }}
+  l2: {{ dig "l2" true . }}
+  {{- with .addresses }}
+  addresses:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+{{- end }}
+{{- end }}
