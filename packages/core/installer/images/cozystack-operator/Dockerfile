@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
   -o /cozystack-operator \
   ./cmd/cozystack-operator
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 COPY --from=builder /cozystack-operator /usr/bin/cozystack-operator
 

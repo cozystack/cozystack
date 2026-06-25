@@ -1,5 +1,5 @@
 apiVersion: v2
-appVersion: 1.111.0
+appVersion: 1.120.3
 description: OpenCost and OpenCost UI
 home: https://github.com/opencost/opencost-helm-chart
 keywords:
@@ -9,11 +9,11 @@ keywords:
 - monitoring
 - opencost
 maintainers:
-- name: mattray
-  url: https://mattray.dev
+- name: jessegoodier
 - name: toscott
+- name: mittal-ishaan
 - email: rafa@stormforge.io
   name: brito-rafa
 name: opencost
 type: application
-version: 1.41.0
+version: 2.5.23

@@ -787,6 +787,23 @@ Sets extra openbao server Service (standby) annotations
 {{- end -}}
 
 {{/*
+Sets extra openbao server Service (headless) annotations
+*/}}
+{{- define "openbao.service.headless.annotations" -}}
+  {{- $headless := .Values.server.service.headless.annotations -}}
+  {{- $generic := .Values.server.service.annotations -}}
+  {{- if or $headless $generic }}
+  annotations:
+    {{- if $headless }}
+      {{- include "openbao.annotations.render.4" (list . $headless) -}}
+    {{- end }}
+    {{- if $generic }}
+      {{- include "openbao.annotations.render.4" (list . $generic) -}}
+    {{- end }}
+  {{- end }}
+{{- end -}}
+
+{{/*
 Sets PodSecurityPolicy annotations
 */}}
 {{- define "openbao.psp.annotations" -}}

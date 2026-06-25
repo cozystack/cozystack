@@ -4,16 +4,18 @@ on:
   pull_request_target:
     types: [opened, edited, reopened, synchronize]
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
   label:
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - name: Apply labels from PR title
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             // Conventional Commits types accepted by Cozystack (per docs/agents/contributing.md):
@@ -103,6 +105,7 @@ jobs:
               // area/storage
               'seaweedfs':           'area/storage',
               'seaweedfs-cosi-driver': 'area/storage',
+              'objectstorage-controller': 'area/storage',
               'bucket':              'area/storage',
               'linstor':             'area/storage',
               'velero':              'area/storage',

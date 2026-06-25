@@ -13,31 +13,37 @@ include ../../../hack/package.mk
 #      and has no upstream fix tracked. See commit 3c5521e.
 #   2. Empties Chart.yaml dependencies and drops Chart.lock so Helm does
 #      not try to re-pull hami-dra at build time. See commit 2734dc0.
-#   3. Strips dra/hami-dra/podSecurityPolicy blocks from the upstream
-#      values.yaml since the corresponding code paths are gone. PSP is
-#      removed from Kubernetes 1.25+ and is unused by cozystack.
+#   3. Strips the hami-dra values block (its subchart is removed and no
+#      template references it). The top-level `dra:` and `podSecurityPolicy:`
+#      blocks are KEPT (both default to `enabled: false`): since 2.9.0 the
+#      scheduler/device-plugin templates gate on `.Values.dra.enabled` and
+#      `.Values.podSecurityPolicy.enabled` directly, so keeping them disabled
+#      cleanly turns off the DRA and PSP paths without nil-pointer renders or
+#      having to strip the conditionals from ~27 templates.
 #
 # Template-level patches are NOT reproduced automatically:
 #
-#   * Scheduler templates have `{{- if .Values.dra.enabled }}` blocks
-#     that need to be removed because the dra value is gone (commit
-#     2734dc0 stripped them).
-#   * device-plugin/monitorservice.yaml uses `indent` with leading
-#     whitespace; it must be rewritten to `nindent` for the labels block
-#     to render correctly when devicePlugin.service.labels is set
-#     (commit 3685254).
+#   * device-plugin/monitorservice.yaml and scheduler/service.yaml use
+#     `indent` with leading whitespace on the custom Service labels block;
+#     it must be rewritten to `{{- ... | nindent 4 }}` so the labels render
+#     as valid map entries when devicePlugin.service.labels /
+#     scheduler.service.labels are set (commit 3685254; both Services share
+#     the same upstream defect).
 #
 # After `make update`, run `git diff -- charts/hami/templates/` and
 # replay these template patches against the new upstream version, then
 # verify with `helm unittest`. If upstream restructured the affected
 # files, the patches may need to be redesigned rather than reapplied.
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add hami-charts https://project-hami.github.io/HAMi/
 	helm repo update hami-charts
-	helm pull hami-charts/hami --untar --untardir charts
+	helm pull hami-charts/hami --untar --untardir charts --version 2.9.0
 	rm -rf charts/hami/charts/hami-dra
 	yq --inplace '.dependencies = []' charts/hami/Chart.yaml
 	rm -f charts/hami/Chart.lock
-	yq --inplace 'del(.dra) | del(.["hami-dra"]) | del(.podSecurityPolicy)' charts/hami/values.yaml
+	yq --inplace 'del(.["hami-dra"])' charts/hami/values.yaml

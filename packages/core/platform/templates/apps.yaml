@@ -24,16 +24,37 @@ stringData:
       solver: {{ .Values.publishing.certificates.solver | quote }}
       issuer-name: {{ .Values.publishing.certificates.issuerName | quote }}
       {{- /*
-        Operator-supplied wildcard mode. Only the Secret NAME rides this
+        Wildcard certificate mode. Only the Secret NAME rides this
         channel — never the cert/key material (unlike a private key, the
         name is not sensitive). When set, the ingress flow points the
         root ingress controller's --default-ssl-certificate at it and
         drops per-host ACME, and the gateway chart switches the
-        TenantGateway to certMode=existingSecret. The Secret itself must
-        be pre-created by the operator in the publishing namespace
-        (tenant-root). Empty string = ACME issuance as before.
+        TenantGateway to certMode=existingSecret.
+
+        The name comes from one of two sources, with the operator-
+        provided (BYO) name always winning:
+          1. publishing.certificates.wildcardSecretName — a Secret the
+             operator pre-creates in the publishing namespace
+             (tenant-root). wildcard-issue stays false: the platform
+             mints nothing.
+          2. Otherwise, on the ingress-nginx path (gateway.enabled=false)
+             with solver=dns01 and publishing.certificates.wildcard=true,
+             the platform issues its own shared wildcard. wildcard-issue
+             becomes true and the publishing ingress package renders the
+             Certificate into this Secret name. http01 cannot issue
+             wildcards, and the Gateway API path issues its own wildcard
+             via the TenantGateway controller, so both are excluded.
+        Empty name + wildcard-issue=false = per-host ACME as before.
       */}}
-      wildcard-secret-name: {{ .Values.publishing.certificates.wildcardSecretName | default "" | quote }}
+      {{- $byoWildcard := .Values.publishing.certificates.wildcardSecretName | default "" }}
+      {{- $wildcardSecretName := $byoWildcard }}
+      {{- $wildcardIssue := false }}
+      {{- if and (not $byoWildcard) (eq .Values.publishing.certificates.solver "dns01") .Values.publishing.certificates.wildcard (not .Values.gateway.enabled) }}
+      {{- $wildcardSecretName = "cozystack-wildcard-tls" }}
+      {{- $wildcardIssue = true }}
+      {{- end }}
+      wildcard-secret-name: {{ $wildcardSecretName | quote }}
+      wildcard-issue: {{ $wildcardIssue | quote }}
       {{- /*
         DNS-01 solver wiring. Read only when solver=dns01, but the
         keys are written unconditionally so a render-time switch from

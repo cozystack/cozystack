@@ -1,6 +1,6 @@
 # E2E Testing Conventions
 
-Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflows (`.github/workflows/pull-requests.yaml`, `.github/workflows/release-e2e.yaml`), or `packages/core/testing/`.
+Guidance for writing, changing, and reviewing Cozystack's end-to-end (E2E) tests and the CI that runs them. Read this **before** touching anything under `hack/e2e-apps/`, `hack/e2e-*.bats`, `hack/*.sh` test helpers, the E2E CI workflow (`.github/workflows/pull-requests.yaml`), or `packages/core/testing/`.
 
 ## The core principle
 
@@ -59,7 +59,7 @@ A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is 
 
 - Conservative escalation: edits to `packages/library/`, `packages/core/`, `api/`, `cmd/`, `internal/`, shared `hack/*.sh|*.bats` helpers, the `Makefile`, or the E2E workflows escalate to the **full suite**. A per-app bats edit selects **only** that app.
 - The `full-e2e` PR label forces the whole suite.
-- Companion: `.github/workflows/release-e2e.yaml` runs the **full** suite on every release tag, closing the coverage gap TIA opens on PRs.
+- The coverage gap TIA opens on PRs is closed at release-cut time: the "Prepare release" commit bakes image digests into `packages/core/` (and other packages), which TIA escalates to the **full** suite — so the release PR exercises the whole suite against the commit the tag will point at.
 
 When adding a new app package, confirm `select-e2e.sh` maps it correctly (it has a unit test, `hack/select-e2e_test.bats`).
 
@@ -102,5 +102,4 @@ These are being explored on branches and may become conventions; do not assume t
 
 - **BATS → Kyverno Chainsaw migration** — declarative asserts replace the `until … wait` boilerplate, with automatic events/describe/podLogs capture. Imperative suites (openbao unseal, vminstance, gateway, the kubernetes cluster tests) stay as script steps. Gotcha: Chainsaw v0.2.15 needs condition assertions in **filter-as-list** form `(conditions[?type == 'Ready'])`; the `(...)[0]` indexed form throws "field not found".
 - **Cilium orphaned-endpoint self-heal** — an interim CI watchdog that evicts a single confirmed-orphan Cilium endpoint ("IP already in use", cilium/cilium#38313). Explicitly a mitigation to remove once a fixed Cilium ships; it refuses to touch an endpoint backing a live pod so real duplicate-IP bugs stay visible.
-- **Pin the e2e management cluster Kubernetes version** to dodge the kube-controller-manager ValidatingAdmissionPolicy type-checker panic on `additionalProperties: true` schemas (kubernetes/kubernetes#135155).
 - **Cluster state snapshot/restore** between test groups instead of reinstalling.

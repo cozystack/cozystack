@@ -76,7 +76,7 @@ spec:
     spec:
       containers:
         - name: alerta
-          image: "alerta/alerta-web:9.0.4"
+          image: "alerta/alerta-web:9.1.0"
           imagePullPolicy: IfNotPresent
           resources: {{- toYaml .Values.alerta.resources | nindent 12 }}
           env:

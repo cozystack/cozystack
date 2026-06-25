@@ -3,6 +3,7 @@ apiVersion: {{ include "common.capabilities.deployment.apiVersion" . }}
 kind: Deployment
 metadata:
   name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}
@@ -14,6 +15,7 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.admissionController.replicaCount }}
+  revisionHistoryLimit: {{ .Values.admissionController.revisionHistoryLimit }}
   selector:
     matchLabels:
       {{- include "vertical-pod-autoscaler.admissionController.selectorLabels" . | nindent 6 }}
@@ -76,7 +78,7 @@ spec:
             {{- end }}
           env:
             - name: NAMESPACE
-              value: {{ .Release.Namespace }}
+              value: {{ include "common.names.namespace" . | quote }}
             {{- if .Values.admissionController.extraEnvVars }}
             {{- include "common.tplvalues.render" (dict "value" .Values.admissionController.extraEnvVars "context" $) | nindent 12 }}
             {{- end }}

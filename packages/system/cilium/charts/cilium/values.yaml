@@ -247,10 +247,10 @@ image:
   # @schema
   override: ~
   repository: "quay.io/cilium/cilium"
-  tag: "v1.19.3"
+  tag: "v1.19.5"
   pullPolicy: "IfNotPresent"
   # cilium-digest
-  digest: sha256:2e61680593cddca8b6c055f6d4c849d87a26a1c91c7e3b8b56c7fb76ab7b7b10
+  digest: sha256:20fbbc14ac20b55a292c0dcda5571bf31cde30a7dbc68c29db3e709390ab0732
   useDigest: true
 # -- Scheduling configurations for cilium pods
 scheduling:
@@ -501,10 +501,8 @@ l2announcements:
 l2podAnnouncements:
   # -- Enable L2 pod announcements
   enabled: false
-  # -- Interface used for sending Gratuitous ARP pod announcements
-  interface: "eth0"
   # -- A regular expression matching interfaces used for sending Gratuitous ARP pod announcements
-  # interfacePattern: ""
+  interfacePattern: ""
 # -- This feature set enables virtual BGP routers to be created via BGP CRDs.
 bgpControlPlane:
   # -- Enables the BGP control plane.
@@ -1352,8 +1350,8 @@ certgen:
     # @schema
     override: ~
     repository: "quay.io/cilium/certgen"
-    tag: "v0.4.1"
-    digest: "sha256:f0c656830e856d26b24b0e144df1f8b327d3b46748d76a630514111fc365b697"
+    tag: "v0.4.5"
+    digest: "sha256:f107522ed4dcea62f918b8eb836142875a9b3e3cb2b2d728dc680f76cdbde6cf"
     useDigest: true
     pullPolicy: "IfNotPresent"
   # @schema
@@ -1701,9 +1699,9 @@ hubble:
       # @schema
       override: ~
       repository: "quay.io/cilium/hubble-relay"
-      tag: "v1.19.3"
+      tag: "v1.19.5"
       # hubble-relay-digest
-      digest: sha256:5ee21d57b6ef2aa6db67e603a735fdceb162454b352b7335b651456e308f681b
+      digest: sha256:24409bfa1bca075c92acb26ba4b49cd573d99d68d5370f7cc825078185222a0c
       useDigest: true
       pullPolicy: "IfNotPresent"
     # -- Specifies the resources for the hubble-relay pods
@@ -1978,8 +1976,8 @@ hubble:
         # @schema
         override: ~
         repository: "quay.io/cilium/hubble-ui-backend"
-        tag: "v0.13.3"
-        digest: "sha256:db1454e45dc39ca41fbf7cad31eec95d99e5b9949c39daaad0fa81ef29d56953"
+        tag: "v0.13.5"
+        digest: "sha256:fac0c300ae119274edca11fd89b1ad23c788792d8bc4ea2ba631c709e8d3c688"
         useDigest: true
         pullPolicy: "IfNotPresent"
       # -- Hubble-ui backend security context.
@@ -2013,8 +2011,8 @@ hubble:
         # @schema
         override: ~
         repository: "quay.io/cilium/hubble-ui"
-        tag: "v0.13.3"
-        digest: "sha256:661d5de7050182d495c6497ff0b007a7a1e379648e60830dd68c4d78ae21761d"
+        tag: "v0.13.5"
+        digest: "sha256:f7d514fc54d784ed6df9d58cf0e97648b143f92b766dd1780ed3fc845bd4c516"
         useDigest: true
         pullPolicy: "IfNotPresent"
       # -- Hubble-ui frontend security context.
@@ -2468,10 +2466,6 @@ monitor:
   enabled: false
 # -- Configure service load balancing
 loadBalancer:
-  # -- standalone enables the standalone L4LB which does not connect to
-  # kube-apiserver.
-  # standalone: false
-
   # -- algorithm is the name of the load balancing algorithm for backend
   # selection e.g. random or maglev
   # algorithm: random
@@ -2725,9 +2719,9 @@ envoy:
     # @schema
     override: ~
     repository: "quay.io/cilium/cilium-envoy"
-    tag: "v1.36.6-1776000132-2437d2edeaf4d9b56ef279bd0d71127440c067aa"
+    tag: "v1.36.8-1781157951-a7f42a3390781539911b5b9107881b35ecc4e752"
     pullPolicy: "IfNotPresent"
-    digest: "sha256:ba0ab8adac082d50d525fd2c5ba096c8facea3a471561b7c61c7a5b9c2e0de0d"
+    digest: "sha256:326f872e19ce8aa45170efbf583b3f301586ba3feead14b864676d4baf3b45ed"
     useDigest: true
   # -- Init containers added to the cilium Envoy DaemonSet.
   initContainers: []
@@ -3110,15 +3104,15 @@ operator:
     # @schema
     override: ~
     repository: "quay.io/cilium/operator"
-    tag: "v1.19.3"
+    tag: "v1.19.5"
     # operator-generic-digest
-    genericDigest: sha256:205b09b0ed6accbf9fe688d312a9f0fcfc6a316fc081c23fbffb472af5dd62cd
+    genericDigest: sha256:be848a365776e07d0c5a895eda7aec928ddc52a5a1fa2f432fd7a286609e1db4
     # operator-azure-digest
-    azureDigest: sha256:699c1571a3df1a98882ee13610d47cffb7b34ee7e8d276096db798a5f6c7e4cb
+    azureDigest: sha256:8600299cb121f9df00fd32b93fa74de89ed49dd3a67e3d7301c07325c04c77f8
     # operator-aws-digest
-    awsDigest: sha256:a53dcbfb77282bf2ddd3abbe60f6d49762e7c1389a36cb35b71d504644a56640
+    awsDigest: sha256:b8473618e8d2bf8a610da445c8c37e1d1e8221aecd05989456d87a7588d66707
     # operator-alibabacloud-digest
-    alibabacloudDigest: sha256:176321a65123373ff8c7823b25183102cbad98375e8d6c80b96d68b6e8491103
+    alibabacloudDigest: sha256:c9706343dde700804c2f50c09a2f8291797c707d1747fd50f70c939c23747c16
     useDigest: true
     pullPolicy: "IfNotPresent"
     suffix: ""
@@ -3443,9 +3437,9 @@ preflight:
     # @schema
     override: ~
     repository: "quay.io/cilium/cilium"
-    tag: "v1.19.3"
+    tag: "v1.19.5"
     # cilium-digest
-    digest: sha256:2e61680593cddca8b6c055f6d4c849d87a26a1c91c7e3b8b56c7fb76ab7b7b10
+    digest: sha256:20fbbc14ac20b55a292c0dcda5571bf31cde30a7dbc68c29db3e709390ab0732
     useDigest: true
     pullPolicy: "IfNotPresent"
   envoy:
@@ -3456,9 +3450,9 @@ preflight:
       # @schema
       override: ~
       repository: "quay.io/cilium/cilium-envoy"
-      tag: "v1.36.6-1776000132-2437d2edeaf4d9b56ef279bd0d71127440c067aa"
+      tag: "v1.36.8-1781157951-a7f42a3390781539911b5b9107881b35ecc4e752"
       pullPolicy: "IfNotPresent"
-      digest: "sha256:ba0ab8adac082d50d525fd2c5ba096c8facea3a471561b7c61c7a5b9c2e0de0d"
+      digest: "sha256:326f872e19ce8aa45170efbf583b3f301586ba3feead14b864676d4baf3b45ed"
       useDigest: true
   # -- The priority class to use for the preflight pod.
   priorityClassName: ""
@@ -3702,9 +3696,9 @@ clustermesh:
       # @schema
       override: ~
       repository: "quay.io/cilium/clustermesh-apiserver"
-      tag: "v1.19.3"
+      tag: "v1.19.5"
       # clustermesh-apiserver-digest
-      digest: sha256:a8136a7615d6c6041d3aa6f2674d17beaec238170d669507ccc05328a778e2b7
+      digest: sha256:5ed9334b2254315740f9e2a8b6645bf69920f79ef14f436931579d2038784f9b
       useDigest: true
       pullPolicy: "IfNotPresent"
     # -- TCP port for the clustermesh-apiserver health API.
@@ -4239,7 +4233,7 @@ authentication:
           override: ~
           repository: "docker.io/library/busybox"
           tag: "1.37.0"
-          digest: "sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e"
+          digest: "sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028"
           useDigest: true
           pullPolicy: "IfNotPresent"
         # SPIRE agent configuration

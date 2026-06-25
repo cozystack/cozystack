@@ -12,6 +12,10 @@ concurrency:
   group: tags-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+permissions:
+  contents: read
+
 jobs:
   prepare-release:
     name: Prepare Release
@@ -27,7 +31,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -36,7 +40,7 @@ jobs:
       # Check if a non-draft release with this tag already exists
       - name: Check if release already exists
         id: check_release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
@@ -57,7 +61,7 @@ jobs:
       - name: Parse tag
         if: steps.check_release.outputs.skip == 'false'
         id: tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');           // e.g. v0.31.5-rc.1
@@ -78,7 +82,7 @@ jobs:
       - name: Get base branch
         if: steps.check_release.outputs.skip == 'false'
         id: get_base
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const baseRef = context.payload.base_ref;
@@ -97,14 +101,14 @@ jobs:
       # Checkout & login once
       - name: Checkout code
         if: steps.check_release.outputs.skip == 'false'
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           fetch-tags:  true
 
       - name: Login to GHCR
         if: steps.check_release.outputs.skip == 'false'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
@@ -156,7 +160,7 @@ jobs:
       - name: Create / reuse draft release
         if: steps.check_release.outputs.skip == 'false'
         id: release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const tag      = '${{ steps.tag.outputs.tag }}';
@@ -208,7 +212,7 @@ jobs:
       # Create pull request into original base branch (if absent)
       - name: Create pull request if not exists
         if: steps.check_release.outputs.skip == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -256,7 +260,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -268,7 +272,7 @@ jobs:
       # regardless of whether the agent follows the prompt's instructions.
       - name: Generate read-only GitHub App token
         id: app-token-read
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -279,7 +283,7 @@ jobs:
 
       - name: Parse tag
         id: tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');
@@ -300,7 +304,7 @@ jobs:
       # contents. The Create changelog branch step below resets the file
       # onto a fresh branch from origin/main for the PR.
       - name: Checkout release tag
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
@@ -329,7 +333,7 @@ jobs:
 
       - name: Setup Node.js
         if: steps.check_changelog.outputs.exists == 'false'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
 
@@ -395,7 +399,7 @@ jobs:
 
       - name: Create PR for changelog
         if: steps.check_changelog.outputs.exists == 'false'
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -460,7 +464,7 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
@@ -468,7 +472,7 @@ jobs:
 
       - name: Parse tag
         id: tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const ref = context.ref.replace('refs/tags/', '');
@@ -482,7 +486,7 @@ jobs:
             core.setOutput('version', version);  // 0.22.0
 
       - name: Checkout website repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           repository: cozystack/website
           token: ${{ steps.app-token.outputs.token }}

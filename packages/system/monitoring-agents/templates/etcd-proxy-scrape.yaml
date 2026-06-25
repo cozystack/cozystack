@@ -31,7 +31,7 @@ spec:
         node-role.kubernetes.io/control-plane: ""
       containers:
       - name: kube-rbac-proxy
-        image: quay.io/brancz/kube-rbac-proxy:v0.11.0
+        image: quay.io/brancz/kube-rbac-proxy:v0.22.0
         args:
         - "--secure-listen-address=$(NODE_IP):9443"
         - "--upstream=http://127.0.0.1:2381/"

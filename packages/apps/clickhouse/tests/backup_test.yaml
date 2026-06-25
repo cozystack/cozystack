@@ -34,6 +34,13 @@ tests:
         enabled: true
         useSystemBucket: true
     asserts:
+      - matchRegex:
+          # The tag tracks the cozystack release version (re-pinned by
+          # release-prep), so pin the cozystack-built repository rather than
+          # the volatile tag. The upstream altinity version lives in the image
+          # Dockerfile.
+          path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].image
+          pattern: '^ghcr\.io/cozystack/cozystack/altinity-clickhouse-backup:'
       - equal:
           path: spec.templates.podTemplates[0].spec.containers[?(@.name=="clickhouse-backup")].env[?(@.name=="S3_PATH")].value
           value: tenant-test/ch-test

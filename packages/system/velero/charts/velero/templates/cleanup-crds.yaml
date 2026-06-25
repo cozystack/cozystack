@@ -3,6 +3,8 @@
 # Using this on production systems, especially those that have multiple releases of Velero, will be destructive.
 {{/* 'securityContext' got renamed to 'podSecurityContext', merge both dicts into one for backward compatibility */}}
 {{- $podSecurityContext := merge (.Values.podSecurityContext | default dict) (.Values.securityContext | default dict) -}}
+{{/* Define the list of resources to clean up */}}
+{{- $cleanupResources := list "restore" "backup" "backupstoragelocation" "volumesnapshotlocation" "podvolumerestore" -}}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -37,6 +39,32 @@ spec:
       {{- end }}
     {{- end }}
       serviceAccountName: {{ include "velero.serverServiceAccount" . }}
+      initContainers:
+        {{- range $cleanupResources }}
+        - name: delete-{{ . }}
+          {{- if $.Values.kubectl.image.digest }}
+          image: "{{ $.Values.kubectl.image.repository }}@{{ $.Values.kubectl.image.digest }}"
+          {{- else if $.Values.kubectl.image.tag }}
+          image: "{{ $.Values.kubectl.image.repository }}:{{ $.Values.kubectl.image.tag }}"
+          {{- else }}
+          image: "{{ $.Values.kubectl.image.repository }}:{{ template "chart.KubernetesVersion" $ }}"
+          {{- end }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command:
+            - /bin/kubectl
+          args:
+            - delete
+            - {{ . }}
+            - --all
+          {{- with $.Values.kubectl.containerSecurityContext }}
+          securityContext:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with $.Values.kubectl.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+        {{- end }}
       containers:
         - name: kubectl
           {{- if .Values.kubectl.image.digest }}
@@ -48,15 +76,12 @@ spec:
           {{- end }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           command:
-            - /bin/sh
-            - -c
-            - >
-              kubectl delete restore --all;
-              kubectl delete backup --all;
-              kubectl delete backupstoragelocation --all;
-              kubectl delete volumesnapshotlocation --all;
-              kubectl delete podvolumerestore --all;
-              kubectl delete crd -l component=velero;
+            - /bin/kubectl
+          args:
+            - delete
+            - crd
+            - -l
+            - component=velero
           {{- with .Values.kubectl.containerSecurityContext }}
           securityContext:
             {{- toYaml . | nindent 12 }}

@@ -97,8 +97,25 @@ spec:
           name: {{ .Release.Name }}-metrics
           key: kafka-metrics-config.yml
   entityOperator:
-    topicOperator: {}
-    userOperator: {}
+    # Tenant namespaces ship a LimitRange that defaults containers to 128Mi.
+    # The topic-operator and user-operator are JVM processes and OOMKill at
+    # that default, leaving the entity-operator in CrashLoopBackOff so
+    # KafkaTopics/KafkaUsers never reconcile. Set explicit resources so they
+    # don't inherit the namespace default.
+    topicOperator:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+    userOperator:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
     template:
       # `pod` accepts metadata + a flat set of pod-spec fields
       # (enableServiceLinks, securityContext, affinity, …) directly.

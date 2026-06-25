@@ -44,3 +44,6 @@ volumeMounts:
 - name: {{ .name | quote }}
   mountPath: {{ .dir | quote }}
 {{- end }}
+
+resources:
+  {{- toYaml .Values.natsBox.container.resources | nindent 2 }}

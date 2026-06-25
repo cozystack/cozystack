@@ -2,11 +2,10 @@ annotations:
   artifacthub.io/changes: |
     - kind: changed
       description: |
-        fix: Add extraPorts to server Service in ha
-  artifacthub.io/containsSecurityUpdates: "false"
+        fix: Add job selector in Grafana dashboard
   charts.openshift.io/name: Openbao
 apiVersion: v2
-appVersion: v2.5.0
+appVersion: v2.5.1
 description: Official OpenBao Chart
 home: https://github.com/openbao/openbao-helm
 icon: https://raw.githubusercontent.com/openbao/artwork/refs/heads/main/color/openbao-color.svg
@@ -27,4 +26,4 @@ maintainers:
 name: openbao
 sources:
 - https://github.com/openbao/openbao-helm
-version: 0.25.3
+version: 0.25.7

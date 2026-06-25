@@ -5,7 +5,7 @@ sourceRef:
   path: /
 migrations:
   enabled: false
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.4.0-rc.2@sha256:17390197a9b11d76a8dd1b24c6d1512adb7d3226b28b5bcba8551b14b1ec4be0
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.0@sha256:8bf61f17e99eb4a3365394e3d97ac52a1d68cc84aa104894ecb09de25721dc1d
   targetVersion: 45
 # Bundle deployment configuration
 bundles:
@@ -199,6 +199,50 @@ publishing:
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod
+    # Shared wildcard issuance on the default ingress-nginx path
+    # (gateway.enabled=false). Opt-in, OFF by default. When set to true
+    # with solver=dns01 and no operator-provided wildcardSecretName, the
+    # platform issues ONE wildcard Certificate (*.<root-host> +
+    # <root-host>) via the DNS-01 ClusterIssuer and serves it as the
+    # ingress controller's default SSL certificate, so system services
+    # (dashboard, grafana, keycloak, harbor, …) stop minting a per-host
+    # ACME cert each. This avoids the Let's Encrypt per-domain rate limit
+    # once a deployment exceeds ~50 endpoints, matching the Gateway API
+    # path which issues a per-apex wildcard in dns01 mode.
+    #
+    # Ignored when solver=http01 (HTTP-01 cannot issue wildcards) and
+    # when gateway.enabled=true (the TenantGateway controller issues the
+    # wildcard there).
+    #
+    # COVERAGE CAVEAT — same contract as wildcardSecretName below: a
+    # single-label wildcard *.<root-host> covers <service>.<root-host>
+    # but NOT a custom service host outside it (e.g. a keycloak
+    # ingress.host / harbor host / grafana host set to auth.example.com,
+    # or a nested a.b.<root-host>). When this is true, services whose
+    # host is not covered fall back to the default SSL certificate and
+    # would serve the wrong certificate. Only enable it when every
+    # exposed system service uses a <service>.<root-host> host (the
+    # default), or provide a covering wildcardSecretName instead. Left
+    # OFF by default precisely so a dns01 cluster with a custom service
+    # host is never silently switched on upgrade.
+    #
+    # BLAST RADIUS — like wildcardSecretName, the chosen name rides the
+    # _cluster channel, which every child tenant inherits verbatim. A
+    # child tenant that inherits the root ingress has nested service
+    # hosts (<service>.<tenant>.<root-host>) that *.<root-host> does NOT
+    # cover; enabling this makes those services drop per-host ACME and
+    # serve the root default certificate too. This is not root-tenant
+    # scoped — only enable it when child-tenant hosts are also covered
+    # (or left on the Gateway path). Per-tenant wildcards are tracked
+    # separately.
+    #
+    # FIRST-ISSUANCE WINDOW: when this is turned on, consumers drop their
+    # per-host certs immediately, but the DNS-01 wildcard takes a few
+    # minutes to issue. Until the Secret is populated ingress-nginx serves
+    # its self-signed default cert (browser warning), then self-heals —
+    # the same delay per-host ACME has on first issue, which an
+    # operator-provided wildcardSecretName avoids only by pre-existing.
+    wildcard: false
     # Operator-provided wildcard certificate. When set, platform
     # services and the root tenant's ingress/Gateway serve under this
     # pre-existing TLS Secret instead of minting per-host ACME certs.

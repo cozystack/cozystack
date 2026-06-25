@@ -1,3 +1,4 @@
+{{- if not .Values.dra.enabled }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -7,7 +8,7 @@ metadata:
     app.kubernetes.io/component: hami-scheduler
     {{- include "hami-vgpu.labels" . | nindent 4 }}
     {{- if .Values.scheduler.service.labels }}
-    {{ toYaml .Values.scheduler.service.labels | indent 4 }}
+    {{- toYaml .Values.scheduler.service.labels | nindent 4 }}
     {{- end }}
   {{- if .Values.scheduler.service.annotations }}
   annotations: {{ toYaml .Values.scheduler.service.annotations | nindent 4 }}
@@ -31,4 +32,6 @@ spec:
       protocol: TCP
   selector:
     app.kubernetes.io/component: hami-scheduler
+    hami.io/scheduler-role: leader
     {{- include "hami-vgpu.selectorLabels" . | nindent 4 }}
+{{- end }}

@@ -1,5 +1,5 @@
 lineageControllerWebhook:
-  image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v1.4.0-rc.2@sha256:c792eb54c67d1b9ea0f2de2107ebea5f85640eed929cbb8a65143f463ec8f0b9
+  image: ghcr.io/cozystack/cozystack/lineage-controller-webhook:v1.5.0@sha256:5868789439d1384cf78d9fb2f20d5457060b0d5dfcc4f93f96a13ea27ed73b81
   debug: false
   replicas: 2
   # DEPRECATED. Injects KUBERNETES_SERVICE_HOST=status.hostIP and

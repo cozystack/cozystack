@@ -1,0 +1,51 @@
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- /* toString normalises the _cluster value whether it arrives as the
+       string "true" (Flux valuesFrom Secret, the real path) or as a bool
+       (helm --set), mirroring the proxy-protocol handling in
+       nginx-ingress.yaml. */ -}}
+{{- $wildcardIssue := (index .Values._cluster "wildcard-issue") | default "false" | toString }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+{{- $rootHost := (index .Values._cluster "root-host") | default "" }}
+{{- $issuerName := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- /*
+  Shared ACME wildcard for the ingress-nginx path (WS2 / #2400). When the
+  platform decides to issue a wildcard (_cluster.wildcard-issue=true,
+  computed in core/platform apps.yaml only on the solver=dns01 ingress
+  path with gateway.enabled=false), the publishing tenant's ingress
+  controller renders ONE DNS-01 Certificate for <root-host> +
+  *.<root-host>. ingress-nginx serves the resulting Secret as its
+  --default-ssl-certificate (see nginx-ingress.yaml), so the system
+  services drop their per-host cert-manager annotation — matching the
+  Gateway API path, which issues a per-apex wildcard via the TenantGateway
+  controller in dns01 mode.
+
+  Only the publishing controller (Release.Namespace == expose-ingress)
+  renders it: the Secret must live in that namespace for ingress-nginx to
+  read it, and child-tenant controllers cannot point --default-ssl-certificate
+  at another namespace. The reference is therefore always same-namespace,
+  the same constraint the operator-supplied wildcard path observes.
+
+  The ClusterIssuer named here (issuer-name, letsencrypt-prod by default)
+  already carries the DNS-01 solver from packages/system/cert-manager-issuers
+  whenever solver=dns01, so no per-tenant Issuer is minted on this path.
+*/}}
+{{- if and (eq $wildcardIssue "true") (eq .Release.Namespace $exposeIngress) }}
+{{- if not $wildcardSecret }}
+{{- fail "packages/extra/ingress: _cluster.wildcard-issue=true but _cluster.wildcard-secret-name is empty — the platform must supply the target Secret name." }}
+{{- end }}
+{{- if not $rootHost }}
+{{- fail "packages/extra/ingress: _cluster.wildcard-issue=true but _cluster.root-host is empty — cannot build the wildcard dnsNames." }}
+{{- end }}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozystack-wildcard
+spec:
+  secretName: {{ $wildcardSecret | quote }}
+  issuerRef:
+    kind: ClusterIssuer
+    name: {{ $issuerName | quote }}
+  dnsNames:
+    - {{ $rootHost | quote }}
+    - {{ printf "*.%s" $rootHost | quote }}
+{{- end }}

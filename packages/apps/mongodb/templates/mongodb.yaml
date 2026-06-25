@@ -8,7 +8,7 @@ metadata:
     - percona.com/delete-psmdb-pods-in-order
     - percona.com/delete-psmdb-pvc
 spec:
-  crVersion: 1.21.1
+  crVersion: 1.22.0
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
   secrets:
     users: {{ .Release.Name }}-percona-server-mongodb-users

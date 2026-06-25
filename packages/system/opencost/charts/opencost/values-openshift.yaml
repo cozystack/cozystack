@@ -1,0 +1,7 @@
+# This Helm values file is a modified version of `values.yaml`.
+# This file is meant to be used by users deploying Opencost to OpenShift (OCP) clusters. For more configuration options, see `values.yaml`.
+opencost:
+  platforms:
+    openshift:
+      enabled: true
+

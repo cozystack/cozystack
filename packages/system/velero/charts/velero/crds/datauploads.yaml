@@ -35,8 +35,14 @@ spec:
       jsonPath: .status.progress.totalBytes
       name: Total Bytes
       type: integer
-    - description: Name of the Backup Storage Location where this backup should
-        be stored
+    - description: Incremental bytes
+      format: int64
+      jsonPath: .status.incrementalBytes
+      name: Incremental Bytes
+      priority: 10
+      type: integer
+    - description: Name of the Backup Storage Location where this backup should be
+        stored
       jsonPath: .spec.backupStorageLocation
       name: Storage Location
       type: string
@@ -51,8 +57,8 @@ spec:
     name: v2alpha1
     schema:
       openAPIV3Schema:
-        description: DataUpload acts as the protocol between data mover plugins
-          and data mover controller for the datamover backup operation
+        description: DataUpload acts as the protocol between data mover plugins and
+          data mover controller for the datamover backup operation
         properties:
           apiVersion:
             description: |-
@@ -93,8 +99,8 @@ spec:
                     description: Driver is the driver used by the VolumeSnapshotContent
                     type: string
                   snapshotClass:
-                    description: SnapshotClass is the name of the snapshot class
-                      that the volume snapshot is created with
+                    description: SnapshotClass is the name of the snapshot class that
+                      the volume snapshot is created with
                     type: string
                   storageClass:
                     description: StorageClass is the name of the storage class of
@@ -135,8 +141,8 @@ spec:
                   It is the same namespace for SourcePVC and CSI namespaced objects.
                 type: string
               sourcePVC:
-                description: SourcePVC is the name of the PVC which the snapshot
-                  is taken for.
+                description: SourcePVC is the name of the PVC which the snapshot is
+                  taken for.
                 type: string
             required:
             - backupStorageLocation
@@ -175,6 +181,11 @@ spec:
                   as a result of the DataUpload.
                 nullable: true
                 type: object
+              incrementalBytes:
+                description: IncrementalBytes holds the number of bytes new or changed
+                  since the last backup
+                format: int64
+                type: integer
               message:
                 description: Message is a message about the DataUpload's status.
                 type: string
@@ -189,8 +200,8 @@ spec:
                 - windows
                 type: string
               path:
-                description: Path is the full path of the snapshot volume being
-                  backed up.
+                description: Path is the full path of the snapshot volume being backed
+                  up.
                 type: string
               phase:
                 description: Phase is the current state of the DataUpload.

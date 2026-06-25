@@ -4,11 +4,11 @@ annotations:
     url: https://cowboysysop.github.io/charts/pgp-public-key-2022-02-19.asc
   kubeVersion: '>=1.24'
 apiVersion: v2
-appVersion: 1.3.0
+appVersion: 1.5.0
 dependencies:
 - name: common
-  repository: https://charts.bitnami.com/bitnami/
-  version: 2.21.0
+  repository: oci://ghcr.io/cowboysysop/charts
+  version: 2.31.3
 description: Set of components that automatically adjust the amount of CPU and memory
   requested by pods running in the Kubernetes Cluster
 home: https://github.com/kubernetes/autoscaler
@@ -20,4 +20,4 @@ name: vertical-pod-autoscaler
 sources:
 - https://github.com/kubernetes/autoscaler
 - https://github.com/cowboysysop/charts/tree/master/charts/vertical-pod-autoscaler
-version: 10.0.0
+version: 11.1.1

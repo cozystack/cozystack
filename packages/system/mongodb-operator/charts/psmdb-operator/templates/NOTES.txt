@@ -1,16 +1,16 @@
 1. Percona Operator for MongoDB is deployed.
   See if the operator Pod is running:
 
-    kubectl get pods -l app.kubernetes.io/name=psmdb-operator --namespace {{ .Release.Namespace }}
+    kubectl get pods -l app.kubernetes.io/name=psmdb-operator --namespace {{ include "psmdb-operator.namespace" . }}
 
   Check the operator logs if the Pod is not starting:
 
-    export POD=$(kubectl get pods -l app.kubernetes.io/name=psmdb-operator --namespace {{ .Release.Namespace }} --output name)
-    kubectl logs $POD --namespace={{ .Release.Namespace }}
+    export POD=$(kubectl get pods -l app.kubernetes.io/name=psmdb-operator --namespace {{ include "psmdb-operator.namespace" . }} --output name)
+    kubectl logs $POD --namespace={{ include "psmdb-operator.namespace" . }}
 
 2. Deploy the database cluster from psmdb-db chart:
 
-    helm install my-db percona/psmdb-db --namespace={{ .Release.Namespace }}
+    helm install my-db percona/psmdb-db --namespace={{ include "psmdb-operator.namespace" . }}
 
 {{- if .Release.IsUpgrade }}
   {{- $ctx := dict "upgradeCrd" false }}

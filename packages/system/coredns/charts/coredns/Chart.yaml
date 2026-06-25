@@ -1,9 +1,9 @@
 annotations:
   artifacthub.io/changes: |
-    - kind: changed
-      description: Bump to CoreDNS 1.12.3
+    - kind: added
+      description: Add scrapeTimeout, scheme, honorLabels, tlsConfig, relabelings, and metricRelabelings options to ServiceMonitor endpoint
 apiVersion: v2
-appVersion: 1.12.3
+appVersion: 1.13.1
 description: CoreDNS is a DNS server that chains plugins and provides Kubernetes DNS
   Services
 home: https://coredns.io
@@ -21,4 +21,4 @@ name: coredns
 sources:
 - https://github.com/coredns/coredns
 type: application
-version: 1.43.2
+version: 1.46.0

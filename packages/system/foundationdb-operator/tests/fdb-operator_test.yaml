@@ -1,0 +1,43 @@
+suite: cozy-foundationdb-operator image pin
+release:
+  name: fdb-operator
+  namespace: cozy-foundationdb-operator
+tests:
+  - it: renders the operator on the pinned upstream image
+    template: charts/fdb-operator/templates/manager/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # Pin the full image. A partial regex would also pass a wrong
+      # registry; assert the verbatim upstream reference instead.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: foundationdb/fdb-kubernetes-operator:v2.30.0
+      # The CVE remediation also rides the init-monitor base images, so
+      # pin those too — a silent upstream retag would otherwise slip past.
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: foundationdb/fdb-kubernetes-monitor:7.1.67
+      - equal:
+          path: spec.template.spec.initContainers[1].image
+          value: foundationdb/fdb-kubernetes-monitor:7.3.63
+      - equal:
+          path: spec.template.spec.initContainers[2].image
+          value: foundationdb/fdb-kubernetes-monitor:7.4.1
+
+  - it: renders the operator image in the cozystack globalMode (the shipping config)
+    template: charts/fdb-operator/templates/manager/deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      # cozystack ships globalMode.enabled=true (package-level values.yaml).
+      # The chart default is false, so without this the suite never renders
+      # the mode that actually deploys.
+      globalMode:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: foundationdb/fdb-kubernetes-operator:v2.30.0

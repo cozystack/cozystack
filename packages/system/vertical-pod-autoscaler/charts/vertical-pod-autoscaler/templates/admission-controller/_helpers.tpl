@@ -21,10 +21,10 @@ app.kubernetes.io/component: admission-controller
 {{- end -}}
 
 {{/*
-Common labels
+Labels
 */}}
 {{- define "vertical-pod-autoscaler.admissionController.labels" -}}
-{{ include "vertical-pod-autoscaler.labels" . }}
+{{ include "vertical-pod-autoscaler.commonLabels" . }}
 {{ include "vertical-pod-autoscaler.admissionController.componentLabels" . }}
 {{- end -}}
 
@@ -32,7 +32,7 @@ Common labels
 Selector labels
 */}}
 {{- define "vertical-pod-autoscaler.admissionController.selectorLabels" -}}
-{{ include "vertical-pod-autoscaler.selectorLabels" . }}
+{{ include "vertical-pod-autoscaler.commonSelectorLabels" . }}
 {{ include "vertical-pod-autoscaler.admissionController.componentLabels" . }}
 {{- end -}}
 
