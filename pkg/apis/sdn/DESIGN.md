@@ -1,49 +1,64 @@
 # Cozystack Security Groups — Design
 
-**Status:** Implemented (v1alpha1, aggregated-API projection)
+**Status:** Implemented (v1alpha1, aggregated-API projection + membership controller)
 
 ## 1. Summary
 
-A **SecurityGroup** is a namespace-scoped, tenant-facing firewall object in the `sdn.cozystack.io/v1alpha1` API group. It is served by the Cozystack aggregated API server (`cozystack-api`) as a **1:1 projection of a single CiliumNetworkPolicy** in the same namespace. Tenants manage SecurityGroups; the API server translates each one, synchronously, into a CiliumNetworkPolicy on write and back on read. There is no separate controller and no extra reconcile loop.
+A **SecurityGroup** is a namespace-scoped, tenant-facing firewall object in the `sdn.cozystack.io/v1alpha1` API group. It is served by the Cozystack aggregated API server (`cozystack-api`) as a **1:1 projection of a single CiliumNetworkPolicy** in the same namespace: tenants manage SecurityGroups while the API server translates each one, synchronously, into a CiliumNetworkPolicy on write and back on read.
 
-A SecurityGroup **attaches to a managed application by reference** (`targetRef: {apiGroup, kind, name}`) rather than carrying a tenant-authored pod selector. The backing CiliumNetworkPolicy's `endpointSelector` is **derived** by the API server from the referenced application's lineage labels (`apps.cozystack.io/application.{group,kind,name}`), so the selector is machine-generated and can only ever point at the referenced application's own pods in the tenant's namespace.
+A SecurityGroup is a **membership group**. It owns a stable identity label — `securitygroup.sdn.cozystack.io/<name>` — and the backing CiliumNetworkPolicy's `endpointSelector` matches that label rather than any one application's labels. A SecurityGroup **attaches to managed applications by reference** (`spec.attachments`, a list of `{apiGroup, kind, name}`); a dedicated controller stamps the membership label onto the attached applications' pods and removes it when they are detached. Because the selector is the group's own machine-assigned label and the attachments are resolved through the lineage labels the platform already stamps, a SecurityGroup can only ever apply to its attached applications' own pods in the tenant's namespace — never to arbitrary or platform-owned pods — and one SecurityGroup can attach to several applications at once.
 
-The product value is the **RBAC boundary plus a Cozystack-native surface**: tenants get self-service control over the network policy of their own applications without being granted any access to the `cilium.io` API group, and without the platform exposing Cilium's full, version-coupled CRD surface to them. Because the selector is derived from an authorized reference instead of free-form tenant input, a tenant cannot express network policy against arbitrary or platform-owned pods.
+Rule peers are expressed in the same vocabulary: `fromApp`/`toApp` reference managed applications (resolved to their lineage labels) and `fromSG`/`toSG` reference other SecurityGroups (resolved to the *other* group's membership label). The `fromSG`/`toSG` reference is **live**: it projects to a label the Cilium dataplane resolves dynamically, so re-attaching a group to different applications updates every rule that references it without rewriting those rules.
+
+The product value is the **RBAC boundary plus a Cozystack-native surface**: tenants get self-service control over the network policy of their own applications without any access to the `cilium.io` API group, and without the platform exposing Cilium's full, version-coupled CRD surface to them.
 
 ## 2. Goals / Non-Goals
 
 **Goals**
 
-- Let tenants declare allow-list ingress/egress for one of their own applications, scoped to their namespace.
-- Derive the enforced pod selector from an authorized application reference, never from free-form tenant input.
+- Let tenants declare allow-list ingress/egress for their own applications, scoped to their namespace, with one SecurityGroup able to cover several applications.
+- Derive the enforced pod set from authorized references (attachments and app/SG peers), never from free-form tenant input.
+- Support live group-to-group references (`fromSG`/`toSG`) that follow membership as attachments change.
 - Keep policy count equal to the number of SecurityGroups (1 SecurityGroup ↔ 1 CiliumNetworkPolicy).
-- Require no direct tenant access to `cilium.io` resources.
-- Avoid disrupting clusters or namespaces that do not create SecurityGroups.
+- Require no direct tenant access to `cilium.io` resources, and keep the membership label writable only by the platform.
 
 **Non-Goals**
 
-- We do not redesign tenant isolation; existing platform isolation policies remain and are untouched (they carry no SecurityGroup marker label, so they are invisible to this API).
-- We do not let a SecurityGroup target arbitrary, free-form label selectors or raw (non-application) pods. A SecurityGroup only ever attaches to a managed application by reference (§7).
-- We do not introduce reusable CIDR/FQDN groups, cluster-scope policies, or references between SecurityGroups. Those are future work (§8).
+- **We do not flip the tenant baseline to default-deny in this change.** Today the per-tenant baseline (`packages/apps/tenant/templates/networkpolicy.yaml`) blanket-allows intra-namespace and outbound traffic, and Cilium allow-rules are additive, so a SecurityGroup can only *widen* — it cannot yet restrict (`ingress: []` does not deny). This API is designed to be the right one in the default-deny world, but actually shrinking the baseline touches every tenant and is its own change (§8).
+- **We do not add a membership admission webhook in this change.** The controller closes the membership labels asynchronously; a pod-admission webhook to make new pods members at creation time only matters under default-deny and is deferred with the baseline flip (§7, §8).
+- We do not redesign tenant isolation; existing platform isolation policies carry no SecurityGroup marker label, so they are invisible to this API and untouched.
+- We do not let a SecurityGroup target free-form label selectors or raw (non-application) pods, name reserved Cilium entities, or reference SecurityGroups in another namespace.
 
 ## 3. Architecture
 
-1. A tenant creates a **SecurityGroup** (`sdn.cozystack.io/v1alpha1`) with a `targetRef` referencing one of their applications and `ingress`/`egress` rules.
-2. The `cozystack-api` REST storage translates it into a **CiliumNetworkPolicy** of the same name in the same namespace, carrying the marker label `sdn.cozystack.io/securitygroup: "true"`. The CiliumNetworkPolicy's `endpointSelector` is **derived** from the `targetRef` — `matchLabels` on `apps.cozystack.io/application.{group,kind,name}` — not copied from tenant input.
-3. Reads (`get`/`list`/`watch`) project marked CiliumNetworkPolicies back into SecurityGroups, reconstructing the `targetRef` from the derived `endpointSelector` matchLabels. The marker label is hidden from the SecurityGroup view.
-4. The translation is synchronous and stateless — the aggregated API server owns it, so there is no controller, no status reconciliation, and no eventual-consistency window.
+The design has two cleanly-split halves.
+
+1. A tenant creates a **SecurityGroup** (`sdn.cozystack.io/v1alpha1`) with `spec.attachments` (managed applications) and `ingress`/`egress` rules.
+2. The `cozystack-api` REST storage translates it into a **CiliumNetworkPolicy** of the same name and namespace, carrying the marker label `sdn.cozystack.io/securitygroup: "true"`. The CiliumNetworkPolicy's `endpointSelector` is the SecurityGroup's own membership label `securitygroup.sdn.cozystack.io/<name>`. The attachments are stored in a storage-owned annotation (`sdn.cozystack.io/attachments`); peers project into endpoint selectors. This translation is synchronous and stateless.
+3. The **securitygroup-controller** watches the marked CiliumNetworkPolicies and managed-app pods. For each policy it stamps the membership label onto the pods of every attached application and removes it on detach or deletion. This is the only stateful piece, and the only writer of membership labels.
+4. Reads (`get`/`list`/`watch`) project marked CiliumNetworkPolicies back into SecurityGroups, rebuilding `attachments` from the annotation and `fromApp`/`fromSG` (and `toApp`/`toSG`) from the rule endpoint selectors. The marker label and the attachments annotation are hidden from the SecurityGroup view.
 
 ### 3.1 Marker-label scoping
 
-Only CiliumNetworkPolicies labelled `sdn.cozystack.io/securitygroup: "true"` are visible through the SecurityGroup API. Policies created by other means (platform tenant-isolation policies, hand-written CiliumNetworkPolicies) are never surfaced and never mutated. `get`/`update`/`patch`/`delete` of an unmarked policy returns `NotFound`. The storage owns the marker label and always re-asserts it on every write (`create`, `update`, `patch`) — the marker is set after any tenant-supplied labels are merged, so a tenant cannot orphan an enforced policy by overwriting the marker through spec labels.
+Only CiliumNetworkPolicies labelled `sdn.cozystack.io/securitygroup: "true"` are visible through the SecurityGroup API. Policies created by other means (platform tenant-isolation policies, hand-written CiliumNetworkPolicies) are never surfaced and never mutated. `get`/`update`/`patch`/`delete` of an unmarked policy returns `NotFound`. The storage owns the marker label and always re-asserts it on every write after any tenant-supplied labels are merged, so a tenant cannot orphan an enforced policy by overwriting the marker through spec labels.
 
-### 3.2 Selector derivation from lineage labels
+### 3.2 Membership labels and attachments
 
-The lineage mutating webhook (`internal/lineagecontrollerwebhook`) stamps every managed-application pod, at admission time, with `apps.cozystack.io/application.{group,kind,name}` (and `internal.cozystack.io/managed-by-cozystack: "true"`), derived by walking the pod's ownership graph up to its application. The SecurityGroup storage reuses those labels: a `targetRef: {apiGroup, kind, name}` projects to an `endpointSelector` with `matchLabels` on exactly those three keys (an empty `apiGroup` defaults to `apps.cozystack.io`). The reverse projection on read reads the three matchLabels back into the `targetRef`. The mapping is lossless because validation rejects any component that is not a valid label value (≤63 characters), and the webhook truncates only groups longer than 63 characters — so a valid value is stamped on pods unchanged and equals the value the tenant submitted.
+A SecurityGroup's membership label key is `securitygroup.sdn.cozystack.io/<name>` (value always empty). The backing policy's `endpointSelector` matches it. The membership relationship — which applications the group attaches to — is stored as a JSON array of `ApplicationReference` in the storage-owned annotation `sdn.cozystack.io/attachments` on the backing policy. The storage re-asserts that annotation from `spec.attachments` on every write (canonicalizing an empty `apiGroup` to `apps.cozystack.io`) and hides it from the SecurityGroup view, exactly as it does the marker label. There is no home for the attachment list in the CiliumNetworkPolicy spec — the spec's selector is the group's own identity, decoupled from any single application — so the annotation is where the controller reads it.
 
-### 3.3 Why an in-tree CiliumNetworkPolicy mirror
+### 3.3 The membership controller
 
-`cozystack-api` does not import the `github.com/cilium/cilium` Go module: the current Cilium release pins a Kubernetes minor version newer than this project's `k8s.io/apimachinery` fork supports. Instead the storage uses a minimal in-tree mirror type (`CiliumNetworkPolicy`, with a `CiliumNetworkPolicySpec` carrying a concrete `endpointSelector` plus the shared ingress/egress rule types) registered with the controller-runtime client at GroupVersion `cilium.io/v2`. Because the field names and JSON tags match the CiliumNetworkPolicy CRD exactly, marshalling the mirror produces wire-compatible objects. The ingress/egress rules project 1:1; only the selector is translated (`targetRef` → derived `endpointSelector` on write, and back on read).
+The `securitygroup-controller` (`internal/securitygroupcontroller`, `cmd/securitygroup-controller`) reconciles membership labels. For each marked policy it computes the desired member set — the union, over the policy's attachments, of pods in the policy's namespace carrying that application's lineage labels — and brings the actual set of pods labelled `securitygroup.sdn.cozystack.io/<name>` to match, adding and removing the label with single-key merge patches. It carries a finalizer on the backing policy so the membership labels are stripped before the policy is deleted. It watches managed-app pods so a freshly-created pod of an attached application is labelled promptly.
+
+The controller is cheap because the identity it needs already lands on every managed-app pod: the lineage mutating webhook (`internal/lineagecontrollerwebhook`) stamps `apps.cozystack.io/application.{group,kind,name}` and `internal.cozystack.io/managed-by-cozystack: "true"` at admission. The controller only consumes those labels; it adds no responsibility to the webhook.
+
+### 3.4 Why an in-tree CiliumNetworkPolicy mirror
+
+Neither `cozystack-api` nor the controller imports the `github.com/cilium/cilium` Go module: the current Cilium release pins a Kubernetes minor version newer than this project's `k8s.io/apimachinery` fork supports. The storage uses a minimal in-tree mirror (`CiliumNetworkPolicy` with a concrete `endpointSelector` and Cilium-shaped ingress/egress rules) registered at GroupVersion `cilium.io/v2`; the controller uses an even smaller metadata-only mirror (it never reads or writes the spec, so its mirror omits it and changes finalizers through merge patches that never carry a spec). Because the field names and JSON tags match the CiliumNetworkPolicy CRD exactly, marshalling produces wire-compatible objects.
+
+### 3.5 Liveness of `fromSG`/`toSG`
+
+`fromSG: other` projects to `fromEndpoints: [{matchLabels: {securitygroup.sdn.cozystack.io/other: ""}}]` — the *other* group's membership label. Cilium resolves that label against live pods at enforcement time, so when `other` re-attaches to different applications its membership label moves with it and every rule referencing `other` follows automatically. This is the payoff of the membership model over a frozen reference: a `targetRef`-style model would have to dereference `other` to its applications and freeze those labels into the rule at write time, going stale the moment `other` re-targeted.
 
 ## 4. API
 
@@ -51,17 +66,18 @@ The lineage mutating webhook (`internal/lineagecontrollerwebhook`) stamps every 
 apiVersion: sdn.cozystack.io/v1alpha1
 kind: SecurityGroup
 metadata:
-  name: sg-db
+  name: db
   namespace: tenant-a
 spec:
-  targetRef:
-    apiGroup: apps.cozystack.io   # optional, defaults to apps.cozystack.io
-    kind: Postgres
-    name: db
+  attachments:
+    - kind: Postgres        # apiGroup optional, defaults to apps.cozystack.io
+      name: db
   ingress:
-    - fromEndpoints:
-        - matchLabels:
-            app: web
+    - fromApp:
+        - kind: Kubernetes
+          name: web
+      fromSG:
+        - frontend
       toPorts:
         - ports:
             - port: "5432"
@@ -73,7 +89,7 @@ spec:
         - "10.0.0.0/8"
 ```
 
-`SecurityGroupSpec` carries a `targetRef` plus the subset of the CiliumNetworkPolicy rule the abstraction supports: `ingress[]` (`fromEndpoints`, `fromCIDR`, `toPorts`) and `egress[]` (`toEndpoints`, `toCIDR`, `toFQDNs`, `toPorts`). `targetRef.kind` and `targetRef.name` are **required**; `apiGroup` defaults to `apps.cozystack.io`. Each component must be a valid label value (≤63 characters), since the storage projects them into the backing policy's `endpointSelector` matchLabels. An empty `ingress`/`egress` list denies all traffic in that direction for the targeted application's pods, matching Cilium semantics.
+`SecurityGroupSpec` carries `attachments` plus `ingress[]` (`fromApp`, `fromSG`, `fromCIDR`, `toPorts`) and `egress[]` (`toApp`, `toSG`, `toCIDR`, `toFQDNs`, `toPorts`). Each `ApplicationReference` requires `kind` and `name`; `apiGroup` defaults to `apps.cozystack.io`. Every reference component must be a valid label value, and each `fromSG`/`toSG` name must project to a valid label key (`securitygroup.sdn.cozystack.io/<name>`); names that collide with reserved Cilium entities (`world`, `cluster`, `kube-apiserver`, `host`, …) are rejected, since external reach is expressed through CIDR/FQDN, not entities. An empty `attachments` list is valid — the group simply selects no pods until something is attached. An empty `ingress`/`egress` list denies all traffic in that direction for the group's member pods, matching Cilium semantics (see §7 for what "deny" means under the current allow-all baseline).
 
 ## 5. Backing CiliumNetworkPolicy
 
@@ -83,20 +99,24 @@ The SecurityGroup above projects to:
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
-  name: sg-db
+  name: db
   namespace: tenant-a
   labels:
     sdn.cozystack.io/securitygroup: "true"
+  annotations:
+    sdn.cozystack.io/attachments: '[{"apiGroup":"apps.cozystack.io","kind":"Postgres","name":"db"}]'
 spec:
   endpointSelector:
-    matchLabels:                            # derived from targetRef, not tenant input
-      apps.cozystack.io/application.group: apps.cozystack.io
-      apps.cozystack.io/application.kind: Postgres
-      apps.cozystack.io/application.name: db
+    matchLabels:                                         # the group's own membership label
+      securitygroup.sdn.cozystack.io/db: ""
   ingress:
     - fromEndpoints:
-        - matchLabels:
-            app: web
+        - matchLabels:                                   # fromApp -> lineage labels
+            apps.cozystack.io/application.group: apps.cozystack.io
+            apps.cozystack.io/application.kind: Kubernetes
+            apps.cozystack.io/application.name: web
+        - matchLabels:                                   # fromSG -> the other group's membership label
+            securitygroup.sdn.cozystack.io/frontend: ""
       toPorts:
         - ports:
             - port: "5432"
@@ -108,35 +128,44 @@ spec:
         - "10.0.0.0/8"
 ```
 
+The securitygroup-controller stamps `securitygroup.sdn.cozystack.io/db: ""` onto the pods of the attached `Postgres/db` application, which is what makes the policy's `endpointSelector` select them.
+
 ## 6. RBAC
 
 - **`cozystack-api` ServiceAccount** — full CRUD on `ciliumnetworkpolicies.cilium.io`, since the storage CRUDs these objects on behalf of tenants.
-- **Tenants** — `securitygroups.sdn.cozystack.io` is granted across the tenant ClusterRole tiers exactly like `apps.cozystack.io`: the tenant ServiceAccount role (`cozy:tenant:base`) gets full access; human `view` gets read-only; human `admin`/`super-admin` get write (create/update/patch/delete) via `cozy:tenant:admin:base`. Tenants never receive any `cilium.io` permission.
+- **`securitygroup-controller` ServiceAccount** — cluster-wide `get`/`list`/`watch`/`patch` on `pods` (it stamps the membership label across dynamically-created tenant namespaces) and `get`/`list`/`watch`/`patch` on `ciliumnetworkpolicies.cilium.io` (to watch the backing policies and manage its finalizer via merge patches). This is the platform's first tenant-driven, cluster-wide pod-label writer; §7 covers how the controller is constrained so the grant is safe.
+- **Tenants** — `securitygroups.sdn.cozystack.io` is granted across the tenant ClusterRole tiers exactly like `apps.cozystack.io`: the tenant ServiceAccount role gets full access, human `view` read-only, human `admin`/`super-admin` write. Tenants never receive any `cilium.io` permission, and never write the membership label.
 
 ## 7. Safety & Interactions
 
-**The RBAC boundary is structural, not selector-validated.** The backing `endpointSelector` is derived from `targetRef`, matching only `apps.cozystack.io/application.{group,kind,name}` labels. Those labels are stamped by the lineage webhook **only** on pods whose ownership chain resolves to a managed Cozystack application, and the backing CiliumNetworkPolicy is namespaced — Cilium scopes a namespaced `endpointSelector` to the policy's own namespace. So a `targetRef` can only ever select the referenced application's own pods in the tenant's namespace. Cross-namespace attachment is structurally impossible, and a tenant cannot author a selector that reaches arbitrary or platform-owned pods. No SubjectAccessReview is required for this boundary; the namespace scope and the derived selector deliver it on their own.
+**The membership label is written exclusively by the platform.** Tenants address SecurityGroups, never the `cilium.io` objects or pod labels. The selector a policy enforces is the group's own membership label, and that label is placed on pods only by the securitygroup-controller.
 
-**A tenant cannot deny platform-managed traffic.** Cilium policies are additive: when several policies select an endpoint, the allowed set is the union of their allow rules, and SecurityGroup exposes only allow rules (no deny). The platform already blankets every tenant pod with selecting allow-policies (e.g. the per-tenant `*-ingress`/`*-egress` CiliumClusterwideNetworkPolicies and `allow-internal-communication`) that permit management traffic — monitoring scrape, operator reconcile, intra-namespace replica traffic. A SecurityGroup attached to a managed application can only **add** allowances on top of those; it cannot subtract the platform's, so it cannot sever a managed application's management plane. By the same token a SecurityGroup cannot tighten traffic below the platform baseline — it widens, it does not restrict. Tightening below the baseline would require the platform to stop blanket-allowing, which is out of scope here.
+**The controller is a privileged pod-label writer, and is constrained to stay safe.** A cluster-wide `pods: patch` grant driven by tenant-authored objects is a real new surface (the rest of the tenant-facing platform is read-only or namespace-scoped). The controller upholds three invariants so it cannot reach pods a tenant could not otherwise address: it resolves each attachment through the lineage labels the webhook stamps (never the attachment list directly), it only ever labels pods in the SecurityGroup's own namespace, and it patches a single label key so it can neither clobber another group's label nor a pod's lineage labels. The membership label key is namespace-unique only (two tenants can each have a group named `db`), so the namespace-equality invariant — not the key — is what keeps one tenant's group off another tenant's pods; the namespaced backing policy independently scopes *enforcement* to its own namespace.
+
+**Eventual-consistency window.** The controller labels pods asynchronously, so a newly-created pod of an attached application is briefly unlabelled. Under the current allow-all baseline this is harmless: a SecurityGroup only adds allowances, so an unlabelled pod is simply "not yet additionally allowed," never wrongly denied. Under a future default-deny baseline this window would wrongly deny a fresh pod until the controller catches up, which is exactly why a pod-admission webhook is paired with the baseline flip (§8) rather than shipped now.
+
+**A tenant cannot deny platform-managed traffic — and, today, cannot deny anything.** Cilium policies are additive: when several policies select an endpoint the allowed set is the union of their allow rules, and SecurityGroup exposes only allow rules. The per-tenant baseline blanket-allows intra-namespace and outbound traffic, so a SecurityGroup can only *widen* it; `ingress: []` does not actually deny. The membership API is therefore inert as a restriction until the baseline becomes default-deny. It is shipped now to settle the contract (membership identity, live group references, no free-form selectors) before tenants depend on it.
+
+**The membership model does not, by itself, solve "a tenant firewalls its own managed application."** Once the baseline is default-deny, a tenant could attach a SecurityGroup with `ingress: []` to their own managed Postgres and starve its platform traffic (backups, metrics scrape, operator reconcile). The fix for that is platform-traffic carve-outs in the baseline, orthogonal to membership and out of scope here (§8).
 
 **Caveats.**
 
-- A `targetRef` can only attach to a managed application. Raw, tenant-created pods (a bare `Deployment` not owned by an `apps.cozystack.io` application) carry no lineage labels and cannot be targeted. This is a deliberate reduction from a free-form selector, in exchange for the structural boundary above.
-- A `targetRef` to a non-existent application is not rejected: it projects to a CiliumNetworkPolicy whose selector matches zero pods, so it has no effect. The storage does not verify the referenced application exists (a SubjectAccessReview/existence check is possible future UX, not a security requirement).
+- Attachments and app peers can only reference managed applications. Raw, tenant-created pods carry no lineage labels and cannot be members or peers — a deliberate trade for the structural boundary above.
+- A reference to a non-existent application or SecurityGroup is not rejected: it resolves to no pods, so it has no effect. The storage does not verify existence (a SubjectAccessReview/existence check is possible future UX, not a security requirement).
+- If the controller is uninstalled, membership labels it stamped remain on pods and the backing policies keep enforcing against them; pods created afterwards are not labelled. This is acceptable for an opt-in, additive feature and revisited with the default-deny work.
 
 **Other interactions.**
 
-- The marker label keeps SecurityGroups and platform-managed policies strictly separate; the storage never surfaces or mutates an unmarked policy.
-- SecurityGroup requires the `ciliumnetworkpolicies.cilium.io` CRD (Cilium ships in the standard Cozystack networking stack). On a cluster without it, every SecurityGroup operation fails loudly with a no-matches-for-kind error rather than silently — there is no fallback.
+- SecurityGroup requires the `ciliumnetworkpolicies.cilium.io` CRD (Cilium ships in the standard Cozystack networking stack). On a cluster without it, every SecurityGroup operation fails loudly rather than silently.
 
 ## 8. Future Work
 
-The aggregated-API model is intentionally minimal. The following can be layered on without changing the core projection:
+The aggregated-API + controller model is intentionally minimal. The following can be layered on without changing the core projection:
 
+- **Default-deny tenant baseline.** Shrink the per-tenant baseline to the minimum the platform needs (DNS, apiserver, monitoring, each app's own flows) and let tenants open the rest with SecurityGroups. This is what gives the feature its restrictive power; it touches every tenant, needs the membership admission webhook below, and is its own change.
+- **Membership admission webhook.** Stamp the membership label at pod-create time to close the eventual-consistency window under default-deny. It must be a *separate* webhook: the lineage webhook is gated by `objectSelector: managed-by-cozystack DoesNotExist`, so it never re-fires on already-managed pods and cannot be extended to do this, nor can it retro-label running pods — a backfill controller (this one) is still required.
+- **Platform-traffic carve-outs** in the default-deny baseline so a tenant cannot starve their own managed application's management plane.
 - **Cluster-scope** SecurityGroups projecting to CiliumClusterwideNetworkPolicy.
-- **Targeting raw pods** a tenant owns (a derived "tenant-owned, non-managed" label) so SecurityGroups can apply beyond managed applications without reopening free-form selectors.
-- **Multiple targets per SecurityGroup**, or a `targetRef` list, if attaching one policy to several applications becomes common.
-- An optional **existence/authorization check** on `targetRef` (SubjectAccessReview) to fail fast on a typo instead of silently matching zero pods.
-- Reusable **CIDR/FQDN groups** and references between SecurityGroups.
-- Exposing more of the CiliumNetworkPolicy rule surface (ICMP, `toServices`, `fromRequires`, `fromCIDRSet`/`toCIDRSet` exceptions) as demand appears.
-- **Richer spec validation.** Create and update already validate the highest-risk fields synchronously — CIDR syntax, port range (1–65535 or a valid named port) and the protocol enum (TCP/UDP/SCTP/ANY) — and reject a bad value with `Invalid` instead of writing a policy that Cilium would silently discard. Still deferred: FQDN `matchName`/`matchPattern` syntax, endpoint-selector key conventions, and cross-rule consistency checks, which currently pass through to Cilium and surface (if at all) asynchronously in the agent.
+- Reusable **CIDR/FQDN groups**, and exposing more of the CiliumNetworkPolicy rule surface (ICMP, `toServices`, CIDR-set exceptions) as demand appears.
+- An optional **existence/authorization check** on attachments and SG peers (SubjectAccessReview) to fail fast on a typo instead of silently matching zero pods.
+- **Richer spec validation.** Create and update already validate the highest-risk fields synchronously — CIDR syntax, port range, the protocol enum, attachment/peer label validity, reserved-entity names — and reject a bad value with `Invalid` instead of writing a policy Cilium would silently discard. Still deferred: FQDN `matchName`/`matchPattern` syntax and cross-rule consistency, which pass through to Cilium.
