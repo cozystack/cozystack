@@ -5,8 +5,11 @@
   # class): a deleted pod's endpoint is orphaned in the agent's registry, IPAM
   # re-hands its IP to a new pod, and the agent then rejects the new sandbox with
   # "IP <X> is already in use" until an agent restart. The watchdog runs as an
-  # in-cluster Job that surgically evicts only the orphaned endpoint, covering
-  # install and (the Job outlives this file) the whole app suite.
+  # in-cluster Job that first surgically evicts only the orphaned endpoint and,
+  # if the leaked IP keeps recurring (the leak is in agent in-memory state that
+  # endpoint-disconnect/delete-reschedule cannot reach), escalates to restarting
+  # that node's cilium-agent — bounded by a per-node cap. It covers install and
+  # (the Job outlives this file) the whole app suite.
   #
   # This is a real @test, NOT a bats setup_file hook: the e2e runner
   # (hack/cozytest.sh) only executes @test functions — it never invokes
