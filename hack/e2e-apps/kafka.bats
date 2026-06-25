@@ -17,13 +17,13 @@ spec:
     replicas: 2
     storageClass: ""
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "c1.small"
   zookeeper:
     size: 5Gi
     replicas: 2
     storageClass: ""
     resources:
-    resourcesPreset: "nano"
+    resourcesPreset: "c1.small"
   topics:
     - name: testResults
       partitions: 1
