@@ -143,10 +143,17 @@ jobs:
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           # Rewrite the rc version substring -> stable in vendored image tags.
           # The exact "X.Y.Z-rc.N" string only appears on cozystack-built images,
-          # so a global replace cannot touch component (e.g. cilium) tags.
+          # so a global replace cannot touch component (e.g. cilium) tags. Escape
+          # regex metacharacters (the dots) in the rc version so sed matches the
+          # literal string, not "any character".
+          RC_ESC=$(printf '%s' "$RC_VERSION" | sed -e 's/[][\\.^$*/]/\\&/g')
           find packages -name values.yaml -print0 \
-            | xargs -0 sed -i "s/${RC_VERSION}/${STABLE_VERSION}/g"
-          git checkout -b "${STABLE_BRANCH}"
+            | xargs -0 sed -i "s/${RC_ESC}/${STABLE_VERSION}/g"
+          # -B so a retry within a re-run resets the local branch instead of
+          # failing on "already exists". The stable branch is derived
+          # deterministically from the rc; if a previous partial run already
+          # pushed a *diverged* remote branch, delete it before re-running.
+          git checkout -B "${STABLE_BRANCH}"
           git add -A
           git commit -s -m "Prepare release v${STABLE_VERSION} (promoted from ${RC_TAG})" \
             || echo "No tag-string changes to commit (digests already stable)"
