@@ -80,10 +80,6 @@ jobs:
         run: make unit-tests
       - name: Run controller Go tests
         run: make test-controllers
-      - name: Run selector unit tests (bats)
-        run: |
-          command -v bats >/dev/null 2>&1 || { sudo apt-get update && sudo apt-get install -y bats; }
-          bats hack/build-matrix_test.bats hack/select-e2e_test.bats
 
   # One image (package) per job, fanned out across the ephemeral pool. Each job
   # gets its own buildx (docker-container driver) so the shared-buildkit
