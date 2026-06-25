@@ -131,11 +131,11 @@
     [ "$output" = "redis" ]
 }
 
-@test "release-e2e workflow change triggers full suite" {
+@test "pull-requests workflow change triggers full suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo ".github/workflows/release-e2e.yaml" > "$tmp/diff"
+    echo ".github/workflows/pull-requests.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }

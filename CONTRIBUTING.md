@@ -36,6 +36,20 @@ We welcome many types of contributions including:
 The best way to reach us with a question when contributing is to drop a line in
 our [Telegram channel](https://t.me/cozystack), or start a new GitHub discussion.
 
+## Where do I file?
+
+Cozystack work is split across two repositories. Use this table to land in the right place:
+
+| You have… | Where it goes |
+|---|---|
+| A **bug** | [New issue → Bug report](https://github.com/cozystack/cozystack/issues/new/choose) in this repo (`kind/bug`) |
+| A **concrete, scoped feature** | [New issue → Feature request](https://github.com/cozystack/cozystack/issues/new/choose) in this repo (`kind/feature`) |
+| A **usage question** or an early idea | [GitHub Discussions](https://github.com/cozystack/cozystack/discussions) |
+| A **cross-cutting / architectural change** — affects multiple components or APIs, or needs a decision before code | A [design proposal](https://github.com/cozystack/community/tree/main/design-proposals) in the [**community**](https://github.com/cozystack/community) repo |
+| **Governance, process, or community** matters | The [community](https://github.com/cozystack/community) repo |
+
+Rule of thumb: **bugs and concrete features live here; "what or whether we should build it" lives in [community](https://github.com/cozystack/community)** as a design proposal or discussion. A large feature often starts as a Discussion, graduates to a design-proposal PR, then spawns implementation issues here.
+
 ## Raising Issues
 
 When raising issues, please specify the following:

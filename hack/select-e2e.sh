@@ -19,7 +19,7 @@ SOURCES_DIR="${2:-packages/core/platform/sources}"
 # Anything matching this pattern triggers the full bats suite. Per-app bats
 # (hack/e2e-apps/<name>.bats) are matched BEFORE this so editing one bats
 # file doesn't escalate to the full suite.
-full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|hack/[^/]+\.sh$|hack/[^/]+\.bats$|hack/e2e-apps/[^/]+\.sh$|Makefile$|\.github/workflows/(pull-requests|release-e2e)\.yaml$)'
+full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|hack/[^/]+\.sh$|hack/[^/]+\.bats$|hack/e2e-apps/[^/]+\.sh$|Makefile$|\.github/workflows/pull-requests\.yaml$)'
 
 # All known per-app bats files
 all_apps=$(ls hack/e2e-apps/*.bats 2>/dev/null | xargs -n1 basename | sed 's/\.bats$//')

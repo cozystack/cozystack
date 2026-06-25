@@ -1,0 +1,32 @@
+suite: MariaDB metrics exporter listen address
+
+# Regression cover: the mariadb-operator hardcodes the mysqld-exporter
+# liveness/readiness probe as an httpGet on port 9104, which kubelet dials
+# over the pod's IPv4 address. The exporter must therefore listen on an
+# IPv4 socket; an IPv6 wildcard ([::]) listener intermittently refuses the
+# IPv4 probe on single-stack-IPv4 data planes, flapping the pod to NotReady
+# and leaving the metrics Service endpoint unpopulated. Pin the explicit
+# IPv4 listen-address flag so the probe is reachable deterministically.
+
+templates:
+  - templates/mariadb.yaml
+
+tests:
+  - it: renders the MariaDB CR
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: MariaDB
+
+  - it: pins the exporter to the IPv4 wildcard so the kubelet probe is reachable
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: spec.metrics.exporter.args
+          content: --web.listen-address=0.0.0.0:9104
