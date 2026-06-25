@@ -73,3 +73,89 @@ tests:
         documentSelector:
           path: kind
           value: MachineHealthCheck
+
+  - it: per-group maxUnhealthy overrides the cluster-wide nodeHealthCheck value
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeHealthCheck:
+        maxUnhealthy: "50%"
+        nodeStartupTimeout: "10m"
+      nodeGroups.md0.maxUnhealthy: "10%"
+    asserts:
+      - equal:
+          path: spec.maxUnhealthy
+          value: "10%"
+        documentSelector:
+          path: kind
+          value: MachineHealthCheck
+
+  - it: per-group bare-integer maxUnhealthy override renders as an unquoted int
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeHealthCheck:
+        maxUnhealthy: "50%"
+        nodeStartupTimeout: "10m"
+      nodeGroups.md0.maxUnhealthy: "3"
+    asserts:
+      - equal:
+          path: spec.maxUnhealthy
+          value: 3
+        documentSelector:
+          path: kind
+          value: MachineHealthCheck
+
+  - it: per-group nodeStartupTimeout overrides the cluster-wide value
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeHealthCheck:
+        maxUnhealthy: "50%"
+        nodeStartupTimeout: "10m"
+      nodeGroups.md0.nodeStartupTimeout: "30m"
+    asserts:
+      - equal:
+          path: spec.nodeStartupTimeout
+          value: "30m"
+        documentSelector:
+          path: kind
+          value: MachineHealthCheck
+
+  - it: falls back to the cluster-wide nodeHealthCheck when no per-group override is set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeHealthCheck:
+        maxUnhealthy: "40%"
+        nodeStartupTimeout: "15m"
+    asserts:
+      - equal:
+          path: spec.maxUnhealthy
+          value: "40%"
+        documentSelector:
+          path: kind
+          value: MachineHealthCheck
+      - equal:
+          path: spec.nodeStartupTimeout
+          value: "15m"
+        documentSelector:
+          path: kind
+          value: MachineHealthCheck
+
+  - it: rejects an invalid per-group maxUnhealthy and names the offending group
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeHealthCheck:
+        maxUnhealthy: "50%"
+        nodeStartupTimeout: "10m"
+      nodeGroups.md0.maxUnhealthy: "abc"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'nodeGroups.md0.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%), got "abc"'

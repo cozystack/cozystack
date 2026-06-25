@@ -88,6 +88,8 @@ storageClass: replicated
 ## @field {Resources} resources - CPU and memory resources for each worker node.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 ## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
+## @field {string} [maxUnhealthy] - Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
+## @field {string} [nodeStartupTimeout] - Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
 
 ## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map.
 nodeGroups:

@@ -122,10 +122,18 @@
             "type": "integer",
             "default": 10
           },
+          "maxUnhealthy": {
+            "description": "Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer (\"0\", \"1\", ...) or an integer percentage (\"0%\", \"50%\").",
+            "type": "string"
+          },
           "minReplicas": {
             "description": "Minimum number of replicas.",
             "type": "integer",
             "default": 0
+          },
+          "nodeStartupTimeout": {
+            "description": "Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.",
+            "type": "string"
           },
           "resources": {
             "description": "CPU and memory resources for each worker node.",
