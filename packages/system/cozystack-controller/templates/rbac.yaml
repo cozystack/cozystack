@@ -25,6 +25,15 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "patch", "update"]
+# TenantQuotaReconciler manages the per-namespace "tenant-quota-allocated"
+# ResourceQuota that enforces each tenant's share of its parent pool, and emits
+# events on the tenant namespace when sub-tenant quotas overcommit the budget.
+- apiGroups: [""]
+  resources: ["resourcequotas"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]

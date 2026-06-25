@@ -40,6 +40,7 @@ import (
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
+	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -77,6 +78,7 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var quotaBufferPercent int64
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -94,6 +96,8 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.Int64Var(&quotaBufferPercent, "tenant-quota-buffer-percent", 0,
+		"Temporary buffer (e.g. 130 = +30%) added to every hierarchical tenant quota pool so workloads already over a freshly-introduced quota keep running during rollout. 0 disables it.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -223,6 +227,16 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
+		os.Exit(1)
+	}
+
+	if err = (&tenantquota.Reconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("tenantquota-controller"),
+		BufferPercent: quotaBufferPercent,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
 		os.Exit(1)
 	}
 
