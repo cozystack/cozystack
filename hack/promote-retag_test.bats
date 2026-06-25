@@ -25,8 +25,25 @@
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
 
-  # Under set -e a non-zero exit aborts the test — that is the exit-0 assertion.
-  hack/promote-retag.sh v9.9.9 --dry-run >"$tmp/out" 2>"$tmp/err"
+  # `env -u REGISTRY`: the CI workflow exports REGISTRY=<OCIR build registry>
+  # for every job (.github/workflows/pull-requests.yaml), but the committed
+  # tree vendors its digests under the script's default ghcr.io/cozystack/
+  # cozystack. Inheriting the ambient REGISTRY makes the selector filter for the
+  # wrong registry, match nothing, and abort — so strip it and exercise the
+  # default, the registry the refs below actually live under.
+  #
+  # An exit-0 is the assertion; on any non-zero, surface the script's own
+  # stdout/stderr (collect_refs swallows yq errors, so its stderr is the only
+  # breadcrumb) and the yq build, so a CI failure is self-diagnosing.
+  rc=0
+  env -u REGISTRY hack/promote-retag.sh v9.9.9 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc; yq: $(yq --version 2>&1)" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    echo "--- script stdout ---" >&2; cat "$tmp/out" >&2
+    return "$rc"
+  fi
 
   # At least one cozystack-owned image is selected.
   grep -q 'docker://ghcr.io/cozystack/cozystack/' "$tmp/out"
