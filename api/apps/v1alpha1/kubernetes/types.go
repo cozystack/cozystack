@@ -276,9 +276,13 @@ type NodeGroup struct {
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
+	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
+	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
 	// Minimum number of replicas.
 	// +kubebuilder:default:=0
 	MinReplicas int `json:"minReplicas"`
+	// Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
+	NodeStartupTimeout string `json:"nodeStartupTimeout,omitempty"`
 	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 	Resources Resources `json:"resources,omitempty"`
 	// List of node roles.
