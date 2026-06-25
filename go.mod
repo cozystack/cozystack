@@ -5,7 +5,7 @@ module github.com/cozystack/cozystack
 go 1.26.4
 
 require (
-	github.com/cert-manager/cert-manager v1.17.4
+	github.com/cert-manager/cert-manager v1.20.3
 	github.com/cozystack/cozystack-scheduler/pkg/apis v0.1.1
 	github.com/emicklei/dot v1.10.0
 	github.com/fluxcd/helm-controller/api v1.4.3
