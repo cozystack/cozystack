@@ -116,8 +116,12 @@ jobs:
       # to flux; install it if absent (idempotent, cheap).
       - name: Set up build toolchain
         run: |
-          command -v flux >/dev/null \
-            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! command -v flux >/dev/null; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo bash "$install_script"
+            rm -f "$install_script"
+          fi
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then
@@ -237,6 +241,7 @@ jobs:
         with:
           name: talos-image
           path: _out/assets/nocloud-amd64.raw.xz
+          if-no-files-found: error
 
   # Reassemble the unified pr.patch from every fragment, then build the installer
   # LAST: `make -C packages/core/installer image` runs `flux push artifact
@@ -270,8 +275,12 @@ jobs:
           fetch-tags: true
       - name: Set up build toolchain
         run: |
-          command -v flux >/dev/null \
-            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! command -v flux >/dev/null; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo bash "$install_script"
+            rm -f "$install_script"
+          fi
       - name: Download patch fragments
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -353,6 +362,8 @@ jobs:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
@@ -423,6 +434,8 @@ jobs:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
 
       # ▸ Checkout and prepare the codebase
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
@@ -432,7 +445,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ▸ Regular PR path – download artefacts produced by the *build* jobs
+      # ▸ Regular PR path – download the Talos disk from build-talos and pr.patch from finalize
       - name: "Download Talos image (regular PR)"
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
