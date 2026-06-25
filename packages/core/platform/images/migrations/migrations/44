@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
 if kubectl get deployment flux-tenants -n cozy-fluxcd >/dev/null 2>&1; then
   # No early-close (head) in the pipe: under pipefail a large name list would
   # SIGPIPE kubectl and abort the migration.
@@ -23,21 +26,6 @@ if kubectl get deployment flux-tenants -n cozy-fluxcd >/dev/null 2>&1; then
   fi
 fi
 
-# Stamp version.
-# Mirror migration 43's labeled manifest. A label-less apply by the same field
-# manager would strip the platform.cozystack.io/no-delete label, dropping
-# cozystack-version out of the cozystack-no-delete-guardrail
-# ValidatingAdmissionPolicy. templates/cozystack-version.yaml only re-renders
-# the labeled ConfigMap on first install, so the label must be carried inline
-# here.
-kubectl apply --filename - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cozystack-version
-  namespace: cozy-system
-  labels:
-    platform.cozystack.io/no-delete: "true"
-data:
-  version: "45"
-EOF
+# Stamp version. The labeled manifest lives in the shared helper so it cannot
+# drift back to a label-less apply that strips platform.cozystack.io/no-delete.
+stamp_cozystack_version 45
