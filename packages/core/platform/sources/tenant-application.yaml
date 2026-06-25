@@ -19,6 +19,8 @@ spec:
         - cozystack.info-application
         - cozystack.monitoring-application
         - cozystack.etcd-application
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
