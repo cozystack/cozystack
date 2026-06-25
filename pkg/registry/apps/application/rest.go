@@ -189,6 +189,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		if nsErrs := r.validateTenantNamespaceLength(app.Namespace, app.Name); len(nsErrs) > 0 {
 			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
 		}
+		// Enforce hierarchical quota allocation: a child tenant's declared
+		// quota may not exceed its parent's remaining (un-carved) quota.
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
 	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
@@ -532,6 +537,15 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Enforce hierarchical quota allocation on quota changes too: raising a
+	// child tenant's declared quota above its parent's remaining budget is
+	// rejected the same way as on create.
+	if r.kindName == "Tenant" {
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
 	}
 
 	r.warnLegacyPresets(app)
