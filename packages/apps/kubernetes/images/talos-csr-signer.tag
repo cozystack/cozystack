@@ -1,0 +1,1 @@
+ghcr.io/clastix/talos-csr-signer:latest@sha256:827b62b5fc2859d66f06f5c1f8d2473ab7109d0600d551269d8ddb98e4a39a18

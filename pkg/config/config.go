@@ -19,6 +19,7 @@ package config
 import (
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 )
 
@@ -34,6 +35,19 @@ const HelmInstallTimeoutAnnotation = "release.cozystack.io/helm-install-timeout"
 // letting a kind keep a short install budget but a longer upgrade budget
 // (or vice versa).
 const HelmUpgradeTimeoutAnnotation = "release.cozystack.io/helm-upgrade-timeout"
+
+// HelmInstallDisableWaitAnnotation is the ApplicationDefinition metadata
+// annotation key that sets HelmReleaseSpec.Install.DisableWait and
+// Upgrade.DisableWait to true for a given Application kind. Use when the
+// parent chart emits child HelmReleases whose readiness depends on
+// post-install hooks of the parent (e.g. the Kubernetes Application's
+// talos-reconcile hook produces the TalosConfigTemplate that worker
+// MachineSets clone from; without DisableWait the helm-controller waits
+// for the emitted in-tenant addon HelmReleases to be Ready before
+// running the hook, but those HelmReleases can never be Ready because
+// they have no worker nodes to schedule on yet, and the hook never
+// runs).
+const HelmInstallDisableWaitAnnotation = "release.cozystack.io/helm-install-disable-wait"
 
 // helmTimeoutPattern mirrors the CRD validation pattern used by Flux
 // helm-controller on HelmReleaseSpec.Install.Timeout (ms/s/m/h units only).
@@ -82,6 +96,25 @@ func ParsePositiveDuration(flagName, raw string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be > 0 (got %q)", flagName, raw)
 	}
 	return d, nil
+}
+
+// ParseHelmInstallDisableWaitAnnotation parses the value of the
+// release.cozystack.io/helm-install-disable-wait annotation. Accepts
+// "true" or "false" (case-insensitive); empty returns (false, nil) so
+// callers can leave HelmInstallDisableWait zero and let flux defaults
+// apply.
+func ParseHelmInstallDisableWaitAnnotation(raw string) (bool, error) {
+	raw = strings.TrimSpace(raw)
+	switch {
+	case raw == "":
+		return false, nil
+	case strings.EqualFold(raw, "true"):
+		return true, nil
+	case strings.EqualFold(raw, "false"):
+		return false, nil
+	default:
+		return false, fmt.Errorf("must be \"true\" or \"false\", got %q", raw)
+	}
 }
 
 // ResourceConfig represents the structure of the configuration file.
@@ -147,6 +180,11 @@ type ReleaseConfig struct {
 	// round-trip distinct from an unset field if ReleaseConfig is ever
 	// marshalled.
 	HelmReleaseMaxHistory int `yaml:"helmReleaseMaxHistory"`
+	// HelmInstallDisableWait sets HelmReleaseSpec.Install.DisableWait and
+	// Upgrade.DisableWait to true for this Application kind. Populated
+	// from the release.cozystack.io/helm-install-disable-wait
+	// annotation on the ApplicationDefinition at start-up.
+	HelmInstallDisableWait bool `yaml:"helmInstallDisableWait,omitempty"`
 }
 
 // ChartRefConfig references a Flux source artifact for the Helm chart.

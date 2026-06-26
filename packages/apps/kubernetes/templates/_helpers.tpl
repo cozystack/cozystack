@@ -51,6 +51,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+DNS domain used INSIDE the tenant cluster (kubelet --cluster-domain,
+apiserver --service-cluster-ip-range FQDNs, CoreDNS authoritative zone).
+Pinned to Kamaji's default `networkProfile.clusterDomain` since this chart
+does not currently expose a knob to override it. If that ever becomes
+configurable, plumb the override here and every consumer picks it up.
+
+Distinct from .Values._cluster["cluster-domain"], which is the MANAGEMENT
+cluster domain (e.g. cozy.local) where the Kamaji control plane and
+monitoring stack live.
+*/}}
+{{- define "kubernetes.tenantClusterDomain" -}}
+cluster.local
+{{- end }}
+
+{{/*
 wait-for-kubeconfig init container shared by the control-plane-side
 Deployments (cluster-autoscaler, kccm, kcsi-controller) that mount the
 *-admin-kubeconfig Secret provisioned asynchronously by Kamaji. The
@@ -59,10 +74,10 @@ Kamaji is still bootstrapping; this container polls the mounted path and
 exits only when super-admin.svc appears, which happens after kubelet's
 optional-Secret refresh cycle.
 
-The 10m deadline stays strictly below the 15m HelmRelease
+The 10m deadline stays strictly below the 20m HelmRelease
 Install.Timeout set by cozystack-api for the Kubernetes kind (via the
-release.cozystack.io/helm-install-timeout annotation) so the
-CrashLoopBackOff surfaces before flux remediation fires and uninstalls
+release.cozystack.io/helm-install-timeout annotation on the cozyrds
+entry) so the CrashLoopBackOff surfaces before flux remediation fires and uninstalls
 the Cluster CR.
 
 The default image lives in images/busybox.tag and points directly at

@@ -81,7 +81,7 @@ storageClass: replicated
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
 ## @field {string} instanceType="u1.medium" - Virtual machine instance type.
 ## @x-cozystack-options {source: instancetype}
-## @field {quantity} diskSize="20Gi" - Persistent disk size for kubelet and containerd data.
+## @field {quantity} diskSize="20Gi" - System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
 ## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 ## @x-cozystack-options {source: storageclass}
 ## @field {[]string} roles - List of node roles.
@@ -110,7 +110,6 @@ nodeGroups:
 ## @value v1.33
 ## @value v1.32
 ## @value v1.31
-## @value v1.30
 
 ## @param {Version} version - Kubernetes major.minor version to deploy
 version: "v1.35"
@@ -273,7 +272,37 @@ controlPlane:
 
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+## @field {string} [kubectl] - Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+## @field {string} [talosCsrSigner] - Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
 
 ## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
 images:
   waitForKubeconfig: ""
+  kubectl: ""
+  talosCsrSigner: ""
+
+##
+## @section Talos Worker Image
+##
+
+## @typedef {struct} Talos - Talos worker image configuration.
+## @field {string} version - Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+
+## @param {Talos} talos - Talos worker image configuration.
+talos:
+  version: "v1.13.0"
+  schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+
+##
+## @section Node Health Check
+##
+
+## @typedef {struct} NodeHealthCheck - MachineHealthCheck configuration for worker node groups.
+## @field {string} maxUnhealthy="50%" - Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
+## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
+
+## @param {NodeHealthCheck} nodeHealthCheck - MachineHealthCheck tuning for worker node groups.
+nodeHealthCheck:
+  maxUnhealthy: "50%"
+  nodeStartupTimeout: "10m"

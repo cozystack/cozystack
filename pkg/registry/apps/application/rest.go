@@ -1606,6 +1606,23 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		},
 	}
 
+	// Per-Application HelmRelease wait disablement. An
+	// ApplicationDefinition that sets
+	// release.cozystack.io/helm-install-disable-wait: "true" gets
+	// Install.DisableWait and Upgrade.DisableWait set on the emitted
+	// HelmRelease. Required for parent charts whose post-install hooks
+	// produce resources the in-tenant child HelmReleases would
+	// otherwise wait for (e.g. the Kubernetes Application's
+	// talos-reconcile hook generates the TalosConfigTemplate the
+	// worker MachineSet clones from; without DisableWait the
+	// helm-controller blocks the hook on cilium/coredns/csi/etc.
+	// HelmReleases that themselves can never become Ready until those
+	// workers exist).
+	if r.releaseConfig.HelmInstallDisableWait {
+		helmRelease.Spec.Install.DisableWait = true
+		helmRelease.Spec.Upgrade.DisableWait = true
+	}
+
 	return helmRelease, nil
 }
 
