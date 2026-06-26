@@ -45,7 +45,7 @@
         ],
         "properties": {
           "diskSize": {
-            "description": "Persistent disk size for kubelet and containerd data.",
+            "description": "System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.",
             "default": "20Gi",
             "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
             "anyOf": [
@@ -185,8 +185,7 @@
         "v1.34",
         "v1.33",
         "v1.32",
-        "v1.31",
-        "v1.30"
+        "v1.31"
       ]
     },
     "host": {
@@ -898,10 +897,62 @@
       "type": "object",
       "default": {},
       "properties": {
+        "kubectl": {
+          "description": "Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.",
+          "type": "string",
+          "default": ""
+        },
+        "talosCsrSigner": {
+          "description": "Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.",
+          "type": "string",
+          "default": ""
+        },
         "waitForKubeconfig": {
           "description": "Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.",
           "type": "string",
           "default": ""
+        }
+      }
+    },
+    "talos": {
+      "description": "Talos worker image configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "schematicID",
+        "version"
+      ],
+      "properties": {
+        "schematicID": {
+          "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
+          "type": "string",
+          "default": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+        },
+        "version": {
+          "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
+          "type": "string",
+          "default": "v1.13.0"
+        }
+      }
+    },
+    "nodeHealthCheck": {
+      "description": "MachineHealthCheck tuning for worker node groups.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "maxUnhealthy",
+        "nodeStartupTimeout"
+      ],
+      "properties": {
+        "maxUnhealthy": {
+          "description": "Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default \"50%\" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to \"0%\" once the fleet is stable on Talos workers.",
+          "type": "string",
+          "default": "50%"
+        },
+        "nodeStartupTimeout": {
+          "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).",
+          "type": "string",
+          "default": "10m"
         }
       }
     }

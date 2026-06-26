@@ -6,7 +6,7 @@ sourceRef:
 migrations:
   enabled: false
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.0@sha256:8bf61f17e99eb4a3365394e3d97ac52a1d68cc84aa104894ecb09de25721dc1d
-  targetVersion: 45
+  targetVersion: 47
 # Bundle deployment configuration
 bundles:
   system:
@@ -49,6 +49,13 @@ networking:
 publishing:
   host: "example.org"
   ingressName: tenant-root
+  # Optional namespace of a SEPARATE Gateway / ingressClass that system
+  # components attach their admin routes to (currently Keycloak) — e.g. one
+  # bound to a private IP, unreachable from the public internet. Empty means
+  # admin endpoints share the same ingress as everything else (ingressName).
+  # The private Gateway itself is NOT created by cozystack; provision it out
+  # of band, then point this at its namespace to move admin traffic onto it.
+  ingressNameAdmin: ""
   exposedServices:
     - api
     - dashboard

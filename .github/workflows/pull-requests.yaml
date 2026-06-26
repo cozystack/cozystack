@@ -175,7 +175,10 @@ jobs:
         run: |
           safe="$(echo "$PKG" | tr '/' '-')"
           mkdir -p _out/fragments
-          git diff HEAD > "_out/fragments/${safe}.patch"
+          # --binary so vendored binary provider bundles (components*.gz),
+          # which some package image targets regenerate, survive reassembly
+          # in finalize (a plain "Binary files differ" stub is unappliable).
+          git diff --binary HEAD > "_out/fragments/${safe}.patch"
           echo "safe=${safe}" >> "$GITHUB_OUTPUT"
           echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
       - name: Upload patch fragment
@@ -244,7 +247,7 @@ jobs:
       - name: Capture Talos patch fragment
         run: |
           mkdir -p _out/fragments
-          git diff HEAD > _out/fragments/talos.patch
+          git diff --binary HEAD > _out/fragments/talos.patch
           echo "Talos fragment:"; git --no-pager diff --stat HEAD
       - name: Upload Talos patch fragment
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -356,7 +359,9 @@ jobs:
       - name: Assemble pr.patch
         run: |
           mkdir -p _out/assets
-          git diff HEAD > _out/assets/pr.patch
+          # --binary so regenerated provider bundles (components*.gz) stay in
+          # the patch e2e applies; mirrors main's pr.patch binary fix (#e566992).
+          git diff --binary HEAD > _out/assets/pr.patch
           echo "Final pr.patch:"; git --no-pager diff --stat HEAD
       - name: Upload git diff patch
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
