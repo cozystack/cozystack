@@ -25,7 +25,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     permissions:
-      # Upload CodeQL results to the code-scanning dashboard.
+      # Upload CodeQL results to the code-scanning dashboard. On pull_request
+      # this is also what lets CodeQL post new-alert annotations on the diff.
       security-events: write
       # Check out the repository.
       contents: read
@@ -37,18 +38,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # Go only supports "autobuild" or "manual" (not "none"). autobuild
-          # discovers every go.mod in the tree and extracts each module
-          # separately (the root module, api/apps/v1alpha1, and the three
-          # nested image modules that `go build ./...` from the root never
-          # reaches), so coverage is broader than a single root build. It first
-          # attempts `make` from the repo root — which runs the default Makefile
-          # goal, including a network `git fetch upstream --tags` — before
-          # falling back to the Go build. setup-go below pins the toolchain to
-          # the go.mod version so autobuild does not use whatever Go the runner
-          # ships.
+          # Go uses build-mode: manual. The alternative, autobuild, runs `make`
+          # from the repo root, whose included hack/common-envs.mk does a
+          # `$(shell git fetch upstream --tags)` at parse time — a network call
+          # to a non-origin remote that has no bearing on the analysis and is a
+          # flake vector. Instead the "Build Go modules" step below compiles
+          # each first-party module explicitly. This keeps the same coverage
+          # autobuild aimed for — the root module, api/apps/v1alpha1, and the
+          # three nested image modules — while the _repos/* upstream clones are
+          # gitignored and absent on a clean checkout, so they are excluded for
+          # free. setup-go pins the toolchain to the root go.mod version.
           - language: go
-            build-mode: autobuild
+            build-mode: manual
 
     steps:
       - name: Checkout repository
@@ -67,6 +68,26 @@ jobs:
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
+
+      # CodeQL traces these compiler invocations to build its database. Each
+      # first-party module is a separate go.mod, so `go build ./...` from the
+      # root never reaches the nested ones — build each explicitly. No `make`,
+      # so no upstream fetch.
+      - name: Build Go modules
+        if: matrix.build-mode == 'manual'
+        shell: bash
+        run: |
+          set -euxo pipefail
+          for mod in \
+            . \
+            api/apps/v1alpha1 \
+            packages/apps/kubernetes/images/kubevirt-csi-driver \
+            packages/system/dashboard/images/token-proxy \
+            packages/system/kubeovn-webhook/images/kubeovn-webhook; do
+            echo "::group::go build ${mod}"
+            ( cd "${mod}" && go build ./... )
+            echo "::endgroup::"
+          done
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2

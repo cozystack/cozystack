@@ -74,11 +74,20 @@ Public disclosure will typically happen through one or more of the following:
 Security is part of the normal Cozystack development and release process. Current project practices include:
 
 - maintainer-owned review through pull requests and `CODEOWNERS`
-- automated pull request checks, including pre-commit validation, unit tests, builds, and end-to-end testing
+- automated pull request checks, including pre-commit validation, unit tests, builds, end-to-end testing, and static application security testing (CodeQL)
 - release automation with patch releases, release branches, and backport workflows
 - ongoing maintenance of packaged dependencies and platform integrations across supported release lines
 
 Because Cozystack is an integration-heavy platform, some vulnerabilities may require coordination across multiple repositories or with upstream maintainers before a public fix can be released.
+
+### Automated security analysis
+
+Two scanners run continuously against this repository:
+
+- **CodeQL** (static analysis). Runs on every pull request to `main`, on push to `main`, and on a weekly schedule. The Go database is built with CodeQL's `manual` build mode — each first-party module is compiled explicitly, so the analysis does not depend on the project `Makefile` (which fetches upstream tags) and stays reproducible. On a pull request CodeQL reports only alerts that are *new relative to `main`* and annotates them on the changed lines. New findings are expected to be resolved before merge — either by fixing the code, or, for a false positive or accepted risk, by dismissing the alert in the **Security → Code scanning** tab with a recorded reason (`False positive`, `Won't fix`, or `Used in tests`).
+- **OpenSSF Scorecard** (supply-chain posture). Runs weekly and on branch-protection changes, and publishes results to the public Scorecard API at <https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack>. Scorecard results are intentionally **not** uploaded to GitHub code scanning: it posts one alert per check, which would bury CodeQL's first-party findings. The scorecard.dev badge is the canonical view.
+
+CodeQL is intended to run as a required pull-request check, so that a newly introduced alert at error severity blocks merge until it is fixed or dismissed.
 
 ## Security Fixes and Announcements
 
