@@ -182,6 +182,10 @@ spec:
               value: "docker"
             - name: KC_HOSTNAME
               value: https://{{ $ingressHost }}
+            {{- with .Values.ingress.adminHost }}
+            - name: KC_HOSTNAME_ADMIN
+              value: https://{{ . }}
+            {{- end }}
             - name: JAVA_OPTS_APPEND
               value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
             {{- with .Values.extraEnv }}

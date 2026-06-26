@@ -1,0 +1,25 @@
+suite: apps.yaml admin-ingress platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# Asserts that publishing.ingressNameAdmin lands in _cluster.expose-ingress-admin,
+# the key read by system charts (currently keycloak) to attach admin routes to a
+# separate Gateway/ingressClass. Empty by default so admin shares expose-ingress.
+tests:
+  - it: writes an empty expose-ingress-admin by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'expose-ingress-admin:\s*""'
+
+  - it: writes the configured admin ingress namespace
+    set:
+      publishing.ingressNameAdmin: cozy-private
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'expose-ingress-admin:\s*"cozy-private"'
