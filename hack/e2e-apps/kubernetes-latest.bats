@@ -11,3 +11,11 @@
   # spinning up a second ~25m Kamaji bringup.
   run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true'
 }
+
+# Version-independent, so it runs once here (not in kubernetes-previous.bats).
+# Does not provision a tenant cluster -- it renders the kubernetes chart against
+# the live management cluster -- so it is kept separate from the heavy tenant
+# test above and runs regardless of that test's outcome.
+@test "Tenant default StorageClass is never the kubevirt alias (PR #2872 B1 regression)" {
+  verify_storageclass_fallback_default
+}

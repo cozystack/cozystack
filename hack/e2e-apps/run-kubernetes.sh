@@ -665,3 +665,129 @@ EOF
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
 }
+
+# B1 regression coverage (PR #2872 review). The tenant's default StorageClass
+# must be chosen among the *propagated* classes and must never be the legacy
+# "kubevirt" alias -- even when the management cluster exposes only remote
+# LINSTOR classes whose names sort alphabetically after "kubevirt" and none is
+# named the configured storageClass (default "replicated"). That is the
+# feature's own multi-tier target configuration. A regressed `sortAlpha | first`
+# over a candidate set that still contained the inserted "kubevirt" alias would
+# pick it, pointing the tenant default at an infra class absent on the
+# management cluster -> default PVCs stay Pending with no error surfaced.
+#
+# helm-unittest cannot reach this branch: with no live cluster Helm `lookup`
+# returns empty, so the storageClasses map always collapses to the "replicated"
+# fallback (see packages/apps/kubernetes/tests/csi_test.yaml). It is therefore
+# exercised here against the live management cluster with a single server-side
+# dry-run render (helm v4 executes `lookup` against the API): add two remote
+# LINSTOR classes that sort after "kubevirt", remove "replicated" for the one
+# render, restore it immediately, then assert on the rendered -csi HelmRelease's
+# storageClasses map.
+verify_storageclass_fallback_default() {
+  echo "Verifying tenant default StorageClass selection with no 'replicated' class (PR #2872 B1 regression)..."
+
+  # Pre-cleanup: drop probe classes leaked by a previous failed run.
+  kubectl delete sc nvme ssd --ignore-not-found
+
+  # Two remote-accessible LINSTOR classes whose names sort AFTER "kubevirt".
+  kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ssd
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+
+  # Remove "replicated" only for the duration of the render below, so that
+  # neither the configured storageClass (default "replicated") nor "replicated"
+  # is in the propagated set -- forcing the `sortAlpha | first` selection branch.
+  kubectl delete sc replicated --ignore-not-found
+
+  # Server-side dry-run executes Helm `lookup` against the live cluster and
+  # renders the real storageClasses map. rc is captured separately (no pipe) so
+  # the management-cluster state is always restored before any assertion exits.
+  # The release namespace must be a valid tenant identifier (the chart's
+  # dashboard-resourcemap template enforces this), so render under tenant-test.
+  local raw rc
+  raw=$(timeout 120 helm install scprobe packages/apps/kubernetes \
+    --dry-run=server -n tenant-test \
+    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
+  rc=$?
+
+  # Restore management-cluster StorageClasses (inline, unconditional). This MUST
+  # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
+  # (per docs/agents/e2e-testing.md). The "replicated" manifest mirrors
+  # hack/e2e-post-install-prep.sh.
+  kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: replicated
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/autoPlace: "3"
+  linstor.csi.linbit.com/layerList: "drbd storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
+  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+  kubectl delete sc nvme ssd --ignore-not-found
+
+  if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then
+    echo "server-side dry-run render of the kubernetes chart failed (rc=$rc)" >&2
+    cat /tmp/sc-fallback-render.err >&2 || true
+    exit 1
+  fi
+
+  # Isolate the rendered -csi HelmRelease's storageClasses map.
+  local sc
+  sc=$(printf '%s' "$raw" | yq -p=json '.manifest' \
+    | yq 'select(.kind == "HelmRelease" and .metadata.name == "scprobe-csi") | .spec.values.storageClasses')
+  if [ -z "$sc" ] || [ "$sc" = "null" ]; then
+    echo "rendered scprobe-csi HelmRelease carries no storageClasses map" >&2
+    printf '%s' "$raw" | yq -p=json '.manifest' >&2
+    exit 1
+  fi
+
+  local default_count default_key kubevirt_present kubevirt_default
+  default_count=$(printf '%s' "$sc" | yq '[to_entries | .[] | select(.value.default == true)] | length')
+  default_key=$(printf '%s' "$sc" | yq 'to_entries | map(select(.value.default == true)) | .[0].key')
+  kubevirt_present=$(printf '%s' "$sc" | yq 'has("kubevirt")')
+  kubevirt_default=$(printf '%s' "$sc" | yq '.kubevirt.default')
+
+  # 1. Exactly one default. 2. The default is a propagated class (nvme/ssd),
+  # never the kubevirt alias. 3. The kubevirt alias still exists, non-default.
+  if [ "$default_count" != "1" ] \
+    || { [ "$default_key" != "nvme" ] && [ "$default_key" != "ssd" ]; } \
+    || [ "$kubevirt_present" != "true" ] \
+    || [ "$kubevirt_default" != "false" ]; then
+    echo "tenant default StorageClass selection regressed (PR #2872 B1):" >&2
+    echo "  default_count=$default_count default_key=$default_key kubevirt_present=$kubevirt_present kubevirt_default=$kubevirt_default" >&2
+    echo "  expected exactly one default among {nvme,ssd}; kubevirt present and non-default" >&2
+    printf 'rendered storageClasses:\n%s\n' "$sc" >&2
+    exit 1
+  fi
+  echo "StorageClass fallback-default OK (default='$default_key' among propagated classes; kubevirt alias non-default)"
+}
