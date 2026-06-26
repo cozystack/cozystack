@@ -49,6 +49,8 @@ jobs:
 
               // area/dashboard
               'dashboard':           'area/dashboard',
+              'cozystack-ui':        'area/dashboard',
+              'console':             'area/dashboard',
 
               // area/database
               'postgres':            'area/database',
