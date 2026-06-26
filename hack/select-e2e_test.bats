@@ -37,6 +37,26 @@
     fi
 }
 
+@test "engine-dependency change does not fan out via the ordering edge" {
+    # cert-manager is a dependency of cozystack-engine, and every app declares
+    # dependsOn cozystack-engine purely as an INSTALL-ORDERING edge (the app's
+    # *-rd HelmRelease waits for the ApplicationDefinition CRD). That edge must
+    # not propagate test selection: a cert-manager change selects only its
+    # genuine direct dependents (postgres, harbor, ...), never unrelated apps
+    # like kafka that reach cert-manager solely through the engine.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/cert-manager/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    echo "$output" | grep -wq postgres
+    echo "$output" | grep -wq harbor
+    if echo "$output" | grep -wq kafka; then
+        echo "cert-manager change must not fan out via engine; got: $output" >&2
+        exit 1
+    fi
+}
+
 @test "networking change triggers full suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT

@@ -1,4 +1,4 @@
-FROM golang:1.25 AS builder
+FROM golang:1.26 AS builder
 
 ARG VERSION=v1.10.6
 ARG LINSTOR_WAIT_UNTIL_VERSION=v0.3.1

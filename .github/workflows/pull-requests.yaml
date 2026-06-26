@@ -138,11 +138,20 @@ jobs:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       # docker-container driver: isolated buildkit per job (no shared-buildkit
       # contention) and a prerequisite for the mode=max cache reads (#2938).
-      - name: Set up Buildx (docker-container driver)
+      # Its buildkitd also routes docker.io base-image pulls through
+      # mirror.gcr.io (hack/buildkitd.toml): the Build step authenticates only
+      # to the push registry (OCIR), so base images (golang/ubuntu/nginx/...)
+      # would otherwise be pulled from Docker Hub anonymously and intermittently
+      # trip its anonymous-pull rate limit; the mirror sidesteps that and falls
+      # back to Docker Hub on a miss/outage. Create the builder under the SAME
+      # DOCKER_CONFIG the Build step reads (runner.temp/.docker, holding the
+      # OCIR auth) so buildx forwards push/cache auth to the container builder.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build ${{ matrix.pkg }}
@@ -150,6 +159,9 @@ jobs:
         env:
           PKG: ${{ matrix.pkg }}
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Build on the docker-container builder created above so base-image
+          # pulls go through the docker.io mirror (BUILDX_ARGS adds
+          # --builder=$(BUILDER)).
           BUILDER: ${{ steps.buildx.outputs.name }}
           # Unique per (PR, commit) so concurrent PR builds never push the same
           # tag. PR images are consumed by digest; :latest belongs to releases.
@@ -208,11 +220,15 @@ jobs:
           registry: iad.ocir.io
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-      - name: Set up Buildx (docker-container driver)
+      # buildkitd-config routes docker.io base-image pulls through mirror.gcr.io
+      # (hack/buildkitd.toml) so the talos image build dodges Docker Hub's
+      # anonymous-pull rate limit; see the build job for the full rationale.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build Talos image (matchbox + installer tarball)
@@ -316,11 +332,15 @@ jobs:
           registry: iad.ocir.io
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-      - name: Set up Buildx (docker-container driver)
+      # buildkitd-config routes docker.io base-image pulls through mirror.gcr.io
+      # (hack/buildkitd.toml) so the installer build dodges Docker Hub's
+      # anonymous-pull rate limit; see the build job for the full rationale.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
         id: buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
         with:
           driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       # Builds the operator image AND flux-pushes the now-fully-patched packages

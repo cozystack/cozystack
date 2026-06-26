@@ -32,6 +32,19 @@ seaweedfs:
       type: "emptyDir"
     logs:
       type: ""
+    # The master's /cluster/status handler calls topo.Leader(), which backs off
+    # up to ~20s (MaxElapsedTime=20s) while the node has no leader in view — e.g.
+    # a master that was briefly the initial raft leader then was demoted during
+    # bootstrap. The default 10s probe timeout is shorter than that worst case, so
+    # such a master is liveness-killed every ~137s into a permanent CrashLoop and
+    # the master StatefulSet never reaches full readiness, timing out the install.
+    # Both probes must allow more than the 20s backoff (the volume component in
+    # this chart already uses 30s). Override only timeoutSeconds; Helm deep-merges
+    # these onto the subchart defaults, keeping enabled/path/initialDelay/etc.
+    livenessProbe:
+      timeoutSeconds: 30
+    readinessProbe:
+      timeoutSeconds: 30
   volume:
     replicas: 2
     resizeHook:
