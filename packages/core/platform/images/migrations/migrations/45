@@ -39,6 +39,9 @@
 
 set -euo pipefail
 
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
 DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 FAILURES=0
 PATCHED=0
@@ -118,21 +121,9 @@ if [ "$FAILURES" -gt 0 ]; then
   exit 1
 fi
 
-# Stamp version=46. Mirror migration 43's labeled heredoc — a label-less
-# apply by the same field manager (kubectl create cm | kubectl apply)
-# would strip the platform.cozystack.io/no-delete label migration 42
-# added, dropping cozystack-version out of the
-# cozystack-no-delete-guardrail ValidatingAdmissionPolicy.
-# templates/cozystack-version.yaml only re-renders the labeled ConfigMap
-# on first install, so the label must be carried inline here.
-kubectl apply --filename - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cozystack-version
-  namespace: cozy-system
-  labels:
-    platform.cozystack.io/no-delete: "true"
-data:
-  version: "46"
-EOF
+# Stamp version=46. The labeled manifest lives in the shared helper so it
+# cannot drift back to a label-less apply that strips the
+# platform.cozystack.io/no-delete label migration 42 added (which would drop
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy).
+stamp_cozystack_version 46
