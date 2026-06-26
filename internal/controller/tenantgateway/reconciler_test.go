@@ -3639,66 +3639,49 @@ func TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough(t *testing.
 }
 
 // TestReconcile_Port443ListenersShareKinds is a regression test for
-// cilium#45559: when both HTTPS-terminate and TLS-passthrough listeners
-// land on port 443, every one of them must carry the SAME
-// allowedRoutes.kinds set. Divergent kinds cause Cilium to collapse all
-// port-443 listeners into one, which then drops the HTTPRoutes that were
-// accepted by the original HTTPS listener.
+// cilium#45559 / cozystack#3070. It pins two distinct security contracts
+// that must hold simultaneously across all three cert modes:
 //
-// The fix (Option B): each port-443 listener advertises both HTTPRoute
-// and TLSRoute. Gateway API rejects any HTTPRoute that targets a
-// Passthrough sectionName at route-attach time, so the expanded kinds do
-// not weaken the security boundary — GRPCRoute/TCPRoute/UDPRoute are
-// still excluded.
+//  1. ANTI-COLLAPSE (cilium#45559): every port-443 listener must carry
+//     IDENTICAL allowedRoutes.kinds. Divergent kinds cause Cilium to
+//     merge all port-443 listeners into one, silently dropping the
+//     HTTPRoutes that were accepted by the HTTPS-terminate listeners.
+//
+//  2. FORBIDDEN KINDS: GRPCRoute, TCPRoute, and UDPRoute must NEVER
+//     appear in any port-443 listener's kinds set. These route types are
+//     not gated by the cozystack-route-hostname-policy VAP; admitting them
+//     would let a tenant serve arbitrary traffic under the apex cert
+//     without admission control.
+//
+//  3. NON-EMPTY: no port-443 listener may have nil or empty
+//     allowedRoutes.kinds. An empty set means Gateway API defaults to all
+//     route kinds — the same security hole as explicitly listing
+//     GRPCRoute/TCPRoute/UDPRoute.
+//
+// The canonical kinds set is exactly [HTTPRoute, TLSRoute] (both in the
+// gateway.networking.k8s.io group). Gateway API rejects any HTTPRoute
+// that targets a Passthrough sectionName at route-attach time, so listing
+// HTTPRoute on TLS-passthrough listeners does not widen the actual attach
+// surface — it only satisfies the Cilium same-port same-kinds invariant.
+//
+// All three cert modes are exercised because they produce different sets of
+// port-443 listeners:
+//   - HTTP-01: per-app HTTPS listener (from HTTPRoute) + TLS-passthrough.
+//   - DNS-01:  wildcard + apex + per-child-apex HTTPS listeners + TLS-passthrough.
+//   - existingSecret: same listener topology as DNS-01, operator-supplied cert.
 func TestReconcile_Port443ListenersShareKinds(t *testing.T) {
-	s := newScheme(t)
-	tgw := &gatewayv1alpha1.TenantGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
-		Spec: gatewayv1alpha1.TenantGatewaySpec{
-			Apex:                   "foo.example.com",
-			CertMode:               gatewayv1alpha1.CertModeHTTP01,
-			GatewayClassName:       "cilium",
-			AttachedNamespaces:     []string{"cozy-harbor"},
-			TLSPassthroughServices: []string{"api"},
-		},
+	// canonicalPort443Kinds is the expected sorted "group/kind" key for
+	// every port-443 listener. Sorted so reflect.DeepEqual is order-independent.
+	canonicalPort443Kinds := []string{
+		gatewayv1.GroupName + "/HTTPRoute",
+		gatewayv1.GroupName + "/TLSRoute",
 	}
-	// Attach an HTTPRoute so the controller renders an HTTPS listener for
-	// harbor.foo.example.com in addition to the TLS-passthrough listener
-	// for api.foo.example.com.
-	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+	sort.Strings(canonicalPort443Kinds)
 
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw).
-		Build()
-
-	r := &Reconciler{Client: c, Scheme: s}
-	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	gw := &gatewayv1.Gateway{}
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
-		t.Fatalf("get Gateway: %v", err)
-	}
-
-	// Collect every listener on port 443.
-	var port443 []gatewayv1.Listener
-	for _, l := range gw.Spec.Listeners {
-		if l.Port == 443 {
-			port443 = append(port443, l)
-		}
-	}
-	if len(port443) < 2 {
-		t.Fatalf("expected at least 2 port-443 listeners (one HTTPS, one TLS-passthrough), got %d: %+v", len(port443), gw.Spec.Listeners)
-	}
-
-	// Canonical kinds key: sorted "Group/Kind" strings for comparison.
+	// kindsKey normalises a RouteGroupKind slice to a sorted []string so
+	// all subsequent comparisons are order-independent.
 	kindsKey := func(kinds []gatewayv1.RouteGroupKind) []string {
-		var out []string
+		out := make([]string, 0, len(kinds))
 		for _, k := range kinds {
 			g := ""
 			if k.Group != nil {
@@ -3710,28 +3693,196 @@ func TestReconcile_Port443ListenersShareKinds(t *testing.T) {
 		return out
 	}
 
-	allowedKinds := []string{
-		gatewayv1.GroupName + "/HTTPRoute",
-		gatewayv1.GroupName + "/TLSRoute",
-	}
-	sort.Strings(allowedKinds)
+	// assertPort443Contract sweeps every port-443 listener in gw and
+	// verifies the three contracts above, reporting all failures via t.
+	assertPort443Contract := func(t *testing.T, gw *gatewayv1.Gateway) {
+		t.Helper()
+		var port443 []gatewayv1.Listener
+		for _, l := range gw.Spec.Listeners {
+			if l.Port == 443 {
+				port443 = append(port443, l)
+			}
+		}
+		if len(port443) < 2 {
+			t.Fatalf("expected at least 2 port-443 listeners (terminate + passthrough), got %d: %+v", len(port443), gw.Spec.Listeners)
+		}
 
-	var referenceKinds []string
-	for i, l := range port443 {
-		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) == 0 {
-			t.Errorf("listener[%d] %q (port 443): allowedRoutes.kinds is empty", i, l.Name)
-			continue
+		var referenceKey []string
+		for i, l := range port443 {
+			// Contract 3: non-empty/non-nil.
+			if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) == 0 {
+				t.Errorf("listener[%d] %q: allowedRoutes.kinds is nil/empty — Gateway API defaults to all kinds, which bypasses the route-hostname VAP", i, l.Name)
+				continue
+			}
+
+			got := kindsKey(l.AllowedRoutes.Kinds)
+
+			// Contract 1: identical across all port-443 listeners.
+			if i == 0 {
+				referenceKey = got
+			} else if !reflect.DeepEqual(got, referenceKey) {
+				t.Errorf("listener[%d] %q kinds %v differ from listener[0] kinds %v — divergent kinds re-trigger cilium#45559 listener collapse", i, l.Name, got, referenceKey)
+			}
+
+			// Contract 1+2: must equal the canonical set exactly.
+			if !reflect.DeepEqual(got, canonicalPort443Kinds) {
+				t.Errorf("listener[%d] %q: got kinds %v, want canonical %v", i, l.Name, got, canonicalPort443Kinds)
+			}
+
+			// Contract 2: forbidden kinds must never appear by name.
+			kindSet := map[string]bool{}
+			for _, k := range l.AllowedRoutes.Kinds {
+				kindSet[string(k.Kind)] = true
+			}
+			for _, forbidden := range []string{"GRPCRoute", "TCPRoute", "UDPRoute"} {
+				if kindSet[forbidden] {
+					t.Errorf("listener[%d] %q: forbidden kind %q present — would bypass cozystack-route-hostname-policy VAP", i, l.Name, forbidden)
+				}
+			}
 		}
-		got := kindsKey(l.AllowedRoutes.Kinds)
-		if i == 0 {
-			referenceKinds = got
-		} else if !reflect.DeepEqual(got, referenceKinds) {
-			t.Errorf("listener[%d] %q kinds %v differ from listener[0] kinds %v (cilium#45559: divergent kinds collapse listeners)", i, l.Name, got, referenceKinds)
-		}
-		// No kind outside HTTPRoute/TLSRoute should appear.
-		if !reflect.DeepEqual(got, allowedKinds) {
-			t.Errorf("listener[%d] %q: expected kinds %v, got %v", i, l.Name, allowedKinds, got)
-		}
+	}
+
+	cases := []struct {
+		name    string
+		tgw     *gatewayv1alpha1.TenantGateway
+		objects []client.Object
+	}{
+		{
+			// HTTP-01: per-app HTTPS listener driven by attached HTTPRoute,
+			// plus TLS-passthrough for "api". Two port-443 listeners total.
+			name: "HTTP-01",
+			tgw: &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "foo.example.com",
+					CertMode:               gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName:       "cilium",
+					AttachedNamespaces:     []string{"cozy-harbor"},
+					TLSPassthroughServices: []string{"api"},
+				},
+			},
+			objects: []client.Object{
+				httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com"),
+			},
+		},
+		{
+			// DNS-01: wildcard + apex + per-child-apex HTTPS listeners rendered
+			// from the wildcard cert, plus TLS-passthrough for "api". The child
+			// namespace (tenant-foo-alice, with namespace.cozystack.io/gateway
+			// and namespace.cozystack.io/host labels) causes collectInheritingChildApexes
+			// to emit a *.alice.foo.example.com listener, giving us 4 port-443 listeners
+			// in total — the broadest surface for this regression.
+			name: "DNS-01",
+			tgw: &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "foo.example.com",
+					CertMode:               gatewayv1alpha1.CertModeDNS01,
+					GatewayClassName:       "cilium",
+					TLSPassthroughServices: []string{"api"},
+					DNS01: &gatewayv1alpha1.DNS01Config{
+						Provider: "cloudflare",
+						Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+							APITokenSecretRef: corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+								Key:                  "api-token",
+							},
+						},
+					},
+				},
+			},
+			objects: []client.Object{
+				// Helm-owned labels on own + child namespaces so
+				// collectInheritingChildApexes picks up the child apex.
+				&corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "tenant-foo",
+						Labels: map[string]string{
+							"namespace.cozystack.io/host":    "foo.example.com",
+							"namespace.cozystack.io/gateway": "tenant-foo",
+						},
+					},
+				},
+				&corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "tenant-foo-alice",
+						Labels: map[string]string{
+							"namespace.cozystack.io/host":    "alice.foo.example.com",
+							"namespace.cozystack.io/gateway": "tenant-foo",
+						},
+					},
+				},
+				// Route in child namespace — seeds a realistic scenario even
+				// though DNS-01 collectHostnameClaims returns nil (wildcard
+				// handles all hostnames).
+				httpRouteAttached("harbor", "tenant-foo-alice", "harbor.alice.foo.example.com"),
+			},
+		},
+		{
+			// existingSecret: same listener topology as DNS-01 but referencing
+			// the operator-supplied wildcard Secret. The child namespace produces
+			// the same *.alice.foo.example.com listener for 4 port-443 listeners.
+			name: "existingSecret",
+			tgw: &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "foo.example.com",
+					CertMode:               gatewayv1alpha1.CertModeExistingSecret,
+					GatewayClassName:       "cilium",
+					TLSPassthroughServices: []string{"api"},
+					WildcardSecretRef:      &corev1.LocalObjectReference{Name: "wildcard-tls"},
+				},
+			},
+			objects: []client.Object{
+				&corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "tenant-foo",
+						Labels: map[string]string{
+							"namespace.cozystack.io/host":    "foo.example.com",
+							"namespace.cozystack.io/gateway": "tenant-foo",
+						},
+					},
+				},
+				&corev1.Namespace{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "tenant-foo-alice",
+						Labels: map[string]string{
+							"namespace.cozystack.io/host":    "alice.foo.example.com",
+							"namespace.cozystack.io/gateway": "tenant-foo",
+						},
+					},
+				},
+				httpRouteAttached("harbor", "tenant-foo-alice", "harbor.alice.foo.example.com"),
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			builder := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(tc.tgw).
+				WithStatusSubresource(tc.tgw)
+			if len(tc.objects) > 0 {
+				builder = builder.WithObjects(tc.objects...)
+			}
+			c := builder.Build()
+
+			r := &Reconciler{Client: c, Scheme: s}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+			}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			gw := &gatewayv1.Gateway{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+				t.Fatalf("get Gateway: %v", err)
+			}
+
+			assertPort443Contract(t, gw)
+		})
 	}
 }
 

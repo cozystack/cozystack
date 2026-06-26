@@ -865,6 +865,11 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// (cilium#45559). In practice only TLSRoute attaches to a Passthrough
 	// listener, but listing HTTPRoute here is harmless — Gateway API
 	// rejects any HTTPRoute that references a Passthrough sectionName.
+	// NOTE: on Cilium 1.19.x each tls-<svc> listener will surface
+	// ResolvedRefs=False/InvalidRouteKinds on the raw Gateway object
+	// (cosmetic — Accepted, Programmed, traffic, and TenantGateway
+	// readiness are all unaffected); removable once Cilium 1.20 /
+	// cilium#45693 ships.
 	// The corresponding TLSRoute templates (cozystack-api, vm-exportproxy,
 	// cdi-uploadproxy) attach to these listeners by sectionName.
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
