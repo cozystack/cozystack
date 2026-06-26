@@ -1,0 +1,162 @@
+suite: seaweedfs post-delete cleanup hook removes orphaned PVCs and secrets
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+# After the seaweedfs module is disabled, the StatefulSet data PVCs
+# (data1-seaweedfs-system-volume-{0,1}) and the cert-manager TLS / db
+# secrets are left orphaned. The post-delete hook renders a Job (plus its
+# RBAC) that deletes the volume PVCs by label and the secrets by name.
+# All names are templated from .Release.Name: the leaked resources use the
+# {{ .Release.Name }}-system prefix because seaweedfs.yaml renders the
+# StatefulSet/cert HelmRelease as "{{ .Release.Name }}-system".
+
+tests:
+  - it: renders the cleanup ServiceAccount as a post-delete hook
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: grants delete on PVCs and only the 9 named secrets
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - seaweedfs-s3-ingress-tls
+              - seaweedfs-system-admin-cert
+              - seaweedfs-system-ca-cert
+              - seaweedfs-system-client-cert
+              - seaweedfs-system-filer-cert
+              - seaweedfs-system-master-cert
+              - seaweedfs-system-volume-cert
+              - seaweedfs-system-worker-cert
+              - seaweedfs-system-db-secret
+
+  - it: binds the cleanup Role to the cleanup ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - equal:
+          path: roleRef.name
+          value: seaweedfs-cleanup
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: seaweedfs-cleanup
+
+  - it: renders a hardened cleanup Job with the right hook metadata
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: seaweedfs-cleanup
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: deletes volume PVCs by label and the named secrets in the cleanup command
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root -l app\.kubernetes\.io/name=seaweedfs,app\.kubernetes\.io/instance=seaweedfs-system --ignore-not-found --wait=false'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete secret -n tenant-root seaweedfs-s3-ingress-tls seaweedfs-system-admin-cert seaweedfs-system-ca-cert seaweedfs-system-client-cert seaweedfs-system-filer-cert seaweedfs-system-master-cert seaweedfs-system-volume-cert seaweedfs-system-worker-cert seaweedfs-system-db-secret --ignore-not-found --wait=false'
+      # The PVC selector must NOT filter by component: the volume StatefulSet sets
+      # app.kubernetes.io/component to volume / volume-<pool> / volume-<zone>[-<pool>]
+      # depending on topology, so a component clause would leave non-default pools and
+      # MultiZone PVCs orphaned (the leak this hook fixes).
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'app\.kubernetes\.io/component='

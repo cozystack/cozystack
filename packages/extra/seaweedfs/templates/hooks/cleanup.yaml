@@ -1,0 +1,123 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "delete"]
+    resourceNames:
+      - {{ .Release.Name }}-s3-ingress-tls
+      - {{ .Release.Name }}-system-admin-cert
+      - {{ .Release.Name }}-system-ca-cert
+      - {{ .Release.Name }}-system-client-cert
+      - {{ .Release.Name }}-system-filer-cert
+      - {{ .Release.Name }}-system-master-cert
+      - {{ .Release.Name }}-system-volume-cert
+      - {{ .Release.Name }}-system-worker-cert
+      - {{ .Release.Name }}-system-db-secret
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-cleanup
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-cleanup
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-cleanup
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    "helm.sh/hook": post-delete
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-cleanup
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        fsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      containers:
+        - name: cleanup
+          image: docker.io/clastix/kubectl:v1.32
+          env:
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "Deleting orphaned SeaweedFS volume PVCs for {{ .Release.Name }}..."
+              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/name=seaweedfs,app.kubernetes.io/instance={{ .Release.Name }}-system --ignore-not-found --wait=false \
+                || echo "WARNING: SeaweedFS PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              echo "Deleting orphaned SeaweedFS cert/db secrets for {{ .Release.Name }}..."
+              kubectl delete secret -n {{ .Release.Namespace }} {{ .Release.Name }}-s3-ingress-tls {{ .Release.Name }}-system-admin-cert {{ .Release.Name }}-system-ca-cert {{ .Release.Name }}-system-client-cert {{ .Release.Name }}-system-filer-cert {{ .Release.Name }}-system-master-cert {{ .Release.Name }}-system-volume-cert {{ .Release.Name }}-system-worker-cert {{ .Release.Name }}-system-db-secret --ignore-not-found --wait=false \
+                || echo "WARNING: SeaweedFS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
+              echo "SeaweedFS cleanup complete."
