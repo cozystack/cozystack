@@ -752,15 +752,20 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		},
 	}
 
-	// HTTPS listeners restrict route attachment to HTTPRoute only —
-	// Layer 7 (cozystack-route-hostname-policy VAP) currently gates
-	// HTTPRoute and TLSRoute. With Gateway API v1.5.1 experimental
-	// CRDs in scope, GRPCRoute / TCPRoute / UDPRoute could otherwise
-	// attach by hostname and bypass the apex hostname check.
-	httpsAllowedRoutes := allowedRoutes.DeepCopy()
-	httpsAllowedRoutes.Kinds = []gatewayv1.RouteGroupKind{
+	// All port-443 listeners (HTTPS-terminate and TLS-passthrough) share
+	// the same kinds set so that Cilium does not collapse them into a
+	// single listener (cilium#45559: divergent allowedRoutes.kinds on the
+	// same port triggers listener merging that drops HTTPRoutes). Using
+	// both HTTPRoute and TLSRoute keeps the security posture intact —
+	// GRPCRoute / TCPRoute / UDPRoute are still excluded, so Layer 7
+	// (cozystack-route-hostname-policy VAP) continues to gate only the
+	// two expected route types.
+	port443Kinds := []gatewayv1.RouteGroupKind{
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
+		{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
 	}
+	httpsAllowedRoutes := allowedRoutes.DeepCopy()
+	httpsAllowedRoutes.Kinds = port443Kinds
 
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
 		// Both modes serve the apex and every subdomain off a single
@@ -854,20 +859,18 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 
 	// TLS-passthrough listeners. One per service in
 	// Spec.TLSPassthroughServices, named "tls-<service>", hostname
-	// "<service>.<apex>", port 443, mode Passthrough. AllowedRoutes
-	// restrict the kinds to TLSRoute (HTTPRoute makes no sense on a
-	// Passthrough listener). The corresponding TLSRoute templates
-	// (cozystack-api, vm-exportproxy, cdi-uploadproxy) attach to
-	// these listeners by sectionName.
+	// "<service>.<apex>", port 443, mode Passthrough. AllowedRoutes use
+	// the same port443Kinds set as the HTTPS-terminate listeners above so
+	// that Cilium does not collapse all port-443 listeners together
+	// (cilium#45559). In practice only TLSRoute attaches to a Passthrough
+	// listener, but listing HTTPRoute here is harmless — Gateway API
+	// rejects any HTTPRoute that references a Passthrough sectionName.
+	// The corresponding TLSRoute templates (cozystack-api, vm-exportproxy,
+	// cdi-uploadproxy) attach to these listeners by sectionName.
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
 		passthroughAllowed := *allowedRoutes
-		passthroughAllowed.Kinds = []gatewayv1.RouteGroupKind{
-			{
-				Group: ptrGroup(gatewayv1.GroupName),
-				Kind:  "TLSRoute",
-			},
-		}
+		passthroughAllowed.Kinds = port443Kinds
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName("tls-" + svc),
 			Port:     443,

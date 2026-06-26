@@ -18,6 +18,8 @@ package tenantgateway
 
 import (
 	"context"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -2012,9 +2014,19 @@ func TestReconcile_TLSPassthroughListenersRendered(t *testing.T) {
 		if l.TLS == nil || l.TLS.Mode == nil || *l.TLS.Mode != gatewayv1.TLSModePassthrough {
 			t.Errorf("%s TLS mode is not Passthrough: %+v", l.Name, l.TLS)
 		}
-		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 1 ||
-			l.AllowedRoutes.Kinds[0].Kind != "TLSRoute" {
-			t.Errorf("%s AllowedRoutes.Kinds restriction missing: %+v", l.Name, l.AllowedRoutes)
+		// Passthrough listeners carry the same port443Kinds set as
+		// HTTPS-terminate listeners (cilium#45559: divergent kinds
+		// collapse listeners). HTTPRoute and TLSRoute must both appear.
+		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 2 {
+			t.Errorf("%s AllowedRoutes.Kinds restriction missing or wrong count: %+v", l.Name, l.AllowedRoutes)
+			continue
+		}
+		kindNames := map[gatewayv1.Kind]bool{}
+		for _, k := range l.AllowedRoutes.Kinds {
+			kindNames[k.Kind] = true
+		}
+		if !kindNames["HTTPRoute"] || !kindNames["TLSRoute"] {
+			t.Errorf("%s AllowedRoutes.Kinds=%v, want both HTTPRoute and TLSRoute", l.Name, l.AllowedRoutes.Kinds)
 		}
 	}
 	if len(wanted) > 0 {
@@ -2411,19 +2423,19 @@ func TestReconcile_HTTP01DoesNotCreateWildcardCertificate(t *testing.T) {
 }
 
 // TestReconcile_HTTPSListenersRestrictRouteKindsToHTTPRoute pins the
-// round-7 hardening: every HTTPS (TLS-terminate) listener must declare
-// AllowedRoutes.Kinds=[HTTPRoute]. Without that explicit restriction
-// Gateway API's default behaviour permits any route kind whose hostname
-// matches a listener — so a tenant carrying RBAC for GRPCRoute /
-// TCPRoute / UDPRoute could attach by hostname to a TLS-terminate
-// listener, bypassing the route-hostname VAP (which only binds to
-// HTTPRoute and TLSRoute) and serving traffic under the apex cert
-// without admission validation.
+// hardening that every HTTPS (TLS-terminate) listener must declare an
+// explicit AllowedRoutes.Kinds set. Without it Gateway API's default
+// permits any route kind whose hostname matches a listener, so a tenant
+// with RBAC for GRPCRoute / TCPRoute / UDPRoute could attach and serve
+// traffic under the apex cert without admission validation.
+//
+// After the cilium#45559 fix the set is [HTTPRoute, TLSRoute] rather
+// than [HTTPRoute] alone — all port-443 listeners carry the same kinds
+// so that Cilium does not collapse them. GRPCRoute / TCPRoute / UDPRoute
+// are still excluded, preserving the original security posture.
 //
 // Both certMode branches are exercised: HTTP-01 (per-app https-<label>
-// listeners) and DNS-01 (the wildcard `https` + apex `https-apex`
-// pair). The TLS-passthrough listener test elsewhere already pins
-// Kinds=[TLSRoute] for that branch; this one covers TLS-terminate.
+// listeners) and DNS-01 (the wildcard `https` + apex `https-apex` pair).
 func TestReconcile_HTTPSListenersRestrictRouteKindsToHTTPRoute(t *testing.T) {
 	cases := []struct {
 		name string
@@ -2506,15 +2518,20 @@ func TestReconcile_HTTPSListenersRestrictRouteKindsToHTTPRoute(t *testing.T) {
 					continue
 				}
 				httpsCount++
-				if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 1 {
-					t.Fatalf("listener %s: expected exactly one allowed Kind, got %+v", l.Name, l.AllowedRoutes)
+				if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 2 {
+					t.Fatalf("listener %s: expected exactly 2 allowed Kinds (HTTPRoute+TLSRoute for cilium#45559), got %+v", l.Name, l.AllowedRoutes)
 				}
-				gk := l.AllowedRoutes.Kinds[0]
-				if gk.Kind != "HTTPRoute" {
-					t.Errorf("listener %s: AllowedRoutes.Kinds[0]=%q, want HTTPRoute", l.Name, gk.Kind)
+				kindNames := map[gatewayv1.Kind]bool{}
+				for _, k := range l.AllowedRoutes.Kinds {
+					kindNames[k.Kind] = true
 				}
-				if gk.Group == nil || *gk.Group != gatewayv1.Group(gatewayv1.GroupName) {
-					t.Errorf("listener %s: AllowedRoutes.Kinds[0].Group=%v, want %q", l.Name, gk.Group, gatewayv1.GroupName)
+				if !kindNames["HTTPRoute"] || !kindNames["TLSRoute"] {
+					t.Errorf("listener %s: AllowedRoutes.Kinds=%v, want both HTTPRoute and TLSRoute", l.Name, l.AllowedRoutes.Kinds)
+				}
+				for _, k := range l.AllowedRoutes.Kinds {
+					if k.Group == nil || *k.Group != gatewayv1.Group(gatewayv1.GroupName) {
+						t.Errorf("listener %s: Kind %s Group=%v, want %q", l.Name, k.Kind, k.Group, gatewayv1.GroupName)
+					}
 				}
 			}
 			if httpsCount == 0 {
@@ -3618,6 +3635,103 @@ func TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough(t *testing.
 	}
 	if !sawPassthrough {
 		t.Errorf("expected tls-api passthrough listener in existingSecret mode, got %+v", gw.Spec.Listeners)
+	}
+}
+
+// TestReconcile_Port443ListenersShareKinds is a regression test for
+// cilium#45559: when both HTTPS-terminate and TLS-passthrough listeners
+// land on port 443, every one of them must carry the SAME
+// allowedRoutes.kinds set. Divergent kinds cause Cilium to collapse all
+// port-443 listeners into one, which then drops the HTTPRoutes that were
+// accepted by the original HTTPS listener.
+//
+// The fix (Option B): each port-443 listener advertises both HTTPRoute
+// and TLSRoute. Gateway API rejects any HTTPRoute that targets a
+// Passthrough sectionName at route-attach time, so the expanded kinds do
+// not weaken the security boundary — GRPCRoute/TCPRoute/UDPRoute are
+// still excluded.
+func TestReconcile_Port443ListenersShareKinds(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-harbor"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	// Attach an HTTPRoute so the controller renders an HTTPS listener for
+	// harbor.foo.example.com in addition to the TLS-passthrough listener
+	// for api.foo.example.com.
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	// Collect every listener on port 443.
+	var port443 []gatewayv1.Listener
+	for _, l := range gw.Spec.Listeners {
+		if l.Port == 443 {
+			port443 = append(port443, l)
+		}
+	}
+	if len(port443) < 2 {
+		t.Fatalf("expected at least 2 port-443 listeners (one HTTPS, one TLS-passthrough), got %d: %+v", len(port443), gw.Spec.Listeners)
+	}
+
+	// Canonical kinds key: sorted "Group/Kind" strings for comparison.
+	kindsKey := func(kinds []gatewayv1.RouteGroupKind) []string {
+		var out []string
+		for _, k := range kinds {
+			g := ""
+			if k.Group != nil {
+				g = string(*k.Group)
+			}
+			out = append(out, g+"/"+string(k.Kind))
+		}
+		sort.Strings(out)
+		return out
+	}
+
+	allowedKinds := []string{
+		gatewayv1.GroupName + "/HTTPRoute",
+		gatewayv1.GroupName + "/TLSRoute",
+	}
+	sort.Strings(allowedKinds)
+
+	var referenceKinds []string
+	for i, l := range port443 {
+		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) == 0 {
+			t.Errorf("listener[%d] %q (port 443): allowedRoutes.kinds is empty", i, l.Name)
+			continue
+		}
+		got := kindsKey(l.AllowedRoutes.Kinds)
+		if i == 0 {
+			referenceKinds = got
+		} else if !reflect.DeepEqual(got, referenceKinds) {
+			t.Errorf("listener[%d] %q kinds %v differ from listener[0] kinds %v (cilium#45559: divergent kinds collapse listeners)", i, l.Name, got, referenceKinds)
+		}
+		// No kind outside HTTPRoute/TLSRoute should appear.
+		if !reflect.DeepEqual(got, allowedKinds) {
+			t.Errorf("listener[%d] %q: expected kinds %v, got %v", i, l.Name, allowedKinds, got)
+		}
 	}
 }
 
