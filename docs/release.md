@@ -246,13 +246,33 @@ Fires on every push to `main`. Reads each `docs/changelogs/vX.Y.Z.md` and PATCHe
 
 ## Stable tags come from rc promotion
 
-There is no nightly auto-bump of stable patch tags. A stable `vX.Y.Z` is created only by **promoting an existing release-candidate** that already passed e2e — never by rebuilding and never by a cron.
+A stable `vX.Y.Z` is created only by **promoting an existing release-candidate** that already passed e2e — never by rebuilding and never by a cron.
 
-- [`nightly-rc.yaml`](../.github/workflows/nightly-rc.yaml) cuts a write-once `vX.Y.Z-nightly.<date>` rc tag for each tracked target (`main` plus every `release-X.Y` maintenance branch) whose HEAD moved since the last nightly. These drive the normal rc build/e2e path and are never moved or deleted.
 - [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) is triggered manually once an rc has gone green. It retags the rc's already-built, e2e-passed image digests to the stable tag **by digest** (no rebuild — see [`hack/promote-retag.sh`](../hack/promote-retag.sh)), rewrites the rc version substring in the vendored `values.yaml` tags, and opens the `release-X.Y.Z` staging PR. Merging that PR creates the write-once stable tag at the merge commit (Phase 5) and publishes the release. Because the copy source is the immutable rc digest, the stable image is bit-for-bit the rc image that passed e2e.
-- [`retention.yaml`](../.github/workflows/retention.yaml) prunes old nightly rc tags (keeps the newest 14 per in-development line); rc and stable tags are never touched.
 
 So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. A maintainer can also cut any branch directly by pushing a `vX.Y.Z` tag; [`tags.yaml`](../.github/workflows/tags.yaml) fires on any `v*.*.*` tag push.
+
+## Nightly builds
+
+A nightly is an **installable copy of `main` on GHCR — not a rebuild and not a release**. [`build-main.yaml`](../.github/workflows/build-main.yaml) already builds every push to `main` into the CI registry (OCIR); the nightly promotes that build to the public release registry (GHCR) and proves it installs.
+
+[`nightly.yaml`](../.github/workflows/nightly.yaml) runs daily (gated by the `NIGHTLY_ENABLED` repo variable) in three stages:
+
+1. **mirror** — resolve the exact commit `cozystack-packages:main` was built from, then [`hack/nightly-mirror.sh`](../hack/nightly-mirror.sh) copies every cozystack-owned component image OCIR→GHCR **by digest** (bit-for-bit, no rebuild) and re-publishes the rewritten `cozystack-packages` artifact and the `cozy-installer` chart to GHCR, tagged `0.0.0-nightly.<YYYYMMDD>` plus a floating `nightly`.
+2. **build-disk** — assemble the Talos `nocloud` disk from the upstream siderolabs imager (the profile references only `ghcr.io/siderolabs/*`, so this needs no cozystack image and no rebuild) and publish it as a GHCR OCI artifact (`cozystack-nocloud`) so a nightly is installable on real hardware, not just in e2e.
+3. **e2e** — stage the published GHCR closure (rewritten tree + the `cozy-installer` chart pinned to the GHCR packages artifact + the disk) and run the **full** app suite. A nightly has no diff, so Test Impact Analysis does not apply.
+
+No GitHub release and no `api/apps/v1alpha1/*` Go-module tag are created for a nightly. [`retention.yaml`](../.github/workflows/retention.yaml) prunes old GHCR nightly versions (keeps the newest 14 per package; the floating `nightly`, release tags and untagged versions are never touched).
+
+Install a nightly:
+
+```bash
+helm upgrade --install cozystack \
+  oci://ghcr.io/cozystack/cozystack/cozy-installer --version 0.0.0-nightly.20260626
+# ...or --version nightly for the latest
+```
+
+The matching Talos node image is `ghcr.io/cozystack/cozystack/cozystack-nocloud:0.0.0-nightly.20260626` (pull with `oras`).
 
 ## Backports
 
@@ -524,15 +544,15 @@ If you find yourself doing the same manual fixup on two consecutive releases (e.
 
 ## Tag immutability
 
-Published tags are **write-once** — once a `vX.Y.Z`, rc, or nightly tag is pushed it is never moved or deleted. Moving a tag silently poisons the Go module proxy / pkg.go.dev cache for `api/apps/v1alpha1/vX.Y.Z` and drifts SBOM/provenance toolchains, so the release flow is built so a move is impossible by construction:
+Published tags are **write-once** — once a `vX.Y.Z` or rc tag is pushed it is never moved or deleted. (Nightlies are not git tags at all — they are GHCR OCI tags, see [Nightly builds](#nightly-builds).) Moving a tag silently poisons the Go module proxy / pkg.go.dev cache for `api/apps/v1alpha1/vX.Y.Z` and drifts SBOM/provenance toolchains, so the release flow is built so a move is impossible by construction:
 
 | File | Tag / branch handling |
 |------|------------------------|
 | [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) | Creates `vX.Y.Z` at the PR merge commit **write-once** (create if absent, no-op if unchanged, fail loudly if it would move — the merge commit is new, so there is nothing to move). The `release-X.Y` maintenance branch is fast-forward-only. |
-| [`tags.yaml`](../.github/workflows/tags.yaml) | The `api/apps/v1alpha1/<vTAG>` Go-submodule tag is write-once and created **only for stable tags** (never rc/nightly). The `release-X.Y.Z` staging branch is a mutable staging ref (compare-before-force: skipped when unchanged, force+log only when it genuinely moves). |
+| [`tags.yaml`](../.github/workflows/tags.yaml) | The `api/apps/v1alpha1/<vTAG>` Go-submodule tag is write-once and created **only for stable tags** (never rc/beta/alpha). The `release-X.Y.Z` staging branch is a mutable staging ref (compare-before-force: skipped when unchanged, force+log only when it genuinely moves). |
 | [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) | Creates the stable tag by promoting an rc — retags image digests by digest, no rebuild. |
 
-This is the immutable-tag + rc-promotion model from [#2677](https://github.com/cozystack/cozystack/issues/2677): stable `vX.Y.Z` is created only by promoting an existing rc, rc and nightly tags are write-once, and `api/apps/v1alpha1/vX.Y.Z` is created only on a stable release. The old nightly `auto-release.yaml` (which delete-recreated auto-bumped patch tags) has been removed; [`retention.yaml`](../.github/workflows/retention.yaml) prunes only the `*-nightly.*` namespace, so rc and stable tags accrete permanently — GHCR storage and Release assets are the cost vectors to watch (nightly rc tags alone would be ~365/yr without the retention prune).
+This is the immutable-tag + rc-promotion model from [#2677](https://github.com/cozystack/cozystack/issues/2677): stable `vX.Y.Z` is created only by promoting an existing rc, rc tags are write-once, and `api/apps/v1alpha1/vX.Y.Z` is created only on a stable release. The old nightly `auto-release.yaml` (which delete-recreated auto-bumped patch tags) has been removed. rc and stable tags accrete permanently; the only churning artifacts are GHCR nightlies, which [`retention.yaml`](../.github/workflows/retention.yaml) prunes (see [Nightly builds](#nightly-builds)) — GHCR storage is the cost vector to watch.
 
 ## Splitting a release-blocking bundle PR
 
@@ -559,8 +579,9 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 - [`agents/releasing.md`](./agents/releasing.md) — pointer file for AI agents handling release tasks.
 - [`.github/workflows/tags.yaml`](../.github/workflows/tags.yaml) — tag-push pipeline.
 - [`.github/workflows/pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — merge-finalize pipeline.
-- [`.github/workflows/nightly-rc.yaml`](../.github/workflows/nightly-rc.yaml) — nightly rc tag cutter.
 - [`.github/workflows/promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — rc → stable promotion.
-- [`.github/workflows/retention.yaml`](../.github/workflows/retention.yaml) — nightly rc tag pruning.
+- [`.github/workflows/nightly.yaml`](../.github/workflows/nightly.yaml) — nightly: mirror `main` OCIR→GHCR + full e2e.
+- [`hack/nightly-mirror.sh`](../hack/nightly-mirror.sh) — cross-registry image mirror used by the nightly.
+- [`.github/workflows/retention.yaml`](../.github/workflows/retention.yaml) — GHCR nightly pruning.
 - [`.github/workflows/backport.yaml`](../.github/workflows/backport.yaml) — automatic cherry-pick bot.
 - [`.github/workflows/update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — sync changelog → GitHub Release body.
