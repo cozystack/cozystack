@@ -1,14 +1,26 @@
 name: Nightly Retention
 
-# Prune old nightly release-candidates: keep the newest 14 per in-development
-# line, delete older nightly git tags and their GitHub releases. Delete-only,
-# scoped strictly to the *-nightly.* namespace — rc and stable tags are never
-# touched. Dry-run by default; flip the input (or the RETENTION_APPLY repo
-# variable) to actually delete.
+# Prune old nightly artifacts from GHCR: keep the newest KEEP dated versions of
+# each cozystack package, delete older ones. Nightlies are GHCR OCI tags
+# (0.0.0-nightly.<date> on every component image plus cozystack-packages,
+# cozy-installer and cozystack-nocloud) — not git tags or releases — so this
+# prunes container-package versions via the GitHub Packages API.
+#
+# Strictly scoped: only versions whose tags are ALL of the form
+# 0.0.0-nightly.<YYYYMMDD> are eligible. A version that also carries the
+# floating `nightly` tag (the newest) or any release tag (vX.Y.Z, latest, rc,
+# main) is never touched, so stable/rc/main artifacts can never be pruned.
+#
+# Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
+# actually delete. Deletion is irreversible.
+#
+# NOTE (admin): deleting org container-package versions requires the
+# cozystack-ci app installation to carry the `packages: write` permission. If
+# the delete step 403s, grant it there — this workflow cannot.
 
 on:
   schedule:
-    - cron: '30 4 * * *'   # daily 04:30 UTC, after nightly-rc
+    - cron: '30 4 * * *'   # daily 04:30 UTC, after the nightly has published
   workflow_dispatch:
     inputs:
       apply:
@@ -21,6 +33,7 @@ permissions:
   contents: read
 
 env:
+  ORG: cozystack
   KEEP: '14'
 
 concurrency:
@@ -29,10 +42,11 @@ concurrency:
 
 jobs:
   prune:
-    name: Prune old nightlies
+    name: Prune old GHCR nightlies
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
+      packages: write
     steps:
       - name: Generate GitHub App token
         id: app-token
@@ -42,13 +56,6 @@ jobs:
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
 
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          fetch-tags: true
-          token: ${{ steps.app-token.outputs.token }}
-
       - name: Prune
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
@@ -56,39 +63,42 @@ jobs:
           APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
         run: |
           set -eu
-          git config user.name  "cozystack-ci[bot]"
-          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
-          git remote set-url origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}"
-
           if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
 
-          # Group nightly tags by their version prefix (the line), newest last.
-          lines="$(git tag --list 'v*-nightly.*' \
-            | sed -E 's/^(v[0-9]+\.[0-9]+\.[0-9]+)-nightly\..*$/\1/' | sort -u)"
+          # All container packages under the org that live in the cozystack/
+          # registry namespace (ghcr.io/cozystack/cozystack/<name>).
+          pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
+            --jq '.[].name' | grep '^cozystack/' || true)"
+          [ -n "$pkgs" ] || { echo "No cozystack/* container packages found."; exit 0; }
 
-          for line in $lines; do
-            [ -n "$line" ] || continue
-            # Oldest -> newest by the YYYYMMDD(.N) suffix (lexical sort works).
-            tags="$(git tag --list "${line}-nightly.*" | sort)"
-            total="$(printf '%s\n' "$tags" | grep -c . || true)"
-            drop=$((total - KEEP))
-            echo "── ${line}: ${total} nightlies, keep ${KEEP}, drop ${drop:-0}"
-            [ "${drop:-0}" -gt 0 ] || continue
+          printf '%s\n' "$pkgs" | while IFS= read -r pkg; do
+            [ -n "$pkg" ] || continue
+            enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
 
-            printf '%s\n' "$tags" | head -n "$drop" | while IFS= read -r tag; do
-              [ -n "$tag" ] || continue
+            # Version ids whose tags are non-empty AND every tag is a dated
+            # nightly (so the floating `nightly` tag and any release tag exclude
+            # the version). API returns versions newest-first, so the dated
+            # nightlies are already in newest->oldest order.
+            ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
+              --jq '[.[]
+                | select((.metadata.container.tags | length) > 0)
+                | select(.metadata.container.tags | all(test("^0\\.0\\.0-nightly\\.[0-9]{8}$")))
+                | .id]')"
+
+            total="$(printf '%s' "$ids" | jq 'length')"
+            [ "$total" -gt "$KEEP" ] || { echo "── ${pkg}: ${total} nightlies (<= ${KEEP}); nothing to prune"; continue; }
+            drop_ids="$(printf '%s' "$ids" | jq -r ".[${KEEP}:][]")"
+            echo "── ${pkg}: ${total} nightlies, keep ${KEEP}, drop $((total - KEEP))"
+
+            printf '%s\n' "$drop_ids" | while IFS= read -r id; do
+              [ -n "$id" ] || continue
               if [ "$APPLY" = "true" ]; then
-                echo "  ✗ deleting ${tag} (tag + release)"
-                # Release first (if any), then the git tag.
-                gh release delete "$tag" --yes --cleanup-tag 2>/dev/null \
-                  || git push origin ":refs/tags/${tag}" 2>/dev/null || true
+                echo "  ✗ deleting ${pkg} version ${id}"
+                gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
+                  || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
               else
-                echo "  • would delete ${tag}"
+                echo "  • would delete ${pkg} version ${id}"
               fi
             done
           done
-
-          # TODO(registry): prune the matching *-nightly.* image tags from OCIR.
-          # OCIR has no GHCR-style delete API parity; needs the OCI registry CLI
-          # and is tracked separately. Git tags + releases are the cost driver.
           echo "Done."
