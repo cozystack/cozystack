@@ -1,0 +1,131 @@
+suite: monitoring post-delete cleanup hook removes orphaned VM PVCs and TLS secrets
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+templates:
+  - templates/hooks/cleanup.yaml
+
+tests:
+  - it: renders the cleanup Job as a post-delete hook with the hardened pod spec
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: monitoring-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: monitoring-cleanup
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: cleanup
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: docker.io/clastix/kubectl:v1.32
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: deletes the vm-operator storage PVCs by label
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete pvc -n tenant-root -l managed-by=vm-operator --ignore-not-found
+
+  - it: deletes the cert-manager TLS secrets by name
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete secret -n tenant-root alerta-tls grafana-ingress-tls --ignore-not-found
+
+  - it: creates the cleanup ServiceAccount as a post-delete hook
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: monitoring-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+
+  - it: grants RBAC to delete PVCs by label and the two named TLS secrets
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: monitoring-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "5"
+      - equal:
+          path: rules[0].resources[0]
+          value: persistentvolumeclaims
+      - contains:
+          path: rules[0].verbs
+          content: delete
+      - equal:
+          path: rules[1].resources[0]
+          value: secrets
+      - equal:
+          path: rules[1].resourceNames
+          value:
+            - alerta-tls
+            - grafana-ingress-tls
+      - contains:
+          path: rules[1].verbs
+          content: delete
+
+  - it: binds the cleanup Role to the cleanup ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: monitoring-cleanup
+      - equal:
+          path: roleRef.name
+          value: monitoring-cleanup
+      - equal:
+          path: subjects[0].name
+          value: monitoring-cleanup
