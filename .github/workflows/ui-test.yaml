@@ -1,0 +1,50 @@
+name: UI Test
+
+# Typecheck + unit tests for the in-tree console SPA
+# (packages/system/dashboard/images/console, vendored from cozystack-ui).
+# The container image itself is built by `make build` in the main build job.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/system/dashboard/images/console/**'
+  pull_request:
+    paths:
+      - 'packages/system/dashboard/images/console/**'
+
+defaults:
+  run:
+    working-directory: packages/system/dashboard/images/console
+
+jobs:
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          # The monorepo root has no package.json; read the pnpm version from
+          # the console workspace manifest (packageManager field).
+          package_json_file: packages/system/dashboard/images/console/package.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: packages/system/dashboard/images/console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test

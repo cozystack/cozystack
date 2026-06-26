@@ -1,0 +1,50 @@
+{
+  "name": "@cozystack/console",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@base-ui/react": "^1.4.1",
+    "@cozystack/k8s-client": "workspace:*",
+    "@cozystack/types": "workspace:*",
+    "@cozystack/ui": "workspace:*",
+    "@monaco-editor/react": "^4.7.0",
+    "@novnc/novnc": "^1.6.0",
+    "@rjsf/core": "^5.24.8",
+    "@rjsf/utils": "^5.24.8",
+    "@rjsf/validator-ajv8": "^5.24.8",
+    "@tanstack/react-query": "^5.96.2",
+    "js-yaml": "^4.1.0",
+    "lucide-react": "^0.484.0",
+    "monaco-editor": "^0.55.1",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-router": "^7.6.1",
+    "simple-icons": "^16.22.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.2.2",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
+    "@types/js-yaml": "^4.0.9",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "@vitest/ui": "^4.1.6",
+    "jsdom": "^29.1.1",
+    "tailwindcss": "^4.2.2",
+    "typescript": "~6.0.2",
+    "vite": "^8.0.4",
+    "vitest": "^4.1.6"
+  }
+}
