@@ -18,14 +18,12 @@ package tenantquota
 
 import (
 	"context"
-	"encoding/json"
 	"strings"
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -91,19 +89,12 @@ func (r *Reconciler) bufferPercent() int64 {
 // Reconcile rebuilds the whole tenant-quota picture: it reads every tenant's
 // declared budget and current usage, computes the pools, and writes one
 // controller-owned ResourceQuota per pool-member namespace clamping it to its
-// fair share of the pool.
+// fair share of the pool. Pools that need no tightening beyond the chart-owned
+// quota (a lone tenant with no sub-tenants) are left untouched.
 func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	tenants, err := r.snapshotTenants(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	usedByNS, err := r.snapshotUsage(ctx)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	existing, err := r.existingNamespaces(ctx)
+	tenants, usedByNS, existing, err := r.snapshot(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -112,20 +103,24 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 
 	desired := map[string]corev1.ResourceList{}
 	for _, p := range pools {
+		if over := p.Overcommitted(); len(over) > 0 {
+			logger.Info("tenant quota pool is overcommitted by sub-tenant carve-outs", "pool", p.Root, "overcommit", over)
+			r.recordOvercommit(ctx, p.Root, over)
+		}
+		// A pool with no carve-outs and a single member is fully covered by the
+		// chart-rendered tenant-quota already; the controller adds nothing.
+		if len(p.CarvedOut) == 0 && len(p.Members) <= 1 {
+			continue
+		}
 		buffered := &Pool{
 			Root:      p.Root,
 			Available: ScaleResourceList(p.Available, r.bufferPercent()),
 			Members:   p.Members,
 		}
 		for _, ns := range p.Members {
-			if !existing[ns] {
-				continue
+			if existing[ns] {
+				desired[ns] = buffered.EnforcedHard(ns, usedByNS)
 			}
-			desired[ns] = buffered.EnforcedHard(ns, usedByNS)
-		}
-		if over := p.Overcommitted(); len(over) > 0 {
-			logger.Info("tenant quota pool is overcommitted by sub-tenant carve-outs", "pool", p.Root, "overcommit", over)
-			r.recordOvercommit(ctx, p.Root, over)
 		}
 	}
 
@@ -142,53 +137,57 @@ func (r *Reconciler) Reconcile(ctx context.Context, _ ctrl.Request) (ctrl.Result
 	return ctrl.Result{RequeueAfter: resyncInterval}, nil
 }
 
-// snapshotTenants reads every tenant HelmRelease and projects it to the
-// hierarchy snapshot (owned namespace + declared quota).
-func (r *Reconciler) snapshotTenants(ctx context.Context) ([]Tenant, error) {
+// snapshot reads the whole picture in one pass: the tenant namespaces (from
+// tenant HelmReleases), each tenant's declared budget, current usage per
+// namespace, and the set of existing namespaces.
+//
+// A tenant's declared budget is taken from its chart-rendered "tenant-quota"
+// ResourceQuota (`.spec.hard`), not from the raw tenant.spec.resourceQuotas
+// values. The chart expands the shorthand values into the real quota resource
+// names and applies the cluster's request/limit allocation ratios
+// (cozy-lib.resources.flatten); reading the rendered object keeps the
+// controller's allocated quota in exactly the same key space, so the two
+// quotas compose correctly and the controller never has to replicate that
+// (cluster-configurable) transformation.
+func (r *Reconciler) snapshot(ctx context.Context) (tenants []Tenant, usedByNS map[string]corev1.ResourceList, existing map[string]bool, err error) {
 	releases := &helmv2.HelmReleaseList{}
-	if err := r.List(ctx, releases, client.MatchingLabels{appsv1alpha1.ApplicationKindLabel: tenantKind}); err != nil {
-		return nil, err
+	if err = r.List(ctx, releases, client.MatchingLabels{appsv1alpha1.ApplicationKindLabel: tenantKind}); err != nil {
+		return nil, nil, nil, err
 	}
-	tenants := make([]Tenant, 0, len(releases.Items))
-	for i := range releases.Items {
-		hr := &releases.Items[i]
-		appName := strings.TrimPrefix(hr.Name, tenantNamespacePrefix)
-		ns := ownedNamespace(hr.Namespace, appName)
-		var declared corev1.ResourceList
-		if hr.Spec.Values != nil {
-			declared = declaredFromValues(hr.Spec.Values.Raw)
-		}
-		tenants = append(tenants, Tenant{Namespace: ns, Declared: declared})
-	}
-	return tenants, nil
-}
 
-// snapshotUsage sums the current usage per namespace. Multiple ResourceQuotas
-// in a namespace each report the same usage for a given resource, so usage is
-// merged with a per-resource max (not a sum) to avoid double counting.
-func (r *Reconciler) snapshotUsage(ctx context.Context) (map[string]corev1.ResourceList, error) {
 	quotas := &corev1.ResourceQuotaList{}
-	if err := r.List(ctx, quotas); err != nil {
-		return nil, err
+	if err = r.List(ctx, quotas); err != nil {
+		return nil, nil, nil, err
 	}
-	used := map[string]corev1.ResourceList{}
+	declaredByNS := map[string]corev1.ResourceList{}
+	usedByNS = map[string]corev1.ResourceList{}
 	for i := range quotas.Items {
 		rq := &quotas.Items[i]
-		used[rq.Namespace] = maxResourceList(used[rq.Namespace], rq.Status.Used)
+		// Multiple ResourceQuotas in a namespace each report the same usage for
+		// a given resource, so usage is merged with a per-resource max (not a
+		// sum) to avoid double counting.
+		usedByNS[rq.Namespace] = maxResourceList(usedByNS[rq.Namespace], rq.Status.Used)
+		if rq.Name == chartQuotaName {
+			declaredByNS[rq.Namespace] = rq.Spec.Hard
+		}
 	}
-	return used, nil
-}
 
-func (r *Reconciler) existingNamespaces(ctx context.Context) (map[string]bool, error) {
-	list := &corev1.NamespaceList{}
-	if err := r.List(ctx, list); err != nil {
-		return nil, err
+	nsList := &corev1.NamespaceList{}
+	if err = r.List(ctx, nsList); err != nil {
+		return nil, nil, nil, err
 	}
-	set := make(map[string]bool, len(list.Items))
-	for i := range list.Items {
-		set[list.Items[i].Name] = true
+	existing = make(map[string]bool, len(nsList.Items))
+	for i := range nsList.Items {
+		existing[nsList.Items[i].Name] = true
 	}
-	return set, nil
+
+	tenants = make([]Tenant, 0, len(releases.Items))
+	for i := range releases.Items {
+		hr := &releases.Items[i]
+		ns := ownedNamespace(hr.Namespace, strings.TrimPrefix(hr.Name, tenantNamespacePrefix))
+		tenants = append(tenants, Tenant{Namespace: ns, Declared: declaredByNS[ns]})
+	}
+	return tenants, usedByNS, existing, nil
 }
 
 func (r *Reconciler) upsertAllocatedQuota(ctx context.Context, namespace string, hard corev1.ResourceList) error {
@@ -270,26 +269,6 @@ func ownedNamespace(hrNamespace, appName string) string {
 	default:
 		return hrNamespace + "-" + appName
 	}
-}
-
-// declaredFromValues extracts spec.resourceQuotas from a tenant HelmRelease's
-// values blob. Malformed values yield a nil (unbounded) quota rather than an
-// error, so one bad tenant cannot wedge the controller.
-func declaredFromValues(raw []byte) corev1.ResourceList {
-	if len(raw) == 0 {
-		return nil
-	}
-	var values struct {
-		ResourceQuotas map[string]resource.Quantity `json:"resourceQuotas"`
-	}
-	if err := json.Unmarshal(raw, &values); err != nil || len(values.ResourceQuotas) == 0 {
-		return nil
-	}
-	out := make(corev1.ResourceList, len(values.ResourceQuotas))
-	for k, q := range values.ResourceQuotas {
-		out[corev1.ResourceName(k)] = q
-	}
-	return out
 }
 
 // maxResourceList returns the per-resource maximum of a and b.
