@@ -28,10 +28,35 @@ spec:
   upgrade:
     remediation:
       retries: -1
-  {{- with .Values.storageClass }}
   values:
-    storageClass: "{{ . }}"
-  {{- end }}
+    storageClasses:
+    {{- /* Propagate remote-accessible LINSTOR infra StorageClasses to the tenant under the same name. */}}
+    {{- $defaultName := .Values.storageClass | default "replicated" }}
+    {{- $out := dict }}
+    {{- range $sc := (lookup "storage.k8s.io/v1" "StorageClass" "" "").items }}
+    {{- $params := $sc.parameters | default dict }}
+    {{- if and (eq $sc.provisioner "linstor.csi.linbit.com") (ne (index $params "linstor.csi.linbit.com/allowRemoteVolumeAccess" | default "true") "false") }}
+    {{- $_ := set $out $sc.metadata.name (dict "infraStorageClass" $sc.metadata.name "default" false) }}
+    {{- end }}
+    {{- end }}
+    {{- /* Non-destructive fallback for dry-run/empty lookup: preserve the legacy mapping, never collapse to nothing. */}}
+    {{- if not $out }}
+    {{- $_ := set $out "replicated" (dict "infraStorageClass" "replicated" "default" false) }}
+    {{- end }}
+    {{- /* Mark exactly one default among the propagated classes. Chosen BEFORE the kubevirt alias is
+           added below, so the legacy alias (which points at $defaultName, possibly absent on the infra
+           cluster) can never be auto-selected as the tenant default: the configured storageClass if
+           propagated, else replicated, else first by name. */}}
+    {{- $chosen := "" }}
+    {{- if hasKey $out $defaultName }}{{ $chosen = $defaultName }}
+    {{- else if hasKey $out "replicated" }}{{ $chosen = "replicated" }}
+    {{- else }}{{ $chosen = (keys $out | sortAlpha | first) }}{{ end }}
+    {{- /* Legacy alias so existing tenant PVCs bound to the "kubevirt" StorageClass keep working. */}}
+    {{- if not (hasKey $out "kubevirt") }}
+    {{- $_ := set $out "kubevirt" (dict "infraStorageClass" $defaultName "default" false) }}
+    {{- end }}
+    {{- $_ := set (index $out $chosen) "default" true }}
+    {{- $out | toYaml | nindent 6 }}
   dependsOn:
   - name: {{ .Release.Name }}-vsnap-crd
     namespace: {{ .Release.Namespace }}

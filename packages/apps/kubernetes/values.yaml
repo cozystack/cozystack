@@ -2,7 +2,7 @@
 ## @section Common Parameters
 ##
 
-## @param {string} storageClass - StorageClass used to store the data.
+## @param {string} storageClass - Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.
 ## @immutable
 ## @x-cozystack-options {source: storageclass}
 storageClass: replicated
