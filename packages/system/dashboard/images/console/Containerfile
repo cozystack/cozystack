@@ -6,7 +6,9 @@ FROM node:${NODE_VERSION} AS builder
 ARG APP_VERSION
 ENV VITE_APP_VERSION=${APP_VERSION}
 
-RUN corepack enable && corepack prepare pnpm@latest --activate
+# Pin to the version in package.json's packageManager field so the image build
+# matches CI and the lockfile, rather than drifting to a newer pnpm major.
+RUN corepack enable && corepack prepare pnpm@11.1.2 --activate
 
 WORKDIR /src
 

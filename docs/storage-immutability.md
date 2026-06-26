@@ -10,7 +10,7 @@ Every stateful Cozystack application that exposes a `storageClass` parameter dec
 
 | Consumer | Behavior |
 | --- | --- |
-| Cozystack UI (cozystack/cozystack-ui#6) | Reads the CEL rule from the chart's `openAPISchema` and renders `storageClass` as a disabled, helper-text-annotated field on edit forms. Save-time overlay reinstates the original value before PUT. |
+| Cozystack UI (`packages/system/dashboard/images/console`) | Reads the CEL rule from the chart's `openAPISchema` and renders `storageClass` as a disabled, helper-text-annotated field on edit forms. Save-time overlay reinstates the original value before PUT. |
 | `kubectl edit` / `kubectl patch` against the cozystack aggregated apiserver | **Currently accepted** — the apiserver does not yet evaluate CEL rules embedded in `ApplicationDefinition.openAPISchema`. The change passes through but does not propagate to existing PVCs (see "Why" above), so no data corruption is possible. Apiserver enforcement is tracked in cozystack/cozystack#2657. |
 | `kubectl edit` / `kubectl patch` against native CRDs | Enforced today by the standard apiextensions apiserver. |
 
