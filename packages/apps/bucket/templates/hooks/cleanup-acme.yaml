@@ -10,6 +10,10 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # Bound the whole cleanup: never let a stuck finalizer or a hung API call
+  # leave this post-delete hook running indefinitely and block the uninstall.
+  activeDeadlineSeconds: 120
+  backoffLimit: 0
   template:
     metadata:
       labels:
@@ -59,9 +63,13 @@ spec:
               # then cascade-removes the cm-acme-http-solver-* solver objects it
               # owns. The release's TLS Certificate is named after the secret it
               # populates ({{ .Release.Name }}-ui-tls).
-              kubectl delete certificate {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found \
+              kubectl delete certificate {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found --wait=false --request-timeout=30s \
                 || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
-              kubectl delete certificate,order,challenge -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found \
+              # Orders/Challenges do NOT carry the Helm app.kubernetes.io/instance
+              # label; cert-manager stamps them with its own
+              # cert-manager.io/certificate-name label, so target them by the
+              # Certificate name to reliably reap any that outlived the cascade.
+              kubectl delete order,challenge -n {{ .Release.Namespace }} -l cert-manager.io/certificate-name={{ .Release.Name }}-ui-tls --ignore-not-found --wait=false --request-timeout=30s \
                 || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
               # Release-scoped solver sweep. We deliberately do NOT delete
               # ingress/service/pod objects namespace-wide by the
@@ -73,8 +81,10 @@ spec:
               #
               # Delete Challenges for our host (cascades the solver
               # Ingress/Service/Pod they own).
-              for ch in $(kubectl get challenge -n {{ .Release.Namespace }} -o jsonpath="{range .items[?(@.spec.dnsName=='$HOST')]}{.metadata.name} {end}" 2>/dev/null); do
-                kubectl delete challenge -n {{ .Release.Namespace }} "$ch" --ignore-not-found \
+              challenges="$(kubectl get challenge -n {{ .Release.Namespace }} --request-timeout=30s -o jsonpath="{range .items[?(@.spec.dnsName=='$HOST')]}{.metadata.name} {end}")" \
+                || { echo "WARNING: failed to list challenges for {{ .Release.Name }}; orphaned ACME resources may remain" >&2; challenges=""; }
+              for ch in $challenges; do
+                kubectl delete challenge -n {{ .Release.Namespace }} "$ch" --ignore-not-found --wait=false --request-timeout=30s \
                   || echo "WARNING: failed to delete challenge $ch for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
               done
               # Delete any orphaned solver Ingress for our host (no live owner
@@ -82,8 +92,10 @@ spec:
               # Challenge and are cascade-deleted with it; truly owner-less
               # solver Service/Pod with no matching Challenge are not expected
               # and are not swept namespace-wide.
-              for ing in $(kubectl get ingress -n {{ .Release.Namespace }} -l acme.cert-manager.io/http01-solver=true -o jsonpath="{range .items[?(@.spec.rules[0].host=='$HOST')]}{.metadata.name} {end}" 2>/dev/null); do
-                kubectl delete ingress -n {{ .Release.Namespace }} "$ing" --ignore-not-found \
+              ingresses="$(kubectl get ingress -n {{ .Release.Namespace }} -l acme.cert-manager.io/http01-solver=true --request-timeout=30s -o jsonpath="{range .items[?(@.spec.rules[0].host=='$HOST')]}{.metadata.name} {end}")" \
+                || { echo "WARNING: failed to list solver ingresses for {{ .Release.Name }}; orphaned ACME resources may remain" >&2; ingresses=""; }
+              for ing in $ingresses; do
+                kubectl delete ingress -n {{ .Release.Namespace }} "$ing" --ignore-not-found --wait=false --request-timeout=30s \
                   || echo "WARNING: failed to delete solver ingress $ing for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
               done
               echo "ACME cleanup complete."
