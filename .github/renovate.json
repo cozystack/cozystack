@@ -10,7 +10,19 @@
   "automerge": false,
   "platformAutomerge": false,
   "prConcurrentLimit": 5,
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["automated", "security"]
+  },
   "packageRules": [
+    {
+      "description": "Bump indirect Go modules too. Transitive deps such as golang.org/x/crypto, golang.org/x/net and golang.org/x/sys carry OSV advisories that drive the OpenSSF Scorecard Vulnerabilities check to 0, but Renovate skips indirect gomod deps by default so they never get a PR. Grouped into one rolling PR to keep volume sane; security fixes are still split out by vulnerabilityAlerts above. Placed before the kubernetes rule on purpose: an indirect k8s.io/** dep matches both, and Renovate applies last-match-wins, so the later kubernetes rule keeps it in the kubernetes lockstep group.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["indirect"],
+      "enabled": true,
+      "groupName": "indirect go modules"
+    },
     {
       "description": "Keep controller-runtime and the Kubernetes libraries in lockstep. A split bump breaks compilation because a given controller-runtime release expects a matching client-go / apimachinery line.",
       "groupName": "kubernetes",
