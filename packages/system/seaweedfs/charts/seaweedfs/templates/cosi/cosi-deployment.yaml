@@ -79,9 +79,9 @@ spec:
               {{- else if .Values.s3.ingress.enabled }}
               value: "{{ printf "https://%s" .Values.s3.ingress.host }}"
               {{- else if .Values.s3.enabled }}
-              value: "{{ printf "https://%s.%s.svc" (include "seaweedfs.componentName" (list . "s3")) .Release.Namespace }}"
+              value: "{{ printf "https://%s-s3.%s.svc:%v" (include "seaweedfs.name" .) .Release.Namespace .Values.s3.port }}"
               {{- else }}
-              value: "{{ printf "https://%s.%s.svc" (include "seaweedfs.componentName" (list . "filer")) .Release.Namespace }}"
+              value: "{{ printf "https://%s-s3.%s.svc:%v" (include "seaweedfs.name" .) .Release.Namespace .Values.filer.s3.port }}"
               {{- end }}
             {{- with .Values.cosi.region }}
             - name: REGION
