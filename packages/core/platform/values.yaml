@@ -349,7 +349,27 @@ gateway:
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
-# UI branding configuration
+# UI branding configuration. The whole map is propagated verbatim into
+# _cluster.branding (the cozystack-values Secret) and consumed by the dashboard
+# (config.json) and Keycloak realm provisioning.
+#
+# Recognized keys:
+#   brandName:       realm displayName (the Keycloak login title reads it as
+#                    "Sign in to <brandName>").
+#   brandHtmlName:   realm displayNameHtml (HTML shown in the login header).
+#   loginTheme:      Keycloak login theme name; selected as the realm login
+#                    theme and used as the theme directory/name.
+#   loginThemeImage: OCI image carrying that theme under /themes/. When set
+#                    together with loginTheme, the keycloak chart mounts it via
+#                    an init container, so the theme ships without patching the
+#                    StatefulSet or the keycloak package values.
+#
+# Example:
+# branding:
+#   brandName: "Acme Platform"
+#   brandHtmlName: "<b>Acme</b> Platform"
+#   loginTheme: acme
+#   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
 # Container registry mirrors configuration
 #
