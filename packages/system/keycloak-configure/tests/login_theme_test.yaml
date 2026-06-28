@@ -1,0 +1,44 @@
+suite: keycloak realm login theme via platform branding
+
+# branding.loginTheme (delivered through _cluster.branding) must select the
+# realm login theme by rendering ClusterKeycloakRealm.spec.themes.loginTheme,
+# alongside the existing branding.brandName -> displayName path. Without this
+# the realm keeps the stock Keycloak login theme regardless of branding.
+release:
+  name: keycloak-configure
+  namespace: cozy-keycloak
+tests:
+  - it: branding loginTheme sets ClusterKeycloakRealm.spec.themes.loginTheme
+    template: templates/configure-kk.yaml
+    documentSelector:
+      path: kind
+      value: ClusterKeycloakRealm
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+        branding:
+          brandName: Acme Platform
+          loginTheme: aenix
+    asserts:
+      - equal:
+          path: spec.themes.loginTheme
+          value: aenix
+      - equal:
+          path: spec.displayName
+          value: Acme Platform
+
+  - it: no loginTheme leaves the realm without a themes block
+    template: templates/configure-kk.yaml
+    documentSelector:
+      path: kind
+      value: ClusterKeycloakRealm
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+        branding:
+          brandName: Acme Platform
+    asserts:
+      - notExists:
+          path: spec.themes
