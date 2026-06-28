@@ -8,7 +8,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-delete
     "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   template:
     metadata:
@@ -46,9 +46,12 @@ spec:
             - /bin/sh
             - -c
             - |
+              set -eu
               echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found \
-                || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              if ! kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found; then
+                echo "ERROR: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+                exit 1
+              fi
               echo "PVC cleanup complete."
           volumeMounts:
             - name: tmp
@@ -65,8 +68,8 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
     "helm.sh/hook": post-delete
-    helm.sh/hook-weight: "0"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "0"
+    "helm.sh/hook-delete-policy": before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -77,7 +80,7 @@ metadata:
   annotations:
     "helm.sh/hook": post-delete
     "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-delete-policy": before-hook-creation
 rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
@@ -91,8 +94,8 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
   annotations:
     "helm.sh/hook": post-delete
-    helm.sh/hook-weight: "5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
