@@ -37,6 +37,12 @@ themes: []
 # Theme images must contain theme files under /themes/ directory.
 # Each theme is copied into Keycloak's /opt/keycloak/themes/ via init container.
 # If multiple themes contain files with the same path, later entries take precedence.
+#
+# In addition to this explicit list, a single login theme can be shipped through
+# platform branding values: setting branding.loginTheme (the theme name) together
+# with branding.loginThemeImage (the OCI image carrying it under /themes/) appends
+# an entry here automatically and selects it as the realm login theme. branding
+# arrives via _cluster.branding, so no per-package values plumbing is required.
 
 imagePullSecrets: []
 # - name: my-registry-secret

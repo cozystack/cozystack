@@ -6,6 +6,21 @@
 {{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 
+{{- /*
+Effective theme list. Starts from the explicit .Values.themes and, when the
+platform branding config names a login theme (branding.loginTheme) together
+with the OCI image that carries it (branding.loginThemeImage), appends an
+auto-derived entry. This lets an operator ship a Keycloak login theme purely
+through platform branding values, without editing this chart or patching the
+StatefulSet. branding flows in via _cluster.branding (the cozystack-values
+Secret), the same path that feeds the realm displayName.
+*/}}
+{{- $branding := (.Values._cluster | default dict).branding | default dict }}
+{{- $themes := .Values.themes | default list }}
+{{- if and (hasKey $branding "loginTheme") (hasKey $branding "loginThemeImage") }}
+{{- $themes = concat $themes (list (dict "name" $branding.loginTheme "image" $branding.loginThemeImage)) }}
+{{- end }}
+
 {{- $existingPassword := lookup "v1" "Secret" "cozy-keycloak" (printf "%s-credentials" .Release.Name) }}
 {{- $password := randAlphaNum 16 -}}
 {{- if $existingPassword }}
@@ -49,9 +64,9 @@ spec:
       {{- end }}
       securityContext:
         fsGroup: 1000
-      {{- if .Values.themes }}
+      {{- if $themes }}
       {{- $themeNames := list }}
-      {{- range .Values.themes }}
+      {{- range $themes }}
       {{- if not .name }}{{ fail "theme entry missing required field: name" }}{{- end }}
       {{- if not .image }}{{ fail "theme entry missing required field: image" }}{{- end }}
       {{- $sanitized := include "keycloak.theme.sanitizedName" .name }}
@@ -61,7 +76,7 @@ spec:
       {{- $themeNames = append $themeNames $sanitized }}
       {{- end }}
       initContainers:
-        {{- range .Values.themes }}
+        {{- range $themes }}
         - name: theme-{{ include "keycloak.theme.sanitizedName" .name }}
           image: "{{ .image }}"
           imagePullPolicy: IfNotPresent
@@ -191,9 +206,9 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or .Values.themes .Values.extraVolumeMounts }}
+          {{- if or $themes .Values.extraVolumeMounts }}
           volumeMounts:
-            {{- if .Values.themes }}
+            {{- if $themes }}
             - name: themes
               mountPath: /opt/keycloak/themes
             {{- end }}
@@ -228,9 +243,9 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-      {{- if or .Values.themes .Values.extraVolumes }}
+      {{- if or $themes .Values.extraVolumes }}
       volumes:
-        {{- if .Values.themes }}
+        {{- if $themes }}
         - name: themes
           emptyDir:
             sizeLimit: 256Mi
