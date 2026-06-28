@@ -185,6 +185,60 @@ data:
     to reconcile - this HelmRelease will pick up the DataStore on its next
     5m reconcile loop and provision the cluster.
 {{- else }}
+{{- /* Validate user-supplied apiServer.extraVolumes / extraVolumeMounts before
+       they are wired into the control-plane Deployment and apiserver container.
+
+       The KamajiControlPlane -> TenantControlPlane Deployment runs on the
+       MANAGEMENT cluster (in the tenant namespace), so volumes declared here
+       land on a management-cluster pod. To preserve tenant<->management
+       isolation we deny by default and allow only the ConfigMap/Secret sources
+       that satisfy the intended use case (mounting an AuthenticationConfiguration
+       file). Host-reaching sources (hostPath, csi, nfs, persistentVolumeClaim)
+       and token-projection sources (projected) are rejected — a tenant with
+       self-service access to the Kubernetes CR must not be able to mount
+       management-node paths or project arbitrary service-account tokens into
+       the apiserver pod.
+
+       Names must be unique and non-empty: the chart injects two reserved
+       volumes (talos-ca, talos-tls-cert), and a duplicate or empty volume name
+       would render an invalid podspec the apiserver rejects with an opaque,
+       apply-time error invisible to GitOps. Mounts may only reference a volume
+       the user declared in extraVolumes — the chart-managed talos secret
+       volumes are deliberately not mountable. */}}
+{{- $allowedVolumeSources := list "configMap" "secret" }}
+{{- $reservedVolumeNames := list "talos-ca" "talos-tls-cert" }}
+{{- $userVolumeNames := list }}
+{{- range $i, $vol := .Values.controlPlane.apiServer.extraVolumes }}
+{{-   $volName := $vol.name | default "" | toString }}
+{{-   if eq $volName "" }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes[%d]: every volume must set a non-empty name" $i) }}
+{{-   end }}
+{{-   if has $volName $reservedVolumeNames }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes: volume name %q is reserved by the chart for the talos control-plane secrets — rename your volume to avoid a duplicate volume name in the control-plane Deployment" $volName) }}
+{{-   end }}
+{{-   if has $volName $userVolumeNames }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes: duplicate volume name %q — each extra volume must have a unique name" $volName) }}
+{{-   end }}
+{{-   $userVolumeNames = append $userVolumeNames $volName }}
+{{-   $sources := without (keys $vol) "name" | sortAlpha }}
+{{-   if ne (len $sources) 1 }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes: volume %q must declare exactly one volume source, got %d (%v)" $volName (len $sources) $sources) }}
+{{-   end }}
+{{-   range $source := $sources }}
+{{-     if not (has $source $allowedVolumeSources) }}
+{{-       fail (printf "controlPlane.apiServer.extraVolumes: volume %q uses a %q source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed" $volName $source) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- range $i, $mount := .Values.controlPlane.apiServer.extraVolumeMounts }}
+{{-   $mountName := $mount.name | default "" | toString }}
+{{-   if eq $mountName "" }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumeMounts[%d]: every mount must set a non-empty name" $i) }}
+{{-   end }}
+{{-   if not (has $mountName $userVolumeNames) }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumeMounts: mount %q references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted" $mountName) }}
+{{-   end }}
+{{- end }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -222,6 +276,14 @@ metadata:
 spec:
   apiServer:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
+    {{- with .Values.controlPlane.apiServer.extraArgs }}
+    extraArgs:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
+    extraVolumeMounts:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
   controllerManager:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:
@@ -315,6 +377,9 @@ spec:
       - name: talos-tls-cert
         secret:
           secretName: {{ .Release.Name }}-talos-tls-cert
+      {{- with .Values.controlPlane.apiServer.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
   replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
 ---

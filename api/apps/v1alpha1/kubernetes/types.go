@@ -49,6 +49,15 @@ type ConfigSpec struct {
 }
 
 type APIServer struct {
+	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. Use for OIDC SSO (`--oidc-issuer-url`, `--oidc-client-id`) or structured authentication (`--authentication-config=/etc/kubernetes/authentication/config.yaml`, `--requestheader-uid-headers=X-Remote-Uid`). Empty by default (no change to current behavior).
+	// +kubebuilder:default:={}
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+	// Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
+	// +kubebuilder:default:={}
+	ExtraVolumeMounts []k8sRuntime.RawExtension `json:"extraVolumeMounts,omitempty"`
+	// Extra volumes added to the control-plane Deployment, passed through to KamajiControlPlane `spec.deployment.extraVolumes`. Use to mount a ConfigMap or Secret holding an AuthenticationConfiguration file referenced by `extraArgs`. Each item is a core/v1 Volume, but because the control-plane pod runs on the management cluster only `configMap` and `secret` sources are allowed (host-reaching sources like `hostPath`/`csi` and token-projection via `projected` are rejected); each volume must have a unique, non-empty name and exactly one source. The names `talos-ca` and `talos-tls-cert` are reserved by the chart. Empty by default.
+	// +kubebuilder:default:={}
+	ExtraVolumes []k8sRuntime.RawExtension `json:"extraVolumes,omitempty"`
 	// CPU and memory resources for API Server.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
