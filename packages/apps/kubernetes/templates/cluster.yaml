@@ -25,10 +25,16 @@ spec:
         node-role.kubernetes.io/{{ . }}: ""
         {{- end }}
     spec:
-      {{- with .group.instanceType }}
+      {{- /* Explicit resources take precedence over instanceType. When a node
+             group is sized by resources (both cpu and memory set), the
+             instancetype is omitted from the VM: KubeVirt rejects a
+             VirtualMachine that references an instancetype and also overrides
+             either domain.cpu or domain.memory. */}}
+      {{- $sizedByResources := and .group.resources .group.resources.cpu .group.resources.memory }}
+      {{- if and .group.instanceType (not $sizedByResources) }}
       instancetype:
         kind: VirtualMachineClusterInstancetype
-        name: {{ . }}
+        name: {{ .group.instanceType }}
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
@@ -238,9 +244,24 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 {{- range $groupName, $group := .Values.nodeGroups }}
+{{- /* instanceType and explicit resources are alternative sizing sources, and
+       explicit resources win. KubeVirt rejects a VirtualMachine that references
+       an instancetype while also overriding either domain.cpu or domain.memory,
+       so when a group is sized by resources (both cpu and memory set) the
+       instancetype is omitted from the VM (see the VM spec above) and the lookup
+       below is skipped — a stale instancetype name cannot fail an otherwise
+       valid, resource-sized group. Explicit resources are all-or-nothing: a
+       partial spec (only one of cpu/memory) would emit one domain override
+       alongside the instancetype, which KubeVirt rejects, so it fails here with
+       a clear render-time error instead of a late admission rejection. */}}
+{{- $hasCpu := and $group.resources $group.resources.cpu }}
+{{- $hasMem := and $group.resources $group.resources.memory }}
+{{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
+{{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
-{{- if $group.instanceType }}
+{{- if and $group.instanceType (not (and $hasCpu $hasMem)) }}
 {{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
 {{-   if not $instanceType }}
 {{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}
