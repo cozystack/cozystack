@@ -292,3 +292,91 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: 'nodeGroup "md0": ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system.'
+
+  ###############################################
+  # resources is optional when instanceType set #
+  ###############################################
+
+  # A node group may be sized either by instanceType or by explicit resources.
+  # When instanceType is the sizing source, resources may be omitted entirely.
+  # helm-unittest enforces values.schema.json, so the render below only succeeds
+  # if the schema does NOT require resources on each node group.
+  #
+  # instanceType is set to "" here only to bypass the live-cluster lookup() that
+  # validates a real VirtualMachineClusterInstancetype; the schema acceptance of
+  # an omitted resources key is independent of the instanceType value.
+  #
+  # The "worker" group sorts after "md0", so its KubevirtMachineTemplate is
+  # document index 8 (md0 → 4, worker → 8), matching the multi-group layout above.
+
+  - it: accepts a node group that omits resources and renders no explicit cpu/memory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups:
+        worker:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: "20Gi"
+          roles:
+            - worker
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 8
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["cluster.x-k8s.io/deployment-name"]
+          value: test-k8s-worker
+        documentIndex: 8
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu
+        documentIndex: 8
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory
+        documentIndex: 8
+
+  # Complementary case: when explicit resources ARE provided (md0 in common.yaml
+  # has cpu: 2 / memory: 4Gi), they take effect on the VM domain. Confirms the fix
+  # only relaxes the schema requirement and does not drop honoured resources.
+  - it: still renders explicit cpu and memory when resources are provided
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory.guest
+          value: 4Gi
+        documentIndex: 4
+
+  # instanceType and explicit resources are mutually exclusive sizing sources:
+  # KubeVirt rejects a VM that references an instancetype and also sets explicit
+  # CPU/memory. The chart fails fast at render time rather than emitting a VM that
+  # is later rejected by the instancetype admission webhook.
+  - it: fails when both instanceType and explicit resources are set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup md0: set either instanceType or explicit resources (cpu/memory), not both — KubeVirt rejects a VM that overrides instanceType CPU/memory"

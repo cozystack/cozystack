@@ -267,8 +267,8 @@ type NodeGroup struct {
 	// Minimum number of replicas.
 	// +kubebuilder:default:=0
 	MinReplicas int `json:"minReplicas"`
-	// CPU and memory resources for each worker node.
-	Resources Resources `json:"resources"`
+	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. Use one or the other — combining a non-empty `instanceType` with explicit `resources` is rejected at render time, because instanceType CPU/memory cannot be overridden.
+	Resources Resources `json:"resources,omitempty"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
 	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.

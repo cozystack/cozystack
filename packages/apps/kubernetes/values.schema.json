@@ -40,8 +40,7 @@
           "diskSize",
           "instanceType",
           "maxReplicas",
-          "minReplicas",
-          "resources"
+          "minReplicas"
         ],
         "properties": {
           "diskSize": {
@@ -128,7 +127,7 @@
             "default": 0
           },
           "resources": {
-            "description": "CPU and memory resources for each worker node.",
+            "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. Use one or the other — combining a non-empty `instanceType` with explicit `resources` is rejected at render time, because instanceType CPU/memory cannot be overridden.",
             "type": "object",
             "properties": {
               "cpu": {

@@ -341,6 +341,14 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 {{- range $groupName, $group := .Values.nodeGroups }}
+{{- /* instanceType and explicit resources are alternative, mutually exclusive
+       sizing sources. KubeVirt rejects a VirtualMachine that references an
+       instancetype while also setting domain.cpu/memory, because instancetype
+       CPU/memory cannot be overridden. Fail fast here with a clear render-time
+       error instead of letting the conflict surface as a late admission rejection. */}}
+{{- if and $group.instanceType $group.resources (or $group.resources.cpu $group.resources.memory) }}
+{{-   fail (printf "nodeGroup %s: set either instanceType or explicit resources (cpu/memory), not both — KubeVirt rejects a VM that overrides instanceType CPU/memory" $groupName) }}
+{{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
 {{- if $group.instanceType }}
