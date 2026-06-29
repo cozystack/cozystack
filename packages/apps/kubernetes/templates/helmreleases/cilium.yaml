@@ -1,7 +1,7 @@
 {{- define "cozystack.defaultCiliumValues" -}}
 {{- /* Cilium runs hostNetwork on the Talos worker nodes and resolves the
        apiserver via the worker's /etc/hosts, which the talos-reconcile
-       post-install hook seeds with the Kamaji Service ClusterIP under
+       main-phase Job seeds with the Kamaji Service ClusterIP under
        <release>.<ns>.svc through machine.network.extraHostEntries. So a
        plain DNS host works here without a lookup-and-reuse race: the
        cert covers the same DNS name from chart render time, and the

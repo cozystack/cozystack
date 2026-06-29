@@ -36,7 +36,7 @@
        exist on first Helm render, so the gate fails, the TCT is
        skipped, and Helm's release-storage three-way merge then refuses
        to upgrade because no values changed. Both objects are now
-       produced by the post-install/post-upgrade Helm hook Job in
+       produced by the main-phase Job in
        templates/talos/talos-reconcile-job.yaml, which blocks until the
        four dependencies exist and then `kubectl apply`s deterministic
        results. The Job owns the TCT through an ownerReference to the
@@ -321,10 +321,9 @@ spec:
         protocol: TCP
     {{- /* Initial render lists only the DNS SANs because the apiserver
            Service ClusterIP is not yet allocated when Helm executes the
-           template. The talos-reconcile post-install/post-upgrade hook
-           re-patches certSANs with the live ClusterIP once Kamaji emits
-           the Service, and Kamaji then re-issues the apiserver TLS cert
-           to cover it. */}}
+           template. The talos-reconcile main-phase Job re-patches certSANs
+           with the live ClusterIP once Kamaji emits the Service, and
+           Kamaji then re-issues the apiserver TLS cert to cover it. */}}
     certSANs:
       - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
       - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
@@ -578,14 +577,15 @@ metadata:
        produce a valid Talos worker machineconfig at Helm template time
        because three of the inputs (apiserver Service ClusterIP, Talos
        CA from cert-manager, Kamaji-issued tenant CA) are created
-       asynchronously after Helm applies this manifest. The
-       talos-reconcile-job hook (templates/talos/talos-reconcile-job.yaml)
-       waits for those inputs and produces the TalosConfigTemplate with
-       a KamajiControlPlane ownerReference for natural GC. The
+       asynchronously after Helm applies this manifest. The main-phase
+       Job in templates/talos/talos-reconcile-job.yaml waits for those
+       inputs and produces the TalosConfigTemplate with a
+       KamajiControlPlane ownerReference for natural GC. That Job runs in
+       the main install phase, so it applies the template as soon as the
+       inputs appear — in parallel with the rest of the install. The
        MachineDeployment below still references the TCT name; CAPI's
        Machine controller blocks on its absence and unblocks the moment
-       the hook applies it, which happens in the same post-install/
-       post-upgrade cycle. */}}
+       the Job applies it. */}}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
