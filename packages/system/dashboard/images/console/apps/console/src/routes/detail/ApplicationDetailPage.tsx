@@ -69,17 +69,20 @@ export function ApplicationDetailPage() {
   })
 
   if (!plural || !name) return <Navigate to="/console" replace />
-  if (isLoading || !instance || !ad) {
-    return (
-      <div className="flex items-center gap-2 p-8 text-slate-500">
-        <Spinner /> Loading…
-      </div>
-    )
-  }
+  // Check the fetch error before the loading guard: on a failed GET, isLoading
+  // is false and instance stays undefined, so a !instance-first guard would
+  // spin forever and never reach this branch.
   if (error) {
     return (
       <div className="p-8 text-red-600">
         Application <code>{name}</code> not found.
+      </div>
+    )
+  }
+  if (isLoading || !instance || !ad) {
+    return (
+      <div className="flex items-center gap-2 p-8 text-slate-500">
+        <Spinner /> Loading…
       </div>
     )
   }

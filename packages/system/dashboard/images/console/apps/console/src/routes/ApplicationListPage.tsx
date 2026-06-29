@@ -26,13 +26,14 @@ export function ApplicationListPage() {
   const { data, isLoading } = useApplicationInstances(ad, tenantNamespace ?? undefined)
   const items = data?.items ?? []
 
-  if (defsLoading || (!ad && plural)) {
+  if (defsLoading) {
     return (
       <div className="flex items-center gap-2 p-6 text-sm text-slate-500">
         <Spinner /> Loading…
       </div>
     )
   }
+  // defs have loaded; an unresolved plural is genuinely unknown, not pending.
   if (!ad) {
     return <div className="p-6 text-sm text-red-600">Unknown application type.</div>
   }
