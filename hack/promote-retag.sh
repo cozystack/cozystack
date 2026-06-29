@@ -107,7 +107,25 @@ echo "$refs" | while IFS= read -r ref; do
   repo="${ref%@*}"
   digest="${ref##*@}"
   echo "▸ ${repo}  ${digest}"
-  copy "$ref" "${repo}:${STABLE}"
+  # The stable tag is write-once at the image level: inspect the destination
+  # before copying. No-op if it already points at this rc digest (idempotent
+  # re-run), fail if it points elsewhere (a partial run or manual push already
+  # put different bytes there) rather than mutate released bytes. :latest is
+  # intentionally mutable and always (re)pointed below.
+  if [ "$DRY_RUN" -eq 0 ]; then
+    cur="$(skopeo inspect --format '{{.Digest}}' "docker://${repo}:${STABLE}" 2>/dev/null || echo '')"
+    if [ -n "$cur" ] && [ "$cur" != "$digest" ]; then
+      echo "::error::${repo}:${STABLE} already exists at '${cur}'; refusing to move it to '${digest}' (stable image tags are write-once)" >&2
+      exit 1
+    fi
+    if [ "$cur" = "$digest" ]; then
+      echo "  = ${repo}:${STABLE} already at ${digest}; skipping stable copy"
+    else
+      copy "$ref" "${repo}:${STABLE}"
+    fi
+  else
+    copy "$ref" "${repo}:${STABLE}"
+  fi
   copy "$ref" "${repo}:latest"
   # Verify the stable tag now resolves to the exact rc digest (skip in dry-run).
   if [ "$DRY_RUN" -eq 0 ]; then
