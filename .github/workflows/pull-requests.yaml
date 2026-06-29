@@ -356,6 +356,53 @@ jobs:
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+
+      # A first-party image's OCIR repository is created on its FIRST push, and
+      # OCIR defaults new repositories to PRIVATE. The e2e cluster pulls these
+      # images anonymously (no pull secret), so a brand-new image's repo yields
+      # 403 until a maintainer flips it public by hand. This step flips every
+      # private cozystack/* repository public via the OCI API, so a newly
+      # introduced first-party image is pullable without manual intervention.
+      # It runs in finalize (once, after every build/build-talos/installer push)
+      # and before e2e, so repos created upstream this run are public by then.
+      #
+      # NOTE: docker's OCIR_TOKEN is a registry auth token and CANNOT call the
+      # OCI control-plane API; repository visibility needs OCI-API auth that the
+      # maintainer provisions out of band. Until then this step is a no-op
+      # (skipped while OCIR_COMPARTMENT_OCID is empty), so current builds and
+      # fork PRs are unaffected. To enable:
+      #   1. Set repository variable OCIR_COMPARTMENT_OCID to the compartment
+      #      holding the cozystack/* repositories.
+      #   2. Grant OCI-API auth (pick one):
+      #      a) Instance principal (recommended; the runners are OCI VMs): add a
+      #         dynamic group matching the runner instances and an IAM policy
+      #         `Allow dynamic-group <dg> to manage repos in compartment <c>`;
+      #         leave OCIR_OCI_CLI_AUTH unset (defaults to instance_principal).
+      #      b) API key: set repository variable OCIR_OCI_CLI_AUTH=api_key and
+      #         add secrets OCI_CLI_USER, OCI_CLI_TENANCY, OCI_CLI_FINGERPRINT,
+      #         OCI_CLI_KEY_CONTENT, with the same `manage repos` policy on that
+      #         user's group.
+      # Fork-gated like every other privileged step in this file: repository
+      # variables (unlike secrets) ARE readable by fork PRs, and the default
+      # instance_principal auth derives from the runner — not from fork-empty
+      # secrets — so without this gate an approved fork PR could swap the script
+      # body and exercise the runner's `manage repos` IAM policy.
+      - name: Make new OCIR repositories public
+        if: ${{ vars.OCIR_COMPARTMENT_OCID != '' && !github.event.pull_request.head.repo.fork }}
+        env:
+          OCI_CLI_AUTH: ${{ vars.OCIR_OCI_CLI_AUTH || 'instance_principal' }}
+          # OCIR is regional; the registry lives in iad (us-ashburn-1) regardless
+          # of the runner's own region, so target it explicitly.
+          OCI_CLI_REGION: ${{ vars.OCIR_OCI_CLI_REGION || 'us-ashburn-1' }}
+          OCIR_COMPARTMENT_OCID: ${{ vars.OCIR_COMPARTMENT_OCID }}
+          # Consumed only when OCI_CLI_AUTH=api_key; empty (and ignored) under
+          # the default instance_principal auth.
+          OCI_CLI_USER: ${{ secrets.OCI_CLI_USER }}
+          OCI_CLI_TENANCY: ${{ secrets.OCI_CLI_TENANCY }}
+          OCI_CLI_FINGERPRINT: ${{ secrets.OCI_CLI_FINGERPRINT }}
+          OCI_CLI_KEY_CONTENT: ${{ secrets.OCI_CLI_KEY_CONTENT }}
+        run: hack/ocir-make-public.sh
+
       - name: Assemble pr.patch
         run: |
           mkdir -p _out/assets
