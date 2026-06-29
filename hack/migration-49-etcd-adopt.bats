@@ -81,7 +81,7 @@ lineno() {
   echo "$apply" | grep -qF -- "--backup-s3-key=cozy-system/etcd-adoption/"
   ! echo "$apply" | grep -qF -- "--skip-backup"
   # --agent-image is explicit (the scaled-down Deployment is still the legacy operator).
-  echo "$apply" | grep -qF -- "--agent-image=ghcr.io/cozystack/etcd-operator:v0.5.1"
+  echo "$apply" | grep -qF -- "--agent-image=ghcr.io/cozystack/etcd-operator:v0.5.2"
 
   # The snapshot credentials are staged into the adopted namespace, and the
   # staged Secret is tenant-invisible (managed-by set, tenantresource stripped)

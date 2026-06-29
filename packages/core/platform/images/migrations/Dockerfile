@@ -9,19 +9,19 @@ FROM alpine:3.24
 
 ARG TARGETOS
 ARG TARGETARCH
-ARG ETCD_OPERATOR_VERSION=v0.5.1
+ARG ETCD_OPERATOR_VERSION=v0.5.2
 
 RUN wget -O- https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/install.sh | sh -s -- -v 1.6.1
 
 RUN apk add --no-cache kubectl helm coreutils git jq ca-certificates bash curl
 
-# SHA-256 of etcd-migrate-linux-<arch> from the etcd-operator v0.5.1 release
+# SHA-256 of etcd-migrate-linux-<arch> from the etcd-operator v0.5.2 release
 # (cli-SHA256SUMS.txt). The migrations image only ever runs as a Kubernetes Job,
 # so only linux arches are needed.
 RUN set -eux; \
     case "${TARGETARCH}" in \
-      amd64) sha256="e8f7781abc4b0d18dd7a6ddb8ac47aca544ffdc20518b5850da333256b44030b" ;; \
-      arm64) sha256="bcb81ef0b154ef6ba3341e3834b00479b10397894b430d785dc60715730b54e2" ;; \
+      amd64) sha256="34fd617e8c4a6312da99e0c449a6afe7ff92518f263d17c5a082087adbdf1936" ;; \
+      arm64) sha256="05fc3096a594c15a963fc18ee4bde17575def48912730cc47225a43aa276859f" ;; \
       *) echo "unsupported TARGETARCH=${TARGETARCH:-<empty>} (build with buildx)" >&2; exit 1 ;; \
     esac; \
     curl -fsSL -o /usr/bin/etcd-migrate \

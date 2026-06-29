@@ -1167,6 +1167,33 @@ spec:
                       rule: '!has(self.source.pvc) || (has(self.source.pvc.subPath)
                         && size(self.source.pvc.subPath) > 0)'
                 type: object
+              imagePullSecrets:
+                description: |-
+                  ImagePullSecrets is a list of Secret references in the cluster's
+                  namespace used to pull the etcd (and restore initContainer) image from
+                  a private registry — e.g. an air-gapped mirror behind credentials.
+                  Passed straight through to each member Pod's spec.imagePullSecrets.
+
+                  Changes take effect on newly-created members (scale-up, replacement);
+                  the operator does not roll existing Pods. Latched through
+                  status.observed.
+                items:
+                  description: |-
+                    LocalObjectReference contains enough information to let you locate the
+                    referenced object inside the same namespace.
+                  properties:
+                    name:
+                      default: ""
+                      description: |-
+                        Name of the referent.
+                        This field is effectively required, but due to backwards compatibility is
+                        allowed to be empty. Instances of this type with an empty value here are
+                        almost certainly wrong.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
               options:
                 description: |-
                   Options carries etcd server tuning flags (backend quota,
@@ -2857,6 +2884,27 @@ spec:
                             x-kubernetes-list-type: atomic
                         type: object
                     type: object
+                  imagePullSecrets:
+                    description: |-
+                      ImagePullSecrets is the locked target pull-secret list for member
+                      Pods. Latched with the rest of the target spec.
+                    items:
+                      description: |-
+                        LocalObjectReference contains enough information to let you locate the
+                        referenced object inside the same namespace.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    type: array
                   options:
                     description: |-
                       Options is the locked target etcd tuning flags for member Pods.

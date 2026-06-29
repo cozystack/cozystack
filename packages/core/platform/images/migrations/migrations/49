@@ -33,7 +33,7 @@ ETCD_OPERATOR_DEPLOY="${ETCD_OPERATOR_DEPLOY:-etcd-operator-controller-manager}"
 # would read off the still-running LEGACY operator Deployment during this hook.
 # Keep in sync with packages/system/etcd-operator (Chart appVersion) and the
 # etcd-migrate binary pinned in the Dockerfile.
-ETCD_OPERATOR_IMAGE="${ETCD_OPERATOR_IMAGE:-ghcr.io/cozystack/etcd-operator:v0.5.1}"
+ETCD_OPERATOR_IMAGE="${ETCD_OPERATOR_IMAGE:-ghcr.io/cozystack/etcd-operator:v0.5.2}"
 # v1alpha2 CRD coordinates. ETCD_CRD_DIR holds the copies baked into the image
 # (see Dockerfile); ensure_v1alpha2_crds applies them when the cluster does not
 # have them yet.
