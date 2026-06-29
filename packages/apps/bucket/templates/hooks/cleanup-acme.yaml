@@ -65,12 +65,12 @@ spec:
               # populates ({{ .Release.Name }}-ui-tls).
               kubectl delete certificate {{ .Release.Name }}-ui-tls -n {{ .Release.Namespace }} --ignore-not-found --wait=false --request-timeout=30s \
                 || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
-              # Orders/Challenges do NOT carry the Helm app.kubernetes.io/instance
-              # label; cert-manager stamps them with its own
-              # cert-manager.io/certificate-name label, so target them by the
-              # Certificate name to reliably reap any that outlived the cascade.
-              kubectl delete order,challenge -n {{ .Release.Namespace }} -l cert-manager.io/certificate-name={{ .Release.Name }}-ui-tls --ignore-not-found --wait=false --request-timeout=30s \
-                || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
+              # Orders are owned by the Certificate and are removed by the cascade
+              # above; Challenges carry no labels and are reaped by the
+              # host-scoped .spec.dnsName sweep below. There is therefore no
+              # reliable label selector for Order/Challenge, so we do not attempt
+              # a label-based delete here.
+              #
               # Release-scoped solver sweep. We deliberately do NOT delete
               # ingress/service/pod objects namespace-wide by the
               # acme.cert-manager.io/http01-solver=true label: that label is set

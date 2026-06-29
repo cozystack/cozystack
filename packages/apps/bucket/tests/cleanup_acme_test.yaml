@@ -67,12 +67,13 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: "kubectl delete certificate my-bucket-ui-tls -n tenant-root"
-      # Orders/Challenges are targeted by cert-manager's own
-      # cert-manager.io/certificate-name label, not the Helm release label.
-      - matchRegex:
+      # Orders are removed by the Certificate cascade and Challenges by the
+      # host-scoped dnsName sweep. cert-manager puts no usable label on either
+      # (Challenges are unlabeled; certificate-name is an annotation on Orders),
+      # so the hook must NOT attempt a label-based order/challenge delete.
+      - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "kubectl delete order,challenge -n tenant-root -l cert-manager.io/certificate-name=my-bucket-ui-tls"
-      # The release label selector must NOT be used for cert-manager resources.
+          pattern: "delete order,challenge"
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: "delete .*-l app.kubernetes.io/instance=my-bucket"
