@@ -86,3 +86,43 @@ tests:
         documentSelector:
           path: kind
           value: KubevirtMachineTemplate
+
+  - it: drops md0 when the user defines their own node groups (md0 is removable)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      # A user-supplied nodeGroups map is authoritative — it is NOT merged with
+      # the built-in md0 (the helper's if-branch). This is the removability the
+      # PR exists for: a cluster that names only its own group no longer carries
+      # md0.
+      nodeGroups:
+        worker0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          storageClass: ""
+          roles:
+          - ingress-nginx
+          resources: {}
+          gpus: []
+          kubelet: {}
+    asserts:
+      # Every rendered MachineDeployment must be the user's own group. The
+      # selector matches *all* MachineDeployments, so a leaked default md0
+      # would surface here as a second doc named test-k8s-md0 that fails the
+      # equal — proving md0 is gone (removable) when the user names their own.
+      - equal:
+          path: metadata.name
+          value: test-k8s-worker0
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
