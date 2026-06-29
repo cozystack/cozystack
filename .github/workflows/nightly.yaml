@@ -18,8 +18,9 @@ name: Nightly
 #
 # Install a nightly:
 #   helm upgrade --install cozystack \
-#     oci://ghcr.io/cozystack/cozystack/cozy-installer --version 0.0.0-nightly.<date>
-#   (or --version nightly for the latest)
+#     oci://ghcr.io/cozystack/cozystack/cozy-installer --version nightly
+#   (the floating `nightly` tag tracks the latest; each build is also published
+#    under an immutable 0.0.0-nightly.<date>.<run-id>.<attempt> tag for pinning)
 
 on:
   schedule:
@@ -95,7 +96,10 @@ jobs:
           # cannot inject a ref.
           echo "$sha" | grep -qE '^[0-9a-f]{40}$' \
             || { echo "::error::source revision '$sha' is not a 40-hex commit sha"; exit 1; }
-          version="0.0.0-nightly.$(date -u +%Y%m%d)"
+          # Make every build's tag immutable: the UTC date keeps it human-
+          # readable, and run id + attempt make a same-day re-dispatch or re-run
+          # publish a distinct tag instead of overwriting the day's nightly.
+          version="0.0.0-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
           echo "sha=$sha"                   >> "$GITHUB_OUTPUT"
           echo "version=$version"           >> "$GITHUB_OUTPUT"
           echo "packages_ref=$packages_ref" >> "$GITHUB_OUTPUT"
