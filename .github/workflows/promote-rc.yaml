@@ -42,11 +42,13 @@ jobs:
     steps:
       - name: Generate GitHub App token
         id: app-token
-        uses: actions/create-github-app-token@v1
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
         with:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
 
       # Validate the dispatch input against a strict rc pattern before it ever
       # reaches a shell or an API call. Derives the stable version, the rc
