@@ -1,305 +1,129 @@
 #!/bin/bash
 # Migration 45 --> 46
-# Adopt legacy etcd.aenix.io/v1alpha1 clusters onto the new
-# etcd-operator.cozystack.io/v1alpha2 operator, in place (no data move, no pod
-# restart), using the etcd-migrate tool baked into this image.
+# Pin KubeadmConfigTemplate / KubeadmConfig objects with helm.sh/resource-policy=keep
+# so the Talos worker migration does not let Helm prune them while CAPI still
+# references them from the existing kubeadm-backed MachineSet.
 #
-# Context: the etcd-operator HelmRelease has already been upgraded to the
-# v1alpha2 operator by the time this runs (same deployment name/namespace,
-# replaced in place). The new operator ignores etcd.aenix.io CRs; the legacy
-# StatefulSets keep the etcd pods running until adoption. etcd-migrate rewrites
-# ownership/labels/CRs so the new operator takes over the live data plane.
+# This release drops KubeadmConfigTemplate from the kubernetes app chart templates
+# entirely (workers move to TalosConfigTemplate). On upgrade Helm sees the
+# resource present in the previous release manifest but absent in the new one
+# and issues a delete. The old MachineSet, which is still around until CAPI
+# finishes rolling workers onto Talos, then has its bootstrap.configRef pointing
+# at a missing object and floods controller-manager logs with reconcile errors.
+# In pathological cases (slow Talos image fetch from factory.talos.dev,
+# MachineHealthCheck remediation, etc.) workers can hang in pending state with
+# nothing to bootstrap from.
 #
-# Idempotent: etcd-migrate completes a partially-applied adoption on re-run,
-# and a cluster with no remaining legacy CRs is a no-op. The version stamp at
-# the end is the gate.
+# The fix is to annotate every Helm-managed KubeadmConfigTemplate (and any
+# Helm-managed KubeadmConfig) with helm.sh/resource-policy=keep *before* the new
+# chart renders. The KubeadmConfig children CAPI spawns from the template are
+# owned by their Machine, not Helm (no app.kubernetes.io/managed-by=Helm label),
+# so Helm never prunes them and the managed-by selector below leaves them alone.
+# Helm then leaves the template alone, CAPI keeps its references intact, and the
+# resources disappear naturally when the old MachineSet is finally
+# garbage-collected after the Talos rollover completes.
+#
+# Idempotent: re-running on already-annotated objects is a no-op
+# (kubectl annotate --overwrite tolerates the existing value).
+#
+# Strict failure semantics: a failed annotate exits 1 to halt
+# run-migrations.sh, leaving CURRENT_VERSION at 45 so this migration retries
+# on the next platform upgrade. Best-effort semantics (exit 0 on partial
+# failure) are unsafe here because any KubeadmConfigTemplate left
+# un-pinned can be pruned by Helm during the chart upgrade, which then
+# breaks the still-extant kubeadm-backed MachineSet's bootstrap.configRef
+# while the Talos rollover is in flight — recovering that requires
+# manually recreating the templates with the right helm ownership
+# annotations and is not something we want to gate on a "best-effort"
+# migration.
 
 set -euo pipefail
 
-NAMESPACE="${NAMESPACE:-cozy-system}"
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
 DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+FAILURES=0
+PATCHED=0
+SKIPPED=0
 
-# etcd-operator coordinates (the v1alpha2 operator deployment).
-ETCD_OPERATOR_NS="${ETCD_OPERATOR_NS:-cozy-etcd-operator}"
-ETCD_OPERATOR_DEPLOY="${ETCD_OPERATOR_DEPLOY:-etcd-operator-controller-manager}"
+KEEP_ANNOTATION="helm.sh/resource-policy=keep"
+# Helm injects the app.kubernetes.io/managed-by=Helm LABEL into every resource it
+# renders (e.g. the chart's KubeadmConfigTemplate). meta.helm.sh/release-name is an
+# ANNOTATION, not a label, so it cannot be used as a --selector — doing so silently
+# matches nothing and the keep annotation is never applied.
+HELM_MANAGED_SELECTOR="app.kubernetes.io/managed-by=Helm"
 
-# Pre-adoption safety snapshot. etcd-migrate --apply rewires ownership of LIVE
-# etcd storage, so it refuses to run without a backup destination (or an
-# explicit --skip-backup, which we deliberately DO NOT use). The unattended
-# platform upgrade must never skip this snapshot: a botched adoption on a
-# tenant control-plane etcd would be unrecoverable. So we ALWAYS snapshot every
-# adopted cluster to the platform-managed object store — the built-in
-# cozy-backups bucket that every cozy-default BackupClass already writes to —
-# before adopting. There is no opt-out: if the target cannot be resolved we
-# FAIL LOUDLY rather than adopt without a snapshot.
-#
-# Tenant isolation: the snapshots land under a SYSTEM key prefix
-# (SNAPSHOT_KEY_PREFIX), separate from the per-app "<ns>/<name>/" keys. But the
-# real boundary is the credentials Secret, not the path — the SeaweedFS bucket
-# user is bucket-scoped, so a key prefix alone does not gate access. We copy the
-# projector-managed cozy-backups-creds (a PLAIN Secret, with the
-# apps.cozystack.io/managed-by label and WITHOUT internal.cozystack.io/
-# tenantresource) into each adopted namespace: the lineage-controller webhook
-# never promotes it to a TenantSecret, so a tenant on the default
-# cozy:tenant:base role (no core/v1.Secret verbs) cannot read it. The
-# managed-by label also keeps it compatible with the backupstrategy-controller
-# projector, which refuses to manage a cozy-backups-creds it does not own.
-PLATFORM_STRATEGY="${PLATFORM_STRATEGY:-cozy-default-etcd}"
-PLATFORM_CREDS_SECRET="${PLATFORM_CREDS_SECRET:-cozy-backups-creds}"
-# Namespace holding a ready-projected PLATFORM_CREDS_SECRET (AWS_ACCESS_KEY_ID /
-# AWS_SECRET_ACCESS_KEY). The backupstrategy-controller eagerly projects it into
-# cozy-velero (backupStorage.systemNamespaces); we copy it from there into each
-# adopted cluster's namespace so etcd-migrate's per-namespace snapshot Job can
-# mount it.
-PLATFORM_CREDS_NS="${PLATFORM_CREDS_NS:-cozy-velero}"
-# System key prefix for the one-off adoption snapshots, segregated from the
-# per-app backup keys (<ns>/<name>/) the cozy-default strategy writes.
-SNAPSHOT_KEY_PREFIX="${SNAPSHOT_KEY_PREFIX:-cozy-system/etcd-adoption/}"
-# Labels that keep the staged copy tenant-invisible (no tenantresource promotion)
-# and projector-owned (so future BackupJobs do not hit TargetSecretNotOwned).
-CREDS_MANAGED_BY_LABEL="apps.cozystack.io/managed-by"
-CREDS_MANAGED_BY_VALUE="cozystack-backups"
-CREDS_TENANT_LABEL="internal.cozystack.io/tenantresource"
+annotate_object() {
+  local kind="$1" ns="$2" name="$3"
+  local current
 
-# Cluster DNS domain, used to build the FQDN form of the cert SANs below.
-CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-cozy.local}"
+  current=$(kubectl get "$kind" --namespace "$ns" "$name" \
+    --output 'jsonpath={.metadata.annotations.helm\.sh/resource-policy}' 2>/dev/null || true)
 
-stamp_version() {
-  # Mirror migration 43's labeled apply: a label-less apply by the same field
-  # manager would strip the platform.cozystack.io/no-delete guardrail label.
-  kubectl apply --filename - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cozystack-version
-  namespace: ${NAMESPACE}
-  labels:
-    platform.cozystack.io/no-delete: "true"
-data:
-  version: "46"
-EOF
+  if [ "$current" = "keep" ]; then
+    SKIPPED=$((SKIPPED + 1))
+    return 0
+  fi
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] would annotate $kind $ns/$name $KEEP_ANNOTATION"
+    PATCHED=$((PATCHED + 1))
+    return 0
+  fi
+
+  local kubectl_err
+  if kubectl_err=$(kubectl annotate "$kind" --namespace "$ns" "$name" \
+       "$KEEP_ANNOTATION" --overwrite 2>&1 >/dev/null); then
+    echo "Annotated $kind $ns/$name"
+    PATCHED=$((PATCHED + 1))
+  else
+    echo "WARN: failed to annotate $kind $ns/$name: ${kubectl_err:-unknown error}" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
 }
 
-# Re-issue the server and peer certificates for one adopted cluster so they
-# cover the domains the NEW operator uses, BEFORE the operator can ever replace
-# a member. Background: in secretRef TLS (what adoption produces) the operator
-# never mints certs, it only references them. Adopted members keep the legacy
-# `*.<name>-headless.<ns>.svc` domain, but every member the operator *creates*
-# (scale-up, and crucially replacement) comes up under the native
-# `<random>.<name>.<ns>.svc` domain. Cozystack's legacy etcd chart issues these
-# certs with enumerated per-pod SANs and no wildcard — enough to adopt, but a
-# replacement member's name is in no SAN and fails TLS verification forever
-# (a silent failure: the member still joins raft and its Pod reports Ready, so
-# the CR shows Available=True while the cluster runs one short). We add both the
-# native and the (transient, mixed-window) legacy wildcard to the server and
-# peer cert-manager Certificates and wait for cert-manager to re-issue.
-# Idempotent: a cert that already carries the native wildcard is left untouched.
-ensure_wildcard_sans() {
-  local ns="$1" name="$2"
-  local native="*.${name}.${ns}.svc"
-  local sans
-  sans=$(printf '%s\n' \
-    "*.${name}.${ns}.svc" "*.${name}.${ns}.svc.${CLUSTER_DOMAIN}" \
-    "*.${name}-headless.${ns}.svc" "*.${name}-headless.${ns}.svc.${CLUSTER_DOMAIN}" \
-    | jq -R . | jq -s .)
-  local cert secret
-  for cert in "${name}-server" "${name}-peer"; do
-    secret="${cert}-tls"
-    if ! kubectl -n "$ns" get certificate.cert-manager.io "$cert" >/dev/null 2>&1; then
-      echo "  - ${ns}/${cert}: Certificate not found; skipping (operator-managed or already pruned)"
-      continue
-    fi
-    if kubectl -n "$ns" get secret "$secret" \
-         -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null \
-         | tr ',' '\n' | grep -qxF "$native"; then
-      echo "  - ${ns}/${cert}: native wildcard already present; nothing to do"
-      continue
-    fi
-    if [ "$DRY_RUN" = "1" ]; then
-      echo "  - [dry-run] ${ns}/${cert}: would add SANs ${native} (+FQDN, +legacy headless wildcard) and wait for re-issue"
-      continue
-    fi
-    echo "  - ${ns}/${cert}: adding native + legacy wildcard SANs and re-issuing"
-    local merged
-    merged=$(kubectl -n "$ns" get certificate.cert-manager.io "$cert" -o json \
-      | jq -c --argjson add "$sans" '(.spec.dnsNames // []) + $add | unique')
-    kubectl -n "$ns" patch certificate.cert-manager.io "$cert" --type=merge \
-      -p "{\"spec\":{\"dnsNames\":${merged}}}"
-    # Wait for cert-manager to re-issue the Secret with the new SANs.
-    local i
-    for i in $(seq 1 30); do
-      if kubectl -n "$ns" get secret "$secret" \
-           -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null \
-           | tr ',' '\n' | grep -qxF "$native"; then
-        echo "    ${ns}/${secret}: re-issued with native wildcard"
-        break
-      fi
-      [ "$i" = "30" ] && { echo "    ERROR: ${ns}/${secret} not re-issued with ${native} in time" >&2; exit 1; }
-      sleep 4
-    done
-  done
+list_helm_managed() {
+  local kind="$1" out
+  if ! out=$(kubectl get "$kind" --all-namespaces \
+       --selector "$HELM_MANAGED_SELECTOR" \
+       --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+       2>&1); then
+    case "$out" in
+      *"the server doesn't have a resource type"*|*"no matches for kind"*|*"NotFound"*) return 0 ;;
+    esac
+    echo "ERROR: kubectl get $kind failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
 }
 
-# resolve_platform_backup_args echoes the etcd-migrate --backup-s3-* flags for
-# the platform-managed safety snapshot, or returns non-zero if the target
-# cannot be resolved (no cozy-default etcd strategy, or no projected creds).
-# Read-only — safe in dry-run. The authoritative endpoint/bucket/region come
-# from the live cozy-default-etcd Strategy CR (rendered with real coordinates
-# by the backupstrategy-controller), so this never drifts from the bucket the
-# regular backups use.
-resolve_platform_backup_args() {
-  local cr ep bucket region fps
-  cr=$(kubectl get etcds.strategy.backups.cozystack.io "$PLATFORM_STRATEGY" -o json 2>/dev/null) || return 1
-  [ -n "$cr" ] || return 1
-  ep=$(printf '%s' "$cr"     | jq -r '.spec.template.destination.s3.endpoint // ""')
-  bucket=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.bucket // ""')
-  region=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.region // ""')
-  fps=$(printf '%s' "$cr"    | jq -r '.spec.template.destination.s3.forcePathStyle // false')
-  [ -n "$ep" ] && [ -n "$bucket" ] || return 1
-  # The credentials Secret must already exist (with the AWS_* keys) so we can
-  # stage it into every adopted namespace. Verify the source before committing
-  # to the platform path.
-  kubectl -n "$PLATFORM_CREDS_NS" get secret "$PLATFORM_CREDS_SECRET" \
-    -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' 2>/dev/null | grep -q . || return 1
-  local args="--backup-s3-endpoint=${ep} --backup-s3-bucket=${bucket}"
-  args="${args} --backup-s3-credentials-secret=${PLATFORM_CREDS_SECRET}"
-  args="${args} --backup-s3-key=${SNAPSHOT_KEY_PREFIX}"
-  [ -n "$region" ] && args="${args} --backup-s3-region=${region}"
-  [ "$fps" = "true" ] && args="${args} --backup-s3-force-path-style"
-  printf '%s' "$args"
-}
+for kind in kubeadmconfigtemplates.bootstrap.cluster.x-k8s.io \
+            kubeadmconfigs.bootstrap.cluster.x-k8s.io; do
+  echo "==> Pinning Helm-managed $kind with $KEEP_ANNOTATION"
+  items=$(list_helm_managed "$kind") || exit 1
+  while IFS=$'\t' read -r ns name; do
+    [ -z "$ns" ] && continue
+    annotate_object "$kind" "$ns" "$name"
+  done <<<"$items"
+done
 
-# stage_backup_creds copies PLATFORM_CREDS_SECRET from PLATFORM_CREDS_NS into
-# <ns> so the snapshot Job etcd-migrate creates in that namespace can mount it
-# (etcd-migrate requires the credentials Secret in EVERY migrated namespace).
-# The copy strips namespace-bound and owner metadata, force-sets the managed-by
-# label (projector compatibility) and drops the tenantresource label (so the
-# webhook never exposes it to the tenant). Idempotent (server-side apply).
-stage_backup_creds() {
-  local ns="$1"
-  kubectl -n "$PLATFORM_CREDS_NS" get secret "$PLATFORM_CREDS_SECRET" -o json \
-    | jq --arg mbl "$CREDS_MANAGED_BY_LABEL" --arg mbv "$CREDS_MANAGED_BY_VALUE" \
-         --arg tl "$CREDS_TENANT_LABEL" '
-        .metadata.labels = ((.metadata.labels // {}) + {($mbl): $mbv})
-        | del(.metadata.labels[$tl])
-        | del(.metadata.namespace, .metadata.resourceVersion, .metadata.uid,
-              .metadata.creationTimestamp, .metadata.ownerReferences,
-              .metadata.managedFields, .metadata.annotations, .status)' \
-    | kubectl -n "$ns" apply -f -
-}
+echo "==> Summary: patched=$PATCHED skipped=$SKIPPED failures=$FAILURES" | tee /dev/stderr
 
-# Warn loudly about scheduled backups that DO NOT carry over. etcd-migrate
-# adopts the data plane, but the legacy etcd.aenix.io EtcdBackupSchedule /
-# EtcdBackup CRs have no equivalent under the v1alpha2 operator — scheduled
-# etcd backups silently stop. The replacement is a backups.cozystack.io
-# BackupClass + Plan (see examples/backups/etcd), which a tenant who relied on
-# the old backup.enabled=true must reconfigure. We deliberately do NOT
-# auto-translate: the destination/credentials shapes differ and a silent,
-# best-effort translation would be worse than a loud, actionable warning during
-# an unattended platform upgrade. Read-only, so it also runs in dry-run.
-warn_orphaned_backup_schedules() {
-  local crd found="" out
-  for crd in etcdbackupschedules.etcd.aenix.io etcdbackups.etcd.aenix.io; do
-    kubectl get crd "$crd" >/dev/null 2>&1 || continue
-    out=$(kubectl get "$crd" -A \
-      -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null)
-    [ -n "$out" ] && found="${found}${out}"$'\n'
-  done
-  [ -n "${found//[$'\n']/}" ] || return 0
-  echo "=========================================================================" >&2
-  echo "WARNING: legacy etcd.aenix.io backup resources will NOT be migrated."     >&2
-  echo "Scheduled/one-off etcd backups STOP working after this upgrade. The new"  >&2
-  echo "flow is a backups.cozystack.io BackupClass + Plan (see"                   >&2
-  echo "examples/backups/etcd); reconfigure it per tenant. Orphaned resources:"   >&2
-  printf '%s' "$found" | sed '/^$/d;s/^/  - /'                                    >&2
-  echo "=========================================================================" >&2
-}
-
-# Nothing to adopt if the legacy CRD is absent or carries no clusters.
-if ! kubectl get crd etcdclusters.etcd.aenix.io >/dev/null 2>&1; then
-  echo "No etcd.aenix.io CRD present; nothing to migrate."
-  [ "$DRY_RUN" = "1" ] && { echo "[dry-run] would stamp version 46"; exit 0; }
-  stamp_version
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
   exit 0
 fi
 
-LEGACY_COUNT=$(kubectl get etcdclusters.etcd.aenix.io -A -o name 2>/dev/null | wc -l | tr -d ' ')
-echo "Found ${LEGACY_COUNT} legacy etcd.aenix.io/EtcdCluster(s)."
-
-warn_orphaned_backup_schedules
-
-if ! command -v etcd-migrate >/dev/null 2>&1; then
-  echo "etcd-migrate binary not found in the migrations image (expected at /usr/bin/etcd-migrate, copied from the etcd-operator image)" >&2
+if [ "$FAILURES" -gt 0 ]; then
+  echo "ERROR: $FAILURES annotate(s) failed; halting run-migrations.sh and leaving CURRENT_VERSION at 45 so this migration retries on the next platform upgrade." >&2
+  echo "ERROR: any un-pinned KubeadmConfigTemplate left behind is at risk of being pruned by the kubernetes chart upgrade; investigate the failed annotate(s) above before retrying." >&2
   exit 1
 fi
 
-# Resolve the platform-managed safety-snapshot destination (policy block at the
-# top). Done BEFORE the dry-run so the printed plan reflects the real flags, and
-# before any mutation so an unresolvable target aborts cleanly. There is no
-# skip path: the snapshot to the cozy-backups bucket is mandatory. Any inbound
-# ETCD_MIGRATE_BACKUP_ARGS is overwritten here on purpose.
-if [ "$LEGACY_COUNT" -gt 0 ]; then
-  echo "Resolving platform-managed S3 snapshot target ('${PLATFORM_STRATEGY}' strategy)..."
-  if ETCD_MIGRATE_BACKUP_ARGS=$(resolve_platform_backup_args); then
-    echo "  -> safety snapshot: ${ETCD_MIGRATE_BACKUP_ARGS}"
-  else
-    echo "ERROR: refusing to adopt live etcd without a safety snapshot." >&2
-    echo "  Could not resolve the platform backup target: the '${PLATFORM_STRATEGY}'" >&2
-    echo "  strategy and a projected '${PLATFORM_CREDS_SECRET}' Secret (AWS_ACCESS_KEY_ID/" >&2
-    echo "  AWS_SECRET_ACCESS_KEY) in '${PLATFORM_CREDS_NS}' are required. Ensure the" >&2
-    echo "  cozy-backups Bucket and the backupstrategy-controller are healthy, then re-run." >&2
-    exit 1
-  fi
-fi
-
-# Ensure every cluster's certs cover the new operator's native member domain
-# BEFORE adoption, so a later member replacement does not silently fail TLS.
-if [ "$LEGACY_COUNT" -gt 0 ]; then
-  echo "=== ensuring wildcard SANs on adopted clusters' server/peer certs ==="
-  while read -r ns name; do
-    [ -n "$ns" ] || continue
-    echo "Cluster ${ns}/${name}:"
-    ensure_wildcard_sans "$ns" "$name"
-  done < <(kubectl get etcdclusters.etcd.aenix.io -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-fi
-
-# Always show the plan first.
-echo "=== etcd-migrate dry-run ==="
-etcd-migrate \
-  --new-controller="${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY}" \
-  --skip-controller-check || true
-
-if [ "$DRY_RUN" = "1" ]; then
-  echo "[dry-run] would scale ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} to 0, run etcd-migrate --apply ${ETCD_MIGRATE_BACKUP_ARGS:-<no clusters>}, scale back to 1, then stamp version 46"
-  exit 0
-fi
-
-if [ "$LEGACY_COUNT" -gt 0 ]; then
-  # Stage the snapshot credentials into every adopted namespace BEFORE adoption:
-  # etcd-migrate's per-namespace snapshot Job mounts PLATFORM_CREDS_SECRET there.
-  echo "=== staging snapshot credentials ('${PLATFORM_CREDS_SECRET}') into adopted namespaces ==="
-  while read -r ns name; do
-    [ -n "$ns" ] || continue
-    echo "  - ${ns}"
-    stage_backup_creds "$ns"
-  done < <(kubectl get etcdclusters.etcd.aenix.io -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)
-
-  echo "Scaling ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} to 0 for adoption..."
-  kubectl -n "$ETCD_OPERATOR_NS" scale deploy "$ETCD_OPERATOR_DEPLOY" --replicas=0
-  kubectl -n "$ETCD_OPERATOR_NS" rollout status deploy "$ETCD_OPERATOR_DEPLOY" --timeout=120s || true
-
-  echo "=== etcd-migrate --apply (snapshot -> cozy-backups, then adopt) ==="
-  etcd-migrate --apply --yes \
-    --new-controller="${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY}" \
-    --skip-controller-check \
-    ${ETCD_MIGRATE_BACKUP_ARGS}
-
-  echo "Scaling ${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY} back to 1..."
-  kubectl -n "$ETCD_OPERATOR_NS" scale deploy "$ETCD_OPERATOR_DEPLOY" --replicas=1
-  kubectl -n "$ETCD_OPERATOR_NS" rollout status deploy "$ETCD_OPERATOR_DEPLOY" --timeout=180s || true
-fi
-
-stamp_version
-echo "Applied configmap ${NAMESPACE}/cozystack-version version=46"
+# Stamp version=46. The labeled manifest lives in the shared helper so it
+# cannot drift back to a label-less apply that strips the
+# platform.cozystack.io/no-delete label migration 42 added (which would drop
+# cozystack-version out of the cozystack-no-delete-guardrail
+# ValidatingAdmissionPolicy).
+stamp_cozystack_version 46

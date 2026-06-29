@@ -14,9 +14,19 @@ spec:
       backoffLimit: 2
       template:
         spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            seccompProfile:
+              type: RuntimeDefault
           containers:
           - name: etcd-defrag
             image: ghcr.io/ahrtr/etcd-defrag:v0.13.0
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
             resources:
               requests:
                 cpu: 200m

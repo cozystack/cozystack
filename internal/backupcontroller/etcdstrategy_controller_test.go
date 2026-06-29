@@ -1262,7 +1262,7 @@ func TestRequeueBackupJobWithReason_SetsRunningPhase(t *testing.T) {
 	}
 	c := newEtcdTestClient(t, bj)
 	r := &BackupJobReconciler{Client: c, Scheme: newEtcdTestScheme(t)}
-	if _, err := r.requeueBackupJobWithReason(context.Background(), bj, "EtcdClusterNotReady", "waiting"); err != nil {
+	if _, err := r.requeueBackupJobWithReason(context.Background(), bj, "EtcdClusterNotAvailable", "waiting"); err != nil {
 		t.Fatalf("requeue: %v", err)
 	}
 	got := &backupsv1alpha1.BackupJob{}
@@ -1273,8 +1273,8 @@ func TestRequeueBackupJobWithReason_SetsRunningPhase(t *testing.T) {
 		t.Errorf("expected phase=Running on first observable iteration, got %q", got.Status.Phase)
 	}
 	cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if cond == nil || cond.Reason != "EtcdClusterNotReady" {
-		t.Errorf("expected Ready=False/EtcdClusterNotReady condition, got %+v", cond)
+	if cond == nil || cond.Reason != "EtcdClusterNotAvailable" {
+		t.Errorf("expected Ready=False/EtcdClusterNotAvailable condition, got %+v", cond)
 	}
 }
 

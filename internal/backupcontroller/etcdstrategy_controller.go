@@ -61,11 +61,11 @@ const (
 	etcdBackupCredsSecretKey    = "etcd.aenix.io/credentials-secret-name"
 	etcdBackupNameKey           = "etcd.aenix.io/backup-name"
 
-	// Polling cadence for both the EtcdBackup status loop and the restore
+	// Polling cadence for both the EtcdSnapshot status loop and the restore
 	// purge/Ready loop. Matches the upstream operator's reconcile beat.
 	etcdPollInterval = 10 * time.Second
 
-	// Wall-clock cap on a BackupJob waiting for the operator EtcdBackup
+	// Wall-clock cap on a BackupJob waiting for the operator EtcdSnapshot
 	// to reach phase=Complete. A single etcd snapshot rarely takes more
 	// than a minute, but the Job pod may sit Pending behind image pulls
 	// and PVC provisioning. CNPG/MariaDB use 30m; etcd is faster so 20m
@@ -210,16 +210,16 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 	}
 
 	// EtcdCluster is the chart-rendered, singleton-named CR. Defer the
-	// EtcdBackup creation until the cluster reports Available - the operator
+	// EtcdSnapshot creation until the cluster reports Available - the operator
 	// otherwise materialises a Job that fails immediately because there
 	// are no etcd members to snapshot.
 	//
 	// Wait-budget: the cluster-Available wait shares the same wall-clock cap
-	// (etcdDefaultBackupDeadline) as the operator-side EtcdBackup wait.
+	// (etcdDefaultBackupDeadline) as the operator-side EtcdSnapshot wait.
 	// Without this gate, a BackupJob against a never-Available EtcdCluster
 	// (broken etcd, deleted source app, stuck PVC provisioner) requeues
 	// forever and the tenant gets no terminal signal. Mirror the same
-	// deadline check the post-EtcdBackup-created path uses (line ~286)
+	// deadline check the post-EtcdSnapshot-created path uses (line ~286)
 	// so the failure mode collapses to a clean phase=Failed.
 	cluster := &etcdtypes.EtcdCluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: j.Namespace, Name: etcdClusterName}, cluster); err != nil {
@@ -229,7 +229,7 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 					"etcd-operator.cozystack.io/EtcdCluster %s/%s did not appear within %s (deploy the source Etcd application before requesting the backup)",
 					j.Namespace, etcdClusterName, etcdDefaultBackupDeadline))
 			}
-			return r.requeueBackupJobWithReason(ctx, j, "EtcdClusterNotReady",
+			return r.requeueBackupJobWithReason(ctx, j, "EtcdClusterNotAvailable",
 				fmt.Sprintf("waiting for etcd-operator.cozystack.io/EtcdCluster %s/%s to exist", j.Namespace, etcdClusterName))
 		}
 		return ctrl.Result{}, err
@@ -240,7 +240,7 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 				"etcd-operator.cozystack.io/EtcdCluster %s/%s did not become Available within %s (current Available condition: %s)",
 				j.Namespace, etcdClusterName, etcdDefaultBackupDeadline, etcdClusterReadyReason(cluster)))
 		}
-		return r.requeueBackupJobWithReason(ctx, j, "EtcdClusterNotReady",
+		return r.requeueBackupJobWithReason(ctx, j, "EtcdClusterNotAvailable",
 			fmt.Sprintf("waiting for etcd-operator.cozystack.io/EtcdCluster %s/%s to become Available", j.Namespace, etcdClusterName))
 	}
 
@@ -258,7 +258,7 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 	// informer in practice. The etcd path would always hit it.
 	//
 	// Missing-Secret diagnostics still surface, just one step later:
-	// the operator-side EtcdBackup Job mounts the Secret by name and
+	// the operator-side EtcdSnapshot Job mounts the Secret by name and
 	// fails fast at pod start with a CreateContainerConfigError. The
 	// BackupJob deadline (etcdDefaultBackupDeadline = 20m) catches the
 	// pathological stuck case and flips the job Failed with a clear
@@ -320,7 +320,7 @@ func (r *BackupJobReconciler) reconcileEtcd(ctx context.Context, j *backupsv1alp
 // requeueBackupJobWithReason stamps a transient Ready=False/<reason>
 // condition and requeues after etcdPollInterval. Mirrors the FDB driver's
 // transient-error helper but without the patch-on-Conflict retry loop
-// because EtcdBackup status updates by the operator are far slower than
+// because EtcdSnapshot status updates by the operator are far slower than
 // FoundationDBBackup, so the 409 race the FDB driver works around does
 // not surface in practice for this driver.
 //
@@ -416,11 +416,11 @@ func latestEtcdSnapshotConditionMessage(eb *etcdtypes.EtcdSnapshot) string {
 	return latestAny.Message
 }
 
-// ensureEtcdSnapshot materialises a per-BackupJob EtcdBackup CR, or returns
+// ensureEtcdSnapshot materialises a per-BackupJob EtcdSnapshot CR, or returns
 // the existing one if a previous reconcile already created it.
 // Idempotency relies on the OwningJob labels.
 //
-// IMPORTANT: the EtcdBackup CR is intentionally NOT linked back to the
+// IMPORTANT: the EtcdSnapshot CR is intentionally NOT linked back to the
 // BackupJob via metav1.OwnerReference. Same reasoning as the FDB driver:
 // a fresh BackupJob with the same name (e.g. tenant `kubectl delete &&
 // kubectl apply`) must find the prior operator CR by its OwningJob label
@@ -465,7 +465,7 @@ func (r *BackupJobReconciler) ensureEtcdSnapshot(
 	return obj, nil
 }
 
-// findEtcdSnapshotForJob returns the EtcdBackup labelled with the
+// findEtcdSnapshotForJob returns the EtcdSnapshot labelled with the
 // BackupJob's OwningJob{Name,Namespace}, if any.
 func (r *BackupJobReconciler) findEtcdSnapshotForJob(ctx context.Context, j *backupsv1alpha1.BackupJob) (*etcdtypes.EtcdSnapshot, error) {
 	list := &etcdtypes.EtcdSnapshotList{}
@@ -497,7 +497,7 @@ func (r *BackupJobReconciler) findEtcdSnapshotForJob(ctx context.Context, j *bac
 // rendered S3/PVC coordinates are persisted in
 // Backup.status.underlyingResources so restore-time templating produces
 // the same values the backup ran with even after the operator-side
-// EtcdBackup CR has been pruned.
+// EtcdSnapshot CR has been pruned.
 func (r *BackupJobReconciler) createEtcdBackupArtifact(
 	ctx context.Context,
 	j *backupsv1alpha1.BackupJob,
@@ -535,8 +535,8 @@ func (r *BackupJobReconciler) createEtcdBackupArtifact(
 	// Pass through the upstream operator's reported snapshot location
 	// + integrity hash. The backup-agent emits the final URI in a
 	// terminal pod-log marker that the operator (v0.4.4+) parses into
-	// EtcdBackup.status.snapshot — see upstream
-	// internal/controller/etcdbackup_controller.go. The spec
+	// EtcdSnapshot.status.artifact — see the upstream etcd-operator
+	// EtcdSnapshot reconciler. The spec
 	// destination alone is just the prefix; the agent appends the
 	// backup-name (and any rev/timestamp suffix), so status.snapshot
 	// is the authoritative final URI for human inspection.
@@ -584,7 +584,6 @@ func (r *BackupJobReconciler) createEtcdBackupArtifact(
 	}
 	return backup, nil
 }
-
 
 // ---------------------------------------------------------------------------
 // RestoreJob path - in-place only (R2: suspend HR, snapshot live spec,
@@ -669,7 +668,7 @@ func (r *RestoreJobReconciler) reconcileEtcdRestore(ctx context.Context, restore
 	}
 
 	// Resolve the snapshot destination from the persisted underlyingResources
-	// (the authoritative source - durable beyond the operator EtcdBackup
+	// (the authoritative source - durable beyond the operator EtcdSnapshot
 	// CR's lifetime). Fall back to driverMetadata on decode failure unless
 	// the snapshot identifies an unrecognised schema, in which case the
 	// restore terminates - same contract as the FoundationDB driver.
@@ -1244,7 +1243,7 @@ func (r *RestoreJobReconciler) resolveEtcdRestoreTarget(restoreJob *backupsv1alp
 // etcdBackupSnapshot is the Etcd-specific payload persisted in
 // Backup.status.underlyingResources at backup time. Carries the rendered
 // destination and BackupClass parameters so a future RestoreJob can
-// reproduce them exactly when the operator-side EtcdBackup CR has been
+// reproduce them exactly when the operator-side EtcdSnapshot CR has been
 // pruned. The JSON tag for Destination matches the strategy CR's
 // spec.template.destination so the on-disk shape is self-describing
 // when an operator inspects the Backup artefact.

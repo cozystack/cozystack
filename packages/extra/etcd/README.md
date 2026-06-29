@@ -2,11 +2,17 @@
 
 This chart renders an `EtcdCluster` (`etcd-operator.cozystack.io/v1alpha2`)
 managed by the cozystack etcd-operator, plus the cert-manager CA chain and a
-Kamaji `DataStore`. TLS is operator-managed (cert-manager mode): the operator
-issues the server, operator-client and peer certs from the `etcd-issuer` /
-`etcd-peer-issuer` CA Issuers rendered by this chart. etcd runs cert-only
-(`--client-cert-auth`, no password auth); consumers authenticate by presenting
-a `commonName=root` client cert (`etcd-client-tls`) signed by the same CA.
+Kamaji `DataStore`. TLS uses secretRef mode: this chart's own cert-manager
+`Certificate` resources issue the server, operator-client and peer certs from
+the `etcd-issuer` / `etcd-peer-issuer` CA Issuers, and the `EtcdCluster` only
+*references* the resulting Secrets via `serverSecretRef` /
+`operatorClientSecretRef` / `peer.secretRef` (the operator itself mints
+nothing). This is deliberate: `spec.tls` is immutable in v1alpha2 and
+`etcd-migrate` adopts legacy clusters into exactly this secretRef shape, so the
+chart must match it or every post-adoption reconcile is rejected. etcd runs
+cert-only (`--client-cert-auth`, no password auth); consumers authenticate by
+presenting a `commonName=root` client cert (`etcd-client-tls`) signed by the
+same CA.
 
 ## Backups
 

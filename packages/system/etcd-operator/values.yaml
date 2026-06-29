@@ -28,6 +28,10 @@ vpa:
   minAllowed:
     cpu: 100m
     memory: 128Mi
+  # maxAllowed is the VPA's scaling CEILING, deliberately well above the static
+  # resources.limits above (128Mi): with updateMode: Auto the VPA rewrites the
+  # Pod's request/limit up to this bound under real load. Do NOT "align" it down
+  # to the 128Mi limit — that would cap the autoscaler's headroom.
   maxAllowed:
     cpu: 1000m
     memory: 1Gi

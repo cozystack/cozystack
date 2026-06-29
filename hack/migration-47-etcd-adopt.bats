@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for platform migration 45 (adopt legacy etcd.aenix.io/v1alpha1
+# Unit tests for platform migration 47 (adopt legacy etcd.aenix.io/v1alpha1
 # clusters onto etcd-operator.cozystack.io/v1alpha2 via etcd-migrate).
 #
 # These drive the real migration script end-to-end against a fake kubectl and a
-# fake etcd-migrate (hack/testdata/migration-45/), mocking only the cluster
+# fake etcd-migrate (hack/testdata/migration-47/), mocking only the cluster
 # boundary — the same approach test/check-readiness uses. Every fake invocation
 # is logged so we can assert on the ordering and arguments of the destructive
 # steps, which is exactly the contract that cannot be checked by reading the
@@ -22,11 +22,11 @@
 # own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
 # shell tests that exit non-zero on failure.
 #
-# Run with: hack/cozytest.sh hack/migration-45-etcd-adopt.bats
+# Run with: hack/cozytest.sh hack/migration-47-etcd-adopt.bats
 # -----------------------------------------------------------------------------
 
-FAKEBIN="$PWD/hack/testdata/migration-45"
-MIG="$PWD/packages/core/platform/images/migrations/migrations/45"
+FAKEBIN="$PWD/hack/testdata/migration-47"
+MIG="$PWD/packages/core/platform/images/migrations/migrations/47"
 
 # prep resets PATH/env to a clean scenario (one legacy cluster, a resolvable
 # platform target). Tests override the FAKE_* knobs afterwards.
@@ -48,6 +48,11 @@ prep() {
   export FAKE_CLUSTERS="tenant-foo etcd"
   export FAKE_STRATEGY=1
   export FAKE_CREDS=1
+  export FAKE_V2_CRD=0
+  # The baked-CRD dir must exist for the script's `-d` guard; the fake kubectl
+  # logs the apply without reading it, so an empty dir is enough.
+  export ETCD_CRD_DIR="$WORK/etcd-operator-crds"
+  mkdir -p "$ETCD_CRD_DIR"
   unset ETCD_MIGRATE_BACKUP_ARGS || true
 }
 
@@ -75,6 +80,8 @@ lineno() {
   # snapshots land under a system key prefix, not a tenant <ns>/<name>/ path.
   echo "$apply" | grep -qF -- "--backup-s3-key=cozy-system/etcd-adoption/"
   ! echo "$apply" | grep -qF -- "--skip-backup"
+  # --agent-image is explicit (the scaled-down Deployment is still the legacy operator).
+  echo "$apply" | grep -qF -- "--agent-image=ghcr.io/cozystack/etcd-operator:v0.5.1"
 
   # The snapshot credentials are staged into the adopted namespace, and the
   # staged Secret is tenant-invisible (managed-by set, tenantresource stripped)
@@ -98,6 +105,81 @@ lineno() {
   [ "$s_down" -lt "$s_apply" ]
   [ "$s_apply" -lt "$s_up" ]
   [ "$s_up" -lt "$s_stamp" ]
+  rm -rf "$WORK"
+}
+
+@test "applies the baked v1alpha2 CRDs before adopting when they are absent" {
+  prep
+  export FAKE_V2_CRD=0
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  # CRDs applied, and BEFORE etcd-migrate (which lists v1alpha2 clusters).
+  grep -qF -- "APPLY-CRDS" "$FAKE_CMDLOG"
+  s_crds=$(lineno "APPLY-CRDS")
+  s_apply=$(lineno "ETCD-MIGRATE --apply")
+  [ -n "$s_crds" ] && [ -n "$s_apply" ]
+  [ "$s_crds" -lt "$s_apply" ]
+}
+
+@test "does not re-apply v1alpha2 CRDs when already installed" {
+  prep
+  export FAKE_V2_CRD=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  ! grep -qF -- "APPLY-CRDS" "$FAKE_CMDLOG"
+  # Adoption still proceeds.
+  grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "re-issues server and peer certs with the native wildcard SAN before adopting" {
+  prep
+  # Certificates exist but lack the operator's native wildcard (the legacy
+  # enumerated-SAN situation ensure_wildcard_sans exists to fix).
+  export FAKE_CERTS=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  # Both server and peer Certificates are patched...
+  grep -qF -- "PATCH-CERT etcd-server" "$FAKE_CMDLOG"
+  grep -qF -- "PATCH-CERT etcd-peer" "$FAKE_CMDLOG"
+  # ...and the patch payload carries the native wildcard SAN.
+  grep -F -- "patch certificate.cert-manager.io etcd-server" "$FAKE_CMDLOG" | grep -qF -- "*.etcd.tenant-foo.svc"
+  # The re-issue happens BEFORE adoption (so a replacement member never fails TLS).
+  s_patch=$(lineno "PATCH-CERT etcd-server")
+  s_apply=$(lineno "ETCD-MIGRATE --apply")
+  [ -n "$s_patch" ] && [ -n "$s_apply" ]
+  [ "$s_patch" -lt "$s_apply" ]
+  rm -rf "$WORK"
+}
+
+@test "failed adoption restores the operator to 1 replica (no stranded scale-to-0)" {
+  prep
+  export FAKE_MIGRATE_FAIL=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  # The migration must propagate the failure...
+  [ "$rc" -ne 0 ]
+  # ...but the EXIT trap must have scaled the cluster-wide operator back to 1
+  # AFTER the failed --apply, so reconciliation is not frozen platform-wide.
+  s_down=$(lineno "SCALE 0")
+  s_apply=$(lineno "ETCD-MIGRATE --apply")
+  s_up=$(lineno "SCALE 1")
+  [ -n "$s_down" ] && [ -n "$s_apply" ] && [ -n "$s_up" ]
+  [ "$s_down" -lt "$s_apply" ]
+  [ "$s_apply" -lt "$s_up" ]
+  # The version must NOT be stamped on a failed adoption (the Job retries).
+  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
 
@@ -151,7 +233,7 @@ lineno() {
   rm -rf "$WORK"
 }
 
-@test "no legacy CRD stamps version 46 without adopting" {
+@test "no legacy CRD stamps version 48 without adopting" {
   prep
   export FAKE_LEGACY_CRD=0
   rc=0
