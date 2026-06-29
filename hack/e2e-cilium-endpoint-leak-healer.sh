@@ -46,6 +46,13 @@
 #   remedy. It is bounded by a per-node cap (MAX_ESCALATIONS_PER_NODE) so it can
 #   never loop-restart agents, and every action is logged loudly with its reason.
 #
+#   Tier 2 skip: when the disputed IP is exactly the node's per-node Cilium
+#   ingress IP (CiliumNode.spec.ingress.ipv4), an agent restart cannot clear it
+#   (the agent re-derives the same ingress IP on boot) and can re-trigger the
+#   host-scope IPAM restore-window race, so the watchdog skips the restart,
+#   surfaces the case, and reschedules the wedged pod best-effort. Full mechanism
+#   is in the inline note at that gate.
+#
 # It is READ-ONLY until it has positively confirmed an orphan: an endpoint in
 # the owning node's registry holds the disputed IP, that endpoint does not back
 # a live Running pod with that IP, and a different pod is currently wedged
@@ -106,6 +113,22 @@ record_escalation() {
   d=$(node_dir "$1"); mkdir -p "$d" 2>/dev/null || true
   f="$d/escalations"; n=$(read_count "$f"); n=$((n + 1)); echo "$n" > "$f"
 }
+
+# ip_is_node_ingress IP INGRESS_IP -> success (0) iff INGRESS_IP is non-empty
+# and exactly equals IP. A pure helper so the genuine-reserved:ingress decision
+# is unit-testable without a cluster. The non-empty guard is load-bearing: an
+# empty INGRESS_IP (CiliumNode absent, field unset, or RBAC denied) must NEVER
+# match, so an unconfirmed lookup can never suppress a Tier-2 restart that would
+# clear a real in-memory leak.
+ip_is_node_ingress() { [ -n "$2" ] && [ "$1" = "$2" ]; }
+
+# Sourcing guard: hack/cilium-leak-healer_test.bats sets CILIUM_LEAK_HEALER_LIB
+# and sources this file purely to reach the pure helpers above; return before
+# the heal loop so the unit test never needs a cluster. The only executing
+# caller (the in-cluster Job) never sets this, so the guard is a no-op there.
+if [ -n "${CILIUM_LEAK_HEALER_LIB:-}" ]; then
+  return 0 2>/dev/null
+fi
 
 mkdir -p "$STATE_DIR" 2>/dev/null || true
 log "started (ns=$CILIUM_NS poll=${POLL_INTERVAL}s, escalate-after=${ESCALATE_AFTER} cycles, max-agent-restarts/node=${MAX_ESCALATIONS_PER_NODE}, in-cluster, runs for the cluster lifetime)"
@@ -168,6 +191,29 @@ while true; do
           continue
         fi
       fi
+    fi
+
+    # Genuine reserved:ingress double-allocation -> never escalate to a Tier-2
+    # agent restart. When the disputed IP is exactly THIS node's Cilium ingress
+    # IP (CiliumNode.spec.ingress.ipv4), the holder is the per-node
+    # reserved:ingress endpoint, carved from the node pod CIDR whenever Gateway
+    # API / Envoy is enabled. Restarting the agent cannot clear it (the agent
+    # re-derives the SAME ingress IP from the CiliumNode spec on every boot) and
+    # is actively harmful: the restart rebuilds the host-scope (kubernetes) IPAM
+    # bitmap empty, then re-reserves the ingress IP via a path decoupled from
+    # pod-endpoint restore, so a CNI ADD in that window can be handed the ingress
+    # IP again -- the same restore-window race that produced this wedge. (Upstream
+    # cilium host-scope IPAM + Gateway API restore-window race; no released fix as
+    # of v1.19.5.) So surface it and reschedule the wedged pod best-effort, but
+    # never count it toward or trigger the agent restart. Gated on an EXACT match
+    # (ip_is_node_ingress; an empty ingress IP never matches) so a false positive
+    # can never suppress a restart that would clear a real in-memory leak.
+    ingress_ip=$(kubectl get ciliumnode "$node" -o jsonpath='{.spec.ingress.ipv4}' 2>/dev/null)
+    if ip_is_node_ingress "$ip" "$ingress_ip"; then
+      log "SURFACE node=$node ip=$ip wedged=$ns/$pod: IP is this node's Cilium ingress IP (CiliumNode.spec.ingress.ipv4), held by the reserved:ingress endpoint -- genuine infra/pod double-allocation from the upstream host-scope IPAM + Gateway API restore-window race. Agent restart cannot clear a re-derived reserved IP and can re-trigger the race, so Tier-2 is skipped; rescheduling the wedged pod best-effort."
+      out=$(kubectl delete pod -n "$ns" "$pod" --wait=false 2>&1)
+      log "  result: ${out:-<none>}"
+      continue
     fi
 
     # Past the REFUSE gate this is a genuine leak candidate: no endpoint holds the
