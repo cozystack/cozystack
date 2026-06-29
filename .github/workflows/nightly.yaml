@@ -48,6 +48,7 @@ jobs:
     outputs:
       version:         ${{ steps.resolve.outputs.version }}
       sha:             ${{ steps.resolve.outputs.sha }}
+      packages_ref:    ${{ steps.resolve.outputs.packages_ref }}
       packages_digest: ${{ steps.publish.outputs.packages_digest }}
     steps:
       - name: Set up toolchain (skopeo, flux, yq, helm)
@@ -80,7 +81,12 @@ jobs:
         id: resolve
         run: |
           set -eu
-          rev="$(skopeo inspect --raw "docker://${SRC_REGISTRY}/cozystack-packages:main" \
+          # Pin :main to its current digest first, then read the revision
+          # annotation and pull the baked tree from that SAME digest below, so a
+          # concurrent build-main push of :main cannot make us check out commit A
+          # while mirroring tree B.
+          packages_ref="$(skopeo inspect --format '{{.Digest}}' "docker://${SRC_REGISTRY}/cozystack-packages:main")"
+          rev="$(skopeo inspect --raw "docker://${SRC_REGISTRY}/cozystack-packages@${packages_ref}" \
             | yq -r '.annotations["org.opencontainers.image.revision"] // ""' -p json 2>/dev/null || true)"
           # revision is "<git-describe>:<sha>"; take the sha.
           sha="${rev##*:}"
@@ -90,9 +96,10 @@ jobs:
           echo "$sha" | grep -qE '^[0-9a-f]{40}$' \
             || { echo "::error::source revision '$sha' is not a 40-hex commit sha"; exit 1; }
           version="0.0.0-nightly.$(date -u +%Y%m%d)"
-          echo "sha=$sha"         >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Resolved main build: sha=$sha version=$version"
+          echo "sha=$sha"                   >> "$GITHUB_OUTPUT"
+          echo "version=$version"           >> "$GITHUB_OUTPUT"
+          echo "packages_ref=$packages_ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved main build: sha=$sha version=$version packages_ref=$packages_ref"
 
       - name: Checkout source commit
         uses: actions/checkout@v4
@@ -101,8 +108,9 @@ jobs:
           fetch-depth: 1
 
       # Pull the digest-vendored tree build-main baked (but never committed).
+      # Pinned to the digest resolved above, not the mutable :main tag.
       - name: Pull baked package tree
-        run: flux pull artifact "oci://${SRC_REGISTRY}/cozystack-packages:main" --output _baked
+        run: flux pull artifact "oci://${SRC_REGISTRY}/cozystack-packages@${{ steps.resolve.outputs.packages_ref }}" --output _baked
 
       # Copy every cozystack-owned component image OCIR -> GHCR by digest and
       # rewrite the baked tree's image hosts to GHCR (digests untouched).
