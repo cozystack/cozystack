@@ -4,7 +4,7 @@
     "config:recommended",
     ":semanticCommits"
   ],
-  "enabledManagers": ["gomod", "dockerfile", "github-actions"],
+  "enabledManagers": ["gomod", "dockerfile", "github-actions", "custom.regex"],
   "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "labels": ["automated", "do-not-merge/hold"],
   "automerge": false,
@@ -15,6 +15,15 @@
     "enabled": true,
     "labels": ["automated", "security"]
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the etcd image pinned in the extra/etcd EtcdCluster podTemplate. etcd-operator v0.4.5 bakes etcd 3.5.12 into its binary, and the chart overrides it with a hardcoded image string that the gomod/dockerfile managers cannot see. Without this manager the security-relevant pin (etcd 3.5.x releases are overwhelmingly security fixes) would silently age.",
+      "managerFilePatterns": ["/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"],
+      "matchStrings": ["image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "datasourceTemplate": "docker"
+    }
+  ],
   "packageRules": [
     {
       "description": "Bump indirect Go modules too. Transitive deps such as golang.org/x/crypto, golang.org/x/net and golang.org/x/sys carry OSV advisories that drive the OpenSSF Scorecard Vulnerabilities check to 0, but Renovate skips indirect gomod deps by default so they never get a PR. Grouped into one rolling PR to keep volume sane; security fixes are still split out by vulnerabilityAlerts above. Placed before the kubernetes rule on purpose: an indirect k8s.io/** dep matches both, and Renovate applies last-match-wins, so the later kubernetes rule keeps it in the kubernetes lockstep group.",
