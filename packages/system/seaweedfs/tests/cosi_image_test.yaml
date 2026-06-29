@@ -1,0 +1,38 @@
+suite: seaweedfs COSI driver image pin
+
+# Pins the COSI driver image to a release that enforces read-only bucket access.
+#
+# The vendored chart default is seaweedfs-cosi-driver v0.1.2 (see
+# charts/seaweedfs/values.yaml), which hardcodes read-write S3 actions for every
+# BucketAccess and ignores the accessPolicy parameter. The chart ships a
+# -readonly BucketAccessClass with parameters.accessPolicy: readonly, so on
+# v0.1.2 a credential meant to be read-only is silently granted read-write.
+# The package values.yaml overrides cosi.image to v0.3.1, which honours
+# accessPolicy: readonly.
+#
+# This test does not set the image itself; it relies on the package values.yaml
+# override, so it goes red if that override is removed and the image falls back
+# to the vulnerable v0.1.2 — turning a silent security regression into a build
+# failure. Note: `make update` re-vendors charts/ and resets the vendored
+# default to v0.1.2 but does not touch the package values.yaml, so the override
+# (and this guard) must be preserved across any re-vendor.
+
+templates:
+  - charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: pins the cosi-driver container to v0.3.1 (read-only access enforcement)
+    template: charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+    set:
+      seaweedfs.cosi.enabled: true
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: seaweedfs-cosi-driver
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1
