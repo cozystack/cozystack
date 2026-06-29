@@ -109,14 +109,17 @@ func appLabels(ref sdnv1alpha1.ApplicationReference) map[string]string {
 	}
 }
 
-// decodeAttachments parses the attachments annotation. A missing or malformed
-// value yields nil.
-func decodeAttachments(s string) []sdnv1alpha1.ApplicationReference {
+// decodeAttachments parses the attachments annotation. A missing value yields
+// nil; a malformed value is treated as empty (so a bad annotation cannot wedge
+// the reconciler) but is logged, since silently swallowing it hides a real
+// defect in whatever wrote the annotation.
+func decodeAttachments(ctx context.Context, s string) []sdnv1alpha1.ApplicationReference {
 	if s == "" {
 		return nil
 	}
 	var refs []sdnv1alpha1.ApplicationReference
 	if err := json.Unmarshal([]byte(s), &refs); err != nil {
+		log.FromContext(ctx).Error(err, "ignoring malformed attachments annotation", "annotation", attachmentsAnnotation)
 		return nil
 	}
 	return refs
@@ -173,7 +176,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// directly — is the boundary that stops a SecurityGroup from labeling pods a
 	// tenant could not otherwise select.
 	desired := map[string]struct{}{}
-	for _, app := range decodeAttachments(cnp.Annotations[attachmentsAnnotation]) {
+	for _, app := range decodeAttachments(ctx, cnp.Annotations[attachmentsAnnotation]) {
 		pods := &corev1.PodList{}
 		if err := r.List(ctx, pods, client.InNamespace(ns), client.MatchingLabels(appLabels(app))); err != nil {
 			return ctrl.Result{}, err
@@ -288,12 +291,16 @@ func (r *Reconciler) mapPodToSGs(ctx context.Context, obj client.Object) []recon
 
 	cnps := &CiliumNetworkPolicyList{}
 	if err := r.List(ctx, cnps, client.InNamespace(pod.Namespace), client.MatchingLabels{sgLabelKey: sgLabelValue}); err != nil {
+		// Returning no requests is the right signal here, but a transient List
+		// error would otherwise be invisible — a pod update could be missed
+		// until the next periodic resync with no trace. Log it.
+		log.FromContext(ctx).Error(err, "failed to list SecurityGroup policies for pod mapping", "pod", pod.Name, "namespace", pod.Namespace)
 		return nil
 	}
 
 	var reqs []reconcile.Request
 	for i := range cnps.Items {
-		for _, app := range decodeAttachments(cnps.Items[i].Annotations[attachmentsAnnotation]) {
+		for _, app := range decodeAttachments(ctx, cnps.Items[i].Annotations[attachmentsAnnotation]) {
 			if appMatchesPod(app, pod.Labels) {
 				reqs = append(reqs, reconcile.Request{NamespacedName: types.NamespacedName{
 					Namespace: cnps.Items[i].Namespace,

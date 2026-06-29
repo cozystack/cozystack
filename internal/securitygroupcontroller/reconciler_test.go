@@ -294,3 +294,28 @@ func TestMapPodToSGs(t *testing.T) {
 		t.Fatalf("mapPodToSGs(bare) = %+v, want none", reqs)
 	}
 }
+
+func TestDecodeAttachments(t *testing.T) {
+	ctx := context.Background()
+
+	if got := decodeAttachments(ctx, ""); got != nil {
+		t.Fatalf("decodeAttachments(empty) = %+v, want nil", got)
+	}
+
+	// A malformed annotation must be treated as empty (nil), not crash the
+	// reconciler. The error is logged, not returned.
+	if got := decodeAttachments(ctx, "{not json"); got != nil {
+		t.Fatalf("decodeAttachments(malformed) = %+v, want nil", got)
+	}
+
+	// A well-formed annotation round-trips.
+	refs := []sdnv1alpha1.ApplicationReference{appRef("Postgres", "db")}
+	encoded, err := json.Marshal(refs)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := decodeAttachments(ctx, string(encoded))
+	if len(got) != 1 || got[0].Kind != "Postgres" || got[0].Name != "db" {
+		t.Fatalf("decodeAttachments(valid) = %+v, want one Postgres/db ref", got)
+	}
+}
