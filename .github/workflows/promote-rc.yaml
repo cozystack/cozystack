@@ -120,6 +120,9 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           token: ${{ steps.app-token.outputs.token }}
+          # The Prepare stable branch step re-injects the token via
+          # `git remote set-url`, so there's no need to persist it in .git/config.
+          persist-credentials: false
 
       - name: Set up toolchain (skopeo, yq)
         run: |
