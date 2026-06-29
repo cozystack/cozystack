@@ -46,9 +46,24 @@ spec:
             - /bin/sh
             - -c
             - |
-              echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found \
-                || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              # StatefulSet-templated data PVCs are named
+              # qdrant-storage-<release>-<ordinal> (volumeClaimTemplate name
+              # "qdrant-storage" + StatefulSet name <release> + pod ordinal).
+              # Select by that deterministic name prefix rather than a label:
+              # the upstream chart stamps volumeClaimTemplates labels, which are
+              # immutable on an existing StatefulSet, so a label-based scheme
+              # cannot be applied to already-deployed instances. The name prefix
+              # needs no StatefulSet change and also reclaims PVCs created before
+              # this hook existed. See #3059.
+              echo "Deleting orphaned data PVCs for release {{ .Release.Name }}..."
+              pvcs=$(kubectl get pvc -n {{ .Release.Namespace }} -o name \
+                | grep "^persistentvolumeclaim/qdrant-storage-{{ .Release.Name }}-" || true)
+              if [ -z "$pvcs" ]; then
+                echo "No data PVCs found for release {{ .Release.Name }}; nothing to delete."
+              else
+                echo "$pvcs" | xargs kubectl delete -n {{ .Release.Namespace }} --ignore-not-found \
+                  || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              fi
               echo "PVC cleanup complete."
           volumeMounts:
             - name: tmp

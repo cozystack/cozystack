@@ -27,4 +27,10 @@ EOF
   timeout 60 sh -ec "until kubectl -n tenant-test get pvc qdrant-storage-qdrant-$name-0 >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait pvc qdrant-storage-qdrant-$name-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   kubectl -n tenant-test delete qdrant.apps.cozystack.io $name
+  # Issue #3059: Kubernetes never garbage-collects StatefulSet-templated PVCs,
+  # so the post-delete cleanup hook must reclaim the data PVC. The hook Job runs
+  # asynchronously during helm uninstall — wait for the PVC to disappear and
+  # fail loud (with the hook Job/Pod state) if it is left orphaned.
+  timeout 120 sh -ec "while kubectl -n tenant-test get pvc qdrant-storage-qdrant-$name-0 >/dev/null 2>&1; do sleep 2; done" \
+    || { echo "❌ data PVC qdrant-storage-qdrant-$name-0 still present after Qdrant delete (issue #3059 regression)"; kubectl -n tenant-test get pvc -o wide; kubectl -n tenant-test get jobs,pods -l app.kubernetes.io/instance=qdrant-$name -o wide; false; }
 }

@@ -34,13 +34,6 @@ spec:
         {{- with .Values.storageClass }}
         storageClassName: {{ . }}
         {{- end }}
-        # Stamp a release-unique label onto the StatefulSet data PVC so the
-        # post-delete cleanup hook can target only this release's PVC. The
-        # upstream chart does NOT support persistentVolumeClaimRetentionPolicy
-        # and its volumeClaimTemplate otherwise carries only `app: qdrant`
-        # (the chart name, shared by every Qdrant in the namespace). See #3059.
-        additionalLabels:
-          app.kubernetes.io/instance: {{ .Release.Name }}
       metrics:
         serviceMonitor:
           enabled: true
