@@ -41,10 +41,24 @@ type CiliumNetworkPolicySpec struct {
 	// it to the SecurityGroup's own membership label.
 	EndpointSelector metav1.LabelSelector `json:"endpointSelector,omitempty"`
 
-	// Ingress is the list of allowed inbound traffic rules.
-	Ingress []CiliumIngressRule `json:"ingress,omitempty"`
+	// Ingress is the list of allowed inbound traffic rules. It is always
+	// serialized (an empty list, not omitted) and the projection guarantees it is
+	// non-nil. The backing CiliumNetworkPolicy CRD requires at least one rule
+	// section to be present (spec anyOf: ingress|ingressDeny|egress|egressDeny),
+	// so a rules-less (membership-only) SecurityGroup would otherwise project to a
+	// selector-only spec the cilium.io/v2 API rejects synchronously. An empty
+	// ingress list is the CRD's documented no-op ("if omitted or empty, this rule
+	// does not apply at ingress"), and enableDefaultDeny defaults to false for a
+	// direction with no rules, so the always-present list keeps the policy
+	// schema-valid while leaving the member pods' connectivity untouched. The
+	// non-nil guarantee matters because the CRD has no nullable fields: a nil
+	// slice without omitempty would marshal to null and be rejected.
+	Ingress []CiliumIngressRule `json:"ingress"`
 
-	// Egress is the list of allowed outbound traffic rules.
+	// Egress is the list of allowed outbound traffic rules. Unlike Ingress it
+	// keeps omitempty: ingress is the guaranteed-present carrier that satisfies the
+	// CRD anyOf in every case, so egress is emitted only when there are egress
+	// rules.
 	Egress []CiliumEgressRule `json:"egress,omitempty"`
 }
 

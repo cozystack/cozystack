@@ -130,6 +130,8 @@ spec:
 
 The securitygroup-controller stamps `securitygroup.sdn.cozystack.io/db: ""` onto the pods of the attached `Postgres/db` application, which is what makes the policy's `endpointSelector` select them.
 
+A **membership-only SecurityGroup** — one with `attachments` but no `ingress`/`egress` rules — still projects to a backing CiliumNetworkPolicy, because the controller reconciles the policy (not the SecurityGroup) and the attachments live on it. The CiliumNetworkPolicy CRD requires at least one rule section to be present (its `spec` `anyOf` is `ingress | ingressDeny | egress | egressDeny`), so the projection always emits the `ingress` section, an empty list `ingress: []` when the group has no ingress rules. An empty list is the CRD's documented no-op ("if omitted or empty, this rule does not apply at ingress") and `enableDefaultDeny` defaults to `false` for a direction with no rules, so the policy is schema-valid yet datapath-inert: it neither allows nor denies anything, consistent with §7. The empty section is hidden from the SecurityGroup view on read, so a membership-only group round-trips with no `ingress`/`egress`.
+
 ## 6. RBAC
 
 - **`cozystack-api` ServiceAccount** — full CRUD on `ciliumnetworkpolicies.cilium.io`, since the storage CRUDs these objects on behalf of tenants.

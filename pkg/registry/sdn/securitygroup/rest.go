@@ -141,10 +141,11 @@ func sgFromSelector(sel metav1.LabelSelector) (string, bool) {
 // projectIngress turns the SecurityGroup ingress rules into Cilium ingress
 // rules: fromApp peers become lineage-label endpointSelectors, fromSG peers
 // become membership-label endpointSelectors, and fromCIDR/toPorts carry over.
+// It always returns a non-nil slice (empty when there are no rules): the backing
+// CiliumNetworkPolicy's ingress section must be present on the wire to satisfy
+// the CRD anyOf, and a non-nil empty slice serializes to an empty list rather
+// than null (which the CRD, having no nullable fields, would reject).
 func projectIngress(rules []sdnv1alpha1.IngressRule) []CiliumIngressRule {
-	if rules == nil {
-		return nil
-	}
 	out := make([]CiliumIngressRule, len(rules))
 	for i := range rules {
 		var eps []metav1.LabelSelector
@@ -192,7 +193,10 @@ func projectEgress(rules []sdnv1alpha1.EgressRule) []CiliumEgressRule {
 // the lineage-label nor the membership-label shape are ignored, so a
 // hand-edited backing policy degrades gracefully rather than erroring.
 func reconstructIngress(rules []CiliumIngressRule) []sdnv1alpha1.IngressRule {
-	if rules == nil {
+	// Collapse an empty list to nil so the always-present empty ingress section the
+	// projection emits for a rules-less group (to satisfy the CRD anyOf) is
+	// invisible in the SecurityGroup view, keeping the rules-less round-trip exact.
+	if len(rules) == 0 {
 		return nil
 	}
 	out := make([]sdnv1alpha1.IngressRule, len(rules))
@@ -218,7 +222,9 @@ func reconstructIngress(rules []CiliumIngressRule) []sdnv1alpha1.IngressRule {
 
 // reconstructEgress is the egress counterpart of reconstructIngress.
 func reconstructEgress(rules []CiliumEgressRule) []sdnv1alpha1.EgressRule {
-	if rules == nil {
+	// Collapse an empty list to nil for the same reason as reconstructIngress, so a
+	// SecurityGroup that carries no egress rules round-trips with egress unset.
+	if len(rules) == 0 {
 		return nil
 	}
 	out := make([]sdnv1alpha1.EgressRule, len(rules))
