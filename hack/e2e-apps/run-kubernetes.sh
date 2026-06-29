@@ -165,8 +165,12 @@ EOF
   # TalosConfigTemplate, which only renders once the lookup-gated Talos PKI
   # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
   # all exist; cold-start in a fresh CI sandbox pushes the time to first
-  # MachineSet scale-up past the old 1m budget.
-  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
+  # MachineSet scale-up past the old 1m budget. The talos-reconcile hook Job
+  # awaits those PKI inputs (its own wait loop budgets 10m, 120 x 5s) before it
+  # produces the TalosConfigTemplate, so a 5m test wait can give up while the
+  # product is still legitimately within budget. Use 10m to match that bootstrap
+  # budget (and the later readyReplicas wait below).
+  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
