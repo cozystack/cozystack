@@ -1176,7 +1176,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 					},
 					"ingress": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Ingress is the list of rules describing allowed inbound traffic. An empty list denies all ingress to the group's member pods.",
+							Description: "Ingress is the list of rules describing allowed inbound traffic. Each rule only ADDS allowed sources. An empty list adds no allow rules and does NOT isolate the member pods: effective connectivity is the union of every policy selecting a pod, including the platform's blanket-allow baseline, so an empty list leaves ingress open rather than denying it. Actual deny / default-deny enforcement depends on the default-deny baseline, tracked separately as future work.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{
@@ -1190,7 +1190,7 @@ func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback
 					},
 					"egress": {
 						SchemaProps: spec.SchemaProps{
-							Description: "Egress is the list of rules describing allowed outbound traffic. An empty list denies all egress from the group's member pods.",
+							Description: "Egress is the list of rules describing allowed outbound traffic. Each rule only ADDS allowed destinations. An empty list adds no allow rules and does NOT isolate the member pods: effective connectivity is the union of every policy selecting a pod, including the platform's blanket-allow baseline, so an empty list leaves egress open rather than denying it. Actual deny / default-deny enforcement depends on the default-deny baseline, tracked separately as future work.",
 							Type:        []string{"array"},
 							Items: &spec.SchemaOrArray{
 								Schema: &spec.Schema{

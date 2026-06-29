@@ -68,12 +68,22 @@ type SecurityGroupSpec struct {
 	// dropped. An empty list means the group selects no pods.
 	Attachments []ApplicationReference `json:"attachments,omitempty"`
 
-	// Ingress is the list of rules describing allowed inbound traffic. An empty
-	// list denies all ingress to the group's member pods.
+	// Ingress is the list of rules describing allowed inbound traffic. Each rule
+	// only ADDS allowed sources. An empty list adds no allow rules and does NOT
+	// isolate the member pods: effective connectivity is the union of every
+	// policy selecting a pod, including the platform's blanket-allow baseline, so
+	// an empty list leaves ingress open rather than denying it. Actual deny /
+	// default-deny enforcement depends on the default-deny baseline, tracked
+	// separately as future work.
 	Ingress []IngressRule `json:"ingress,omitempty"`
 
-	// Egress is the list of rules describing allowed outbound traffic. An empty
-	// list denies all egress from the group's member pods.
+	// Egress is the list of rules describing allowed outbound traffic. Each rule
+	// only ADDS allowed destinations. An empty list adds no allow rules and does
+	// NOT isolate the member pods: effective connectivity is the union of every
+	// policy selecting a pod, including the platform's blanket-allow baseline, so
+	// an empty list leaves egress open rather than denying it. Actual deny /
+	// default-deny enforcement depends on the default-deny baseline, tracked
+	// separately as future work.
 	Egress []EgressRule `json:"egress,omitempty"`
 }
 
