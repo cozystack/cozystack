@@ -2,14 +2,16 @@ name: Nightly Retention
 
 # Prune old nightly artifacts from GHCR: keep the newest KEEP dated versions of
 # each cozystack package, delete older ones. Nightlies are GHCR OCI tags
-# (0.0.0-nightly.<date> on every component image plus cozystack-packages,
-# cozy-installer and cozystack-nocloud) — not git tags or releases — so this
-# prunes container-package versions via the GitHub Packages API.
+# (0.0.0-nightly.<date>.<run-id>.<attempt> on every component image plus
+# cozystack-packages, cozy-installer and cozystack-nocloud) — not git tags or
+# releases — so this prunes container-package versions via the GitHub Packages
+# API.
 #
 # Strictly scoped: only versions whose tags are ALL of the form
-# 0.0.0-nightly.<YYYYMMDD> are eligible. A version that also carries the
-# floating `nightly` tag (the newest) or any release tag (vX.Y.Z, latest, rc,
-# main) is never touched, so stable/rc/main artifacts can never be pruned.
+# 0.0.0-nightly.<YYYYMMDD>.<run-id>.<attempt> are eligible. A version that also
+# carries the floating `nightly` tag (the newest) or any release tag (vX.Y.Z,
+# latest, rc, main) is never touched, so stable/rc/main artifacts can never be
+# pruned.
 #
 # Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
 # actually delete. Deletion is irreversible.
@@ -86,7 +88,7 @@ jobs:
             ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
               | jq -s '[add[]
                 | select((.metadata.container.tags | length) > 0)
-                | select(.metadata.container.tags | all(test("^0\\.0\\.0-nightly\\.[0-9]{8}$")))
+                | select(.metadata.container.tags | all(test("^0\\.0\\.0-nightly\\.[0-9]{8}(\\.[0-9]+)*$")))
                 | .id]')"
 
             total="$(printf '%s' "$ids" | jq 'length')"
