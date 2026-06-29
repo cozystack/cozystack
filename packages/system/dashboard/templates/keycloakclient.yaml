@@ -64,6 +64,8 @@ spec:
   directAccess: true
   public: false
   webUrl: "https://dashboard.{{ $host }}"
+  webOrigins:
+    - "+"
   defaultClientScopes:
     - groups
     - kubernetes-client
