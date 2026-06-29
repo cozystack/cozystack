@@ -93,6 +93,19 @@ jobs:
             if (releases.some(r => r.tag_name === stableTag)) {
               core.setFailed(`Stable release '${stableTag}' already exists — refusing to re-promote.`);
             }
+            // The stable git tag must not pre-exist either: finalize creates it
+            // write-once at the PR merge commit, so a stray tag (from a partial
+            // run or a manual push) would only fail that step AFTER images were
+            // already retagged. Catch it here, before any side effects.
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner, repo: context.repo.repo,
+                ref: `tags/${stableTag}`
+              });
+              core.setFailed(`Stable tag '${stableTag}' already exists — refusing to re-promote.`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
             // Surface the rc's disk asset id for the copy step.
             const disk = (rcRel.assets || []).find(a => a.name === 'nocloud-amd64.raw.xz');
             if (!disk) core.setFailed(`rc release '${rcTag}' has no nocloud-amd64.raw.xz asset.`);
