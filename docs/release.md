@@ -44,31 +44,30 @@ This begins the regular release process, creates a dedicated `release-X.Y` branc
 
 ## Regular Releases
 
-When making a regular release, we tag the latest RC or a subsequent minimal-change commit as `vX.Y.0`.
-In this explanation, we'll use version `v1.2.0` as an example:
+A regular release `vX.Y.0` is **promoted from a release-candidate that already passed e2e** — never tagged by hand and never rebuilt. The bytes shipped as `vX.Y.0` are the exact `vX.Y.0-rc.N` images, retagged by digest. We'll use `v1.2.0` as an example.
 
 ```mermaid
 gitGraph
     commit id: "feature"
     commit id: "feature 2"
-    commit id: "feature 3" tag: "v1.2.0"
+    commit id: "feature 3" tag: "v1.2.0-rc.1"
 ```
 
-A regular release sequence starts in the following way:
+A regular release sequence runs as follows:
 
-1. Maintainer tags a commit in `main` with `v1.2.0` and pushes it to GitHub.
-2. CI workflow triggers on tag push:
-   1. Creates a draft page for release `v1.2.0`, if it wasn't created before.
-   2. Takes code from tag `v1.2.0`, builds images, and pushes them to ghcr.io.
-   3. Makes a new commit `Prepare release v1.2.0` with updated digests, pushes it to the new branch `release-1.2.0`, and opens a PR to `main`.
-   4. Builds Cozystack release assets from the new commit `Prepare release v1.2.0` and uploads them to the release draft page.
-3. Maintainer reviews PR, tests build artifacts, and edits changelogs on the release draft page.
+1. Tag the last good commit on `main` as a release candidate (`v1.2.0-rc.N`) and push it with `git push origin HEAD:refs/tags/v1.2.0-rc.N`. CI builds the rc images, drafts the rc release, and pushes the digest-vendored `release-1.2.0-rc.N` staging branch.
+2. Validate the rc. New features and fixes can still land on `main` and be picked up by a later rc.
+3. Once an rc is green, run the [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) workflow (manual dispatch) with that rc tag. It:
+   1. Retags the rc's images by digest to `v1.2.0` and `:latest` — no rebuild.
+   2. Pushes the `release-1.2.0` branch: the rc's digest-vendored tree with the rc version substring rewritten to `1.2.0`.
+   3. Drafts the `v1.2.0` release and uploads the (restamped) assets.
+   4. Opens the `chore(release): promote v1.2.0-rc.N -> v1.2.0` PR into `main`.
 
    ```mermaid
    gitGraph
        commit id: "feature"
        commit id: "feature 2"
-       commit id: "feature 3" tag: "v1.2.0"
+       commit id: "feature 3" tag: "v1.2.0-rc.1"
        branch release-1.2.0
        checkout release-1.2.0
        commit id: "Prepare release v1.2.0"
@@ -76,19 +75,18 @@ A regular release sequence starts in the following way:
        merge release-1.2.0 id: "Pull Request"
    ```
 
-   When testing and editing are completed, the sequence goes on.
-
-4. Maintainer merges the PR. GitHub removes the merged branch `release-1.2.0`.
+4. Maintainer reviews the PR and the draft release, then merges it — **do not squash-merge**, the stable tag must attach to a real merge commit. GitHub removes the merged branch `release-1.2.0`.
 5. CI workflow triggers on merge:
    1. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
-   2. Publishes the release page (`draft` → `latest`).
+   2. Ensures the `release-1.2` maintenance branch exists at the tag commit.
+   3. Publishes the release page (`draft` → `latest`).
 6. The maintainer can now announce the release to the community.
 
 ```mermaid
 gitGraph
     commit id: "feature"
     commit id: "feature 2"
-    commit id: "feature 3"
+    commit id: "feature 3" tag: "v1.2.0-rc.1"
     branch release-1.2.0
     checkout release-1.2.0
     commit id: "Prepare release v1.2.0"
@@ -100,9 +98,8 @@ gitGraph
 
 Making a patch release has a lot in common with a regular release, with a couple of differences:
 
-* A release branch is used instead of `main`
-* Patch commits are cherry-picked to the release branch.
-* A pull request is opened against the release branch.
+* The rc and its promotion happen on the `release-X.Y` maintenance branch instead of `main`.
+* Patch commits are cherry-picked to that branch before the rc is tagged.
 
 
 Let's assume that we've released `v1.2.0` and that development is ongoing.
@@ -144,14 +141,10 @@ gitGraph
 
    When all relevant patch commits are cherry-picked, the branch is ready for release.
 
-2. The maintainer tags the `HEAD` commit of branch `release-1.2` as `v1.2.1` and then pushes it to GitHub.
-3. CI workflow triggers on tag push:
-    1. Creates a draft page for release `v1.2.1`, if it wasn't created before.
-    2. Takes code from tag `v1.2.1`, builds images, and pushes them to ghcr.io.
-    3. Makes a new commit `Prepare release v1.2.1` with updated digests, pushes it to the new branch `release-1.2.1`, and opens a PR to `release-1.2`.
-    4. Builds Cozystack release assets from the new commit `Prepare release v1.2.1` and uploads them to the release draft page.
-4. Maintainer reviews PR, tests build artifacts, and edits changelogs on the release draft page.
-   
+2. The maintainer tags the `HEAD` commit of branch `release-1.2` as a release candidate (`v1.2.1-rc.N`) and pushes it. CI builds the rc images, drafts the rc release, and pushes the `release-1.2.1-rc.N` staging branch.
+3. Validate the rc.
+4. Once the rc is green, run [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) (manual dispatch) with that rc tag. It retags the rc images by digest to `v1.2.1`, pushes the `release-1.2.1` branch, drafts the `v1.2.1` release with the restamped assets, and opens the promote PR into `release-1.2`.
+
    ```mermaid
    gitGraph
        commit id: "Release v1.2.0" tag: "v1.2.0"
@@ -163,7 +156,7 @@ gitGraph
        commit id: "patch 2"
        checkout release-1.2
        cherry-pick id: "patch 1"
-       cherry-pick id: "patch 2" tag: "v1.2.1"
+       cherry-pick id: "patch 2" tag: "v1.2.1-rc.1"
        branch release-1.2.1
        commit id: "Prepare release v1.2.1"
        checkout release-1.2
@@ -172,7 +165,7 @@ gitGraph
 
    Finally, when release is confirmed, the release sequence goes on.
 
-5. Maintainer merges the PR. GitHub removes the merged branch `release-1.2.1`.
+5. Maintainer reviews and merges the PR — **do not squash-merge**. GitHub removes the merged branch `release-1.2.1`.
 6. CI workflow triggers on merge:
    1. Creates the tag `v1.2.1` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Publishes the release page (`draft` → `latest`).
@@ -180,15 +173,16 @@ gitGraph
 
 ## What CI does on a tag push
 
-The numbered process above is implemented by three workflows. Knowing which job does what makes the failure modes much easier to diagnose.
+The numbered process above is implemented by four workflows. Knowing which job does what makes the failure modes much easier to diagnose.
 
-1. [`tags.yaml`](../.github/workflows/tags.yaml) — runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
-2. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires later when the `release-X.Y.Z` PR merges; finalizes the release.
-3. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on every push to `main`; syncs `docs/changelogs/v*.md` content into the corresponding GitHub Release body.
+1. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
+2. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch: retags a green rc to stable by digest and opens the `release-X.Y.Z` promote PR.
+3. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires later when the `release-X.Y.Z` PR merges; finalizes the release (creates the write-once stable tag, publishes).
+4. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on every push to `main`; syncs `docs/changelogs/v*.md` content into the corresponding GitHub Release body.
 
 ### Phase 1 — `prepare-release` (hard gate)
 
-Builds images, commits digest pins, creates the draft release, creates the `release-X.Y.Z` branch, opens the `chore(release): cut vX.Y.Z` PR.
+On an rc tag push: builds images, commits digest pins, creates the draft release, and pushes the `release-X.Y.Z-rc.N` staging branch. (The stable promote PR is opened later by `promote-rc.yaml`, not here. When the stable tag itself is pushed by finalize, a draft already exists, so this job is a no-op — see [Phase 5](#phase-5--pull-requests-releaseyaml-finalize).)
 
 The commit (`Prepare release vX.Y.Z`, authored by `cozystack-ci[bot]`) is **digest pins and image tags only**:
 
@@ -250,7 +244,7 @@ A stable `vX.Y.Z` is created only by **promoting an existing release-candidate**
 
 - [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) is triggered manually once an rc has gone green. It retags the rc's already-built, e2e-passed image digests to the stable tag **by digest** (no rebuild — see [`hack/promote-retag.sh`](../hack/promote-retag.sh)), rewrites the rc version substring in the vendored `values.yaml` tags, and opens the `release-X.Y.Z` staging PR. Merging that PR creates the write-once stable tag at the merge commit (Phase 5) and publishes the release. Because the copy source is the immutable rc digest, the stable image is bit-for-bit the rc image that passed e2e.
 
-So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. A maintainer can also cut any branch directly by pushing a `vX.Y.Z` tag; [`tags.yaml`](../.github/workflows/tags.yaml) fires on any `v*.*.*` tag push.
+So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. Pushing a stable `vX.Y.Z` tag by hand is **not** a supported path: the finalize step creates that tag write-once at the promote PR's merge commit (Phase 5) and refuses to move a pre-existing one, so a hand-pushed stable tag only collides with the promotion flow. Release candidates (`vX.Y.Z-rc.N`) are still pushed by hand — [`tags.yaml`](../.github/workflows/tags.yaml) fires on the rc tag push and builds it.
 
 ## Nightly builds
 
