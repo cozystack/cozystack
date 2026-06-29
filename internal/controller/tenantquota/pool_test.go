@@ -182,6 +182,20 @@ func TestPoolOvercommitted(t *testing.T) {
 	}
 }
 
+// TestPoolOvercommitted_IgnoresUnboundedResource: a child that bounds a resource
+// its parent leaves unbounded is allowed at admission, so the parent pool must
+// not be reported as overcommitted on that resource (an unbounded budget cannot
+// be overcommitted).
+func TestPoolOvercommitted_IgnoresUnboundedResource(t *testing.T) {
+	pools := ComputePools([]Tenant{
+		{Namespace: "tenant-foo", Declared: rl(map[string]string{"cpu": "10"})},
+		{Namespace: "tenant-foo-bar", Declared: rl(map[string]string{"memory": "8Gi"})},
+	})
+	if over := pools["tenant-foo"].Overcommitted(); len(over) != 0 {
+		t.Fatalf("expected no overcommit for a resource the parent does not bound, got %v", over)
+	}
+}
+
 func TestScaleResourceList(t *testing.T) {
 	got := ScaleResourceList(rl(map[string]string{"cpu": "10", "memory": "20Gi"}), 120)
 	quantityEqual(t, got, "cpu", "12")

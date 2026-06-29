@@ -152,10 +152,18 @@ func ComputePools(tenants []Tenant) map[string]*Pool {
 // tenant owns. This should be prevented at admission, but a parent quota that
 // is lowered after children exist can still produce it, so the controller
 // surfaces it.
+//
+// Only resources the budget actually constrains are considered: a child that
+// bounds a resource its parent leaves unbounded is allowed at admission, and an
+// unbounded budget can never be overcommitted, so such resources must not be
+// reported here.
 func (p *Pool) Overcommitted() corev1.ResourceList {
 	over := quota.Subtract(p.CarvedOut, p.Budget)
 	result := corev1.ResourceList{}
 	for name, qty := range over {
+		if _, bounded := p.Budget[name]; !bounded {
+			continue
+		}
 		if qty.Sign() > 0 {
 			result[name] = qty
 		}
