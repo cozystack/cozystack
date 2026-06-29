@@ -191,6 +191,11 @@ seaweedfs:
               topologyKey: kubernetes.io/hostname
   cosi:
     enabled: true
+    # Override the vendored chart default (v0.1.2), which hardcodes read-write
+    # S3 actions for every BucketAccess and ignores the accessPolicy parameter.
+    # v0.3.x honours accessPolicy: readonly, so a -readonly BucketAccessClass
+    # actually issues read-only (Read,List) credentials instead of read-write.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1"
     podLabels:
       policy.cozystack.io/allow-to-apiserver: "true"
     driverName: "seaweedfs.objectstorage.k8s.io"
