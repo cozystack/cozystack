@@ -1,7 +1,16 @@
 {{- $branding := .Values._cluster.branding | default dict }}
+{{- /* Surface the platform version to the SPA at deploy time, derived from the
+       console image tag (build stamps it vX.Y.Z; promotion rewrites rc->stable).
+       This decouples the displayed version from the VITE_APP_VERSION baked into
+       the bundle, so a promoted-by-retag image reports the stable version. */}}
+{{- $tag := .Values.console.image | toString | splitList "@" | first | splitList ":" | last }}
+{{- $config := merge (dict) $branding }}
+{{- if regexMatch "^v?[0-9]" $tag }}
+{{- $_ := set $config "version" (trimPrefix "v" $tag) }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cozy-dashboard-console-config
 data:
-  config.json: {{ $branding | toJson | quote }}
+  config.json: {{ $config | toJson | quote }}
