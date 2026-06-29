@@ -948,6 +948,18 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 				continue
 			}
 
+			// watch.Error carries a *metav1.Status, not a CiliumNetworkPolicy, so
+			// the type assertion below would silently drop it and leave the client
+			// with a cleanly closed stream. Forward it verbatim so the client sees
+			// the error (e.g. a 410 Gone for an expired resourceVersion) and
+			// performs the required relist.
+			if ev.Type == watch.Error {
+				if !send(ev) {
+					return
+				}
+				continue
+			}
+
 			np, ok := ev.Object.(*CiliumNetworkPolicy)
 			if !ok || np == nil {
 				continue
@@ -961,7 +973,11 @@ func (r *REST) Watch(ctx context.Context, opts *metainternal.ListOptions) (watch
 			if ev.Type != watch.Deleted && !ls.Matches(labels.Set(np.Labels)) {
 				continue
 			}
-			if ev.Type != watch.Deleted && (!fieldFilter.MatchesName(np.Name) || !fieldFilter.MatchesNamespace(np.Namespace)) {
+			// Unlike labels, a policy's name and namespace are immutable, so the
+			// DELETED bypass that the label selector needs does not apply here: a
+			// field-selected watch (e.g. metadata.name=sg-a) must not receive
+			// sg-b's deletion. Apply the field filter to every event type.
+			if !fieldFilter.MatchesName(np.Name) || !fieldFilter.MatchesNamespace(np.Namespace) {
 				continue
 			}
 

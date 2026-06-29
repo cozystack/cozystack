@@ -832,6 +832,92 @@ func TestWatchForwardsSendInitialEvents(t *testing.T) {
 	}
 }
 
+// newBackingWatchREST builds a REST whose backing watch is the supplied fake
+// watcher, so a test can drive raw backing-watch events (including watch.Error)
+// through the SecurityGroup watch proxy.
+func newBackingWatchREST(t *testing.T, fw watch.Interface) *REST {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	if err := AddToScheme(scheme); err != nil {
+		t.Fatalf("add cilium mirror to scheme: %v", err)
+	}
+	fc := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Watch: func(_ context.Context, _ client.WithWatch, _ client.ObjectList, _ ...client.ListOption) (watch.Interface, error) {
+				return fw, nil
+			},
+		}).
+		Build()
+	return &REST{c: fc, w: fc, gvr: schema.GroupVersionResource{
+		Group: sdnv1alpha1.GroupName, Version: "v1alpha1", Resource: sdnv1alpha1.SecurityGroupPluralName,
+	}}
+}
+
+func TestWatchForwardsBackingErrorEvents(t *testing.T) {
+	fw := watch.NewFakeWithChanSize(1, false)
+	r := newBackingWatchREST(t, fw)
+
+	w, err := r.Watch(ctxNS(), &metainternal.ListOptions{})
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+	defer w.Stop()
+
+	// A backing watch.Error (e.g. a 410 Gone for an expired resourceVersion)
+	// carries a *metav1.Status, not a CiliumNetworkPolicy. It must reach the
+	// client so it relists, instead of being silently dropped by the
+	// CiliumNetworkPolicy type assertion (which would leave the client seeing a
+	// cleanly closed stream).
+	fw.Error(&metav1.Status{Status: metav1.StatusFailure, Reason: metav1.StatusReasonExpired, Code: 410})
+
+	ev, ok := <-w.ResultChan()
+	if !ok {
+		t.Fatal("watch channel closed without forwarding the error event")
+	}
+	if ev.Type != watch.Error {
+		t.Fatalf("forwarded event type = %q, want %q", ev.Type, watch.Error)
+	}
+	if _, ok := ev.Object.(*metav1.Status); !ok {
+		t.Fatalf("forwarded error object type = %T, want *metav1.Status", ev.Object)
+	}
+}
+
+func TestWatchFieldSelectorFiltersDeletedEvents(t *testing.T) {
+	fw := watch.NewFakeWithChanSize(2, false)
+	r := newBackingWatchREST(t, fw)
+
+	w, err := r.Watch(ctxNS(), &metainternal.ListOptions{
+		FieldSelector: fields.SelectorFromSet(fields.Set{"metadata.name": "sg-a"}),
+	})
+	if err != nil {
+		t.Fatalf("Watch returned error: %v", err)
+	}
+	defer w.Stop()
+
+	// Push sg-b's deletion FIRST. A policy's name and namespace are immutable
+	// (unlike labels), so a field-selected watch must drop sg-b's deletion; only
+	// sg-a's deletion may pass. Because sg-b is pushed first, receiving sg-a as
+	// the first event proves sg-b was filtered out rather than merely reordered.
+	fw.Delete(markedPolicy("sg-b"))
+	fw.Delete(markedPolicy("sg-a"))
+
+	ev, ok := <-w.ResultChan()
+	if !ok {
+		t.Fatal("watch channel closed without forwarding any event")
+	}
+	if ev.Type != watch.Deleted {
+		t.Fatalf("event type = %q, want %q", ev.Type, watch.Deleted)
+	}
+	sg, ok := ev.Object.(*sdnv1alpha1.SecurityGroup)
+	if !ok {
+		t.Fatalf("event object type = %T, want *SecurityGroup", ev.Object)
+	}
+	if sg.Name != "sg-a" {
+		t.Fatalf("field-selected (metadata.name=sg-a) watch received deletion of %q; sg-b must be filtered out", sg.Name)
+	}
+}
+
 func TestUpdateHonorsResourceVersion(t *testing.T) {
 	r := newTestREST(t, markedPolicy("sg-db"))
 
