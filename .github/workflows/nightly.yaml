@@ -110,6 +110,9 @@ jobs:
         with:
           ref: ${{ steps.resolve.outputs.sha }}
           fetch-depth: 1
+          # These jobs copy the checkout into /tmp/$SANDBOX_NAME; don't leave the
+          # checkout token in .git/config to be copied along with it.
+          persist-credentials: false
 
       # Pull the digest-vendored tree build-main baked (but never committed).
       # Pinned to the digest resolved above, not the mutable :main tag.
@@ -168,6 +171,7 @@ jobs:
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
+          persist-credentials: false
       - name: Set up oras
         run: |
           command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
@@ -208,6 +212,7 @@ jobs:
         with:
           ref: ${{ needs.mirror.outputs.sha }}
           fetch-depth: 1
+          persist-credentials: false
       - name: Set up toolchain (flux, oras)
         run: |
           command -v flux >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
