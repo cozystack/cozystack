@@ -79,8 +79,12 @@ jobs:
             # nightly (so the floating `nightly` tag and any release tag exclude
             # the version). API returns versions newest-first, so the dated
             # nightlies are already in newest->oldest order.
+            # `gh api --paginate --jq` runs the filter per page and emits one
+            # array per page, so length/slicing break once a package spans
+            # multiple pages. Slurp the raw pages and merge with `jq -s add`
+            # first, then count and slice the combined array.
             ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
-              --jq '[.[]
+              | jq -s '[add[]
                 | select((.metadata.container.tags | length) > 0)
                 | select(.metadata.container.tags | all(test("^0\\.0\\.0-nightly\\.[0-9]{8}$")))
                 | .id]')"
