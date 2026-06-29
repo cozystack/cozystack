@@ -10,28 +10,36 @@
 # multiple external-dns instances from one platform-level package.
 #
 # cozytest.sh is plain POSIX shell — no `[[ ... ]]`, no bats `run` helper,
-# no FD 3, and `teardown()` is never auto-invoked. Cleanup is inlined at the
-# end of the @test body and runs on the success path only; the e2e Makefile's
-# sandbox teardown handles the failure case.
+# no FD 3, and setup()/teardown() are never auto-invoked. Cleanup is inlined
+# at the end of the @test body (success path, fail-loud) and also wired to
+# cozy_cleanup(), the hook cozytest runs at suite exit and on the first
+# failing test, so the failure path is covered too.
 
 # Shared cleanup so the inline success-path call at the end of the @test
-# body and the teardown hook (alive only under upstream bats) cannot
-# drift apart.
+# body and the cozy_cleanup hook cannot drift apart.
 _cleanup() {
   # Probe Pods and their RBAC live outside the chart and need explicit
   # teardown — the Package delete cascade does not own them. The
   # ClusterRole/ClusterRoleBinding are cluster-scoped and would otherwise
   # leak across e2e re-runs on the same sandbox cluster.
-  kubectl delete --namespace cozy-kuberture --ignore-not-found pod/kuberture-e2e-edns-public pod/kuberture-e2e-edns-internal 2>/dev/null || true
-  kubectl delete --namespace cozy-kuberture --ignore-not-found sa/kuberture-e2e-edns-probe 2>/dev/null || true
-  kubectl delete --ignore-not-found clusterrolebinding/kuberture-e2e-edns-probe clusterrole/kuberture-e2e-edns-probe 2>/dev/null || true
-  kubectl delete package.cozystack.io cozystack.kuberture --ignore-not-found --wait=true --timeout=180s 2>/dev/null || true
+  #
+  # No `|| true`: on the success-path inline call these run under `set -e`, so
+  # a stuck finalizer or wait timeout fails the test (e2e-testing.md §4) instead
+  # of silently leaking; --ignore-not-found still covers the clean case. On the
+  # failure path cozytest wraps the cozy_cleanup hook in `|| true`, so it stays
+  # best-effort there without per-delete masking.
+  kubectl delete --namespace cozy-kuberture --ignore-not-found pod/kuberture-e2e-edns-public pod/kuberture-e2e-edns-internal
+  kubectl delete --namespace cozy-kuberture --ignore-not-found sa/kuberture-e2e-edns-probe
+  kubectl delete --ignore-not-found clusterrolebinding/kuberture-e2e-edns-probe clusterrole/kuberture-e2e-edns-probe
+  kubectl delete package.cozystack.io cozystack.kuberture --ignore-not-found --wait=true --timeout=180s
 }
 
-teardown() {
-  # Dead code under cozytest.sh — the runner never invokes it. Kept so
-  # the file still works under upstream bats (e.g. for local debugging
-  # via `bats hack/e2e-apps/kuberture.bats`).
+cozy_cleanup() {
+  # cozytest's failure-path safety net: it runs this at suite exit and on the
+  # first failing test. The @test also calls _cleanup inline on the success
+  # path; routing both through _cleanup keeps them from drifting. Without this,
+  # a failing run would leak the cluster-scoped ClusterRole/ClusterRoleBinding
+  # across e2e re-runs on the same sandbox cluster.
   _cleanup
 }
 

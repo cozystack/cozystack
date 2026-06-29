@@ -1,12 +1,10 @@
 #!/usr/bin/env bats
 # Unit tests for hack/build-matrix.sh — the CI build-matrix selector.
 #
-# Run from the repo root:  bats hack/build-matrix_test.bats
-
-setup() {
-  REPO_ROOT="$(cd "$(dirname "$BATS_TEST_FILENAME")/.." && pwd)"
-  cd "$REPO_ROOT"
-}
+# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the
+# relative `hack/build-matrix.sh` calls below resolve against that cwd. A bats
+# setup() hook would be dead here — cozytest never invokes it — so the
+# repo-root cwd is supplied by the runner rather than a setup() cd.
 
 @test "no argument emits the full matrix" {
   out=$(hack/build-matrix.sh)
