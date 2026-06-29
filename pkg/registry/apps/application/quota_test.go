@@ -22,7 +22,9 @@ import (
 	"testing"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	corev1 "k8s.io/api/core/v1"
 	apiextv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -79,6 +81,9 @@ func newTenantREST(t *testing.T, objects ...client.Object) *REST {
 	if err := helmv2.AddToScheme(scheme); err != nil {
 		t.Fatalf("register helmv2 scheme: %v", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("register corev1 scheme: %v", err)
+	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 	return &REST{
 		c: fakeClient,
@@ -113,6 +118,37 @@ func childApplication(t *testing.T, name, namespace string, quotas map[string]st
 			Namespace: namespace,
 		},
 		Spec: tenantValuesJSON(t, quotas),
+	}
+}
+
+// usageQuota builds a ResourceQuota reporting current usage (status.used) in a
+// namespace, keyed in the rendered quota key space (e.g. "limits.cpu").
+func usageQuota(t *testing.T, namespace, name string, used map[string]string) *corev1.ResourceQuota {
+	t.Helper()
+	rl := corev1.ResourceList{}
+	for k, v := range used {
+		rl[corev1.ResourceName(k)] = resource.MustParse(v)
+	}
+	return &corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+		Status:     corev1.ResourceQuotaStatus{Used: rl},
+	}
+}
+
+func TestRenderedLimitKey(t *testing.T) {
+	cases := map[string]string{
+		"cpu":                    "limits.cpu",
+		"memory":                 "limits.memory",
+		"ephemeral-storage":      "limits.ephemeral-storage",
+		"devices.com/nvidia":     "limits.devices.com/nvidia",
+		"storage":                "requests.storage",
+		"pods":                   "pods",
+		"services.loadbalancers": "services.loadbalancers",
+	}
+	for raw, want := range cases {
+		if got := renderedLimitKey(raw); got != want {
+			t.Errorf("renderedLimitKey(%q) = %q, want %q", raw, got, want)
+		}
 	}
 }
 
@@ -263,6 +299,54 @@ func TestValidateTenantResourceQuotas_UpdateExcludesSelf(t *testing.T) {
 	if errs := r.validateTenantResourceQuotas(context.Background(), appOver); len(errs) == 0 {
 		t.Fatalf("update of own quota above parent budget should be denied")
 	}
+}
+
+// TestValidateTenantResourceQuotas_PoolUsage verifies that the parent pool's
+// current usage is carved out of the budget available to a new child, so the
+// sub-tree invariant holds at declaration time.
+func TestValidateTenantResourceQuotas_PoolUsage(t *testing.T) {
+	// foo budget cpu=10, already using 8 in its own namespace. A child asking
+	// for 10 must be denied (only 2 left); a child asking for 2 is allowed.
+	t.Run("parent usage shrinks remaining", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+		used := usageQuota(t, "tenant-foo", "tenant-quota", map[string]string{"limits.cpu": "8"})
+		r := newTenantREST(t, parent, used)
+
+		denied := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "10"}))
+		if len(denied) == 0 {
+			t.Fatalf("child cpu=10 should be denied when parent pool already uses 8 of 10")
+		}
+		allowed := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "2"}))
+		if len(allowed) > 0 {
+			t.Fatalf("child cpu=2 should be allowed (2 left), got: %v", allowed)
+		}
+	})
+
+	// Usage in a bounded child's own namespace (its own pool) must not count
+	// against the parent pool's remaining budget.
+	t.Run("bounded child usage excluded from parent pool", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+		child := tenantHelmRelease(t, "bar", "tenant-foo", map[string]string{"cpu": "4"})
+		// bar uses its full 4 in its own namespace.
+		childUsed := usageQuota(t, "tenant-foo-bar", "tenant-quota", map[string]string{"limits.cpu": "4"})
+		r := newTenantREST(t, parent, child, childUsed)
+
+		// Raising bar to 9 must still be allowed: bar's own usage is in its own
+		// pool, and as the tenant being updated it is excluded anyway.
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "9"})); len(errs) > 0 {
+			t.Fatalf("raising own quota within budget must be allowed, got: %v", errs)
+		}
+	})
+
+	// No rendered usage yet (freshly-created parent, Flux has not rendered the
+	// quota): usage degrades to zero and behaviour matches the pre-usage gate.
+	t.Run("absent usage degrades to budget-only check", func(t *testing.T) {
+		parent := tenantHelmRelease(t, "foo", "tenant-root", map[string]string{"cpu": "10"})
+		r := newTenantREST(t, parent)
+		if errs := r.validateTenantResourceQuotas(context.Background(), childApplication(t, "bar", "tenant-foo", map[string]string{"cpu": "10"})); len(errs) > 0 {
+			t.Fatalf("with no recorded usage a full-budget child must be allowed, got: %v", errs)
+		}
+	})
 }
 
 func TestParentTenantHelmReleaseRef(t *testing.T) {
