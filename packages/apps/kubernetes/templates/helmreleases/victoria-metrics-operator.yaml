@@ -36,6 +36,8 @@ spec:
   {{- end }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
+  {{- if .Values.addons.certManager.enabled }}
   - name: {{ .Release.Name }}-cert-manager-crds
     namespace: {{ .Release.Namespace }}
+  {{- end }}
 {{- end }}
