@@ -1,0 +1,130 @@
+suite: cleanup ACME account secret post-delete hook
+templates:
+  - templates/hooks/cleanup-acme.yaml
+
+release:
+  name: gateway
+  namespace: tenant-root
+
+tests:
+  - it: renders the post-delete cleanup Job, ServiceAccount, Role and RoleBinding
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: Job is a post-delete hook named <release>-cleanup
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gateway-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "10"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+
+  - it: Job deletes the cozystack-acme-account secret in the release namespace
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: gateway-cleanup
+      - equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl delete secret -n tenant-root cozystack-acme-account --ignore-not-found"
+
+  - it: Job pod and container carry a hardened securityContext
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+
+  - it: Role is scoped via resourceNames to the cozystack-acme-account secret only
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gateway-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: ""
+      - contains:
+          path: rules[0].resources
+          content: secrets
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - cozystack-acme-account
+      - equal:
+          path: rules[0].verbs
+          value:
+            - get
+            - delete
+
+  - it: RoleBinding binds the cleanup Role to the cleanup ServiceAccount
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.kind
+          value: Role
+      - equal:
+          path: roleRef.name
+          value: gateway-cleanup
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: gateway-cleanup
+
+  - it: ServiceAccount is a post-delete hook named <release>-cleanup
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    asserts:
+      - equal:
+          path: metadata.name
+          value: gateway-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
