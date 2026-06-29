@@ -507,16 +507,17 @@ func createOptionsFromUpdate(opts *metav1.UpdateOptions) *metav1.CreateOptions {
 // -----------------------------------------------------------------------------
 
 var (
-	_ rest.Creater              = &REST{}
-	_ rest.Getter               = &REST{}
-	_ rest.Lister               = &REST{}
-	_ rest.Updater              = &REST{}
-	_ rest.Patcher              = &REST{}
-	_ rest.GracefulDeleter      = &REST{}
-	_ rest.Watcher              = &REST{}
-	_ rest.TableConvertor       = &REST{}
-	_ rest.Scoper               = &REST{}
-	_ rest.SingularNameProvider = &REST{}
+	_ rest.Creater                    = &REST{}
+	_ rest.Getter                     = &REST{}
+	_ rest.Lister                     = &REST{}
+	_ rest.Updater                    = &REST{}
+	_ rest.Patcher                    = &REST{}
+	_ rest.GracefulDeleter            = &REST{}
+	_ rest.MayReturnFullObjectDeleter = &REST{}
+	_ rest.Watcher                    = &REST{}
+	_ rest.TableConvertor             = &REST{}
+	_ rest.Scoper                     = &REST{}
+	_ rest.SingularNameProvider       = &REST{}
 )
 
 // REST is the storage backend translating SecurityGroup to CiliumNetworkPolicy.
@@ -844,9 +845,41 @@ func (r *REST) Delete(
 			return nil, false, err
 		}
 	}
-	err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts})
-	return nil, err == nil, err
+	if err = r.c.Delete(ctx, &CiliumNetworkPolicy{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: name}}, &client.DeleteOptions{Raw: opts}); err != nil {
+		return nil, false, err
+	}
+	// Report whether the delete completed synchronously, per the
+	// rest.GracefulDeleter contract whose bool means "instantly deleted". Read the
+	// post-delete state through the direct (uncached) client: the storage's
+	// cache-backed client could return a stale pre-delete object and misreport an
+	// async, finalizer-deferred delete as instant. The backing policy carries the
+	// membership finalizer (the controller adds it and the storage re-asserts it on
+	// every write), so a real delete normally lingers as Terminating until the
+	// securitygroup-controller strips the member-pod labels and clears it.
+	after := &CiliumNetworkPolicy{}
+	getErr := r.w.Get(ctx, types.NamespacedName{Namespace: ns, Name: name}, after)
+	if apierrors.IsNotFound(getErr) {
+		return policyToSecurityGroup(current), true, nil
+	}
+	if getErr != nil {
+		return nil, false, getErr
+	}
+	// The object is still present. A dry-run never removes it, so the prospective
+	// result is read from its authoritative finalizers: none means the real delete
+	// would be instant. A non-dry-run delete that left the object means a finalizer
+	// is holding it as Terminating, so it is asynchronous.
+	if opts != nil && len(opts.DryRun) > 0 && len(after.Finalizers) == 0 {
+		return policyToSecurityGroup(after), true, nil
+	}
+	return policyToSecurityGroup(after), false, nil
 }
+
+// DeleteReturnsDeletedObject implements rest.MayReturnFullObjectDeleter: Delete
+// returns the SecurityGroup object (the deleted object on a synchronous delete,
+// the terminating object on an asynchronous one) rather than only a Status, so
+// the DELETE endpoint is advertised and serialized accordingly — matching the
+// generic registry's behavior.
+func (*REST) DeleteReturnsDeletedObject() bool { return true }
 
 // PATCH is served by the generic apiserver handler via Get + Update (the storage
 // only needs to satisfy rest.Patcher = Getter + Updater); there is no storage

@@ -337,6 +337,54 @@ func TestDeleteRemovesBackingPolicy(t *testing.T) {
 	}
 }
 
+func TestDeleteWithFinalizerReportsAsync(t *testing.T) {
+	// The backing policy carries the membership finalizer, so deleting it is
+	// asynchronous: it gets a deletionTimestamp and survives until the controller
+	// strips the member-pod labels and clears the finalizer. The storage must
+	// report this per the rest.GracefulDeleter contract — deleted=false plus the
+	// terminating object — so the endpoint emits 202 Accepted, not a 200 that
+	// claims the object is already gone.
+	cnp := markedPolicy("sg-db")
+	cnp.Finalizers = []string{sdnv1alpha1.MembershipFinalizer}
+	r := newTestREST(t, cnp)
+
+	obj, deleted, err := r.Delete(ctxNS(), "sg-db", nil, &metav1.DeleteOptions{})
+	if err != nil {
+		t.Fatalf("Delete returned error: %v", err)
+	}
+	if deleted {
+		t.Fatalf("Delete of a finalizer-guarded policy reported deleted=true; want false (async)")
+	}
+	sg, ok := obj.(*sdnv1alpha1.SecurityGroup)
+	if !ok {
+		t.Fatalf("Delete returned %T, want *SecurityGroup", obj)
+	}
+	if sg.DeletionTimestamp == nil {
+		t.Fatalf("async delete must surface the terminating object with a deletionTimestamp: %+v", sg)
+	}
+
+	// The backing policy must still be retrievable while the finalizer holds it.
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-db"}, np); err != nil {
+		t.Fatalf("policy hard-deleted despite a pending finalizer: %v", err)
+	}
+}
+
+func TestDeleteDryRunReportsPolicyWithoutFinalizerAsInstant(t *testing.T) {
+	// A dry-run delete must report what a real delete would do without re-reading
+	// the object: for a finalizer-less policy the real delete is instant, so the
+	// dry-run reports deleted=true. (Re-reading after the delete would see the
+	// dry-run-preserved object and wrongly report it as still present / async.)
+	r := newTestREST(t, markedPolicy("sg-db"))
+	_, deleted, err := r.Delete(ctxNS(), "sg-db", nil, &metav1.DeleteOptions{DryRun: []string{metav1.DryRunAll}})
+	if err != nil {
+		t.Fatalf("dry-run Delete returned error: %v", err)
+	}
+	if !deleted {
+		t.Fatalf("dry-run Delete of a finalizer-less policy reported deleted=false; want true (instant)")
+	}
+}
+
 func TestCreateOverExistingUnmarkedPolicyFails(t *testing.T) {
 	r := newTestREST(t, unmarkedPolicy("tenant-isolation"))
 
