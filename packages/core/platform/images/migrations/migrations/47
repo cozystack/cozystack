@@ -19,6 +19,12 @@ set -euo pipefail
 NAMESPACE="${NAMESPACE:-cozy-system}"
 DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 
+# Shared cozystack-version stamp helper. Every migration >= 42 must stamp via
+# this (labeled, no-delete-guarded) helper rather than a hand-rolled apply — the
+# cozystack-version-stamp.bats guard enforces it. Provides stamp_cozystack_version.
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
 # etcd-operator coordinates (the v1alpha2 operator deployment).
 ETCD_OPERATOR_NS="${ETCD_OPERATOR_NS:-cozy-etcd-operator}"
 ETCD_OPERATOR_DEPLOY="${ETCD_OPERATOR_DEPLOY:-etcd-operator-controller-manager}"
@@ -74,22 +80,6 @@ CREDS_TENANT_LABEL="internal.cozystack.io/tenantresource"
 
 # Cluster DNS domain, used to build the FQDN form of the cert SANs below.
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-cozy.local}"
-
-stamp_version() {
-  # Mirror migration 43's labeled apply: a label-less apply by the same field
-  # manager would strip the platform.cozystack.io/no-delete guardrail label.
-  kubectl apply --filename - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cozystack-version
-  namespace: ${NAMESPACE}
-  labels:
-    platform.cozystack.io/no-delete: "true"
-data:
-  version: "48"
-EOF
-}
 
 # Re-issue the server and peer certificates for one adopted cluster so they
 # cover the domains the NEW operator uses, BEFORE the operator can ever replace
@@ -260,7 +250,7 @@ warn_orphaned_backup_schedules() {
 if ! kubectl get crd etcdclusters.etcd.aenix.io >/dev/null 2>&1; then
   echo "No etcd.aenix.io CRD present; nothing to migrate."
   [ "$DRY_RUN" = "1" ] && { echo "[dry-run] would stamp version 48"; exit 0; }
-  stamp_version
+  stamp_cozystack_version 48
   exit 0
 fi
 
@@ -368,5 +358,5 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
   trap - EXIT
 fi
 
-stamp_version
+stamp_cozystack_version 48
 echo "Applied configmap ${NAMESPACE}/cozystack-version version=48"
