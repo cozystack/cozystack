@@ -20,9 +20,9 @@ controlPlane:
       resources: {}
       resourcesPreset: "micro"
 # storageClass is intentionally omitted from md0 to verify the template falls back
-# to the cluster default StorageClass. diskSize is set to the default 20Gi (it is a
-# required field now that the chart no longer ships a default md0 node group to
-# supply it via values merge).
+# to the application-level storageClass (chart default "replicated"). diskSize is
+# set to the default 20Gi (it is a required field now that the chart no longer ships
+# a default md0 node group to supply it via values merge).
 nodeGroups:
   md0:
     minReplicas: 0
