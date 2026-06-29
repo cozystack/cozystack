@@ -1,0 +1,32 @@
+suite: data PVC retention policy passthrough
+
+# Guards the fix for issue #3058: the upstream OpenBAO StatefulSet renders
+# persistentVolumeClaimRetentionPolicy from server.persistentVolumeClaimRetentionPolicy.
+# The app wrapper must pass this value through the HelmRelease so the data PVC
+# is removed on release deletion instead of being orphaned.
+
+templates:
+  - templates/openbao.yaml
+
+release:
+  name: openbao-test
+  namespace: tenant-test
+
+tests:
+  - it: "passes whenDeleted=Delete through the HelmRelease values"
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.persistentVolumeClaimRetentionPolicy.whenDeleted
+          value: Delete
+
+  - it: "keeps whenScaled=Retain so scale-down does not destroy raft member data"
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: spec.values.openbao.server.persistentVolumeClaimRetentionPolicy.whenScaled
+          value: Retain
