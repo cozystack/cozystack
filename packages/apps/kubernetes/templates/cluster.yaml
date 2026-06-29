@@ -70,10 +70,21 @@ spec:
         node-role.kubernetes.io/{{ . }}: ""
         {{- end }}
     spec:
-      {{- with .group.instanceType }}
+      {{- /* Explicit resources take precedence over instanceType. When a node
+             group is sized by resources (both cpu and memory set), the
+             instancetype is omitted from the VM: KubeVirt rejects a
+             VirtualMachine that references an instancetype and also overrides
+             both domain.cpu and domain.memory. instanceType is required and
+             defaulted in the schema, so a user (or the dashboard, which cannot
+             clear it) that sets explicit cpu+memory would otherwise hit that
+             admission rejection — precedence resolves it with no schema/UI
+             change. A partial override (only cpu or only memory) is left to the
+             existing override-layer behaviour and is unaffected here. */}}
+      {{- $sizedByResources := and .group.resources .group.resources.cpu .group.resources.memory }}
+      {{- if and .group.instanceType (not $sizedByResources) }}
       instancetype:
         kind: VirtualMachineClusterInstancetype
-        name: {{ . }}
+        name: {{ .group.instanceType }}
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
@@ -341,17 +352,22 @@ metadata:
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
 {{- range $groupName, $group := .Values.nodeGroups }}
-{{- /* instanceType and explicit resources are alternative, mutually exclusive
-       sizing sources. KubeVirt rejects a VirtualMachine that references an
-       instancetype while also setting domain.cpu/memory, because instancetype
-       CPU/memory cannot be overridden. Fail fast here with a clear render-time
-       error instead of letting the conflict surface as a late admission rejection. */}}
-{{- if and $group.instanceType $group.resources (or $group.resources.cpu $group.resources.memory) }}
-{{-   fail (printf "nodeGroup %s: set either instanceType or explicit resources (cpu/memory), not both — KubeVirt rejects a VM that overrides instanceType CPU/memory" $groupName) }}
-{{- end }}
-{{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
+{{- /* A node group is sized either by instanceType or by an explicit resources
+       block. When resources fully specify the size (both cpu and memory), they
+       take precedence and the instancetype is omitted from the rendered VM
+       (see the "kubevirtmachinetemplate" definition) — KubeVirt rejects a VM
+       that references an instancetype and also overrides domain.cpu/memory.
+       Because instanceType is required+defaulted in the schema, a user (or the
+       dashboard) sizing a group with explicit resources cannot also clear
+       instanceType, so treating "both set" as an error would be a dead end.
+       Precedence resolves it without any schema or UI change. */}}
+{{- $hasCpu := and $group.resources $group.resources.cpu }}
+{{- $hasMem := and $group.resources $group.resources.memory }}
+{{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations.
+     Skip the lookup when the group is sized by resources: the instancetype is omitted from the VM,
+     so a stale or absent instancetype must not fail an otherwise valid resources-sized group. */}}
 {{- $instanceType := dict }}
-{{- if $group.instanceType }}
+{{- if and $group.instanceType (not (and $hasCpu $hasMem)) }}
 {{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
 {{-   if not $instanceType }}
 {{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}

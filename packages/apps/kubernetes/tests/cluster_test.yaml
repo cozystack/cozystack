@@ -357,11 +357,13 @@ tests:
           value: 4Gi
         documentIndex: 4
 
-  # instanceType and explicit resources are mutually exclusive sizing sources:
-  # KubeVirt rejects a VM that references an instancetype and also sets explicit
-  # CPU/memory. The chart fails fast at render time rather than emitting a VM that
-  # is later rejected by the instancetype admission webhook.
-  - it: fails when both instanceType and explicit resources are set
+  # Explicit resources take PRECEDENCE over instanceType. instanceType is
+  # required + defaulted (u1.medium) in the schema, so a user — or the dashboard,
+  # which cannot send an empty instanceType — that sizes a group with explicit
+  # resources unavoidably also carries an instanceType. The chart must resolve
+  # this by honouring resources and omitting the instancetype from the VM, so
+  # KubeVirt does not reject an instancetype+domain.cpu/memory override.
+  - it: omits instancetype and renders explicit cpu/memory when both are set
     release:
       name: test-k8s
       namespace: tenant-test
@@ -378,5 +380,17 @@ tests:
             cpu: 2
             memory: 4Gi
     asserts:
-      - failedTemplate:
-          errorMessage: "nodeGroup md0: set either instanceType or explicit resources (cpu/memory), not both — KubeVirt rejects a VM that overrides instanceType CPU/memory"
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 4
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.instancetype
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+        documentIndex: 4
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory.guest
+          value: 4Gi
+        documentIndex: 4
