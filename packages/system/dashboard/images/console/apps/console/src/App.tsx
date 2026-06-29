@@ -48,7 +48,7 @@ function Shell({ config, username }: ShellProps) {
       sections={sections}
       subtitle={<Breadcrumb />}
       onSearchClick={toggle}
-      version={import.meta.env.VITE_APP_VERSION}
+      version={config.version || import.meta.env.VITE_APP_VERSION}
       logoSvg={config.logoSvg}
       logoText={config.logoText}
       username={username}
