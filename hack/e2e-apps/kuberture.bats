@@ -236,12 +236,15 @@ EOF
   # kuberture-e2e-public.cozystack.test (kuberture-e2e-public Service carries
   # external-dns.alpha.kubernetes.io/hostname=...) and must NOT see the
   # internal hostname (kuberture-e2e-internal carries only the internal prefix).
+  # A bare `! echo | grep` is vacuous under cozytest's `set -e` (errexit is
+  # suppressed for a `!` pipeline), so a leak of the wrong hostname into a probe
+  # would not fail the test; assert the absence via `if ... grep; then ...; false`.
   echo "${pub_logs}" | grep -F "${pub_host}" >/dev/null
-  ! echo "${pub_logs}" | grep -F "${int_host}" >/dev/null
+  if echo "${pub_logs}" | grep -F "${int_host}" >/dev/null; then echo "FAIL: public-prefix probe must NOT see the internal hostname ${int_host}"; false; fi
 
   # And the inverse for the internal-prefix probe.
   echo "${int_logs}" | grep -F "${int_host}" >/dev/null
-  ! echo "${int_logs}" | grep -F "${pub_host}" >/dev/null
+  if echo "${int_logs}" | grep -F "${pub_host}" >/dev/null; then echo "FAIL: internal-prefix probe must NOT see the public hostname ${pub_host}"; false; fi
 
   # _cleanup deletes the probe Pods, their SA, the ClusterRole+ClusterRoleBinding,
   # and finally the Package CR. Inlined here for the success path so a re-run

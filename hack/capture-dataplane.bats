@@ -53,8 +53,11 @@ E2E_CAPTURE_DATAPLANE_LIB=1
   [ "$(printf '%s\n' "$out" | grep -c .)" -eq 2 ]
   printf '%s\n' "$out" | grep -q '^tenant|app|LoadBalancer|192.0.2.50|'
   printf '%s\n' "$out" | grep -q '^tenant|db|LoadBalancer|192.0.2.51|'
-  ! printf '%s\n' "$out" | grep -q 'kube-dns'
-  ! printf '%s\n' "$out" | grep -q 'pending'
+  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for a
+  # `!`-negated pipeline), so a filter regression that let these rows through
+  # would not fail the test. Assert the absence via `if cmd; then ...; false`.
+  if printf '%s\n' "$out" | grep -q 'kube-dns'; then echo "FAIL: lb_filter_services must drop the kube-dns row"; false; fi
+  if printf '%s\n' "$out" | grep -q 'pending'; then echo "FAIL: lb_filter_services must drop the pending (no external IP) row"; false; fi
 }
 
 @test "lb_first_ready_endpoint picks the first addressed endpoint that is not NotReady" {

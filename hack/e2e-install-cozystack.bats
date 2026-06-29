@@ -289,8 +289,10 @@ EOF
   # generic DNS-1035 errors and from network/auth failures).
   echo "$output" | grep -q "tenant names must"
   # And assert kubectl did NOT report creation — if validation regressed
-  # into a "warn" variant, the server could still accept the object.
-  ! echo "$output" | grep -qi "created"
+  # into a "warn" variant, the server could still accept the object. A bare
+  # `! echo | grep` is vacuous under cozytest's `set -e` (suppressed for a `!`
+  # pipeline), so the regression would slip through; assert via `if ...; false`.
+  if echo "$output" | grep -qi "created"; then echo "FAIL: kubectl reported the tenant as created — validation must reject it, not warn"; false; fi
 
   # Post-condition cleanup: even though we expect validation to reject the
   # create, removing foo-bar unconditionally keeps the cluster clean for
@@ -395,7 +397,10 @@ EOF
   version=$(kubectl get configmap cozystack-version -n cozy-system \
     -o jsonpath='{.data.version}')
   kubectl delete configmap cozystack-version -n cozy-system
-  ! kubectl get configmap cozystack-version -n cozy-system 2>/dev/null
+  # A bare `! kubectl get` is vacuous under cozytest's `set -e` (errexit is
+  # suppressed for a `!` pipeline), so a delete that silently failed would not
+  # fail the test; assert the absence via `if kubectl get; then ...; false`.
+  if kubectl get configmap cozystack-version -n cozy-system 2>/dev/null; then echo "FAIL: cozystack-version configmap must be gone after delete with the no-delete label removed"; false; fi
   # Reconstruct: declarative apply matches the chart template at
   # packages/core/platform/templates/cozystack-version.yaml — same label set
   # AND the helm.sh/resource-policy: keep annotation that pins the ConfigMap
