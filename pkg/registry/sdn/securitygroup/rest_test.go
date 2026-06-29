@@ -204,6 +204,64 @@ func TestCreateGetSpecRoundTrip(t *testing.T) {
 	}
 }
 
+func TestEgressPeerProjectionRoundTrip(t *testing.T) {
+	// Egress toApp/toSG peers mirror the ingress fromApp/fromSG path: toApp
+	// projects to a lineage-label endpointSelector and toSG to the referenced
+	// group's membership-label endpointSelector, and both reconstruct on read. A
+	// mistake here would point an egress allow at the wrong endpoints — a real
+	// network-policy consequence — so the path is pinned end to end, symmetric to
+	// the ingress coverage.
+	r := newTestREST(t)
+	in := &sdnv1alpha1.SecurityGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "sg-egress", Namespace: testNamespace},
+		Spec: sdnv1alpha1.SecurityGroupSpec{
+			Attachments: []sdnv1alpha1.ApplicationReference{{APIGroup: "apps.cozystack.io", Kind: "Postgres", Name: "db"}},
+			Egress: []sdnv1alpha1.EgressRule{
+				{
+					ToApp: []sdnv1alpha1.ApplicationReference{{APIGroup: "apps.cozystack.io", Kind: "Kubernetes", Name: "web"}},
+					ToSG:  []string{"frontend"},
+					ToPorts: []sdnv1alpha1.PortRule{
+						{Ports: []sdnv1alpha1.PortProtocol{{Port: "5432", Protocol: "TCP"}}},
+					},
+				},
+			},
+		},
+	}
+	createSG(t, r, in)
+
+	np := &CiliumNetworkPolicy{}
+	if err := r.c.Get(context.Background(), types.NamespacedName{Namespace: testNamespace, Name: "sg-egress"}, np); err != nil {
+		t.Fatalf("backing policy not found: %v", err)
+	}
+	eg := np.Spec.Egress
+	if len(eg) != 1 || len(eg[0].ToEndpoints) != 2 {
+		t.Fatalf("egress projection mismatch: %+v", eg)
+	}
+	wantApp := map[string]string{
+		"apps.cozystack.io/application.group": "apps.cozystack.io",
+		"apps.cozystack.io/application.kind":  "Kubernetes",
+		"apps.cozystack.io/application.name":  "web",
+	}
+	if !reflect.DeepEqual(eg[0].ToEndpoints[0].MatchLabels, wantApp) {
+		t.Fatalf("toApp not projected to lineage labels: %+v", eg[0].ToEndpoints[0].MatchLabels)
+	}
+	wantSG := map[string]string{"securitygroup.sdn.cozystack.io/frontend": ""}
+	if !reflect.DeepEqual(eg[0].ToEndpoints[1].MatchLabels, wantSG) {
+		t.Fatalf("toSG not projected to membership label: %+v", eg[0].ToEndpoints[1].MatchLabels)
+	}
+
+	// The SecurityGroup view reconstructs toApp/toSG (and the carried port) from
+	// the backing endpoint selectors, round-tripping exactly.
+	out, err := r.Get(ctxNS(), "sg-egress", &metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("Get returned error: %v", err)
+	}
+	got := out.(*sdnv1alpha1.SecurityGroup)
+	if !reflect.DeepEqual(got.Spec.Egress, in.Spec.Egress) {
+		t.Fatalf("egress peer round-trip mismatch:\n got: %+v\nwant: %+v", got.Spec.Egress, in.Spec.Egress)
+	}
+}
+
 func TestCreateDefaultsAttachmentAPIGroup(t *testing.T) {
 	r := newTestREST(t)
 	in := &sdnv1alpha1.SecurityGroup{
