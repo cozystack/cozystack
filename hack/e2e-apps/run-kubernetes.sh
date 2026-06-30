@@ -126,6 +126,7 @@ ${ouroboros_addon}
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 2
+      resources: {}
       roles:
       - ingress-nginx
   storageClass: replicated

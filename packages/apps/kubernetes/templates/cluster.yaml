@@ -405,7 +405,7 @@ metadata:
     cluster.x-k8s.io/managed-by: kamaji
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
-{{- range $groupName, $group := .Values.nodeGroups }}
+{{- range $groupName, $group := (include "kubernetes.nodeGroups" $ | fromYaml) }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
 {{- if $group.instanceType }}
