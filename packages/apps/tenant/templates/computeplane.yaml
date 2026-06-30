@@ -51,12 +51,31 @@ spec:
     disableWait: true
     remediation:
       retries: -1
+  # Cozystack-enablement. A ComputePlane is not a vanilla Kubernetes cluster:
+  # placement: ComputePlane apps (e.g. cozyllm Jupyter/n8n/Langflow) render
+  # child HelmReleases (-> fluxcd), Certificate resources (-> certManager) and
+  # Ingress objects (-> ingressNginx) into the target cluster. Enabling these
+  # addons makes the provisioned cluster a Cozystack-prepared environment so
+  # those resources reconcile on it instead of failing with "no matches for
+  # kind". Set as inline base values (always-on); Flux merges spec.values last,
+  # so the optional profile ConfigMap below cannot disable them, only override
+  # cluster *shape* (node groups / version / GPU) and add further addons.
+  values:
+    addons:
+      fluxcd:
+        enabled: true
+      certManager:
+        enabled: true
+      ingressNginx:
+        enabled: true
   valuesFrom:
-  # Platform-defined ComputePlane profile (single source of truth for node
-  # groups / GPU types / Kubernetes version / autoscaling). Referenced by name
-  # only; the profile catalog is a follow-up.
+  # Platform-defined ComputePlane profile: overrides cluster shape (node groups
+  # / GPU types / Kubernetes version / autoscaling). Optional — when absent the
+  # inline defaults above provision a baseline cluster with the required addons.
+  # The profile catalog is a follow-up (see design-proposals/compute-plane).
   - kind: ConfigMap
     name: computeplane-profile-{{ .Values.computePlane }}
+    optional: true
   - kind: Secret
     name: cozystack-values
 {{- end }}
