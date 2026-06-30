@@ -273,9 +273,13 @@ type NodeGroup struct {
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
+	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
+	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
 	// Minimum number of replicas.
 	// +kubebuilder:default:=0
 	MinReplicas int `json:"minReplicas"`
+	// Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
+	NodeStartupTimeout string `json:"nodeStartupTimeout,omitempty"`
 	// CPU and memory resources for each worker node.
 	Resources Resources `json:"resources"`
 	// List of node roles.
