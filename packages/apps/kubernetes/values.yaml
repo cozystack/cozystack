@@ -80,7 +80,7 @@ storageClass: replicated
 ## @field {quantity} diskSize="20Gi" - Persistent disk size for kubelet and containerd data.
 ## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true).
 ## @field {[]string} roles - List of node roles.
-## @field {Resources} resources - CPU and memory resources for each worker node.
+## @field {Resources} [resources] - Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 ## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
 
