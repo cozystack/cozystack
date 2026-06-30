@@ -303,8 +303,8 @@ metadata:
 {{- if and (eq .Values.oidc.mode "CustomConfig") (ne .Values.oidc.customConfig.secretRef.name "") }}
 {{-   $oidcAuthnSecret = .Values.oidc.customConfig.secretRef.name }}
 {{- end }}
-{{- if and $oidcEnabled (has "cozy-oidc-authn-config" $userVolumeNames) }}
-{{-   fail "controlPlane.apiServer.extraVolumes: volume name \"cozy-oidc-authn-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
+{{- if and $oidcEnabled (has "authentication-config" $userVolumeNames) }}
+{{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
 {{- end }}
 spec:
   apiServer:
@@ -315,7 +315,7 @@ spec:
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
-      - --authentication-config=/etc/kubernetes/cozy-oidc/config.yaml
+      - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
       {{- end }}
     {{- end }}
     {{- if or .Values.controlPlane.apiServer.extraVolumeMounts $oidcEnabled }}
@@ -324,8 +324,8 @@ spec:
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
-      - name: cozy-oidc-authn-config
-        mountPath: /etc/kubernetes/cozy-oidc
+      - name: authentication-config
+        mountPath: /etc/kubernetes/authentication-config
         readOnly: true
       {{- end }}
     {{- end }}
@@ -425,7 +425,7 @@ spec:
       {{- toYaml . | nindent 6 }}
       {{- end }}
       {{- if $oidcEnabled }}
-      - name: cozy-oidc-authn-config
+      - name: authentication-config
         secret:
           secretName: {{ $oidcAuthnSecret }}
           items:
