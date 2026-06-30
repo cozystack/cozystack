@@ -87,6 +87,7 @@ func newTenantREST(t *testing.T, objects ...client.Object) *REST {
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build()
 	return &REST{
 		c: fakeClient,
+		w: fakeClient,
 		gvk: schema.GroupVersionKind{
 			Group:   appsv1alpha1.GroupName,
 			Version: "v1alpha1",

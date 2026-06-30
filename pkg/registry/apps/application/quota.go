@@ -382,17 +382,20 @@ func (r *REST) parentPoolUsage(ctx context.Context, parentNS, excludeNS string) 
 	}
 	delete(members, excludeNS)
 
-	quotas := &corev1.ResourceQuotaList{}
-	if err := r.c.List(ctx, quotas); err != nil {
-		return nil, err
-	}
 	perNamespace := map[string]map[string]resource.Quantity{}
-	for i := range quotas.Items {
-		rq := &quotas.Items[i]
-		if !members[rq.Namespace] {
-			continue
+	for ns := range members {
+		quotas := &corev1.ResourceQuotaList{}
+		// Direct (uncached), namespace-scoped read: the aggregated apiserver
+		// must not spin up a cluster-wide ResourceQuota informer just for
+		// admission, so this goes through the watch client (r.w) rather than the
+		// cached r.c, and is scoped to the handful of pool-member namespaces.
+		if err := r.w.List(ctx, quotas, client.InNamespace(ns)); err != nil {
+			return nil, err
 		}
-		perNamespace[rq.Namespace] = maxQuotas(perNamespace[rq.Namespace], resourceListToQuotas(rq.Status.Used))
+		for i := range quotas.Items {
+			rq := &quotas.Items[i]
+			perNamespace[ns] = maxQuotas(perNamespace[ns], resourceListToQuotas(rq.Status.Used))
+		}
 	}
 
 	total := map[string]resource.Quantity{}
