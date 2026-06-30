@@ -61,6 +61,15 @@ tests:
       - hasDocuments:
           count: 0
 
+  - it: emits no OIDC kubeconfig placeholder Secret when oidc.mode is None
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/oidc-kubeconfig-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
   ###############################################
   # mode: System — happy path                   #
   ###############################################
@@ -135,7 +144,7 @@ tests:
           value: oidc-audience-mapper
         documentIndex: 0
       - equal:
-          path: spec.protocolMappers[0].config["included.custom.audience"]
+          path: spec.protocolMappers[0].config["included.client.audience"]
           value: tenant-foo-kubernetes-app
         documentIndex: 0
 
@@ -186,13 +195,13 @@ tests:
     asserts:
       - contains:
           path: spec.apiServer.extraArgs
-          content: "--authentication-config=/etc/kubernetes/cozy-oidc/config.yaml"
+          content: "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
         documentIndex: 1
       - contains:
           path: spec.apiServer.extraVolumeMounts
           content:
-            name: cozy-oidc-authn-config
-            mountPath: /etc/kubernetes/cozy-oidc
+            name: authentication-config
+            mountPath: /etc/kubernetes/authentication-config
             readOnly: true
         documentIndex: 1
       - lengthEqual:
@@ -201,12 +210,34 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.deployment.extraVolumes[2].name
-          value: cozy-oidc-authn-config
+          value: authentication-config
         documentIndex: 1
       - equal:
           path: spec.deployment.extraVolumes[2].secret.secretName
           value: kubernetes-app-oidc-authn-config
         documentIndex: 1
+
+  - it: System mode pre-renders the OIDC kubeconfig Secret as a release-owned placeholder
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-kubeconfig-secret.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: kubernetes-app-oidc-kubeconfig
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm
+      - matchRegex:
+          path: stringData.kubeconfig
+          pattern: "awaiting OIDC bootstrap Job"
 
   - it: System mode hard-fails when platform OIDC is off
     release:
@@ -338,6 +369,18 @@ tests:
           path: spec.deployment.extraVolumes[2].secret.secretName
           value: my-byo-authn
         documentIndex: 1
+
+  - it: CustomConfig mode does not pre-render the OIDC kubeconfig Secret
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-kubeconfig-secret.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config: "..."
+    asserts:
+      - hasDocuments:
+          count: 0
 
   - it: CustomConfig mode does not render any Keycloak objects
     release:
