@@ -32,6 +32,15 @@ tests:
       # --ignore-not-found tolerates absent resources, but a genuine RBAC/API
       # failure must propagate: the script tracks failures and exits with that
       # status instead of masking errors behind `|| echo ...`.
+      #
+      # Assert both delete branches set the failure flag (not just the final
+      # exit), so a regression that stops flagging either path is caught.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?s)PVC cleanup failed for mariadb-test.*?cleanup_failed=1'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '(?s)Secret cleanup failed for mariadb-test.*?cleanup_failed=1'
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'exit "\$\{cleanup_failed\}"'
@@ -62,3 +71,9 @@ tests:
               - mariadb-test-metrics-password
               - mariadb-test-repl-password
             verbs: ["get", "delete"]
+      # Lock the exact rule set (PVC rule + the single scoped secrets rule).
+      # Without this, a broader unscoped `secrets` rule could be added and the
+      # `contains` checks above would still pass.
+      - lengthEqual:
+          path: rules
+          count: 2
