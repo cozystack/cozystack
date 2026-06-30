@@ -64,9 +64,7 @@ spec:
     kind: ClusterKeycloakRealm
   public: true
   directAccess: false
-  standardFlow: true
   advancedProtocolMappers: true
-  webUrl: ""
   redirectUris:
     - "http://localhost:8000"
     - "http://localhost:18000"
