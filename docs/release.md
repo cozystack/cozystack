@@ -171,7 +171,7 @@ gitGraph
    2. Publishes the release page (`draft` → `latest`).
 7. The maintainer can now announce the release to the community.
 
-## What CI does on a tag push
+## What CI does during the release process
 
 The numbered process above is implemented by four workflows. Knowing which job does what makes the failure modes much easier to diagnose.
 
