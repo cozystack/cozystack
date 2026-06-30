@@ -1,7 +1,17 @@
 {{- if .Values.encryption.enabled }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 {{- $kms := .Values.encryption.kms }}
-{{- if eq $kms.backend "static" }}
+{{- /*
+  Fail fast on an unsupported backend. Both the KEK Secret below and the env
+  wiring further down key off $backend, so an invalid value (e.g. a "vault"
+  typo) can never render a Deployment that mounts KKP_KEK from a Secret that
+  was never created — which would silently break the whole IdP.
+*/}}
+{{- $backend := ($kms.backend | default "static") }}
+{{- if and (ne $backend "static") (ne $backend "vault-transit") }}
+{{- fail (printf "encryption.kms.backend must be 'static' or 'vault-transit', got %q" $backend) }}
+{{- end }}
+{{- if eq $backend "static" }}
 {{- /*
   Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
   and preserved across upgrades via lookup (same pattern as the admin
@@ -9,8 +19,8 @@
 */}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace "keycloak-kms-proxy-kek" }}
 {{- $kek := randAlphaNum 32 | b64enc }}
-{{- if $existing }}
-{{- $kek = index $existing.data "kek" }}
+{{- if and $existing $existing.data }}
+{{- $kek = index $existing.data "kek" | default $kek }}
 {{- end }}
 apiVersion: v1
 kind: Secret
@@ -67,9 +77,10 @@ spec:
               value: ":5432"
             - name: KKP_METRICS_ADDR
               value: ":9090"
-            # TODO: CNPG enforces TLS on the read-write endpoint; the proxy
-            # must dial keycloak-db-rw over TLS and validate the CNPG CA.
-            # Backend TLS re-origination is a follow-up before production.
+            # NOTE: the proxy re-originates the connection to keycloak-db-rw and
+            # negotiates TLS in-band, but does not yet pin the CNPG CA. Backend
+            # CA validation (sslrootcert) is a tracked follow-up before this is
+            # production-ready; see the keycloak-kms-proxy project.
             - name: KKP_BACKEND_ADDR
               value: "keycloak-db-rw.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}:5432"
             # The proxy terminates SCRAM on both legs. Keycloak still presents
@@ -100,17 +111,18 @@ spec:
               value: {{ .Values.encryption.fields | quote }}
             - name: KKP_LENIENT
               value: {{ .Values.encryption.lenient | quote }}
-            {{- if eq $kms.backend "vault-transit" }}
+            {{- if eq $backend "vault-transit" }}
+            {{- $vault := $kms.vault | default dict }}
             - name: KKP_VAULT_ADDR
-              value: {{ $kms.vault.address | quote }}
+              value: {{ required "encryption.kms.vault.address is required when kms.backend=vault-transit" $vault.address | quote }}
             - name: KKP_VAULT_KEY_NAME
-              value: {{ $kms.vault.keyName | quote }}
+              value: {{ required "encryption.kms.vault.keyName is required when kms.backend=vault-transit" $vault.keyName | quote }}
             - name: KKP_VAULT_MOUNT
-              value: {{ $kms.vault.mount | default "transit" | quote }}
+              value: {{ $vault.mount | default "transit" | quote }}
             - name: KKP_VAULT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "encryption.kms.vault.tokenSecretName is required when kms.backend=vault-transit" $kms.vault.tokenSecretName }}
+                  name: {{ required "encryption.kms.vault.tokenSecretName is required when kms.backend=vault-transit" $vault.tokenSecretName }}
                   key: token
             {{- else }}
             - name: KKP_KEK
@@ -145,4 +157,7 @@ spec:
     - name: postgres
       port: 5432
       targetPort: postgres
+    - name: metrics
+      port: 9090
+      targetPort: metrics
 {{- end }}
