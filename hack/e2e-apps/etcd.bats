@@ -10,8 +10,8 @@
 # cozy_cleanup() hook, which it invokes once at suite exit and on the first
 # failing test. There is also no bats `run`/`$status`/`$output` — capture
 # command output with `out=$(...)` and check exit codes with `if ! ...`
-# directly (see hack/e2e-apps/gateway.bats). A dead setup() did nothing and
-# etcd leaked into the shared tenant-test namespace.
+# directly (see hack/e2e-apps/gateway.bats) — and no BATS_TEST_DIRNAME. A dead
+# setup() did nothing and etcd leaked into the shared tenant-test namespace.
 #
 # Teardown lives in etcd_drain(). It is run two ways:
 #   - inline at the end of the last @test, where set -e makes a teardown
@@ -22,7 +22,11 @@
 #     path alone cannot fail the suite — the inline call is what has teeth).
 # The first @test also drains up front so a dirty namespace from a previous
 # run cannot taint it (e2e-testing.md §3 — pre-cleanup at test start).
-ETCD_EXAMPLES="${BATS_TEST_DIRNAME}/../../examples/backups/etcd"
+# cozytest runs from the repo root (cd /workspace) and sources this file under
+# set -u without setting BATS_TEST_DIRNAME, so a ${BATS_TEST_DIRNAME} reference
+# aborts the whole suite. Use a repo-root-relative path, like the sibling
+# scripts hack/e2e-apps/kubernetes-*.bats source via `hack/e2e-apps/...`.
+ETCD_EXAMPLES="examples/backups/etcd"
 
 etcd_drain() {
   etcd_pvc_selector='app.kubernetes.io/name=etcd,app.kubernetes.io/managed-by=etcd-operator'
