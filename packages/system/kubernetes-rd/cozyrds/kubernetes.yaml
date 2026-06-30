@@ -17,14 +17,14 @@ metadata:
     # annotation is raised, update that init deadline correspondingly.
     release.cozystack.io/helm-install-timeout: "20m"
     # The kubernetes chart emits in-tenant addon HelmReleases (cilium, coredns,
-    # csi, ingress-nginx, metrics-server, ouroboros) and ships a talos-reconcile
-    # post-install hook that produces the TalosConfigTemplate the worker
+    # csi, ingress-nginx, metrics-server, ouroboros) and a main-phase
+    # talos-reconcile Job that produces the TalosConfigTemplate the worker
     # MachineSets clone from. Without DisableWait the helm-controller waits for
-    # the addon HelmReleases to be Ready before running the hook, but those
+    # the addon HelmReleases to be Ready before the release settles, but those
     # cannot be Ready until worker nodes exist, and the workers cannot be
-    # created without the TalosConfigTemplate the hook is supposed to produce.
-    # Skip the readiness wait so the hook fires and the chicken-and-egg
-    # resolves.
+    # created without the TalosConfigTemplate the Job produces. Skip the
+    # readiness wait so the release settles and the chicken-and-egg resolves;
+    # the talos-reconcile Job runs to completion asynchronously.
     release.cozystack.io/helm-install-disable-wait: "true"
 spec:
   application:

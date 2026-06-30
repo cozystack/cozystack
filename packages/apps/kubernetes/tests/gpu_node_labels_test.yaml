@@ -1,9 +1,9 @@
 suite: GPU node-group Talos worker nodeLabels tests
 
 # The TalosConfigTemplate that defines worker nodeLabels is not rendered
-# directly by helm — the kubernetes chart emits a post-install Job
+# directly by helm — the kubernetes chart emits a main-phase Job
 # (templates/talos/talos-reconcile-job.yaml) whose container command
-# carries the TCT YAML as a string literal that the hook applies at
+# carries the TCT YAML as a string literal that the Job applies at
 # runtime. helm-unittest therefore asserts on the rendered Job's script
 # via matchRegex / notMatchRegex, looking for the machine.nodeLabels
 # block GPU node-groups must inject so HAMi's hami-device-plugin

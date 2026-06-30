@@ -39,14 +39,15 @@ const HelmUpgradeTimeoutAnnotation = "release.cozystack.io/helm-upgrade-timeout"
 // HelmInstallDisableWaitAnnotation is the ApplicationDefinition metadata
 // annotation key that sets HelmReleaseSpec.Install.DisableWait and
 // Upgrade.DisableWait to true for a given Application kind. Use when the
-// parent chart emits child HelmReleases whose readiness depends on
-// post-install hooks of the parent (e.g. the Kubernetes Application's
-// talos-reconcile hook produces the TalosConfigTemplate that worker
-// MachineSets clone from; without DisableWait the helm-controller waits
-// for the emitted in-tenant addon HelmReleases to be Ready before
-// running the hook, but those HelmReleases can never be Ready because
-// they have no worker nodes to schedule on yet, and the hook never
-// runs).
+// parent chart emits child HelmReleases that cannot become Ready during
+// the parent's own install (e.g. the Kubernetes Application emits
+// in-tenant addon HelmReleases that have no worker nodes to schedule on
+// until the worker MachineSets come up, plus a main-phase talos-reconcile
+// Job that produces the TalosConfigTemplate those MachineSets clone from).
+// Without DisableWait the helm-controller blocks on the addon HelmReleases
+// becoming Ready, which cannot happen during install, so the release never
+// settles. DisableWait lets it settle while the addon HelmReleases and the
+// reconcile Job converge asynchronously.
 const HelmInstallDisableWaitAnnotation = "release.cozystack.io/helm-install-disable-wait"
 
 // helmTimeoutPattern mirrors the CRD validation pattern used by Flux

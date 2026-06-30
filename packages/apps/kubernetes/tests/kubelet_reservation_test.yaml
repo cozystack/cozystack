@@ -3,12 +3,12 @@ suite: kubelet reservation validation tests
 # These tests cover the failure-path guards in cluster.yaml's per-nodeGroup
 # validation block (memory/CPU format checks, total-reserved vs effective
 # invariants, mixed-unit eviction rejection, etc.). The TalosConfigTemplate
-# is no longer rendered by cluster.yaml — the post-install hook in
+# is no longer rendered by cluster.yaml — the main-phase Job in
 # templates/talos/talos-reconcile-job.yaml produces it at runtime — so the
 # test file only asserts on the kubeadm-era validation paths that survived
 # the Talos rollover. The kubelet-reservation math used to apply
 # machine.kubelet.extraConfig is exercised separately by helm-unittest on
-# the reconcile hook template (see tests/gpu_node_labels_test.yaml for the
+# the reconcile Job template (see tests/gpu_node_labels_test.yaml for the
 # matchRegex pattern against the Job's command literal).
 
 templates:

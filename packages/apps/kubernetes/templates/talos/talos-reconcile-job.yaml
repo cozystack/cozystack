@@ -1,5 +1,5 @@
 {{- /*
-  Post-install/post-upgrade Helm hook that resolves the chart's
+  Main-phase Job (NOT a Helm hook) that resolves the chart's
   lookup-and-reuse race for TalosConfigTemplate and
   KamajiControlPlane.spec.network.certSANs.
 
@@ -18,9 +18,8 @@
   Ready but whose CAPI MachineDeployment is stuck on
   `cannot create a new MachineSet when templates do not exist` forever.
 
-  This Job runs once Helm has applied everything else in the release,
-  blocks until the four dependencies are observably present, then
-  produces both objects via `kubectl apply` (idempotent). The
+  This Job blocks until the four dependencies are observably present,
+  then produces both objects via `kubectl apply` (idempotent). The
   TalosConfigTemplate carries an ownerReference to the KamajiControlPlane
   so Kubernetes garbage-collects it through the standard owner-reference
   cascade when the chart's release is uninstalled — Helm itself does not
@@ -29,12 +28,56 @@
   field; the Kamaji controller picks up the change and re-issues the
   apiserver TLS cert with the live ClusterIP in its SAN list.
 
-  Hook weight 5 places the Job after Helm has emitted the
-  KamajiControlPlane / Talos PKI Certificate / talos-secrets but before
-  the bootstrap-token-tenant Job (weight 10), so workers see a
-  reachable apiserver, a SAN-correct TLS cert, and a populated
-  bootstrap-token Secret in the tenant kube-system the first time
-  they boot.
+  Why main phase, not a post-install hook. This Job is the only thing
+  that creates the TalosConfigTemplate (the chart no longer renders it —
+  see cluster.yaml). As a post-install hook it runs only AFTER Helm has
+  applied the release's main resources and, when Helm waits, after they
+  become Ready. But the same release also emits in-tenant addon
+  HelmReleases — notably cilium — whose readiness needs tenant worker
+  nodes, and those nodes can only be created once this Job has produced
+  the TalosConfigTemplate the worker MachineDeployment clones from. So
+  when the main-resource wait is in effect it DEADLOCKS: the install
+  waits for cilium to be Ready, cilium waits for worker nodes, the nodes
+  wait for the TalosConfigTemplate, and the template waits for this hook
+  — which never runs, because the install never finishes the wait that
+  precedes the post-install hook phase. The install times out and the
+  MachineDeployment never scales. (Observed on a failing run: the parent
+  HelmRelease stuck at `Running install action 20m`, NEITHER post-install
+  hook ever created, the cilium sub-release timing out on cilium-operator
+  — all while the four inputs were ready early. The hook never reached;
+  the inputs were not late.)
+
+  The release sets `helm-install-disable-wait` precisely to skip that
+  main-resource wait so the hooks run, but its effect is unreliable —
+  which is what makes the failure bimodal: when the wait is skipped the
+  hook runs and the template lands in ~46s; when it is not, the deadlock
+  above strands the install. Rendering this Job as an ordinary MAIN-phase
+  resource removes the dependency on both the hook phase and DisableWait.
+  The Job is created during the apply itself (not after the wait) and
+  runs on the management cluster — which has nodes, unlike the tenant
+  cilium-operator — so it produces the TalosConfigTemplate, the
+  MachineDeployment scales, workers join, cilium goes Ready, and the
+  main-resource wait (if any) closes within the install budget: the Job
+  completes in tens of seconds, node boot plus cilium readiness is a few
+  minutes. It works whether or not DisableWait takes effect. The Job's
+  RBAC, ServiceAccount and egress CiliumNetworkPolicy are main-phase too;
+  the wait loop tolerates its dependencies (and its own network policy)
+  not yet being in place, so Helm's kind-ordered apply needs no explicit
+  sequencing. The bootstrap-token Job stays a post-install hook.
+
+  Churn-free across upgrades. The Job is immutable (spec.template cannot
+  be patched), so it carries a content-hash name suffix — mirrors the
+  KubevirtMachineTemplate idiom in cluster.yaml. An identical render
+  yields the same name and Helm no-ops a Job it can never patch; any
+  change to a field that flows into the rendered Job spec (and therefore
+  into the TalosConfigTemplate it applies) yields a new name, so a fresh
+  Job re-applies the updated template and Helm prunes the superseded one.
+  Because the hash is taken over the whole rendered spec, no spec change
+  can ever land on the same name and trigger an immutable-field patch
+  error. The applied TalosConfigTemplate keeps a stable name
+  (<release>-<group>, referenced by MachineDeployment.bootstrap.configRef)
+  regardless of the Job's hash, so an unchanged render re-applies a
+  byte-identical TCT — a CAPI no-op that never rolls existing workers.
 */}}
 ---
 apiVersion: v1
@@ -44,10 +87,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -56,10 +95,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
   - apiGroups: [""]
     resources: ["services"]
@@ -81,12 +116,12 @@ rules:
     verbs: ["get", "create", "patch", "update"]
 ---
 {{- /* The tenant-root chart installs a default-deny egress policy on every
-       pod in the tenant namespace; without an explicit allow, this hook Job
+       pod in the tenant namespace; without an explicit allow, this Job
        cannot reach the management-cluster apiserver to read the Service
        ClusterIP / Secrets / KamajiControlPlane it has to reconcile. Cilium
        policies are additive, so this rule layers on top of the tenant
        default-deny without weakening it for anything else. Endpoint
-       selector is scoped to pods carrying the hook label only. */}}
+       selector is scoped to pods carrying the reconcile label only. */}}
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -94,10 +129,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
   endpointSelector:
     matchLabels:
@@ -123,10 +154,6 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -136,7 +163,7 @@ subjects:
     name: {{ .Release.Name }}-talos-reconcile
     namespace: {{ .Release.Namespace }}
 ---
-{{- /* Cluster-scoped read on the management CoreDNS Service so the hook
+{{- /* Cluster-scoped read on the management CoreDNS Service so the Job
        can look up its ClusterIP at runtime and inject it into the worker
        machineconfig as a host-level nameserver. Tenant workers run as
        KubeVirt VMs inside the management pod network; tenant in-cluster
@@ -161,10 +188,6 @@ metadata:
   name: {{ .Release.Namespace }}-{{ .Release.Name }}-talos-reconcile-coredns
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
   - apiGroups: [""]
     resources: ["services"]
@@ -177,10 +200,6 @@ metadata:
   name: {{ .Release.Namespace }}-{{ .Release.Name }}-talos-reconcile-coredns
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "1"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -189,88 +208,30 @@ subjects:
   - kind: ServiceAccount
     name: {{ .Release.Name }}-talos-reconcile
     namespace: {{ .Release.Namespace }}
----
-{{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
-{{- $talosVersion := $.Values.talos.version }}
-{{- $podCIDR := "10.243.0.0/16" }}
-{{- $serviceCIDR := "10.95.0.0/16" }}
-{{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
-{{- /* Management cluster DNS domain. Tenant Kubernetes workers run as
-       KubeVirt VMs inside the management cluster's pod network and need
-       to resolve management-cluster service short names ("<svc>.<ns>.svc")
-       the same way an Ubuntu+kubeadm worker did via cloud-init DHCP. The
-       kubevirt-csi NFS mount path is the load-bearing case: kubelet on
-       the worker host calls `mount.nfs linstor-csi-nfs.cozy-linstor.svc`
-       (no domain suffix), and without searchDomains in /etc/resolv.conf
-       the host resolver hands that name to management CoreDNS verbatim
-       and gets NXDOMAIN.
-
-       Distinct from tenantClusterDomain ("cluster.local"), which is the
-       *tenant* kubelet --cluster-dns zone. This value is the
-       *management* cluster-domain, sourced from .Values._cluster
-       (populated by cozystack-controller from the platform config). */}}
-{{- $mgmtClusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
-{{- range $groupName, $group := .Values.nodeGroups }}
-{{- /* Mirror the kubelet-reservation computation from cluster.yaml so the
-       worker machineconfig the hook applies carries the same numbers the
-       MachineDeployment validator was happy with. Auto-computed
-       system/kube reserved memory = 5% of effective memory clamped to
-       [256Mi, 1Gi]; auto-computed system/kube reserved CPU = 5% of
-       effective CPU clamped to [50m, 500m]. instanceType lookup is
-       optional — operators that override resources.cpu / resources.memory
-       on the nodeGroup get those, otherwise the chart falls back to the
-       same static-defaults pair the cluster.yaml validator uses on a
-       no-instanceType setup. */}}
-{{- $instanceType := dict }}
-{{- if $group.instanceType }}
-{{-   $instanceType = lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType }}
-{{-   $instanceType = $instanceType | default dict }}
-{{- end }}
-{{- $effectiveMemory := "" }}
-{{- if and $group.resources $group.resources.memory }}
-{{-   $effectiveMemory = $group.resources.memory | toString }}
-{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
-{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
-{{- end }}
-{{- $effectiveCpu := "" }}
-{{- if and $group.resources $group.resources.cpu }}
-{{-   $effectiveCpu = $group.resources.cpu | toString }}
-{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
-{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
-{{- end }}
-{{- $autoReservedMi := 256 }}
-{{- if $effectiveMemory }}
-{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
-{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
-{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
-{{- end }}
-{{- $autoReservedMillicores := 50 }}
-{{- if $effectiveCpu }}
-{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
-{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
-{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
-{{- end }}
-{{- $kubeletOverride := $group.kubelet | default dict }}
-{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
-{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
-{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
-{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
-{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
----
-apiVersion: batch/v1
-kind: Job
-metadata:
-  name: {{ $.Release.Name }}-talos-reconcile-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-  labels:
-    {{- include "kubernetes.labels" $ | nindent 4 }}
-  annotations:
-    "helm.sh/hook": post-install,post-upgrade
-    "helm.sh/hook-weight": "5"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+{{- /* Job spec rendered through a named template so the Job name can carry
+       a content hash of the whole spec (see the header comment). The dot
+       passed in is a deepCopy of the root context with the per-nodeGroup
+       computed values set on it, so $.Release / $.Values resolve as usual
+       and the loop/computed locals are read as .group, .groupName, etc. */}}
+{{- define "kubernetes.talos-reconcile-job-spec" -}}
 spec:
-  backoffLimit: 5
+  {{- /* Each pod attempt runs the ~10-minute (120 × 5s) input-wait loop, so this
+         backoffLimit sets the self-heal window to roughly 5 hours. The Job does
+         not block the install — when disable-wait is in effect Helm does not wait
+         on it, and when Helm does wait the Job completes in tens of seconds — so a
+         long retry budget costs nothing on the install path. It only governs how
+         long a Job whose inputs are unusually slow keeps retrying on its own
+         before giving up. Bounded (not infinite) so a permanently-broken input
+         eventually stops spawning pods. */}}
+  backoffLimit: 30
+  {{- /* ttlSecondsAfterFinished clears the Job (Complete or Failed) shortly after
+         it finishes, so a later reconcile can recreate and retry it. Without the
+         TTL a Failed Job would keep the same content-hash name and be a no-op on
+         every later upgrade — Helm never patches the immutable Job, so it would
+         stay Failed until deleted by hand. No churn from the TTL: the repo runs no
+         Flux drift detection, so an interval reconcile never re-applies a cleared
+         Job; only an actual upgrade does, and that re-applies the byte-identical
+         TalosConfigTemplate (a CAPI no-op). Mirrors the original hook Job's value. */}}
   ttlSecondsAfterFinished: 600
   template:
     metadata:
@@ -281,14 +242,14 @@ spec:
       serviceAccountName: {{ $.Release.Name }}-talos-reconcile
       containers:
         - name: kubectl
-          image: "{{ default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl }}"
+          image: "{{ .kubectlImage }}"
           env:
             - name: RELEASE
               value: {{ $.Release.Name | quote }}
             - name: NS
               value: {{ $.Release.Namespace | quote }}
             - name: GROUP_NAME
-              value: {{ $groupName | quote }}
+              value: {{ .groupName | quote }}
             - name: TALOS_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -336,7 +297,7 @@ spec:
               # we want here — Kamaji owns the full SAN list.
               kubectl -n "$NS" patch kamajicontrolplane "$RELEASE" --type=merge --patch "$(
                 cat <<JSON
-              {"spec":{"network":{"certSANs":["${RELEASE}.${NS}.svc","${RELEASE}.${NS}.svc.{{ $dnsDomain }}","${SVC_IP}"]}}}
+              {"spec":{"network":{"certSANs":["${RELEASE}.${NS}.svc","${RELEASE}.${NS}.svc.{{ .dnsDomain }}","${SVC_IP}"]}}}
               JSON
               )"
 
@@ -376,7 +337,7 @@ spec:
                 template:
                   spec:
                     generateType: none
-                    talosVersion: "{{ $talosVersion }}"
+                    talosVersion: "{{ .talosVersion }}"
                     data: |
                       version: v1alpha1
                       persist: true
@@ -405,9 +366,9 @@ spec:
                           nameservers:
                             - ${COREDNS_IP}
                           searchDomains:
-                            - svc.{{ $mgmtClusterDomain }}
-                            - {{ $mgmtClusterDomain }}
-                            {{- if ne $mgmtClusterDomain "cluster.local" }}
+                            - svc.{{ .mgmtClusterDomain }}
+                            - {{ .mgmtClusterDomain }}
+                            {{- if ne .mgmtClusterDomain "cluster.local" }}
                             - svc.cluster.local
                             - cluster.local
                             {{- end }}
@@ -415,10 +376,10 @@ spec:
                             - ip: ${SVC_IP}
                               aliases:
                                 - ${RELEASE}.${NS}.svc
-                                - ${RELEASE}.${NS}.svc.{{ $dnsDomain }}
+                                - ${RELEASE}.${NS}.svc.{{ .dnsDomain }}
                         ca:
                           crt: ${TALOS_CA_B64}
-                        {{- if $group.gpus }}
+                        {{- if .group.gpus }}
                         # GPU node-groups: label every node `gpu=on` so
                         # HAMi's hami-device-plugin DaemonSet (nodeSelector
                         # gpu=on) schedules and advertises nvidia.com/gpu.
@@ -431,21 +392,21 @@ spec:
                           gpu: "on"
                         {{- end }}
                         kubelet:
-                          image: ghcr.io/siderolabs/kubelet:{{ $kubeletVersion }}
+                          image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
                           extraConfig:
                             systemReserved:
-                              cpu: "{{ $systemReservedCpu }}"
-                              memory: "{{ $systemReservedMemory }}"
+                              cpu: "{{ .systemReservedCpu }}"
+                              memory: "{{ .systemReservedMemory }}"
                             kubeReserved:
-                              cpu: "{{ $kubeReservedCpu }}"
-                              memory: "{{ $kubeReservedMemory }}"
+                              cpu: "{{ .kubeReservedCpu }}"
+                              memory: "{{ .kubeReservedMemory }}"
                             evictionHard:
-                              memory.available: "{{ $evictionHardMemory }}"
+                              memory.available: "{{ .evictionHardMemory }}"
                               nodefs.available: "10%"
                               imagefs.available: "15%"
                               nodefs.inodesFree: "5%"
                             evictionSoft:
-                              memory.available: "{{ $evictionSoftMemory }}"
+                              memory.available: "{{ .evictionSoftMemory }}"
                               nodefs.available: "15%"
                               imagefs.available: "20%"
                             evictionSoftGracePeriod:
@@ -456,7 +417,7 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: factory.talos.dev/installer/{{ $.Values.talos.schematicID }}:{{ $talosVersion }}
+                          image: factory.talos.dev/installer/{{ $.Values.talos.schematicID }}:{{ .talosVersion }}
                           wipe: false
                         features:
                           rbac: true
@@ -469,11 +430,11 @@ spec:
                           endpoint: https://${RELEASE}.${NS}.svc:6443
                         clusterName: ${RELEASE}
                         network:
-                          dnsDomain: {{ $dnsDomain }}
+                          dnsDomain: {{ .dnsDomain }}
                           podSubnets:
-                            - {{ $podCIDR }}
+                            - {{ .podCIDR }}
                           serviceSubnets:
-                            - {{ $serviceCIDR }}
+                            - {{ .serviceCIDR }}
                         token: ${BOOTSTRAP_TOKEN}
                         ca:
                           crt: ${K8S_CA_B64}
@@ -503,4 +464,107 @@ spec:
             runAsUser: 65532
             seccompProfile:
               type: RuntimeDefault
+{{- end }}
+{{- $kubeletVersion := include "kubernetes.versionMap" $ | trim }}
+{{- $talosVersion := $.Values.talos.version }}
+{{- $podCIDR := "10.243.0.0/16" }}
+{{- $serviceCIDR := "10.95.0.0/16" }}
+{{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
+{{- /* Management cluster DNS domain. Tenant Kubernetes workers run as
+       KubeVirt VMs inside the management cluster's pod network and need
+       to resolve management-cluster service short names ("<svc>.<ns>.svc")
+       the same way an Ubuntu+kubeadm worker did via cloud-init DHCP. The
+       kubevirt-csi NFS mount path is the load-bearing case: kubelet on
+       the worker host calls `mount.nfs linstor-csi-nfs.cozy-linstor.svc`
+       (no domain suffix), and without searchDomains in /etc/resolv.conf
+       the host resolver hands that name to management CoreDNS verbatim
+       and gets NXDOMAIN.
+
+       Distinct from tenantClusterDomain ("cluster.local"), which is the
+       *tenant* kubelet --cluster-dns zone. This value is the
+       *management* cluster-domain, sourced from .Values._cluster
+       (populated by cozystack-controller from the platform config). */}}
+{{- $mgmtClusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- range $groupName, $group := .Values.nodeGroups }}
+{{- /* Mirror the kubelet-reservation computation from cluster.yaml so the
+       worker machineconfig the Job applies carries the same numbers the
+       MachineDeployment validator was happy with. Auto-computed
+       system/kube reserved memory = 5% of effective memory clamped to
+       [256Mi, 1Gi]; auto-computed system/kube reserved CPU = 5% of
+       effective CPU clamped to [50m, 500m]. instanceType lookup is
+       optional — operators that override resources.cpu / resources.memory
+       on the nodeGroup get those, otherwise the chart falls back to the
+       same static-defaults pair the cluster.yaml validator uses on a
+       no-instanceType setup. */}}
+{{- $instanceType := dict }}
+{{- if $group.instanceType }}
+{{-   $instanceType = lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType }}
+{{-   $instanceType = $instanceType | default dict }}
+{{- end }}
+{{- $effectiveMemory := "" }}
+{{- if and $group.resources $group.resources.memory }}
+{{-   $effectiveMemory = $group.resources.memory | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.memory $instanceType.spec.memory.guest }}
+{{-   $effectiveMemory = $instanceType.spec.memory.guest | toString }}
+{{- end }}
+{{- $effectiveCpu := "" }}
+{{- if and $group.resources $group.resources.cpu }}
+{{-   $effectiveCpu = $group.resources.cpu | toString }}
+{{- else if and $instanceType $instanceType.spec $instanceType.spec.cpu $instanceType.spec.cpu.guest }}
+{{-   $effectiveCpu = $instanceType.spec.cpu.guest | toString }}
+{{- end }}
+{{- $autoReservedMi := 256 }}
+{{- if $effectiveMemory }}
+{{-   $effectiveMemMi := divf (include "cozy-lib.resources.toFloat" $effectiveMemory | float64) 1048576.0 | int }}
+{{-   $fivePercentMi := mulf ($effectiveMemMi | float64) 0.05 | int }}
+{{-   $autoReservedMi = min (max $fivePercentMi 256) 1024 }}
+{{- end }}
+{{- $autoReservedMillicores := 50 }}
+{{- if $effectiveCpu }}
+{{-   $effectiveCpuMillicores := include "kubernetes.cpuToMillicores" $effectiveCpu | int }}
+{{-   $fivePercentMillis := mulf ($effectiveCpuMillicores | float64) 0.05 | int }}
+{{-   $autoReservedMillicores = min (max $fivePercentMillis 50) 500 }}
+{{- end }}
+{{- $kubeletOverride := $group.kubelet | default dict }}
+{{- $systemReservedMemory := $kubeletOverride.systemReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $kubeReservedMemory := $kubeletOverride.kubeReservedMemory | default (printf "%dMi" $autoReservedMi) }}
+{{- $systemReservedCpu := $kubeletOverride.systemReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $kubeReservedCpu := $kubeletOverride.kubeReservedCpu | default (printf "%dm" $autoReservedMillicores) }}
+{{- $evictionHardMemory := $kubeletOverride.evictionHardMemory | default "7%" }}
+{{- $evictionSoftMemory := $kubeletOverride.evictionSoftMemory | default "10%" }}
+{{- /* Render the Job spec, then hash it to a name suffix so the immutable
+       Job is churn-free across upgrades (see the header comment). Mirrors
+       the KubevirtMachineTemplate content-hash idiom in cluster.yaml. */}}
+{{- $jobContext := deepCopy $ }}
+{{- $_ := set $jobContext "group" $group }}
+{{- $_ := set $jobContext "groupName" $groupName }}
+{{- $_ := set $jobContext "kubeletVersion" $kubeletVersion }}
+{{- $_ := set $jobContext "talosVersion" $talosVersion }}
+{{- $_ := set $jobContext "podCIDR" $podCIDR }}
+{{- $_ := set $jobContext "serviceCIDR" $serviceCIDR }}
+{{- $_ := set $jobContext "dnsDomain" $dnsDomain }}
+{{- $_ := set $jobContext "mgmtClusterDomain" $mgmtClusterDomain }}
+{{- $_ := set $jobContext "systemReservedCpu" $systemReservedCpu }}
+{{- $_ := set $jobContext "systemReservedMemory" $systemReservedMemory }}
+{{- $_ := set $jobContext "kubeReservedCpu" $kubeReservedCpu }}
+{{- $_ := set $jobContext "kubeReservedMemory" $kubeReservedMemory }}
+{{- $_ := set $jobContext "evictionHardMemory" $evictionHardMemory }}
+{{- $_ := set $jobContext "evictionSoftMemory" $evictionSoftMemory }}
+{{- $_ := set $jobContext "kubectlImage" (default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl) }}
+{{- $jobSpec := include "kubernetes.talos-reconcile-job-spec" $jobContext }}
+{{- $jobHash := $jobSpec | sha256sum | trunc 6 }}
+{{- /* Truncate the name prefix, never the hash, so the name stays within the
+       63-char DNS-label limit for long release/group names while the 6-char
+       content hash that keeps the immutable Job churn-free is always preserved.
+       A no-op for normal-length names (prefix << 56). */}}
+{{- $jobName := printf "%s-talos-reconcile-%s" $.Release.Name $groupName | trunc 56 | trimSuffix "-" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $jobName }}-{{ $jobHash }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" $ | nindent 4 }}
+{{ $jobSpec }}
 {{- end }}

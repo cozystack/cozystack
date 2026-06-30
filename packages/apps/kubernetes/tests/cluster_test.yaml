@@ -8,7 +8,7 @@ values:
 
 # With one nodeGroup (md0) the cluster.yaml template renders in this
 # order. The TalosConfigTemplate is no longer rendered here — it is
-# produced at runtime by the post-install hook in
+# produced at runtime by the main-phase Job in
 # templates/talos/talos-reconcile-job.yaml, which writes the TCT YAML
 # from a string literal in the Job's command.
 #   0: Cluster
