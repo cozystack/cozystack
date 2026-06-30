@@ -49,15 +49,18 @@ spec:
               # StatefulSet-templated data PVCs are named
               # qdrant-storage-<release>-<ordinal> (volumeClaimTemplate name
               # "qdrant-storage" + StatefulSet name <release> + pod ordinal).
-              # Select by that deterministic name prefix rather than a label:
-              # the upstream chart stamps volumeClaimTemplates labels, which are
+              # Select by that deterministic name rather than a label: the
+              # upstream chart stamps volumeClaimTemplates labels, which are
               # immutable on an existing StatefulSet, so a label-based scheme
-              # cannot be applied to already-deployed instances. The name prefix
+              # cannot be applied to already-deployed instances. Name selection
               # needs no StatefulSet change and also reclaims PVCs created before
-              # this hook existed. See #3059.
+              # this hook existed. The ordinal is anchored ("-[0-9]+$") so a
+              # release whose name is a prefix of a sibling (e.g. "qdrant-test"
+              # vs "qdrant-test-2") never matches the sibling's PVCs and deletes
+              # its data. See #3059.
               echo "Deleting orphaned data PVCs for release {{ .Release.Name }}..."
               pvcs=$(kubectl get pvc -n {{ .Release.Namespace }} -o name \
-                | grep "^persistentvolumeclaim/qdrant-storage-{{ .Release.Name }}-" || true)
+                | grep -E "^persistentvolumeclaim/qdrant-storage-{{ .Release.Name }}-[0-9]+$" || true)
               if [ -z "$pvcs" ]; then
                 echo "No data PVCs found for release {{ .Release.Name }}; nothing to delete."
               else

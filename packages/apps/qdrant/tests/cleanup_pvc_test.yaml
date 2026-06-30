@@ -20,7 +20,7 @@ tests:
   # post-delete cleanup hook                          #
   #####################################################
 
-  - it: "renders a post-delete Job that deletes the data PVC by name prefix"
+  - it: "renders a post-delete Job that deletes the data PVC by anchored name"
     templates:
       - templates/hooks/cleanup-pvc.yaml
     documentSelector:
@@ -38,9 +38,16 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: "kubectl get pvc -n tenant-test -o name"
+      # The ordinal MUST be anchored ("-[0-9]+$"). Without it, deleting release
+      # "qdrant-test" would also match a sibling "qdrant-test-2"'s PVCs
+      # (qdrant-storage-qdrant-test-2-0) and irreversibly delete its data.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "grep \"\\^persistentvolumeclaim/qdrant-storage-qdrant-test-\""
+          pattern: 'grep -E "\^persistentvolumeclaim/qdrant-storage-qdrant-test-\[0-9\]\+\$"'
+      # Guard against regressing to the unanchored prefix (plain grep, no $).
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'grep "\^persistentvolumeclaim/qdrant-storage-qdrant-test-"'
 
   - it: "creates qdrant-scoped RBAC for the cleanup hook"
     templates:
