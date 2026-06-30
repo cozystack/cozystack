@@ -84,7 +84,7 @@ tests:
       namespace: tenant-test
     set:
       controlPlane.apiServer.extraVolumes:
-        - name: authentication-config
+        - name: tenant-byo-mount
           configMap:
             name: tenant-authentication-config
     asserts:
@@ -104,7 +104,7 @@ tests:
       # user-supplied volume is appended
       - equal:
           path: spec.deployment.extraVolumes[2].name
-          value: authentication-config
+          value: tenant-byo-mount
         documentIndex: 1
       - equal:
           path: spec.deployment.extraVolumes[2].configMap.name
@@ -117,17 +117,17 @@ tests:
       namespace: tenant-test
     set:
       controlPlane.apiServer.extraVolumes:
-        - name: authentication-config
+        - name: tenant-byo-mount
           secret:
             secretName: tenant-authentication-config
       controlPlane.apiServer.extraVolumeMounts:
-        - name: authentication-config
+        - name: tenant-byo-mount
           mountPath: /etc/kubernetes/authentication
           readOnly: true
     asserts:
       - equal:
           path: spec.apiServer.extraVolumeMounts[0].name
-          value: authentication-config
+          value: tenant-byo-mount
         documentIndex: 1
       - equal:
           path: spec.apiServer.extraVolumeMounts[0].mountPath
@@ -210,13 +210,13 @@ tests:
       namespace: tenant-test
     set:
       controlPlane.apiServer.extraVolumes:
-        - name: authentication-config
+        - name: tenant-byo-mount
           secret:
             secretName: tenant-authentication-config
     asserts:
       - equal:
           path: spec.deployment.extraVolumes[2].name
-          value: authentication-config
+          value: tenant-byo-mount
         documentIndex: 1
       - equal:
           path: spec.deployment.extraVolumes[2].secret.secretName

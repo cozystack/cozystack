@@ -1,16 +1,25 @@
 #!/usr/bin/env bats
 
-# Phase-1 OIDC selector e2e — render-side only.
+# Phase-1 OIDC System-mode e2e — render-side only.
+#
+# Pairs with kubernetes-oidc-customconfig.bats (BYO issuer path).
 #
 # Does NOT spin up a full Kamaji control plane: that path is covered by
 # the existing kubernetes-{latest,previous}.bats and would add another
 # ~25 min Kamaji bringup for a feature whose end-to-end OIDC browser
 # flow is explicitly out of scope (see docs/oidc-tenant.md → Phase 1).
 #
-# What is exercised on a live cluster: that the new `spec.oidc.*` fields
-# are admitted by the Kubernetes CRD; that cozystack-api accepts the
-# updated schema; that the HelmRelease renders the OIDC templates; and
-# that the resulting KeycloakClient / KeycloakClientScope /
+# Deferred to a follow-up integration suite, on top of the existing
+# heavy harness in kubernetes-latest.bats:
+#   - CRBs land inside the tenant cluster (one per users[] entry).
+#   - view user is read-only, admin user is cluster-admin.
+#   - Pre-delete cleanup removes the CRBs.
+#   - kubectl oidc-login browser flow against a real Keycloak realm.
+#
+# What is exercised here on a live cluster: that the new `spec.oidc.*`
+# fields are admitted by the Kubernetes CRD; that cozystack-api accepts
+# the updated schema; that the HelmRelease renders the OIDC templates;
+# and that the resulting KeycloakClient / KeycloakClientScope /
 # AuthenticationConfiguration Secret / KamajiControlPlane carry the
 # expected per-cluster shape.
 
@@ -84,17 +93,17 @@ EOF
   # --authentication-config is appended to spec.apiServer.extraArgs.
   args=$(kubectl -n tenant-test get kamajicontrolplane "${KCP}" -o jsonpath='{.spec.apiServer.extraArgs}')
   echo "extraArgs: ${args}"
-  echo "${args}" | grep -q -- "--authentication-config=/etc/kubernetes/cozy-oidc/config.yaml"
+  echo "${args}" | grep -q -- "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
 
   # The chart-owned mount lands on spec.apiServer.extraVolumeMounts.
   mounts=$(kubectl -n tenant-test get kamajicontrolplane "${KCP}" -o jsonpath='{.spec.apiServer.extraVolumeMounts[*].name}')
   echo "extraVolumeMounts: ${mounts}"
-  echo "${mounts}" | grep -qw "cozy-oidc-authn-config"
+  echo "${mounts}" | grep -qw "authentication-config"
 
   # The chart-owned volume lands on spec.deployment.extraVolumes.
   vols=$(kubectl -n tenant-test get kamajicontrolplane "${KCP}" -o jsonpath='{.spec.deployment.extraVolumes[*].name}')
   echo "extraVolumes: ${vols}"
-  echo "${vols}" | grep -qw "cozy-oidc-authn-config"
+  echo "${vols}" | grep -qw "authentication-config"
 }
 
 @test "AuthenticationConfiguration Secret carries the cozy realm issuer + per-cluster audience" {
