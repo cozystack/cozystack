@@ -1,10 +1,10 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for platform migration 47 (adopt legacy etcd.aenix.io/v1alpha1
+# Unit tests for platform migration 48 (adopt legacy etcd.aenix.io/v1alpha1
 # clusters onto etcd-operator.cozystack.io/v1alpha2 via etcd-migrate).
 #
 # These drive the real migration script end-to-end against a fake kubectl and a
-# fake etcd-migrate (hack/testdata/migration-47/), mocking only the cluster
+# fake etcd-migrate (hack/testdata/migration-48/), mocking only the cluster
 # boundary — the same approach test/check-readiness uses. Every fake invocation
 # is logged so we can assert on the ordering and arguments of the destructive
 # steps, which is exactly the contract that cannot be checked by reading the
@@ -22,11 +22,11 @@
 # own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
 # shell tests that exit non-zero on failure.
 #
-# Run with: hack/cozytest.sh hack/migration-47-etcd-adopt.bats
+# Run with: hack/cozytest.sh hack/migration-48-etcd-adopt.bats
 # -----------------------------------------------------------------------------
 
-FAKEBIN="$PWD/hack/testdata/migration-47"
-MIG="$PWD/packages/core/platform/images/migrations/migrations/47"
+FAKEBIN="$PWD/hack/testdata/migration-48"
+MIG="$PWD/packages/core/platform/images/migrations/migrations/48"
 
 # prep resets PATH/env to a clean scenario (one legacy cluster, a resolvable
 # platform target). Tests override the FAKE_* knobs afterwards.
@@ -233,7 +233,7 @@ lineno() {
   rm -rf "$WORK"
 }
 
-@test "no legacy CRD stamps version 48 without adopting" {
+@test "no legacy CRD stamps version 49 without adopting" {
   prep
   export FAKE_LEGACY_CRD=0
   rc=0
