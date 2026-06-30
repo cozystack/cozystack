@@ -1,6 +1,14 @@
 #!/usr/bin/env bats
 
-teardown() {
+# cozytest.sh (the e2e runner) is not real bats — it never invokes setup()/
+# teardown(). Cleanup belongs in cozy_cleanup(), which cozytest runs once at
+# suite exit and on the first failing test. Each @test already deletes its own
+# ExternalDNS inline on the success path (fail-loud); this is the failure-path
+# safety net, so a test that aborts before its inline delete does not leak the
+# ExternalDNS CR (and its HelmReleases) into the shared tenant-test namespace.
+# ExternalDNS here is a stateless Deployment with the inmemory provider, so a
+# plain delete fully reclaims it — no PVCs, finalizers, or provider records.
+cozy_cleanup() {
   kubectl -n tenant-test delete externaldns.apps.cozystack.io --all --ignore-not-found 2>/dev/null || true
 }
 
