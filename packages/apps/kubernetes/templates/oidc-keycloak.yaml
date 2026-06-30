@@ -45,7 +45,7 @@ spec:
       protocol: openid-connect
       protocolMapper: "oidc-audience-mapper"
       config:
-        "included.custom.audience": {{ $clientId | quote }}
+        "included.client.audience": {{ $clientId | quote }}
         "id.token.claim": "true"
         "access.token.claim": "true"
         "introspection.token.claim": "true"
