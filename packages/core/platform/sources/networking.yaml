@@ -146,3 +146,41 @@ spec:
         releaseName: kubeovn
         dependsOn:
         - cilium
+  # cozyplane eBPF CNI + Cilium (kube-proxy replacement) for Talos clusters.
+  # cozyplane owns the datapath and the CNI conflist; Cilium runs alongside for
+  # KPR (coexistence, not generic-veth chaining). See
+  # system/cilium/values-cozyplane.yaml for the coexistence settings.
+  - name: cozyplane-cilium
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cilium
+      path: system/cilium
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      - values-cozyplane.yaml
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium
+        dependsOn: []
+    - name: cilium-networkpolicy
+      path: system/cilium-networkpolicy
+      install:
+        privileged: true
+        namespace: cozy-cilium
+        releaseName: cilium-networkpolicy
+        dependsOn:
+        - cilium
+    - name: cozyplane
+      path: system/cozyplane
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-cozyplane
+        releaseName: cozyplane
+        dependsOn:
+        - cilium

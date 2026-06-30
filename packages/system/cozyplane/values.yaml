@@ -1,0 +1,44 @@
+# Container image for all cozyplane components (agent, CNI plugin, controller),
+# published from github.com/lllamnyp/cozyplane to a public ghcr package.
+# TODO(release): digest-pin (ghcr.io/lllamnyp/cozyplane:v0.1.0@sha256:...).
+image: ghcr.io/lllamnyp/cozyplane:v0.1.0
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Pod MTU (underlay MTU minus Geneve overhead, ~50 bytes).
+mtu: 1450
+
+# Geneve UDP destination port. Override (e.g. 6082) only to coexist with another
+# overlay still holding 6081 on the node.
+genevePort: 6081
+
+# CNI conflist filename written to /etc/cni/net.d. Lower names sort first; use a
+# low prefix (e.g. "00-cozyplane.conflist") to win over a co-installed CNI such
+# as Cilium (which ships 05-cilium.conflist).
+cniConfName: "10-cozyplane.conflist"
+
+agent:
+  priorityClassName: system-node-critical
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+controller:
+  replicas: 1
+  priorityClassName: system-cluster-critical
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# The export ValidatingAdmissionPolicy that gates VPCBinding creation on the
+# 'export' verb of the referenced VPC. Requires Kubernetes >= 1.30. Disable only
+# if your cluster predates VAP (then VPCBinding creation is governed by plain
+# 'create vpcbindings' RBAC alone, with no cross-VPC export check).
+exportPolicy:
+  enabled: true

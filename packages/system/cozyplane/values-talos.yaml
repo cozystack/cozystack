@@ -1,0 +1,6 @@
+# Talos overlay for the cozyplane-cilium variant.
+#
+# cozyplane is the CNI; Cilium runs alongside for kube-proxy replacement. The
+# cozyplane conflist must sort ahead of Cilium's 05-cilium.conflist so kubelet
+# uses cozyplane as the primary CNI.
+cniConfName: "00-cozyplane.conflist"

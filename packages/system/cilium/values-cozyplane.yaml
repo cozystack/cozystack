@@ -1,0 +1,21 @@
+# Cilium overlay for the cozyplane-cilium variant (coexistence model).
+#
+# cozyplane is the CNI: it writes 00-cozyplane.conflist and owns the datapath
+# (overlay, isolation, masquerade). Cilium runs ALONGSIDE only for kube-proxy
+# replacement (kubeProxyReplacement stays true from values.yaml). Cilium does
+# NOT chain onto cozyplane (no generic-veth chaining) and must not take over or
+# delete the CNI configuration.
+#
+# Consequence: Cilium NetworkPolicy enforcement is NOT active under this variant
+# — cozyplane provides VPC isolation; Cilium-based policy would require chaining
+# (a follow-up). These settings are validated on Talos/dev4; tune there.
+cilium:
+  cni:
+    # Do not remove cozyplane's CNI conflist; cozyplane is the primary CNI.
+    exclusive: false
+  # cozyplane owns masquerade and routing for pod traffic.
+  enableIPv4Masquerade: false
+  enableIPv6Masquerade: false
+  bpf:
+    masquerade: false
+  autoDirectNodeRoutes: false

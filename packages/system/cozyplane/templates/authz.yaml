@@ -1,0 +1,72 @@
+{{- if .Values.exportPolicy.enabled }}
+# Gate VPCBinding creation on the 'export' verb of the referenced VPC. This is
+# the escalation gate that stops a tenant binding to a VPC it doesn't own (see
+# docs/control-plane.md §6). The 'export' check is only required when vpcRef is
+# set or changed, so the controller's finalizer writes are not blocked.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozyplane-vpcbinding-export
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["sdn.cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["vpcbindings"]
+  variables:
+    - name: ref
+      expression: object.spec.vpcRef
+    - name: refUnchanged
+      expression: >-
+        has(oldObject) &&
+        oldObject.spec.vpcRef.namespace == object.spec.vpcRef.namespace &&
+        oldObject.spec.vpcRef.name == object.spec.vpcRef.name
+  validations:
+    - expression: >-
+        variables.refUnchanged ||
+        authorizer.group('sdn.cozystack.io').resource('vpcs')
+          .namespace(variables.ref.namespace).name(variables.ref.name)
+          .check('export').allowed()
+      reason: Forbidden
+      messageExpression: >-
+        "creating a VPCBinding to VPC " + variables.ref.namespace + "/" +
+        variables.ref.name + " requires the 'export' verb on that VPC " +
+        "(sdn.cozystack.io vpcs)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozyplane-vpcbinding-export
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  policyName: cozyplane-vpcbinding-export
+  validationActions: ["Deny"]
+{{- end }}
+---
+# Sample owner role. RoleBind it into a tenant namespace so that tenant can own
+# VPCs (including 'export' them) and manage VPCBindings there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-vpc-owner
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs"]
+    # 'export' is the virtual verb consumed by the ValidatingAdmissionPolicy.
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "export"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs/status"]
+    verbs: ["get"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcbindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["ports"]
+    verbs: ["get", "list", "watch"]
