@@ -132,6 +132,26 @@ func TestComputePools_NestedUnboundedIntermediary(t *testing.T) {
 	quantityEqual(t, baz.Available, "cpu", "4")
 }
 
+// TestComputePools_CarveOutUnboundedResourceDoesNotClamp: a child carving a
+// resource its parent does not bound must not make that resource appear in the
+// parent pool's Available/EnforcedHard — otherwise the parent would be clamped
+// to zero of a resource it never limited.
+func TestComputePools_CarveOutUnboundedResourceDoesNotClamp(t *testing.T) {
+	pools := ComputePools([]Tenant{
+		{Namespace: "tenant-foo", Declared: rl(map[string]string{"cpu": "4"})},
+		{Namespace: "tenant-foo-bar", Declared: rl(map[string]string{"memory": "1Gi"})},
+	})
+	foo := pools["tenant-foo"]
+	if _, ok := foo.Available[corev1.ResourceName("memory")]; ok {
+		t.Fatalf("memory must not appear in Available (parent does not bound it), got %v", foo.Available)
+	}
+	quantityEqual(t, foo.Available, "cpu", "4")
+	hard := foo.EnforcedHard("tenant-foo", nil)
+	if _, ok := hard[corev1.ResourceName("memory")]; ok {
+		t.Fatalf("EnforcedHard must not clamp a resource the parent does not bound, got %v", hard)
+	}
+}
+
 func TestPoolEnforcedHard(t *testing.T) {
 	pools := ComputePools([]Tenant{
 		{Namespace: "tenant-foo", Declared: rl(map[string]string{"cpu": "10"})},

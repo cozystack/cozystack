@@ -141,7 +141,12 @@ func ComputePools(tenants []Tenant) map[string]*Pool {
 	}
 
 	for _, p := range pools {
-		p.Available = quota.SubtractWithNonNegativeResult(p.Budget, p.CarvedOut)
+		// Restrict Available to the resources the budget actually bounds. A child
+		// may carve out a resource its parent leaves unbounded (allowed at
+		// admission); without this mask SubtractWithNonNegativeResult would
+		// surface that resource as 0 — clamping the parent pool to zero of a
+		// resource the parent never limited and blocking its workloads.
+		p.Available = quota.Mask(quota.SubtractWithNonNegativeResult(p.Budget, p.CarvedOut), quota.ResourceNames(p.Budget))
 		sort.Strings(p.Members)
 	}
 	return pools
