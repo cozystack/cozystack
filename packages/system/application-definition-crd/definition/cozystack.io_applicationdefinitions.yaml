@@ -49,6 +49,20 @@ spec:
                     description: OpenAPI schema for the application, used for API
                       validation
                     type: string
+                  placement:
+                    default: ManagementPlane
+                    description: |-
+                      Placement selects which plane the application is deployed onto.
+                      ManagementPlane (the default) deploys the generated HelmRelease into the
+                      tenant namespace on the management cluster, exactly as today. ComputePlane
+                      routes the HelmRelease onto the tenant's ComputePlane — a separate,
+                      Cozystack-managed cluster for untrusted-code workloads — via remote Flux
+                      apply (spec.kubeConfig), so the workload never runs on the management
+                      cluster. See design-proposals/compute-plane in cozystack/community.
+                    enum:
+                    - ManagementPlane
+                    - ComputePlane
+                    type: string
                   plural:
                     description: Plural name of the application, used for UI and API
                     type: string

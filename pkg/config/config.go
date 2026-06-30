@@ -143,6 +143,13 @@ type ReleaseConfig struct {
 	Prefix   string            `yaml:"prefix"`
 	Labels   map[string]string `yaml:"labels"`
 	ChartRef ChartRefConfig    `yaml:"chartRef"`
+	// Placement selects which plane the generated HelmRelease targets.
+	// Empty or "ManagementPlane" deploys into the tenant namespace on the
+	// management cluster (default). "ComputePlane" injects spec.kubeConfig
+	// pointing at the tenant's ComputePlane admin-kubeconfig Secret, so Flux
+	// reconciles the release onto the ComputePlane instead. Populated from the
+	// ApplicationDefinition's spec.application.placement at start-up.
+	Placement string `yaml:"placement,omitempty"`
 	// HelmInstallTimeout is a per-Application override of Install.Timeout
 	// and Upgrade.Timeout. When non-zero, it wins over
 	// HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout below.
