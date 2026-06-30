@@ -290,16 +290,55 @@ metadata:
     cluster.x-k8s.io/role: control-plane
   annotations:
     kamaji.clastix.io/kubeconfig-secret-key: "super-admin.svc"
+{{- /*
+  OIDC wiring for `spec.oidc.mode` ≠ None:
+    - Inject `--authentication-config=/etc/kubernetes/authentication-config/config.yaml`
+      into the kube-apiserver extraArgs.
+    - Mount the per-release Secret carrying the structured
+      AuthenticationConfiguration at that path.
+    - Add the Secret as an extraVolume on the KCP Deployment.
+
+  The OIDC-managed flag and volume are kept ORTHOGONAL to the
+  user-supplied controlPlane.apiServer.extraArgs / extraVolumes /
+  extraVolumeMounts knobs — the user fields are preserved verbatim
+  and the OIDC additions are appended. The OIDC mount name
+  `authentication-config` is reserved by the chart; a user-supplied
+  volume reusing it would conflict in the rendered podSpec.
+
+  For mode=CustomConfig+secretRef, the user-owned Secret is mounted
+  directly (the chart does not copy the contents). Otherwise the
+  chart-owned `<release>-oidc-authn-config` Secret is mounted.
+*/}}
+{{- $oidcEnabled := ne .Values.oidc.mode "None" }}
+{{- $oidcAuthnSecret := printf "%s-oidc-authn-config" .Release.Name }}
+{{- if and (eq .Values.oidc.mode "CustomConfig") (ne .Values.oidc.customConfig.secretRef.name "") }}
+{{-   $oidcAuthnSecret = .Values.oidc.customConfig.secretRef.name }}
+{{- end }}
+{{- if and $oidcEnabled (has "cozy-oidc-authn-config" $userVolumeNames) }}
+{{-   fail "controlPlane.apiServer.extraVolumes: volume name \"cozy-oidc-authn-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
+{{- end }}
 spec:
   apiServer:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
-    {{- with .Values.controlPlane.apiServer.extraArgs }}
+    {{- if or .Values.controlPlane.apiServer.extraArgs $oidcEnabled }}
     extraArgs:
+      {{- with .Values.controlPlane.apiServer.extraArgs }}
       {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - --authentication-config=/etc/kubernetes/cozy-oidc/config.yaml
+      {{- end }}
     {{- end }}
-    {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
+    {{- if or .Values.controlPlane.apiServer.extraVolumeMounts $oidcEnabled }}
     extraVolumeMounts:
+      {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - name: cozy-oidc-authn-config
+        mountPath: /etc/kubernetes/cozy-oidc
+        readOnly: true
+      {{- end }}
     {{- end }}
   controllerManager:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
@@ -395,6 +434,14 @@ spec:
           secretName: {{ .Release.Name }}-talos-tls-cert
       {{- with .Values.controlPlane.apiServer.extraVolumes }}
       {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - name: cozy-oidc-authn-config
+        secret:
+          secretName: {{ $oidcAuthnSecret }}
+          items:
+          - key: config.yaml
+            path: config.yaml
       {{- end }}
   replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
