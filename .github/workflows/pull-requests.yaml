@@ -31,6 +31,7 @@ jobs:
       code: ${{ steps.p.outputs.code }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
+      touched: ${{ steps.p.outputs.touched }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -50,6 +51,14 @@ jobs:
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          # Package dirs the PR edited (packages/<area>/<name>). Their committed
+          # refs are the PR's intent and must survive the current-main overlay —
+          # otherwise an upstream image bump in a non-build-unit package would be
+          # silently reverted in e2e/the installer artifact (see
+          # hack/overlay-main-images.sh). Whitespace-separated, no trailing slash.
+          touched="$(sed -nE 's#^(packages/[^/]+/[^/]+)/.*#\1#p' /tmp/changed.txt | sort -u | tr '\n' ' ')"
+          echo "Touched packages: $touched"
+          echo "touched=$touched" >> "$GITHUB_OUTPUT"
           if [ "$matrix" = "[]" ]; then
             echo "any=false" >> "$GITHUB_OUTPUT"
           else
@@ -335,6 +344,47 @@ jobs:
           registry: iad.ocir.io
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      # Overlay current-main image refs onto every package this PR did NOT
+      # rebuild. Without it, unbuilt packages fall back to the last-release refs
+      # committed in the tree (e.g. v1.5.0) even when main is hundreds of commits
+      # ahead — so e2e and the installer's packages artifact would ship stale
+      # images for everything outside this PR's build matrix. Source of truth is
+      # the cozystack-packages:main OCI artifact build-main.yaml already
+      # publishes (the whole current-main packages tree, refs digest-pinned to
+      # main's images). Runs after login (creds available) and before the
+      # installer build below so the flux-pushed packages tree — and the
+      # pr.patch e2e applies — already reflect the overlay. A missing artifact
+      # (build-main not yet green) is a no-op: packages keep their committed
+      # refs (prior behaviour). See hack/overlay-main-images.sh.
+      - name: Pull current-main packages tree
+        run: |
+          rm -rf _out/mainpkgs
+          mkdir -p _out/mainpkgs
+          flux pull artifact "oci://${REGISTRY}/cozystack-packages:main" \
+            --output _out/mainpkgs \
+            || { echo "cozystack-packages:main pull failed — keeping committed refs"; rm -rf _out/mainpkgs; }
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Overlay current-main refs for unbuilt packages
+        # Best-effort: this only improves WHICH images e2e and the installer use,
+        # so an unexpected failure must degrade to the committed refs (prior
+        # behaviour), never block the PR. overlay-main-images.sh already handles
+        # the expected paths (missing artifact, drift, absent unit) internally.
+        run: |
+          hack/overlay-main-images.sh _out/mainpkgs "$BUILD_MATRIX" "$PR_TOUCHED" \
+            || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"
+        env:
+          # The set of packages THIS PR rebuilt; their pr-<N>-<sha> refs are
+          # authoritative, so overlay-main-images.sh skips them. Computed by the
+          # plan job from the Makefile (a JSON array of package dirs), not from
+          # untrusted PR input — passed via env per workflow-injection hygiene.
+          BUILD_MATRIX: ${{ needs.plan.outputs.matrix }}
+          # Packages THIS PR edited (changed-file dirs from the plan job's git
+          # diff). Their committed refs are the PR's intent — an upstream image
+          # bump in a non-build-unit package would otherwise be silently reverted
+          # by the overlay — so overlay-main-images.sh preserves them. Also
+          # env-passed, derived from the diff, not from untrusted PR input.
+          PR_TOUCHED: ${{ needs.plan.outputs.touched }}
       # buildkitd-config routes docker.io base-image pulls through mirror.gcr.io
       # (hack/buildkitd.toml) so the installer build dodges Docker Hub's
       # anonymous-pull rate limit; see the build job for the full rationale.
