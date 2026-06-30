@@ -46,6 +46,9 @@ type ConfigSpec struct {
 	// MachineHealthCheck tuning for worker node groups.
 	// +kubebuilder:default:={}
 	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
+	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
+	// +kubebuilder:default:={}
+	Oidc OIDC `json:"oidc"`
 }
 
 type APIServer struct {
@@ -293,6 +296,40 @@ type NodeHealthCheck struct {
 	NodeStartupTimeout string `json:"nodeStartupTimeout"`
 }
 
+type OIDC struct {
+	// Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
+	// +kubebuilder:default:={}
+	CustomConfig OIDCCustomConfig `json:"customConfig,omitempty"`
+	// Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+	// +kubebuilder:default:="None"
+	Mode OIDCMode `json:"mode"`
+	// Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.
+	// +kubebuilder:default:={}
+	Users []OIDCUser `json:"users,omitempty"`
+}
+
+type OIDCCustomConfig struct {
+	// Inline AuthenticationConfiguration YAML (`apiserver.config.k8s.io/v1beta1`). The chart writes the value verbatim into a Secret mounted at `/etc/kubernetes/authentication-config/config.yaml` on the kube-apiserver. Mutually exclusive with `secretRef.name`.
+	// +kubebuilder:default:=""
+	Config string `json:"config,omitempty"`
+	// Reference to an existing Secret in the tenant namespace carrying the `AuthenticationConfiguration`.
+	// +kubebuilder:default:={}
+	SecretRef OIDCSecretRef `json:"secretRef,omitempty"`
+}
+
+type OIDCSecretRef struct {
+	// Name of an existing Secret in the tenant (release) namespace whose `config.yaml` key holds an `apiserver.config.k8s.io/v1beta1` `AuthenticationConfiguration`. Mutually exclusive with `customConfig.config`.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+}
+
+type OIDCUser struct {
+	// Username matched against the `preferred_username` claim from the issuer. In the platform `cozy` realm this is the user's email. Used verbatim as the `User:` subject in the ClusterRoleBinding.
+	Email string `json:"email"`
+	// Role to bind: `admin` maps to `ClusterRole/cluster-admin`, `view` maps to `ClusterRole/view`.
+	Role OIDCRole `json:"role"`
+}
+
 type OuroborosAddon struct {
 	// Enable ouroboros. Requires addons.ingressNginx.enabled (chart-render fail otherwise). Only useful when PROXY-protocol is wired on the tenant ingress-nginx via valuesOverride.
 	// +kubebuilder:default:=false
@@ -344,6 +381,12 @@ type VerticalPodAutoscalerAddon struct {
 
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"
 type IngressNginxExposeMethod string
+
+// +kubebuilder:validation:Enum="None";"System";"CustomConfig"
+type OIDCMode string
+
+// +kubebuilder:validation:Enum="admin";"view"
+type OIDCRole string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
