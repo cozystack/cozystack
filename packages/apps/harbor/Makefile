@@ -2,6 +2,7 @@ NAME=harbor
 
 include ../../../hack/package.mk
 
+.PHONY: test
 test:
 	helm unittest .
 

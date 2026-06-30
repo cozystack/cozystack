@@ -1,0 +1,173 @@
+suite: harbor post-delete cleanup hook
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: harbor-test
+  namespace: tenant-root
+
+# The cleanup hook scopes its ACME solver sweep to this release's TLS host,
+# which defaults to "<release>.<_namespace.host>".
+set:
+  _namespace:
+    host: example.org
+
+tests:
+  - it: renders the cleanup Job as a post-delete hook
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: kind
+          value: Job
+      - equal:
+          path: metadata.name
+          value: harbor-test-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: harbor-test-cleanup
+
+  - it: targets both kept PVCs (jobservice + trivy) via the shared release label and ACME objects
+    documentIndex: 0
+    asserts:
+      # The upstream Harbor subchart runs as the "<release>-system"
+      # HelmRelease. Its kept PVCs must be selected by release=<release>-system:
+      # jobservice carries it via "harbor.labels", and trivy's StatefulSet PVC
+      # carries it via "harbor.legacy.labels". The trivy PVC does NOT carry
+      # app.kubernetes.io/instance, so selecting on that label would silently
+      # miss trivy (which is enabled by default).
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete pvc[\s\S]*-l release=harbor-test-system
+      # Guard against regressing to the instance label, which misses trivy.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: app.kubernetes.io/instance=harbor-test-system
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: harbor-test-ingress-tls
+
+  - it: scopes the ACME solver sweep to this release's TLS host
+    documentIndex: 0
+    asserts:
+      # The solver sweep must be scoped to this release's host, not a
+      # namespace-wide label sweep, so sibling apps' in-flight challenges in
+      # the shared tenant namespace are never touched.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: HOST="harbor-test\.example\.org"
+      # Challenges are filtered by .spec.dnsName == $HOST.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: \@\.spec\.dnsName==.\$HOST
+      # Solver Ingresses are filtered by .spec.rules[0].host == $HOST.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: \@\.spec\.rules\[0\]\.host==.\$HOST
+      # There must be NO namespace-wide blanket delete that targets every
+      # object carrying the http01-solver label. The label may still appear
+      # in the scoped `kubectl get ingress -l ...` selector, but it must
+      # never be used in a `kubectl delete` against the whole namespace.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete[^\n]*-l acme.cert-manager.io/http01-solver=true
+
+  - it: sets resource requests and limits on the cleanup container
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 200m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 128Mi
+
+  - it: creates a ServiceAccount for the cleanup job
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: kind
+          value: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: harbor-test-cleanup
+
+  - it: grants RBAC for PVCs and cert-manager ACME resources
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - equal:
+          path: metadata.name
+          value: harbor-test-cleanup
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cert-manager.io"]
+            resources: ["certificates"]
+            verbs: ["get", "list", "delete"]
+      # Only "challenges" are granted: the host-scoped sweep lists/deletes
+      # them, while Orders are cascade-deleted by cert-manager itself when the
+      # Certificate is removed, so the hook needs no RBAC for orders.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["acme.cert-manager.io"]
+            resources: ["challenges"]
+            verbs: ["get", "list", "delete"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["acme.cert-manager.io"]
+            resources: ["orders", "challenges"]
+            verbs: ["get", "list", "delete"]
+      # We list+delete orphaned http01 solver Ingresses by name, so we need
+      # get/list/delete on networking.k8s.io ingresses.
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["networking.k8s.io"]
+            resources: ["ingresses"]
+            verbs: ["get", "list", "delete"]
+      # The hook must not grant services/pods: solver Pods/Services cascade
+      # from the Challenge/Certificate and are never deleted directly.
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["services"]
+            verbs: ["get", "list", "delete"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "delete"]
+
+  - it: binds the Role to the cleanup ServiceAccount
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: kind
+          value: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: harbor-test-cleanup
+      - equal:
+          path: subjects[0].name
+          value: harbor-test-cleanup
