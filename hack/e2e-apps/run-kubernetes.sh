@@ -1,5 +1,62 @@
 . hack/e2e-apps/remediation-guard.sh
 
+# Pure exit-condition for the inter-test drain loop (cozy_wait_tenant_drained).
+# Each argument is one resource-probe capture: the stdout of a
+# `kubectl get -o name` (empty once the resource is gone) or the literal "err"
+# the loop substitutes when a probe itself fails. Returns 0 (drained) only when
+# every capture holds nothing but whitespace; any capture with a non-whitespace
+# character -- a resource name, or the "err" sentinel the loop injects on a
+# probe failure -- yields non-zero, so a transient API blip is never misread as
+# "the tenant has drained" (same guard as etcd_drain). Pure text logic,
+# unit-tested in hack/run-kubernetes-drain_test.bats.
+cozy_tenant_drained() {
+  for _capture in "$@"; do
+    case "$_capture" in
+      *[![:space:]]*) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# Block until the tenant cluster's KubeVirt compute and storage are actually
+# released, not merely triggered for deletion. Deleting the Kubernetes CR
+# returns as soon as its finalizers clear, but that only TRIGGERS teardown of
+# the CAPK worker VMs and their DataVolume-backed disk PVCs. The virt-launcher
+# pods keep their guest RAM reserved until the VMIs are gone, so without this
+# barrier the next tenant test's worker VMs begin scheduling against a sandbox
+# the previous tenant has not yet vacated -> memory starvation -> a worker VM
+# misses the node-join budget and the test flakes on worker-node-join.
+#
+# Bounded and best-effort: cozytest runs cozy_cleanup wrapped in `|| true`, and
+# this returns (loudly) on timeout, so a stuck teardown can never hang the job
+# past the deadline -- it just leaves the sandbox no worse than before this
+# wait existed. tenant-test is provisioned with etcd/monitoring/seaweedfs
+# disabled (see the Tenant in hack/e2e-install-cozystack.bats), so it carries no
+# baseline PVCs, and the e2e apps run sequentially each cleaning up after
+# itself; at cleanup time the only VMs/VMIs/PVCs in the namespace belong to the
+# tenant cluster being torn down, so a plain namespace-scoped probe is both safe
+# and accurate (the worker-disk PVCs carry no cluster-scoping label to select on).
+cozy_wait_tenant_drained() {
+  _ns=tenant-test
+  _timeout="${1:-300}"
+  _deadline=$(( $(date +%s) + _timeout ))
+  while :; do
+    _vm=$(kubectl -n "$_ns" get virtualmachines.kubevirt.io -o name 2>/dev/null) || _vm=err
+    _vmi=$(kubectl -n "$_ns" get virtualmachineinstances.kubevirt.io -o name 2>/dev/null) || _vmi=err
+    _pvc=$(kubectl -n "$_ns" get pvc -o name 2>/dev/null) || _pvc=err
+    if cozy_tenant_drained "$_vm" "$_vmi" "$_pvc"; then
+      echo "» tenant VMs/VMIs/PVCs drained from $_ns"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» WARNING: tenant teardown did not drain within ${_timeout}s; continuing (next test may face memory/storage pressure)" >&2
+      kubectl -n "$_ns" get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io,pvc 2>&1 | sed 's/^/  drain-leftover: /' >&2 || true
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 # Unconditional cleanup hook, invoked by cozytest.sh after this file's tests
 # (pass or fail). A failed run otherwise leaves the tenant cluster's worker-VM
 # PVCs (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
@@ -13,6 +70,11 @@ cozy_cleanup() {
   kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
+  # The CR delete above finalizes once the Kubernetes CR is gone, which only
+  # TRIGGERS KubeVirt VM teardown + PVC release. Block until the worker VMs,
+  # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
+  # starts on a freed sandbox -- the root cause of the node-join flake.
+  cozy_wait_tenant_drained 300 || true
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
