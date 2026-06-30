@@ -51,6 +51,11 @@ tests:
       value: Role
     asserts:
       - equal:
+          # RBAC artifacts are reclaimed on a successful uninstall (unlike the
+          # Job, which is kept for post-mortem on failure).
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
           path: rules[0].apiGroups[0]
           value: ""
       - equal:
