@@ -6,6 +6,12 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces", "secrets", "services"]
   verbs: ["get", "watch", "list"]
+# Hierarchical tenant quota admission reads the rendered ResourceQuota usage of
+# a parent tenant's pool to carve a child's allocation out of what is actually
+# left (see pkg/registry/apps/application/quota.go).
+- apiGroups: [""]
+  resources: ["resourcequotas"]
+  verbs: ["get", "watch", "list"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["rolebindings"]
   verbs: ["get", "watch", "list"]
