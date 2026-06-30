@@ -359,9 +359,10 @@ jobs:
       - name: Pull current-main packages tree
         run: |
           rm -rf _out/mainpkgs
+          mkdir -p _out/mainpkgs
           flux pull artifact "oci://${REGISTRY}/cozystack-packages:main" \
             --output _out/mainpkgs \
-            || { echo "No cozystack-packages:main yet — keeping committed refs"; rm -rf _out/mainpkgs; }
+            || { echo "cozystack-packages:main pull failed — keeping committed refs"; rm -rf _out/mainpkgs; }
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Overlay current-main refs for unbuilt packages
