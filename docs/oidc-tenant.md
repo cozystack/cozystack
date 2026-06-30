@@ -134,7 +134,7 @@ the OIDC kubeconfig out-of-band.
 `ClusterRoleBinding` inside the tenant cluster, labelled
 `app.kubernetes.io/managed-by=cozystack-oidc` and
 `app.kubernetes.io/instance=<release>`. The CRB name is a
-deterministic hash of `<release>:<email>`, so the same email always
+deterministic hash of `<release>-<email>`, so the same email always
 maps to the same binding.
 
 | `role:` | `ClusterRole` bound |
@@ -163,10 +163,13 @@ The user installs `kubectl oidc-login` once:
 kubectl krew install oidc-login
 ```
 
-The operator hands them the OIDC kubeconfig:
+The operator hands them the OIDC kubeconfig. The Secret name follows
+the Helm release pattern `kubernetes-<cluster>-oidc-kubeconfig` (the
+cozystack-api prefixes the cluster name with `kubernetes-` when it
+materialises the `HelmRelease`):
 
 ```bash
-kubectl --namespace tenant-acme get secret prod-oidc-kubeconfig \
+kubectl --namespace tenant-acme get secret kubernetes-prod-oidc-kubeconfig \
   --output=jsonpath='{.data.kubeconfig}' | base64 -d > prod.kubeconfig
 ```
 
