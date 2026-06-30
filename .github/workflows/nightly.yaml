@@ -1,0 +1,334 @@
+name: Nightly
+
+# Publish an installable nightly of `main` WITHOUT rebuilding it, then run the
+# full e2e suite against the published bits.
+#
+# A nightly is a renamed copy of what `build-main` already built: every
+# component image is content-addressed, so `nightly-mirror.sh` copies each one
+# from the CI build registry (OCIR) to the public release registry (GHCR) BY
+# DIGEST — bit-for-bit, no rebuild. The cozystack-packages artifact and the
+# cozy-installer chart are re-published on GHCR so the whole install closure is
+# self-contained there. The only thing genuinely built is the Talos nocloud disk
+# (assembled from upstream profiles, independent of the registry), published as a
+# GHCR OCI artifact so a nightly is installable on real hardware, not just e2e.
+#
+# No GitHub release and no api/apps/v1alpha1 Go-module tag are created — a
+# nightly is an installable artifact set on GHCR, nothing more. retention.yaml
+# prunes the GHCR nightly tags.
+#
+# Install a nightly:
+#   helm upgrade --install cozystack \
+#     oci://ghcr.io/cozystack/cozystack/cozy-installer --version nightly
+#   (the floating `nightly` tag tracks the latest; each build is also published
+#    under an immutable 0.0.0-nightly.<date>.<run-id>.<attempt> tag for pinning)
+
+on:
+  schedule:
+    - cron: '0 2 * * *'   # daily 02:00 UTC, after build-main has settled
+  workflow_dispatch: {}
+
+env:
+  SRC_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+  DST_REGISTRY: ghcr.io/cozystack/cozystack
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  # ── Mirror the latest main build OCIR -> GHCR by digest, re-publish the
+  #    packages artifact + installer chart on GHCR. No rebuild.
+  mirror:
+    name: Mirror images to GHCR
+    if: vars.NIGHTLY_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version:         ${{ steps.resolve.outputs.version }}
+      sha:             ${{ steps.resolve.outputs.sha }}
+      packages_ref:    ${{ steps.resolve.outputs.packages_ref }}
+      packages_digest: ${{ steps.publish.outputs.packages_digest }}
+    steps:
+      - name: Set up toolchain (skopeo, flux, yq, helm)
+        run: |
+          command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -v flux   >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          command -v yq     >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          command -v helm   >/dev/null || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      - name: Login to registries
+        env:
+          OCIR_USER:  ${{ secrets.OCIR_USER }}
+          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+          GHCR_USER:  ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # skopeo (mirror copies), flux + helm (artifact/chart push) all read
+          # their own auth; log each into both registries it touches.
+          skopeo login "${SRC_REGISTRY%%/*}" -u "$OCIR_USER" -p "$OCIR_TOKEN"
+          skopeo login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" -p "$GHCR_TOKEN"
+          echo "$OCIR_TOKEN" | docker login "${SRC_REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | docker login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | helm registry login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+
+      # The source of truth is the cozystack-packages:main artifact build-main
+      # pushed. Resolve the exact commit it was built from (its revision
+      # annotation) so the disk and the install tree are checked out from the
+      # SAME commit the images were built at — never main's drifting HEAD.
+      - name: Resolve source commit and version
+        id: resolve
+        run: |
+          set -eu
+          # Pin :main to its current digest first, then read the revision
+          # annotation and pull the baked tree from that SAME digest below, so a
+          # concurrent build-main push of :main cannot make us check out commit A
+          # while mirroring tree B.
+          packages_ref="$(skopeo inspect --format '{{.Digest}}' "docker://${SRC_REGISTRY}/cozystack-packages:main")"
+          rev="$(skopeo inspect --raw "docker://${SRC_REGISTRY}/cozystack-packages@${packages_ref}" \
+            | yq -r '.annotations["org.opencontainers.image.revision"] // ""' -p json 2>/dev/null || true)"
+          # revision is "<git-describe>:<sha>"; take the sha.
+          sha="${rev##*:}"
+          # The sha flows into `actions/checkout` ref: — validate it is a bare
+          # commit hash before trusting it, so a malformed/forged annotation
+          # cannot inject a ref.
+          echo "$sha" | grep -qE '^[0-9a-f]{40}$' \
+            || { echo "::error::source revision '$sha' is not a 40-hex commit sha"; exit 1; }
+          # Make every build's tag immutable: the UTC date keeps it human-
+          # readable, and run id + attempt make a same-day re-dispatch or re-run
+          # publish a distinct tag instead of overwriting the day's nightly.
+          version="0.0.0-nightly.$(date -u +%Y%m%d).${GITHUB_RUN_ID}.${GITHUB_RUN_ATTEMPT}"
+          echo "sha=$sha"                   >> "$GITHUB_OUTPUT"
+          echo "version=$version"           >> "$GITHUB_OUTPUT"
+          echo "packages_ref=$packages_ref" >> "$GITHUB_OUTPUT"
+          echo "Resolved main build: sha=$sha version=$version packages_ref=$packages_ref"
+
+      - name: Checkout source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          fetch-depth: 1
+          # These jobs copy the checkout into /tmp/$SANDBOX_NAME; don't leave the
+          # checkout token in .git/config to be copied along with it.
+          persist-credentials: false
+
+      # Pull the digest-vendored tree build-main baked (but never committed).
+      # Pinned to the digest resolved above, not the mutable :main tag.
+      - name: Pull baked package tree
+        run: flux pull artifact "oci://${SRC_REGISTRY}/cozystack-packages@${{ steps.resolve.outputs.packages_ref }}" --output _baked
+
+      # Copy every cozystack-owned component image OCIR -> GHCR by digest and
+      # rewrite the baked tree's image hosts to GHCR (digests untouched).
+      - name: Mirror images and rewrite tree
+        run: ./hack/nightly-mirror.sh "${{ steps.resolve.outputs.version }}" _baked
+
+      # Re-publish the rewritten tree as the GHCR packages artifact, capture its
+      # digest, point the installer chart at it, package + push the chart.
+      - name: Publish packages artifact and installer chart to GHCR
+        id: publish
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          SHA:     ${{ steps.resolve.outputs.sha }}
+        run: |
+          set -eu
+          flux push artifact "oci://${DST_REGISTRY}/cozystack-packages:${VERSION}" \
+            --path=_baked \
+            --source=https://github.com/cozystack/cozystack \
+            --revision="${VERSION}:${SHA}" 2>&1 | tee _push.log
+          DIGEST="$(awk -F@ '/artifact successfully pushed/ {print $2}' _push.log)"
+          [ -n "$DIGEST" ] || { echo "::error::failed to capture packages artifact digest"; exit 1; }
+          # Floating tag for the latest nightly packages artifact.
+          skopeo copy --multi-arch all \
+            "docker://${DST_REGISTRY}/cozystack-packages:${VERSION}" \
+            "docker://${DST_REGISTRY}/cozystack-packages:nightly"
+          # Point the installer chart at the GHCR artifact (the artifact cannot
+          # carry its own digest, so set it on the chart we package now).
+          yq -i ".cozystackOperator.platformSourceUrl = \"oci://${DST_REGISTRY}/cozystack-packages\"" _baked/core/installer/values.yaml
+          yq -i ".cozystackOperator.platformSourceRef = \"digest=${DIGEST}\"" _baked/core/installer/values.yaml
+          PKG="$(helm package _baked/core/installer --version "${VERSION}" --app-version "${VERSION}" | awk '{print $NF}')"
+          helm push "$PKG" "oci://${DST_REGISTRY}"
+          skopeo copy --multi-arch all \
+            "docker://${DST_REGISTRY}/cozy-installer:${VERSION}" \
+            "docker://${DST_REGISTRY}/cozy-installer:nightly"
+          echo "packages_digest=${DIGEST}" >> "$GITHUB_OUTPUT"
+          echo "Published cozystack-packages@${DIGEST} and cozy-installer:${VERSION} to GHCR."
+
+  # ── Assemble the Talos nocloud disk from the upstream imager (no cozystack
+  #    image dependency) and publish it as a GHCR OCI artifact.
+  build-disk:
+    name: Build & publish nocloud disk
+    needs: [mirror]
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.mirror.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up oras
+        run: |
+          command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
+      - name: Login to GHCR
+        env:
+          GHCR_USER:  ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GHCR_TOKEN" | oras login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+      # Pure asset assembly: the nocloud profile references only upstream
+      # ghcr.io/siderolabs/* images, so this needs no cozystack registry and no
+      # rebuild of any cozystack image.
+      - name: Build nocloud disk
+        run: make -C packages/core/talos talos-nocloud
+      - name: Publish disk to GHCR
+        env:
+          VERSION: ${{ needs.mirror.outputs.version }}
+        run: |
+          set -eu
+          cd _out/assets
+          oras push "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" \
+            --artifact-type application/vnd.cozystack.talos.nocloud \
+            nocloud-amd64.raw.xz:application/vnd.cozystack.talos.disk.v1+xz
+          oras tag "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" nightly
+          echo "Published cozystack-nocloud:${VERSION} (+ :nightly) to GHCR."
+
+  # ── Full e2e against the published GHCR closure (chart + images + disk).
+  e2e:
+    name: E2E (full suite)
+    needs: [mirror, build-disk]
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Checkout source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.mirror.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up toolchain (flux, oras)
+        run: |
+          command -v flux >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          command -v oras >/dev/null || { curl -fsSL https://github.com/oras-project/oras/releases/download/v1.2.0/oras_1.2.0_linux_amd64.tar.gz | sudo tar -xz -C /usr/local/bin oras; }
+      - name: Login to GHCR
+        env:
+          GHCR_USER:  ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | docker login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | oras login  "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+
+      # Overlay the GHCR-rewritten tree (operator image, .e2e.image and every
+      # component now point at GHCR), then pin the installer chart to the GHCR
+      # packages artifact — exactly the bits a user would install.
+      - name: Stage GHCR install tree
+        env:
+          VERSION:         ${{ needs.mirror.outputs.version }}
+          PACKAGES_DIGEST: ${{ needs.mirror.outputs.packages_digest }}
+        run: |
+          set -eu
+          flux pull artifact "oci://${DST_REGISTRY}/cozystack-packages:${VERSION}" --output _rw
+          cp -r _rw/. packages/
+          yq -i ".cozystackOperator.platformSourceUrl = \"oci://${DST_REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
+          yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
+
+      - name: Fetch nocloud disk from GHCR
+        env:
+          VERSION: ${{ needs.mirror.outputs.version }}
+        run: |
+          set -eu
+          mkdir -p _out/assets
+          oras pull "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" --output _out/assets
+
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+
+      - name: Prepare workspace
+        run: |
+          rm -rf "/tmp/$SANDBOX_NAME"
+          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
+
+      - name: Prepare environment
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+
+      - name: Install Cozystack into sandbox
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::not-Ready HelmReleases"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            exit 1
+          fi
+
+      - name: Run OpenAPI tests
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+
+      # Always the FULL app suite — a nightly has no diff to scope against, so
+      # Test Impact Analysis does not apply.
+      - name: Run E2E tests (full suite)
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          apps_list=$(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1)
+          failed_tests=""
+          for app in $apps_list; do
+            echo "::group::Testing $app"
+            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
+              echo "::endgroup::"; echo "✅ $app passed"
+            else
+              echo "::endgroup::"; echo "❌ $app failed"
+              failed_tests="$failed_tests $app"
+              echo "::group::Diagnostics for $app"
+              docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+              docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+              echo "::endgroup::"
+            fi
+          done
+          if [ -n "$failed_tests" ]; then echo "❌ Failed:$failed_tests"; exit 1; fi
+          echo "✅ All E2E tests passed"
+
+      - name: Collect report
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+          if-no-files-found: warn
+
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+      - name: Remove workspace
+        if: always()
+        run: rm -rf "/tmp/$SANDBOX_NAME"

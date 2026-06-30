@@ -57,15 +57,33 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Create tag on merge commit
+      # Create the release tag at the merge commit — write-once.
+      #
+      # The tag is attached to the PR merge commit, which did not exist before
+      # this release PR opened, so there is never a prior SHA to overwrite: a
+      # force is impossible by construction. The guard makes that explicit and
+      # makes re-runs idempotent. A pre-existing tag at a different commit means
+      # something pushed the tag out-of-band — fail loudly rather than move it.
+      - name: Create tag on merge commit (write-once)
         env:
           APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          TAG: ${{ steps.get_tag.outputs.tag }}
+          SHA: ${{ github.sha }}
         run: |
           git config user.name  "cozystack-ci[bot]"
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
-          git tag -f ${{ steps.get_tag.outputs.tag }} ${{ github.sha }}
-          git push -f origin ${{ steps.get_tag.outputs.tag }}
+          EXISTING="$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')"
+          if [ -z "$EXISTING" ]; then
+            git tag "${TAG}" "${SHA}"
+            git push origin "refs/tags/${TAG}"
+            echo "✅ Created ${TAG} at ${SHA}."
+          elif [ "$EXISTING" = "${SHA}" ]; then
+            echo "✅ ${TAG} already at ${SHA}; nothing to do."
+          else
+            echo "::error::${TAG} already exists at ${EXISTING}; refusing to force-move it to ${SHA} (tags are write-once)."
+            exit 1
+          fi
 
       # Ensure maintenance branch release-X.Y
       - name: Ensure maintenance branch release-X.Y
@@ -98,14 +116,30 @@ jobs:
                 branch
               });
            
-              await github.rest.git.updateRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: `heads/${branch}`,
-                sha: commitSha,
-                force: true
-              });
-              console.log(`🔁 Force-updated '${branch}' to ${commitSha}`);
+              // Fast-forward only — the maintenance branch is never rewound.
+              // force:false makes GitHub reject (422) a non-fast-forward update;
+              // we warn and leave the branch for a maintainer to resolve rather
+              // than clobber history.
+              try {
+                await github.rest.git.updateRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: `heads/${branch}`,
+                  sha: commitSha,
+                  force: false
+                });
+                console.log(`✅ Fast-forwarded '${branch}' to ${commitSha}`);
+              } catch (ffErr) {
+                // Only a non-fast-forward rejection (422) is the expected,
+                // recoverable case. Auth/API/malformed-ref errors must not be
+                // swallowed — they'd silently leave the maintenance branch stale.
+                if (ffErr.status === 422) {
+                  console.log(`::warning::Could not fast-forward '${branch}' to ${commitSha} (not a descendant); leaving as-is — resolve manually. (${ffErr.message})`);
+                } else {
+                  core.setFailed(`Unexpected error updating '${branch}': ${ffErr.message}`);
+                  throw ffErr;
+                }
+              }
             } catch (err) {
               if (err.status === 404) {
                 await github.rest.git.createRef({

@@ -1,0 +1,231 @@
+name: Promote RC
+
+# Bless a release-candidate as stable WITHOUT rebuilding it.
+#
+# A stable release is a renamed release-candidate: the bytes shipped as vX.Y.Z
+# are bit-for-bit the bytes built and e2e-tested as vX.Y.Z-rc.N. This workflow
+# retags the rc's existing images (by digest) to the stable tag, then opens a
+# release-X.Y.Z PR carrying the rc's digest-vendored tree. Merging that PR runs
+# the existing release-PR e2e and, via pull-requests-release.yaml, creates the
+# write-once stable tag at the merge commit and publishes the release.
+#
+# Triggered manually once an rc has gone green. The stable git tag is never
+# pushed by a human and never force-moved — it is created only at PR merge,
+# against a commit that did not exist before this PR opened.
+
+on:
+  workflow_dispatch:
+    inputs:
+      rc_tag:
+        description: "Release-candidate tag to promote, e.g. v1.4.0-rc.2"
+        required: true
+        type: string
+
+env:
+  # TODO: unhardcode this (shared with the build/e2e workflows)
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+concurrency:
+  group: promote-rc-${{ inputs.rc_tag }}
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote ${{ inputs.rc_tag }}
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
+    timeout-minutes: 45
+    permissions:
+      contents: write
+      packages: write
+      pull-requests: write
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
+
+      # Validate the dispatch input against a strict rc pattern before it ever
+      # reaches a shell or an API call. Derives the stable version, the rc
+      # staging branch, and the maintenance line.
+      - name: Parse and validate rc tag
+        id: parse
+        env:
+          RC_TAG: ${{ inputs.rc_tag }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const rc = process.env.RC_TAG.trim();
+            const m = rc.match(/^v(\d+)\.(\d+)\.(\d+)-rc\.(\d+)$/);
+            if (!m) {
+              core.setFailed(`rc_tag '${rc}' must match 'vX.Y.Z-rc.N'`);
+              return;
+            }
+            const [maj, min, patch] = [m[1], m[2], m[3]];
+            const version = `${maj}.${min}.${patch}`;
+            core.setOutput('rc_tag', rc);
+            core.setOutput('rc_version', `${version}-rc.${m[4]}`);   // 1.4.0-rc.2
+            core.setOutput('stable_tag', `v${version}`);             // v1.4.0
+            core.setOutput('stable_version', version);               // 1.4.0
+            core.setOutput('rc_branch', `release-${version}-rc.${m[4]}`);
+            core.setOutput('stable_branch', `release-${version}`);
+            core.setOutput('line', `${maj}.${min}`);
+
+      # Gate: the rc must exist as a (draft) release and the stable tag must NOT
+      # exist yet. Refuse to promote twice or to an already-shipped version.
+      - name: Validate rc is promotable
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const rcTag     = '${{ steps.parse.outputs.rc_tag }}';
+            const stableTag = '${{ steps.parse.outputs.stable_tag }}';
+            const releases  = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+            });
+            const rcRel = releases.find(r => r.tag_name === rcTag);
+            if (!rcRel) core.setFailed(`No release found for rc '${rcTag}' — has it been built?`);
+            if (releases.some(r => r.tag_name === stableTag)) {
+              core.setFailed(`Stable release '${stableTag}' already exists — refusing to re-promote.`);
+            }
+            // The stable git tag must not pre-exist either: finalize creates it
+            // write-once at the PR merge commit, so a stray tag (from a partial
+            // run or a manual push) would only fail that step AFTER images were
+            // already retagged. Catch it here, before any side effects.
+            try {
+              await github.rest.git.getRef({
+                owner: context.repo.owner, repo: context.repo.repo,
+                ref: `tags/${stableTag}`
+              });
+              core.setFailed(`Stable tag '${stableTag}' already exists — refusing to re-promote.`);
+            } catch (e) {
+              if (e.status !== 404) throw e;
+            }
+            // Surface the rc's disk asset id for the copy step.
+            const disk = (rcRel.assets || []).find(a => a.name === 'nocloud-amd64.raw.xz');
+            if (!disk) core.setFailed(`rc release '${rcTag}' has no nocloud-amd64.raw.xz asset.`);
+            core.setOutput('disk_id', String(disk.id));
+        id: validate
+
+      # The rc's digest-vendored tree (the staging branch the rc build pushed).
+      - name: Checkout rc staging branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.parse.outputs.rc_branch }}
+          fetch-depth: 0
+          fetch-tags: true
+          token: ${{ steps.app-token.outputs.token }}
+          # The Prepare stable branch step re-injects the token via
+          # `git remote set-url`, so there's no need to persist it in .git/config.
+          persist-credentials: false
+
+      - name: Set up toolchain (skopeo, yq)
+        run: |
+          command -v yq >/dev/null \
+            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          command -v skopeo >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+
+      - name: Login to registry
+        run: skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" -p "$OCIR_TOKEN"
+        env:
+          OCIR_USER: ${{ secrets.OCIR_USER }}
+          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+
+      # The promotion proper: retag every rc image/digest to the stable tag and
+      # :latest. No rebuild — bit-for-bit the e2e-tested rc.
+      - name: Retag rc images to stable
+        run: ./hack/promote-retag.sh "${STABLE_TAG}"
+        env:
+          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
+
+      # Build the stable digest-vendored tree off the rc tree: the digests are
+      # unchanged (they pin the retagged images); only the cosmetic -rc.N substring
+      # in the image tag is rewritten to the stable version (decision A — the
+      # @sha256 wins regardless, this is for human readability).
+      - name: Prepare stable branch
+        env:
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          RC_VERSION: ${{ steps.parse.outputs.rc_version }}
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+          STABLE_BRANCH: ${{ steps.parse.outputs.stable_branch }}
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        run: |
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
+          # Rewrite the rc version substring -> stable in vendored image tags.
+          # The exact "X.Y.Z-rc.N" string only appears on cozystack-built images,
+          # so a global replace cannot touch component (e.g. cilium) tags. Escape
+          # regex metacharacters (the dots) in the rc version so sed matches the
+          # literal string, not "any character".
+          RC_ESC=$(printf '%s' "$RC_VERSION" | sed -e 's/[][\\.^$*/]/\\&/g')
+          find packages -name values.yaml -print0 \
+            | xargs -0 sed -i "s/${RC_ESC}/${STABLE_VERSION}/g"
+          # -B so a retry within a re-run resets the local branch instead of
+          # failing on "already exists". The stable branch is derived
+          # deterministically from the rc; if a previous partial run already
+          # pushed a *diverged* remote branch, delete it before re-running.
+          git checkout -B "${STABLE_BRANCH}"
+          git add -A
+          git commit -s -m "Prepare release v${STABLE_VERSION} (promoted from ${RC_TAG})" \
+            || echo "No tag-string changes to commit (digests already stable)"
+          git push origin "HEAD:refs/heads/${STABLE_BRANCH}"
+
+      # Assemble the stable draft's assets. Start from the rc draft's assets
+      # (the heavy Talos ISO/disk/kernel/initramfs are identical bits — the rc
+      # e2e booted them), then OVERWRITE only the version-stamped, cheap-to-render
+      # ones with stable-stamped builds (restamp, decision D): operator manifests
+      # carry platformVersion=vX.Y.Z, cozypkg / check-readiness report the stable
+      # version, CRDs + openapi are regenerated. No image build.
+      - name: Stage rc assets
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        run: |
+          mkdir -p _out/assets
+          gh release download "${RC_TAG}" --dir _out/assets --clobber
+
+      - name: Restamp version-stamped assets
+        env:
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+        run: |
+          make manifests assets-cozypkg openapi-json COZYSTACK_VERSION="${STABLE_VERSION}"
+
+      - name: Create draft stable release and upload assets
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+        run: |
+          # Draft now; pull-requests-release.yaml publishes it on PR merge.
+          gh release view "${STABLE_TAG}" >/dev/null 2>&1 \
+            || gh release create "${STABLE_TAG}" --draft --title "${STABLE_TAG}" --notes "Promoted from ${RC_TAG}."
+          make upload_assets VERSION="${STABLE_TAG}"
+
+      - name: Open promote (release) PR
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          STABLE_BRANCH: ${{ steps.parse.outputs.stable_branch }}
+          STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
+          RC_TAG: ${{ steps.parse.outputs.rc_tag }}
+          LINE: ${{ steps.parse.outputs.line }}
+        run: |
+          # Target the maintenance line if it exists, else main.
+          BASE=main
+          if git ls-remote --exit-code --heads origin "release-${LINE}" >/dev/null 2>&1; then
+            BASE="release-${LINE}"
+          fi
+          BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. Component images were retagged from the rc to \`${STABLE_TAG}\` by digest, so the stable images are bit-for-bit the rc that passed e2e. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit and publishes the release. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit."
+          if gh pr view "${STABLE_BRANCH}" >/dev/null 2>&1; then
+            echo "PR already open for ${STABLE_BRANCH}"
+          else
+            gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
+              --title "chore(release): promote ${RC_TAG} -> ${STABLE_TAG}" \
+              --body "$BODY" --label release
+          fi

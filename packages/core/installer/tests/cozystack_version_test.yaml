@@ -1,0 +1,73 @@
+suite: cozystack-operator COZYSTACK_VERSION env rendering
+
+# The COZYSTACK_VERSION env is what lets a release-candidate image be promoted
+# to stable by retagging alone (the operator reports the deploy-time platform
+# version instead of a value baked into the image). It is emitted only when
+# platformVersion is set, and is interleaved with the per-variant endpoint env
+# under a single conditional — pin both axes so a refactor can't silently drop
+# COZYSTACK_VERSION or mis-render the variant endpoint block.
+
+templates:
+  - templates/cozystack-operator.yaml
+
+# cozystack-operator.yaml renders a ServiceAccount, a ClusterRoleBinding and the
+# operator Deployment; every assert is pinned to the Deployment.
+tests:
+  - it: talos + platformVersion sets COZYSTACK_VERSION and the KubePrism endpoint
+    set:
+      cozystackOperator.variant: talos
+      cozystackOperator.platformVersion: v1.4.0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: COZYSTACK_VERSION
+              value: v1.4.0
+            - name: KUBERNETES_SERVICE_HOST
+              value: localhost
+            - name: KUBERNETES_SERVICE_PORT
+              value: "7445"
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: talos without platformVersion omits COZYSTACK_VERSION but keeps the endpoint env
+    set:
+      cozystackOperator.variant: talos
+      cozystackOperator.platformVersion: ""
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: KUBERNETES_SERVICE_HOST
+              value: localhost
+            - name: KUBERNETES_SERVICE_PORT
+              value: "7445"
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: hosted + platformVersion sets COZYSTACK_VERSION and no endpoint env
+    set:
+      cozystackOperator.variant: hosted
+      cozystackOperator.platformVersion: v1.4.0
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: COZYSTACK_VERSION
+              value: v1.4.0
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: hosted without platformVersion renders no env block at all
+    set:
+      cozystackOperator.variant: hosted
+      cozystackOperator.platformVersion: ""
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].env
+        documentSelector:
+          path: kind
+          value: Deployment
