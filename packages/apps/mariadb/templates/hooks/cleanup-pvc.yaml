@@ -46,15 +46,27 @@ spec:
             - /bin/sh
             - -c
             - |
+              # --ignore-not-found tolerates already-absent resources; only a
+              # genuine delete failure (RBAC/API error) must fail the hook, so
+              # track it and propagate via the final exit instead of masking
+              # errors behind `|| echo ...`.
+              cleanup_failed=0
               echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found \
-                || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
-              echo "PVC cleanup complete."
+              if kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found; then
+                echo "PVC cleanup complete."
+              else
+                echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+                cleanup_failed=1
+              fi
               echo "Deleting orphaned operator-generated Secrets for {{ .Release.Name }}..."
-              kubectl delete secret -n {{ .Release.Namespace }} \
-                {{ .Release.Name }}-metrics-password {{ .Release.Name }}-repl-password --ignore-not-found \
-                || echo "WARNING: Secret cleanup failed for {{ .Release.Name }}; orphaned Secrets may remain" >&2
-              echo "Secret cleanup complete."
+              if kubectl delete secret -n {{ .Release.Namespace }} \
+                {{ .Release.Name }}-metrics-password {{ .Release.Name }}-repl-password --ignore-not-found; then
+                echo "Secret cleanup complete."
+              else
+                echo "WARNING: Secret cleanup failed for {{ .Release.Name }}; orphaned Secrets may remain" >&2
+                cleanup_failed=1
+              fi
+              exit "${cleanup_failed}"
           volumeMounts:
             - name: tmp
               mountPath: /tmp

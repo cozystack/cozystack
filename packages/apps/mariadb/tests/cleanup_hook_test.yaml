@@ -24,6 +24,18 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: "mariadb-test-metrics-password mariadb-test-repl-password --ignore-not-found"
 
+  - it: "cleanup Job fails (exits non-zero) when a real delete error occurs, so orphaned resources don't pass silently"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # --ignore-not-found tolerates absent resources, but a genuine RBAC/API
+      # failure must propagate: the script tracks failures and exits with that
+      # status instead of masking errors behind `|| echo ...`.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'exit "\$\{cleanup_failed\}"'
+
   - it: "cleanup Role grants get/list/delete on persistentvolumeclaims"
     documentSelector:
       path: kind
