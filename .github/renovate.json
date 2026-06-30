@@ -7,6 +7,8 @@
   "enabledManagers": ["gomod", "dockerfile", "github-actions", "custom.regex"],
   "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
   "labels": ["automated", "do-not-merge/hold"],
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
   "automerge": false,
   "platformAutomerge": false,
   "prConcurrentLimit": 5,
@@ -25,6 +27,12 @@
     }
   ],
   "packageRules": [
+    {
+      "description": "Force chore(deps) for all Go module bumps. config:recommended pulls in :semanticPrefixFixDepsChoreOthers, whose packageRule re-sets semanticCommitType=fix for direct deps (depType require), overriding the top-level chore. packageRules override top-level config, so a user rule evaluated last is required to win it back; without this, direct-dep PRs land as fix(deps) and get auto-labeled kind/bug.",
+      "matchManagers": ["gomod"],
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "deps"
+    },
     {
       "description": "Bump indirect Go modules too. Transitive deps such as golang.org/x/crypto, golang.org/x/net and golang.org/x/sys carry OSV advisories that drive the OpenSSF Scorecard Vulnerabilities check to 0, but Renovate skips indirect gomod deps by default so they never get a PR. Grouped into one rolling PR to keep volume sane; security fixes are still split out by vulnerabilityAlerts above. Placed before the kubernetes rule on purpose: an indirect k8s.io/** dep matches both, and Renovate applies last-match-wins, so the later kubernetes rule keeps it in the kubernetes lockstep group.",
       "matchManagers": ["gomod"],
@@ -55,6 +63,12 @@
       "matchUpdateTypes": ["digest", "pinDigest"],
       "groupName": "container image & action digests",
       "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "enabled": false
     }
   ]
 }

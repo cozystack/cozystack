@@ -47,6 +47,9 @@ jobs:
               // area/ci
               'ci':                  'area/ci',
 
+              // area/dependencies — Renovate uses scope `deps` (see .github/renovate.json)
+              'deps':                'area/dependencies',
+
               // area/dashboard
               'dashboard':           'area/dashboard',
               'cozystack-ui':        'area/dashboard',
