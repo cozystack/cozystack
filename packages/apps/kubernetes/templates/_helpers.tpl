@@ -142,3 +142,38 @@ md0:
   kubelet: {}
 {{- end -}}
 {{- end }}
+
+{{/*
+OIDC clientId for the per-cluster Keycloak public client (mode: System).
+
+Namespaced by Release.Namespace so the identifier is globally unique within
+the `cozy` realm — two clusters of the same name in different tenants would
+otherwise collide. The audience binding (KeycloakClientScope) and the
+apiserver's `AuthenticationConfiguration` audience use this same value, so
+both ends of the per-cluster isolation primitive line up by construction.
+
+Truncated to 253 characters because the EDP Keycloak operator stores the
+client as a Kubernetes CR named after the clientId (DNS-1123 subdomain).
+*/}}
+{{- define "kubernetes.oidc.clientId" -}}
+{{- printf "%s-%s" .Release.Namespace .Release.Name | trunc 253 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Name of the per-cluster KeycloakClientScope that carries the audience
+mapper. Same uniqueness considerations as the clientId; suffixed with
+`-audience` so it does not collide with the global `kubernetes-client`
+scope from packages/system/keycloak-configure.
+*/}}
+{{- define "kubernetes.oidc.audienceScopeName" -}}
+{{- printf "%s-%s-audience" .Release.Namespace .Release.Name | trunc 253 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Issuer URL for `mode: System`. Resolves to the platform Keycloak realm
+`cozy`, served at the root host published in the per-namespace bundle by
+cozystack-basics.
+*/}}
+{{- define "kubernetes.oidc.systemIssuerURL" -}}
+{{- printf "https://keycloak.%s/realms/cozy" (index .Values._cluster "root-host") }}
+{{- end }}
