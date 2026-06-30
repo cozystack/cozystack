@@ -966,6 +966,76 @@
           "default": "10m"
         }
       }
+    },
+    "oidc": {
+      "description": "OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "customConfig": {
+          "description": "Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "config": {
+              "description": "Inline AuthenticationConfiguration YAML (`apiserver.config.k8s.io/v1beta1`). The chart writes the value verbatim into a Secret mounted at `/etc/kubernetes/authentication-config/config.yaml` on the kube-apiserver. Mutually exclusive with `secretRef.name`.",
+              "type": "string",
+              "default": ""
+            },
+            "secretRef": {
+              "description": "Reference to an existing Secret in the tenant namespace carrying the `AuthenticationConfiguration`.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "name": {
+                  "description": "Name of an existing Secret in the tenant (release) namespace whose `config.yaml` key holds an `apiserver.config.k8s.io/v1beta1` `AuthenticationConfiguration`. Mutually exclusive with `customConfig.config`.",
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            }
+          }
+        },
+        "mode": {
+          "description": "Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
+          "type": "string",
+          "default": "None",
+          "enum": [
+            "None",
+            "System",
+            "CustomConfig"
+          ]
+        },
+        "users": {
+          "description": "Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "email",
+              "role"
+            ],
+            "properties": {
+              "email": {
+                "description": "Username matched against the `preferred_username` claim from the issuer. In the platform `cozy` realm this is the user's email. Used verbatim as the `User:` subject in the ClusterRoleBinding.",
+                "type": "string"
+              },
+              "role": {
+                "description": "Role to bind: `admin` maps to `ClusterRole/cluster-admin`, `view` maps to `ClusterRole/view`.",
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "view"
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
