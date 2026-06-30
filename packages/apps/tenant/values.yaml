@@ -19,6 +19,9 @@ ingress: false
 ## @param {bool} seaweedfs - Deploy own SeaweedFS.
 seaweedfs: false
 
+## @param {string} [computePlane] - Name of a ComputePlane profile to provision a single-tenant, Cozystack-managed cluster for untrusted-code workloads (empty disables it). Applications with placement: ComputePlane are routed onto it. See design-proposals/compute-plane in cozystack/community.
+computePlane: ""
+
 ## @param {string} [schedulingClass] - The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.
 schedulingClass: ""
 
