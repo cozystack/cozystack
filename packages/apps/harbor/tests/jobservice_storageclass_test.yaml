@@ -1,0 +1,64 @@
+suite: jobservice storageClass propagation
+
+release:
+  name: harbor
+  namespace: tenant-test
+
+# Regression test for issue #2368: the jobservice PVC must receive the
+# configured storageClass so it is created with an explicit storageClassName
+# instead of relying on the default-StorageClass admission. Because PVC
+# storageClassName is immutable, the template preserves an existing PVC's
+# class when one is found; under `helm template`/unittest the cluster lookup
+# returns empty, so these cases exercise the fresh-install fallback path.
+#
+# The rendered HelmRelease (documentIndex 1) carries the values that the
+# cozy-harbor chart forwards to the upstream harbor subchart.
+# helm-unittest renders every template in the chart, so the platform-injected
+# globals consumed by the ingress/httproute/bucket templates must be supplied
+# even though only templates/harbor.yaml is asserted on.
+set:
+  _namespace:
+    host: example.org
+    ingress: nginx
+    gateway: ""
+    seaweedfs: seaweedfs
+  _cluster:
+    solver: http01
+
+tests:
+  - it: forwards storageClass to jobservice jobLog on a fresh install
+    template: templates/harbor.yaml
+    documentIndex: 1
+    set:
+      storageClass: local-3rep
+    asserts:
+      - equal:
+          path: spec.values.harbor.persistence.persistentVolumeClaim.jobservice.jobLog.storageClass
+          value: local-3rep
+
+  - it: still forwards storageClass to trivy alongside jobservice
+    template: templates/harbor.yaml
+    documentIndex: 1
+    set:
+      storageClass: local-3rep
+    asserts:
+      - equal:
+          path: spec.values.harbor.persistence.persistentVolumeClaim.trivy.storageClass
+          value: local-3rep
+
+  - it: omits the jobservice block when storageClass is unset
+    template: templates/harbor.yaml
+    documentIndex: 1
+    asserts:
+      - notExists:
+          path: spec.values.harbor.persistence.persistentVolumeClaim.jobservice
+
+  - it: emits no persistentVolumeClaim block when storageClass is unset and trivy is disabled
+    template: templates/harbor.yaml
+    documentIndex: 1
+    set:
+      trivy:
+        enabled: false
+    asserts:
+      - notExists:
+          path: spec.values.harbor.persistence.persistentVolumeClaim
