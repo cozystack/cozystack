@@ -29,13 +29,20 @@ tests:
           path: spec.template.spec.serviceAccountName
           value: harbor-test-cleanup
 
-  - it: targets the jobservice PVC label (release-system instance) and ACME objects
+  - it: targets both kept PVCs (jobservice + trivy) via the shared release label and ACME objects
     documentIndex: 0
     asserts:
       # The upstream Harbor subchart runs as the "<release>-system"
-      # HelmRelease, so its kept jobservice PVC is labeled
-      # app.kubernetes.io/instance=<release>-system, not <release>.
+      # HelmRelease. Its kept PVCs must be selected by release=<release>-system:
+      # jobservice carries it via "harbor.labels", and trivy's StatefulSet PVC
+      # carries it via "harbor.legacy.labels". The trivy PVC does NOT carry
+      # app.kubernetes.io/instance, so selecting on that label would silently
+      # miss trivy (which is enabled by default).
       - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete pvc[\s\S]*-l release=harbor-test-system
+      # Guard against regressing to the instance label, which misses trivy.
+      - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: app.kubernetes.io/instance=harbor-test-system
       - matchRegex:
@@ -114,7 +121,16 @@ tests:
             apiGroups: ["cert-manager.io"]
             resources: ["certificates"]
             verbs: ["get", "list", "delete"]
+      # Only "challenges" are granted: the host-scoped sweep lists/deletes
+      # them, while Orders are cascade-deleted by cert-manager itself when the
+      # Certificate is removed, so the hook needs no RBAC for orders.
       - contains:
+          path: rules
+          content:
+            apiGroups: ["acme.cert-manager.io"]
+            resources: ["challenges"]
+            verbs: ["get", "list", "delete"]
+      - notContains:
           path: rules
           content:
             apiGroups: ["acme.cert-manager.io"]

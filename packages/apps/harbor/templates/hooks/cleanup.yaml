@@ -48,26 +48,39 @@ spec:
             - -c
             - |
               set -u
-              # Harbor's jobservice PVC is annotated with
+              # Harbor's jobservice and trivy PVCs are annotated with
               # helm.sh/resource-policy: keep by the upstream subchart
               # (persistence.resourcePolicy: keep), so Helm/Flux deliberately
-              # leaves it behind on uninstall. The subchart runs as the
-              # "{{ .Release.Name }}-system" HelmRelease, so its PVCs carry
-              # app.kubernetes.io/instance={{ .Release.Name }}-system.
+              # leave them behind on uninstall. The subchart runs as the
+              # "{{ .Release.Name }}-system" HelmRelease, so both PVCs carry the
+              # label release={{ .Release.Name }}-system: jobservice via the
+              # chart's "harbor.labels" helper, and trivy's StatefulSet PVC via
+              # "harbor.legacy.labels". We must select on "release" (not
+              # app.kubernetes.io/instance) because the trivy PVC does NOT carry
+              # app.kubernetes.io/instance, so an instance-label sweep would
+              # silently miss trivy (enabled by default). CNPG (db) and Redis
+              # PVCs use different label schemes and the registry is on S3, so
+              # this selector matches only those two kept PVCs.
               echo "Deleting orphaned PVCs for {{ .Release.Name }}-system..."
               kubectl delete pvc -n {{ .Release.Namespace }} \
-                -l app.kubernetes.io/instance={{ .Release.Name }}-system --ignore-not-found \
+                -l release={{ .Release.Name }}-system --ignore-not-found \
                 || echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
 
-              # Remove cert-manager ACME objects owned by this release's
+              # Remove the cert-manager Certificate owned by this release's
               # Ingress so an in-flight http01 challenge does not leave a
               # dangling cm-acme-http-solver-* Pod/Service/Ingress behind.
               # Deleting the release's Certificate (deterministic name
               # "{{ .Release.Name }}-ingress-tls") triggers cert-manager to
               # cascade-delete the Orders, Challenges and solver
-              # Pod/Service/Ingress objects it owns for this release.
-              echo "Deleting ACME objects for {{ .Release.Name }}-ingress..."
-              kubectl delete certificate,order,challenge -n {{ .Release.Namespace }} \
+              # Pod/Service/Ingress objects it owns via owner references.
+              # We delete only the Certificate by name: Orders/Challenges have
+              # hash-suffixed names, so a by-name delete of those kinds would
+              # be a no-op (the host-scoped sweep below covers them instead).
+              # In Gateway mode no per-app Ingress or "-ingress-tls"
+              # Certificate is rendered, so this delete is simply a no-op there
+              # and the dnsName-scoped sweep below still handles http01.
+              echo "Deleting ACME Certificate for {{ .Release.Name }}-ingress..."
+              kubectl delete certificate -n {{ .Release.Namespace }} \
                 {{ .Release.Name }}-ingress-tls --ignore-not-found \
                 || echo "WARNING: cert-manager cleanup failed for {{ .Release.Name }}; orphaned ACME resources may remain" >&2
 
@@ -132,8 +145,11 @@ rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
     verbs: ["get", "list", "delete"]
+  # Only Challenges are touched directly (the host-scoped sweep lists and
+  # deletes them); Orders are cascade-deleted by cert-manager itself when the
+  # Certificate is removed, so the hook needs no RBAC for them.
   - apiGroups: ["acme.cert-manager.io"]
-    resources: ["orders", "challenges"]
+    resources: ["challenges"]
     verbs: ["get", "list", "delete"]
   # We list ACME http01 solver Ingresses (filtered by this release's host)
   # and delete the orphaned ones by name.
