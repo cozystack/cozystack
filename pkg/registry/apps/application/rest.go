@@ -28,7 +28,6 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
-	meta "github.com/fluxcd/pkg/apis/meta"
 	corev1 "k8s.io/api/core/v1"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1622,29 +1621,6 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 	if r.releaseConfig.HelmInstallDisableWait {
 		helmRelease.Spec.Install.DisableWait = true
 		helmRelease.Spec.Upgrade.DisableWait = true
-	}
-
-	// ComputePlane placement. For kinds whose ApplicationDefinition declares
-	// spec.application.placement: ComputePlane, route the generated HelmRelease
-	// onto the tenant's ComputePlane — a separate, single-tenant,
-	// Cozystack-managed cluster for untrusted-code workloads — instead of the
-	// management cluster. The HelmRelease object still lives in the tenant
-	// namespace, but spec.kubeConfig makes Flux reconcile it onto the
-	// ComputePlane via the Kamaji-written admin-kubeconfig Secret
-	// (computeplane-admin-kubeconfig, key super-admin.svc, provisioned by the
-	// tenant's `computePlane` module). createNamespace is required because the
-	// target namespace does not exist on a freshly provisioned ComputePlane.
-	// The default ("" / ManagementPlane) leaves the release reconciling on the
-	// management cluster, so existing kinds are unaffected.
-	// See design-proposals/compute-plane in cozystack/community.
-	if r.releaseConfig.Placement == "ComputePlane" {
-		helmRelease.Spec.KubeConfig = &meta.KubeConfigReference{
-			SecretRef: &meta.SecretKeyReference{
-				Name: "computeplane-admin-kubeconfig",
-				Key:  "super-admin.svc",
-			},
-		}
-		helmRelease.Spec.Install.CreateNamespace = true
 	}
 
 	return helmRelease, nil

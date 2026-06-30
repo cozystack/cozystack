@@ -71,17 +71,6 @@ type ApplicationDefinitionApplication struct {
 	Plural string `json:"plural"`
 	// Singular name of the application, used for UI and API
 	Singular string `json:"singular"`
-	// Placement selects which plane the application is deployed onto.
-	// ManagementPlane (the default) deploys the generated HelmRelease into the
-	// tenant namespace on the management cluster, exactly as today. ComputePlane
-	// routes the HelmRelease onto the tenant's ComputePlane — a separate,
-	// Cozystack-managed cluster for untrusted-code workloads — via remote Flux
-	// apply (spec.kubeConfig), so the workload never runs on the management
-	// cluster. See design-proposals/compute-plane in cozystack/community.
-	// +kubebuilder:validation:Enum=ManagementPlane;ComputePlane
-	// +kubebuilder:default=ManagementPlane
-	// +optional
-	Placement string `json:"placement,omitempty"`
 }
 
 type ApplicationDefinitionRelease struct {

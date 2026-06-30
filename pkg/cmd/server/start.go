@@ -255,10 +255,6 @@ func (o *CozyServerOptions) Complete() error {
 				Name:      crd.Spec.Release.ChartRef.Name,
 				Namespace: crd.Spec.Release.ChartRef.Namespace,
 			},
-			// Plane routing: ComputePlane makes the REST layer inject
-			// spec.kubeConfig on the generated HelmRelease (see
-			// convertApplicationToHelmRelease).
-			Placement: crd.Spec.Application.Placement,
 			// Per-Application HelmRelease generation defaults from server
 			// flags. The same five values are applied to every Resource,
 			// matching cozystack-operator's PackageReconciler. The
