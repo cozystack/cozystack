@@ -1,7 +1,6 @@
 # Container image for all cozyplane components (agent, CNI plugin, controller),
-# published from github.com/lllamnyp/cozyplane to a public ghcr package.
-# TODO(release): digest-pin (ghcr.io/lllamnyp/cozyplane:v0.1.0@sha256:...).
-image: ghcr.io/lllamnyp/cozyplane:v0.1.0
+# published from github.com/lllamnyp/cozyplane. Digest-pinned (no floating tag).
+image: ghcr.io/lllamnyp/cozyplane@sha256:a9cefbd585283bbdadbeb4efce39720693dc228bf5bb00e6b54996953d3d9f87
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
