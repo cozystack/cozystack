@@ -1,0 +1,12 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: sdn.cozystack.io:securitygroup-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: sdn.cozystack.io:securitygroup-controller
+subjects:
+- kind: ServiceAccount
+  name: securitygroup-controller
+  namespace: {{ .Release.Namespace }}

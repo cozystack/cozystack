@@ -46,3 +46,8 @@ rules:
 - apiGroups: ["apps.cozystack.io"]
   resources: ["vmdisks"]
   verbs: ["get", "watch", "list"]
+# The SecurityGroup resource is a projection over CiliumNetworkPolicy: the
+# storage CRUDs these objects with the cozystack-api ServiceAccount.
+- apiGroups: ["cilium.io"]
+  resources: ["ciliumnetworkpolicies"]
+  verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]
