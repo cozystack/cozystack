@@ -166,3 +166,57 @@ tests:
     asserts:
       - hasDocuments:
           count: 2
+
+  - it: rejects an unsupported kms backend at render time
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.backend must be 'static' or 'vault-transit'"
+
+  - it: requires vault.address for the vault-transit backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.tokenSecretName: keycloak-vault-token
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.address is required"
+
+  - it: requires vault.keyName for the vault-transit backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.tokenSecretName: keycloak-vault-token
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.keyName is required"
+
+  - it: requires vault.tokenSecretName for the vault-transit backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.tokenSecretName is required"
