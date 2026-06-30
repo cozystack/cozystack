@@ -95,6 +95,27 @@ extraVolumeMounts: []
 # writes and decrypts them on reads. The data-encryption key is wrapped by
 # a KMS, so it never lives inside PostgreSQL.
 # Project: https://github.com/cozystack/keycloak-kms-proxy
+#
+# OPERATIONAL CAVEATS — read before enabling:
+#   * Availability downgrade. The proxy runs as a single replica (HA needs a
+#     shared wrapped DEK set, tracked as a follow-up). Keycloak itself runs HA
+#     (2 replicas); with encryption on, both replicas funnel their DB traffic
+#     through this one pod, so any proxy restart — node drain, rollout, image
+#     pull, OOM — briefly drops the database connection for the entire IdP.
+#   * Existing data is NOT migrated automatically. Flipping enabled:true on a
+#     populated database leaves the pre-existing PII as plaintext; logins that
+#     match on the deterministic columns (username/email) then fail until the
+#     offline backfill has run. Disabling later is just as unsafe — Keycloak
+#     would point back at CNPG and read ciphertext directly. Off-by-default only
+#     protects FRESH installs. To enable on an existing install, run the backfill
+#     procedure first:
+#     https://github.com/cozystack/keycloak-kms-proxy/blob/main/docs/migration-existing-keycloak.md
+#   * Static KEK = single point of permanent data loss. With kms.backend=static
+#     the KEK is generated once and kept in the keycloak-kms-proxy-kek Secret
+#     (in etcd, next to the DB credentials — "static" trades some at-rest
+#     protection for zero external dependencies). If that Secret is ever lost,
+#     every previously-encrypted value becomes permanently undecryptable, so it
+#     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
 encryption:
   enabled: false
   image: ghcr.io/cozystack/keycloak-kms-proxy:v0.1.0
@@ -119,3 +140,5 @@ encryption:
     requests:
       memory: 128Mi
       cpu: 50m
+    limits:
+      memory: 256Mi
