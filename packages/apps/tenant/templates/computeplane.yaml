@@ -64,6 +64,17 @@ spec:
     addons:
       fluxcd:
         enabled: true
+        # The kubernetes-app fluxcd addon (cozy-fluxcd chart) defaults the
+        # FluxInstance spec.distribution.artifact to "", which fails CRD
+        # validation ("must be of type string"). ComputePlane is the first real
+        # consumer of the fluxcd addon, so set the canonical distribution
+        # artifact here so the in-cluster Flux installs and can reconcile the
+        # child HelmReleases that placement: ComputePlane apps render.
+        valuesOverride:
+          flux-instance:
+            instance:
+              distribution:
+                artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest"
       certManager:
         enabled: true
       ingressNginx:
