@@ -104,3 +104,46 @@
   "$root/hack/overlay-main-images.sh" does-not-exist '[]'
   grep -q 'foo:v1.5.0@sha256:aaaa' packages/apps/foo/values.yaml
 }
+
+@test "preserves a PR-edited non-rebuilt package ref (passed via the touched arg)" {
+  root=$(pwd)
+  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  mkdir -p "$w/packages/system/keycloak" "$w/main/system/keycloak"
+  # The PR bumps an upstream image in keycloak. keycloak is NOT a build unit, so
+  # it is absent from BUILD_MATRIX; only its image line differs from the artifact.
+  # Without the touched arg the overlay would silently revert the PR's bump.
+  echo 'image: quay.io/keycloak/keycloak:26.7.0' > "$w/packages/system/keycloak/values.yaml"
+  echo 'image: quay.io/keycloak/keycloak:26.6.3' > "$w/main/system/keycloak/values.yaml"
+  cd "$w"
+  out=$("$root/hack/overlay-main-images.sh" main '[]' 'packages/system/keycloak')
+  # The PR's edit wins; the overlay must not touch it.
+  grep -q 'keycloak:26.7.0' packages/system/keycloak/values.yaml
+  echo "$out" | grep -q 'overlaid=0'
+}
+
+@test "recognizes a --…-image= arg line (no @sha256, no image key) as an image ref" {
+  root=$(pwd)
+  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  mkdir -p "$w/packages/system/argimg" "$w/main/system/argimg"
+  # The only differing line is a `--…-image=` arg with neither @sha256 nor an
+  # image/tag/repository key — it must still count as image-reference-bearing.
+  printf 'args:\n  - --provider-image=ghcr.io/cozystack/cozystack/x:v1.5.0\n' > "$w/packages/system/argimg/values.yaml"
+  printf 'args:\n  - --provider-image=iad.ocir.io/x/cozystack/x:main\n'       > "$w/main/system/argimg/values.yaml"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  grep -q 'x:main' packages/system/argimg/values.yaml
+}
+
+@test "does not introduce a file present in the artifact but absent in the PR tree" {
+  root=$(pwd)
+  w=$(mktemp -d); trap 'rm -rf "$w"' EXIT
+  mkdir -p "$w/packages/apps/present/images" "$w/main/apps/present/images" "$w/main/apps/ghost/images"
+  echo 'ghcr.io/cozystack/cozystack/present:v1.5.0@sha256:aaaa' > "$w/packages/apps/present/images/present.tag"
+  echo 'iad.ocir.io/x/cozystack/present:main@sha256:bbbb'       > "$w/main/apps/present/images/present.tag"
+  # 'ghost' exists only in the artifact tree, never in the PR's packages/.
+  echo 'iad.ocir.io/x/cozystack/ghost:main@sha256:cccc'         > "$w/main/apps/ghost/images/ghost.tag"
+  cd "$w"
+  "$root/hack/overlay-main-images.sh" main '[]'
+  grep -q 'present:main@sha256:bbbb' packages/apps/present/images/present.tag
+  [ ! -e packages/apps/ghost/images/ghost.tag ]
+}
