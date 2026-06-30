@@ -25,6 +25,10 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
           value: before-hook-creation,hook-succeeded
+      # Backstop so a stuck delete can never stall the HelmRelease teardown.
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 120
       - equal:
           path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
           value: "true"
@@ -53,23 +57,31 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
-  - it: deletes the vm-operator storage PVCs by label
+  - it: deletes the vm-operator storage PVCs by label without blocking teardown
     documentSelector:
       path: kind
       value: Job
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: kubectl delete pvc -n tenant-root -l managed-by=vm-operator --ignore-not-found
+          pattern: kubectl delete pvc -n tenant-root -l managed-by=vm-operator --ignore-not-found --wait=false
+      # Never widen the PVC sweep beyond the vm-operator label scope.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete pvc[^\n]*--all
 
-  - it: deletes the cert-manager TLS secrets by name
+  - it: deletes the cert-manager TLS secrets by name without blocking teardown
     documentSelector:
       path: kind
       value: Job
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: kubectl delete secret -n tenant-root alerta-tls grafana-ingress-tls --ignore-not-found
+          pattern: kubectl delete secret -n tenant-root alerta-tls grafana-ingress-tls --ignore-not-found --wait=false
+      # The secret deletion must stay name-scoped — never a label or --all sweep.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: kubectl delete secret[^\n]*(-l |--all)
 
   - it: creates the cleanup ServiceAccount as a post-delete hook
     documentSelector:

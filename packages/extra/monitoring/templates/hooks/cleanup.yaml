@@ -10,6 +10,9 @@ metadata:
     "helm.sh/hook-weight": "10"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 spec:
+  # Backstop: the deletes are best-effort and non-blocking (--wait=false), but
+  # cap the Job so it can never stall the HelmRelease teardown.
+  activeDeadlineSeconds: 120
   template:
     metadata:
       labels:
@@ -47,9 +50,9 @@ spec:
             - /bin/sh
             - -c
             - |
-              kubectl delete pvc -n {{ .Release.Namespace }} -l managed-by=vm-operator --ignore-not-found \
+              kubectl delete pvc -n {{ .Release.Namespace }} -l managed-by=vm-operator --ignore-not-found --wait=false \
                 || echo "WARNING: VM storage PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
-              kubectl delete secret -n {{ .Release.Namespace }} alerta-tls grafana-ingress-tls --ignore-not-found \
+              kubectl delete secret -n {{ .Release.Namespace }} alerta-tls grafana-ingress-tls --ignore-not-found --wait=false \
                 || echo "WARNING: TLS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
           volumeMounts:
             - name: tmp
