@@ -116,6 +116,10 @@ stringData:
              where the admin route attaches. */}}
       expose-ingress-admin: {{ .Values.publishing.ingressNameAdmin | default "" | quote }}
       expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
+      {{- /* Name of the ExposureClass the host ingress publishes through.
+             Empty keeps the externalIPs path; set it to render a
+             ServiceExposure for the ingress Service (see extra/ingress). */}}
+      exposure-class: {{ .Values.publishing.exposureClass.name | default "" | quote }}
       {{- /* Host PROXY-protocol switch. extra/ingress reads this and applies
              use-proxy-protocol to the external-facing ingress (the namespace
              named by expose-ingress), keeping it host-scoped like expose-external-ips. */}}
