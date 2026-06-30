@@ -1,0 +1,80 @@
+{{- /*
+  Phase 1 — System mode: render one per-cluster Keycloak client and a
+  per-cluster audience client scope inside the platform `cozy` realm.
+
+  The clientId is namespace-prefixed so it is globally unique across the
+  realm; the audience scope binds `id_token.aud` to that clientId so a
+  token minted for cluster A is rejected by cluster B's apiserver — the
+  per-cluster isolation primitive in the absence of per-tenant realms.
+
+  Nothing is rendered for `mode: CustomConfig` or `mode: None`: in those
+  modes `cozy` is not in the path.
+
+  The `_cluster.oidc-enabled` guard catches the case where an operator
+  toggles `mode: System` without the platform-level OIDC feature
+  (authentication.oidc.enabled) being on — the Keycloak operator CRDs
+  would not be present and the chart would silently no-op without the
+  fail-fast.
+*/}}
+{{- if eq .Values.oidc.mode "System" }}
+{{-   $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{-   if ne ($oidcEnabled | toString) "true" }}
+{{-     fail "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer." }}
+{{-   end }}
+{{-   if .Capabilities.APIVersions.Has "v1.edp.epam.com/v1" }}
+{{-     $clientId := include "kubernetes.oidc.clientId" . }}
+{{-     $scopeName := include "kubernetes.oidc.audienceScopeName" . }}
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClientScope
+metadata:
+  name: {{ $scopeName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  name: {{ $scopeName }}
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  description: "Per-cluster audience for tenant kube-apiserver {{ .Release.Name }}"
+  protocol: openid-connect
+  default: false
+  attributes:
+    "include.in.token.scope": "true"
+  protocolMappers:
+    - name: audience
+      protocol: openid-connect
+      protocolMapper: "oidc-audience-mapper"
+      config:
+        "included.custom.audience": {{ $clientId | quote }}
+        "id.token.claim": "true"
+        "access.token.claim": "true"
+        "introspection.token.claim": "true"
+        "lightweight.claim": "false"
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: {{ $clientId }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  clientId: {{ $clientId }}
+  name: {{ $clientId }}
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  public: true
+  directAccess: false
+  standardFlow: true
+  advancedProtocolMappers: true
+  webUrl: ""
+  redirectUris:
+    - "http://localhost:8000"
+    - "http://localhost:18000"
+  defaultClientScopes:
+    - groups
+    - {{ $scopeName }}
+  attributes:
+    "pkce.code.challenge.method": "S256"
+    "post.logout.redirect.uris": "+"
+{{-   end }}
+{{- end }}
