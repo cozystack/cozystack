@@ -5,11 +5,11 @@ paths:
   backend:
     {{- if semverCompare ">=1.19-0" .Capabilities.KubeVersion.GitVersion }}
     service:
-      name: {{ include "seaweedfs.componentName" (list . "s3") }}
+      name: {{ template "seaweedfs.name" . }}-s3
       port:
         number: {{ .Values.s3.icebergPort }}
     {{- else }}
-    serviceName: {{ include "seaweedfs.componentName" (list . "s3") }}
+    serviceName: {{ template "seaweedfs.name" . }}-s3
     servicePort: {{ .Values.s3.icebergPort }}
     {{- end }}
 {{- end -}}
