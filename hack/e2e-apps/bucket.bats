@@ -85,9 +85,12 @@ EOF
   # Viewer can download
   mc cp --insecure ro-user/$BUCKET_NAME/rw-test.txt /tmp/ro-test-download.txt
 
-  # Viewer cannot upload (must fail with Access Denied)
+  # Viewer cannot upload (must fail with Access Denied). A bare `! mc cp` is
+  # vacuous under cozytest's `set -e` (errexit is suppressed for a `!` pipeline),
+  # so a real access-control regression that let the upload through would pass
+  # silently — assert via `if mc cp; then ...; false` so it fails loudly.
   echo "readonly test" > /tmp/ro-test.txt
-  ! mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt
+  if mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt; then echo "FAIL: read-only user must NOT be able to upload (bucket access-control regression)"; false; fi
 
   # --- Cleanup ---
   mc rm --insecure rw-user/$BUCKET_NAME/rw-test.txt

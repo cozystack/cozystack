@@ -540,8 +540,11 @@ EOF
   echo "$cozyvalues" | grep -E '^\s*gateway:\s*"tenant-test-gwparent"\s*$' >/dev/null
 
   # The child must NOT have its own gateway HelmRelease — inheritance
-  # means no separate Gateway resource for the child tenant.
-  ! kubectl -n tenant-test-gwparent-gwchild get helmrelease gateway 2>/dev/null
+  # means no separate Gateway resource for the child tenant. A bare `! kubectl`
+  # is vacuous under cozytest's `set -e` (suppressed for a `!` pipeline), so if
+  # the child wrongly got its own HelmRelease the test would still pass; assert
+  # via `if kubectl get; then ...; false`.
+  if kubectl -n tenant-test-gwparent-gwchild get helmrelease gateway 2>/dev/null; then echo "FAIL: child tenant must NOT have its own gateway HelmRelease (gateway inheritance broken)"; false; fi
 
   # Teardown child before parent, waiting out each uninstall: deleting
   # the parent while the child is still uninstalling wedges the parent's
