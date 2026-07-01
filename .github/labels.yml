@@ -218,6 +218,18 @@
   color: 'bfd4f2'
   description: Issues or PRs related to virtualization (kubevirt, cdi, vmi, vm-import)
 
+- name: area/kamaji
+  color: 'bfd4f2'
+  description: Issues or PRs related to Kamaji (hosted control planes for tenant Kubernetes)
+
+- name: area/keycloak
+  color: 'bfd4f2'
+  description: Issues or PRs related to Keycloak (SSO / identity)
+
+- name: area/tenant
+  color: 'bfd4f2'
+  description: Issues or PRs related to the tenant chart and multi-tenancy
+
 - name: area/uncategorized
   color: 'fbca04'
   description: PR auto-labeler could not map title scope to a known area/*; please review
