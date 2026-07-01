@@ -188,12 +188,12 @@ spec:
                 --selector=app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=$RELEASE \
                 --output=jsonpath='{.items[*].metadata.name}')
               for crb in $EXISTING; do
-                if ! grep --line-regexp --quiet --fixed-strings "$crb" "$DESIRED_FILE"; then
+                if ! grep -x -q -F "$crb" "$DESIRED_FILE"; then
                   echo "  removing $crb"
                   kubectl --kubeconfig "$KUBECONFIG_TENANT" delete clusterrolebinding "$crb" --ignore-not-found
                 fi
               done
-              rm --force "$DESIRED_FILE"
+              rm -f "$DESIRED_FILE"
 
               if [ "$OIDC_MODE" = "System" ]; then
                 echo "Patching the OIDC kubeconfig Secret on the management cluster..."
@@ -239,7 +239,7 @@ spec:
                     "$RELEASE-oidc-kubeconfig" \
                     --type=merge \
                     --patch "$PATCH"
-                  rm --force "$KUBECONFIG_FILE"
+                  rm -f "$KUBECONFIG_FILE"
                 fi
               fi
 

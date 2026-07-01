@@ -320,7 +320,18 @@ metadata:
 spec:
   apiServer:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
-    {{- if or .Values.controlPlane.apiServer.extraArgs $oidcEnabled }}
+    {{- /*
+      extraArgs and extraVolumeMounts are ALWAYS emitted (empty array when
+      nothing to inject). Kamaji's KamajiControlPlane is a CRD and Helm
+      applies JSON-merge-patch to CRDs, which for arrays REPLACES the whole
+      value. If we omitted the field for `oidc.mode: None` after previously
+      rendering it under `System`, JSON-merge-patch would leave the live
+      array untouched — the tenant apiserver would keep the stale
+      --authentication-config flag pointing at a Secret that no longer
+      exists, and would refuse to start on the next kubelet restart.
+      Rendering the empty array on the "off" path forces Helm to send a
+      REPLACE patch that clears the stale value.
+    */}}
     extraArgs:
       {{- with .Values.controlPlane.apiServer.extraArgs }}
       {{- toYaml . | nindent 6 }}
@@ -328,8 +339,7 @@ spec:
       {{- if $oidcEnabled }}
       - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
       {{- end }}
-    {{- end }}
-    {{- if or .Values.controlPlane.apiServer.extraVolumeMounts $oidcEnabled }}
+      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
       {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
@@ -339,7 +349,7 @@ spec:
         mountPath: /etc/kubernetes/authentication-config
         readOnly: true
       {{- end }}
-    {{- end }}
+      {{- if not (or .Values.controlPlane.apiServer.extraVolumeMounts $oidcEnabled) }} []{{ end }}
   controllerManager:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:
