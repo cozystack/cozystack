@@ -175,5 +175,5 @@ Issuer URL for `mode: System`. Resolves to the platform Keycloak realm
 cozystack-basics.
 */}}
 {{- define "kubernetes.oidc.systemIssuerURL" -}}
-{{- printf "https://keycloak.%s/realms/cozy" (index .Values._cluster "root-host") }}
+{{- printf "https://keycloak.%s/realms/cozy" (dig "root-host" "" (.Values._cluster | default dict)) }}
 {{- end }}

@@ -108,6 +108,11 @@ EOF
 
 @test "AuthenticationConfiguration Secret carries the cozy realm issuer + per-cluster audience" {
   SEC="kubernetes-${TEST_NAME}-oidc-authn-config"
+  # Existence backstop before `kubectl wait` — the HR renders the Secret
+  # asynchronously and `kubectl wait` on a non-existent object errors out
+  # immediately with NotFound (`--for=jsonpath` only starts polling once
+  # the object appears).
+  timeout 60 sh -ec 'until kubectl -n tenant-test get secret "'"${SEC}"'" >/dev/null 2>&1; do sleep 2; done'
   kubectl -n tenant-test wait secret "${SEC}" --for=jsonpath='{.metadata.name}'="${SEC}" --timeout=60s
   body=$(kubectl -n tenant-test get secret "${SEC}" -o jsonpath='{.data.config\.yaml}' | base64 -d)
   echo "${body}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'

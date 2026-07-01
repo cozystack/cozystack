@@ -252,6 +252,18 @@ tests:
       - failedTemplate:
           errorMessage: "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer."
 
+  - it: System mode hard-fails cleanly when _cluster map has no oidc-enabled key
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      _cluster: {}
+      oidc.mode: System
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer."
+
   ###############################################
   # mode: System — bootstrap Job + users[]      #
   ###############################################

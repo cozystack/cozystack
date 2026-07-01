@@ -97,6 +97,10 @@ EOF
 
 @test "AuthenticationConfiguration Secret carries the tenant-supplied issuer (not cozy)" {
   SEC="kubernetes-${TEST_NAME}-oidc-authn-config"
+  # Existence backstop before `kubectl wait` — the HR renders the Secret
+  # asynchronously and `kubectl wait` on a non-existent object errors out
+  # immediately with NotFound.
+  timeout 60 sh -ec 'until kubectl -n tenant-test get secret "'"${SEC}"'" >/dev/null 2>&1; do sleep 2; done'
   kubectl -n tenant-test wait secret "${SEC}" --for=jsonpath='{.metadata.name}'="${SEC}" --timeout=60s
   body=$(kubectl -n tenant-test get secret "${SEC}" -o jsonpath='{.data.config\.yaml}' | base64 -d)
   echo "${body}" | grep -qF "url: https://idp.byo.example.test"
