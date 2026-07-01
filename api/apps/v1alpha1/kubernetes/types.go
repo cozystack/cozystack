@@ -52,7 +52,7 @@ type ConfigSpec struct {
 }
 
 type APIServer struct {
-	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. Use for OIDC SSO (`--oidc-issuer-url`, `--oidc-client-id`) or structured authentication (`--authentication-config=/etc/kubernetes/authentication/config.yaml`, `--requestheader-uid-headers=X-Remote-Uid`). Empty by default (no change to current behavior).
+	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
 	// +kubebuilder:default:={}
 	ExtraArgs []string `json:"extraArgs,omitempty"`
 	// Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
