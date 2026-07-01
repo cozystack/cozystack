@@ -180,10 +180,18 @@ spec:
                 #    manager takes ownership of spec.deployment.extraVolumes on
                 #    write-back to the TenantControlPlane. Verified end-to-end
                 #    against a real Kamaji controller.
-                echo "  patching KamajiControlPlane $RELEASE — remove authentication-config volume"
+                echo "  patching KamajiControlPlane $RELEASE — remove OIDC-only entries from extraArgs, extraVolumeMounts, deployment.extraVolumes"
+                # Patch payload is rendered at helm template time from the same
+                # source of truth cluster.yaml uses: user-supplied extras stay
+                # intact, only the chart-owned OIDC-only entries (that Kamaji's
+                # SSA field-owner refuses to release) are stripped.
                 kubectl --namespace "$RELEASE_NAMESPACE" patch kamajicontrolplane "$RELEASE" \
                   --type=merge \
-                  --patch '{"spec":{"deployment":{"extraVolumes":[{"name":"talos-ca","secret":{"secretName":"'"$RELEASE"'-talos-ca"}},{"name":"talos-tls-cert","secret":{"secretName":"'"$RELEASE"'-talos-tls-cert"}}]}}}'
+                  --patch {{ printf "{\"spec\":{\"apiServer\":{\"extraArgs\":%s,\"extraVolumeMounts\":%s},\"deployment\":{\"extraVolumes\":%s}}}"
+                      (default (list) .Values.controlPlane.apiServer.extraArgs | toJson)
+                      (default (list) .Values.controlPlane.apiServer.extraVolumeMounts | toJson)
+                      (concat (list (dict "name" "talos-ca" "secret" (dict "secretName" (printf "%s-talos-ca" .Release.Name))) (dict "name" "talos-tls-cert" "secret" (dict "secretName" (printf "%s-talos-tls-cert" .Release.Name)))) (default (list) .Values.controlPlane.apiServer.extraVolumes) | toJson)
+                      | quote }}
 
                 # 2. Chart-owned OIDC Secrets — Helm's SSA-based delete-on-absence
                 #    also fails here (same field-ownership pattern). Explicit
