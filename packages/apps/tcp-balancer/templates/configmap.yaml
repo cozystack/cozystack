@@ -42,10 +42,10 @@ data:
         {{- if $.Values.whitelistHTTP }}
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
+        {{- end }}
         {{- end }}
         tcp-request content set-dst-port int(80)
 
@@ -68,10 +68,10 @@ data:
         {{- if $.Values.whitelistHTTP }}
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
+        {{- end }}
         {{- end }}
         tcp-request content set-dst-port int(443)
 
@@ -92,10 +92,10 @@ data:
         default_backend kubernetes_backend
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
+        {{- end }}
 
     frontend talos
         bind :::50000 v4v6
@@ -103,10 +103,10 @@ data:
         default_backend talos_backend
         {{- with $.Values.whitelist }}
         acl whitelist src{{ range . }} {{ . }}{{ end }}
-        {{- end }}
         acl all src 0.0.0.0
         tcp-request content accept if whitelist
         tcp-request content reject
+        {{- end }}
 
     backend kubernetes_backend
         {{- include "backendoptions" (default "tcp" .mode) | nindent 8 }}
