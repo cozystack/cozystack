@@ -18,6 +18,27 @@ spec:
         cnpg.io/cluster: keycloak-db
   {{- end }}
   {{- end }}
+  {{- if and .Values.backup.enabled .Values.backup.destinationPath }}
+  {{- $credSecret := .Values.backup.existingSecretName | default "keycloak-db-backup-s3-creds" }}
+  backup:
+    barmanObjectStore:
+      destinationPath: {{ .Values.backup.destinationPath | quote }}
+      {{- with .Values.backup.endpointURL }}
+      endpointURL: {{ . | quote }}
+      {{- end }}
+      s3Credentials:
+        accessKeyId:
+          name: {{ $credSecret }}
+          key: AWS_ACCESS_KEY_ID
+        secretAccessKey:
+          name: {{ $credSecret }}
+          key: AWS_SECRET_ACCESS_KEY
+      data:
+        compression: gzip
+      wal:
+        compression: gzip
+    retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  {{- end }}
   monitoring:
     enablePodMonitor: true
 
