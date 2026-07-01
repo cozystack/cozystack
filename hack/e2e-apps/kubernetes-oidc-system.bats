@@ -23,14 +23,11 @@
 # AuthenticationConfiguration Secret / KamajiControlPlane carry the
 # expected per-cluster shape.
 
-setup() {
-  TEST_NAME="oidc-system-$$"
-  cleanup_kr
-}
-
-teardown() {
-  cleanup_kr
-}
+# cozytest.sh (the e2e runner) is not real bats — it never invokes
+# setup()/teardown(). Cleanup belongs in cozy_cleanup(), which runs at
+# suite exit and on the first failing test. Per-test isolation is done
+# inline at the top of each @test.
+TEST_NAME="oidc-system"
 
 cleanup_kr() {
   kubectl -n tenant-test delete kubernetes.apps.cozystack.io "${TEST_NAME}" \
@@ -39,7 +36,10 @@ cleanup_kr() {
     --for=delete --timeout=2m 2>/dev/null || true
 }
 
+cozy_cleanup() { cleanup_kr; }
+
 @test "Kubernetes CR accepts spec.oidc.mode=System with users[]" {
+  cleanup_kr
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
