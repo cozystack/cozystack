@@ -17,7 +17,11 @@
   fail-fast.
 */}}
 {{- if eq .Values.oidc.mode "System" }}
-{{-   $oidcEnabled := index .Values._cluster "oidc-enabled" }}
+{{- /* dig safely navigates missing _cluster / oidc-enabled without a
+       nil-pointer panic — index on nil returns <nil> which stringifies OK
+       but dig is the idiomatic Helm/Sprig way to read optional nested
+       keys. */ -}}
+{{-   $oidcEnabled := dig "oidc-enabled" "" (.Values._cluster | default dict) }}
 {{-   if ne ($oidcEnabled | toString) "true" }}
 {{-     fail "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer." }}
 {{-   end }}

@@ -325,7 +325,9 @@ spec:
                 echo "tenant kubeconfig not present; nothing to clean up"
                 exit 0
               fi
-              kubectl --kubeconfig "$KUBECONFIG_TENANT" delete clusterrolebinding \
+              kubectl --kubeconfig "$KUBECONFIG_TENANT" \
+                --request-timeout=30s \
+                delete clusterrolebinding \
                 --selector=app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=$RELEASE \
                 --ignore-not-found --timeout=30s \
                 || echo "WARNING: could not clean OIDC ClusterRoleBindings (apiserver unreachable?); they will disappear with the control plane" >&2
