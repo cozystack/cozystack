@@ -194,14 +194,26 @@ expires.
 - **`CustomConfig` with an unreachable issuer or wrong claim mappings** —
   the apiserver rejects tokens at request time; the admin kubeconfig
   keeps working as break-glass.
-- **`emailVerified: false` on the Keycloak user** — with
-  `username.claim: email` (the `System`-mode default and the pattern the
-  `CustomConfig` examples above use) the kube-apiserver applies
-  `claims.?email_verified.orValue(true) == true` and returns
-  `oidc: email not verified` to the client. Provision users with
-  `emailVerified: true` on the `KeycloakRealmUser` (or complete the
-  email-verify flow through the Keycloak UI) before granting cluster
-  access. A missing `email_verified` claim is treated as verified.
+- **`emailVerified` on Keycloak users is a prescriptive requirement,
+  not a chart-enforced one.** Phase 1 does not emit any
+  `claimValidationRules` in the rendered `AuthenticationConfiguration`,
+  so the chart itself is not the gate. The layered guarantees you rely
+  on instead:
+  1. Provision users with `emailVerified: true` (via `KeycloakRealmUser`
+     or the Keycloak UI's email-verify flow) so no unverified identity
+     ever holds the email you name in `users[].email`.
+  2. The `cozy` realm keeps Keycloak's default `duplicateEmails: false`,
+     so a second account cannot claim an already-registered address to
+     impersonate an existing operator.
+  3. As a k8s side-effect, if the issuer explicitly emits
+     `email_verified: false` on a token the apiserver rejects it with
+     `oidc: email not verified` — but a *missing* claim is treated as
+     verified.
+  Adding a CEL `claimValidationRules` entry
+  (`!has(claims.email_verified) || claims.email_verified == true`) to
+  the rendered System-mode config would elevate item 3 to a hard gate;
+  that is a reasonable follow-up hardening but is out of scope for
+  Phase 1.
 - **`kubectl` without the `oidc-login` plugin** — the exec block errors
   out client-side; install the plugin.
 
