@@ -15,6 +15,8 @@ const h = vi.hoisted(() => ({
     strategyRef: { kind: "Strategy", name: "s3" },
     takenAt: "2024-01-01T00:00:00Z",
   },
+  // Spec the mocked SchemaForm emits into the page on mount; reset per test.
+  emitSpec: {} as unknown,
 }))
 
 vi.mock("../lib/tenant-context.tsx", () => ({
@@ -38,7 +40,7 @@ vi.mock("../components/SchemaForm.tsx", () => ({
     function MockSchemaForm({ onChange }, ref) {
       useImperativeHandle(ref, () => ({ validate: () => h.validateReturn }))
       useEffect(() => {
-        onChange(h.validSpec)
+        onChange(h.emitSpec)
       }, [onChange])
       return null
     },
@@ -60,6 +62,7 @@ describe("BackupCreatePage submit validation gate", () => {
     h.createMutateAsync.mockReset()
     h.createMutateAsync.mockResolvedValue({})
     h.validateReturn = true
+    h.emitSpec = h.validSpec
   })
 
   it("does not POST when the form fails RJSF validation", async () => {
@@ -82,5 +85,23 @@ describe("BackupCreatePage submit validation gate", () => {
     await user.click(screen.getByRole("button", { name: /create/i }))
 
     expect(h.createMutateAsync).toHaveBeenCalledTimes(1)
+  })
+
+  it("runs RJSF validation before the page-level required-field alerts", async () => {
+    // Form is RJSF-invalid AND a page-required field is missing. The gate must
+    // fire first, so no alert() is shown — proving validate() runs before the
+    // manual checks (under the old ordering the applicationRef alert fired).
+    h.validateReturn = false
+    h.emitSpec = {}
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {})
+    const user = userEvent.setup()
+    renderPage()
+
+    await user.type(screen.getByRole("textbox"), "my-backup")
+    await user.click(screen.getByRole("button", { name: /create/i }))
+
+    expect(h.createMutateAsync).not.toHaveBeenCalled()
+    expect(alertSpy).not.toHaveBeenCalled()
+    alertSpy.mockRestore()
   })
 })
