@@ -305,6 +305,7 @@ spec:
                     - get-token
                     - --oidc-issuer-url=$OIDC_ISSUER_URL
                     - --oidc-client-id=$OIDC_CLIENT_ID
+                    - --oidc-extra-scope=email
                     - --oidc-extra-scope=groups
                     - --oidc-use-pkce
                     interactiveMode: IfAvailable
