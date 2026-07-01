@@ -135,7 +135,7 @@
   ========================================
   resources:
     cpu: "1"
-  resourcesPreset: "nano"
+  resourcesPreset: "t1.nano"
 
   Example output:
   ===============
@@ -143,7 +143,7 @@
     limits:
       cpu: "1" # == user input
       ephemeral-storage: 2Gi # == default ephemeral storage limit
-      memory: 128Mi # from "nano"
+      memory: 128Mi # from "t1.nano"
     requests:
       cpu: 100m # == 1 / 10
       ephemeral-storage: 50Mi # == default ephemeral storage request

@@ -21,9 +21,30 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: "NoSchedule"
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: kubectl
           image: docker.io/clastix/kubectl:v1.32
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           command:
             - /bin/sh
             - -c
@@ -48,9 +69,49 @@ spec:
               kubectl -n {{ .Release.Namespace }} delete kamajicontrolplanes.controlplane.cluster.x-k8s.io {{ .Release.Name }} \
                 --ignore-not-found=true
 
-              echo "Step 4: Deleting TenantControlPlane {{ .Release.Name }}"
+              echo "Step 4: Deleting TenantControlPlane {{ .Release.Name }} and waiting for it to be removed"
+              # --wait=true blocks until the TenantControlPlane object is fully
+              # gone. This is required so that Kamaji's TCP finalizer-cleanup
+              # chain (which strips finalizer.kamaji.clastix.io/datastore-secret
+              # off the <release>-datastore-config Secret) has a chance to run
+              # before we fall through to Step 4b. A short --timeout keeps the
+              # hook from hanging forever if Kamaji is unreachable; Step 4b is
+              # the backstop for that case.
               kubectl -n {{ .Release.Namespace }} delete tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=true --timeout=120s \
+                || echo "WARNING: TenantControlPlane {{ .Release.Name }} did not delete within timeout; relying on the Step 4b finalizer backstop" >&2
+
+              echo "Step 4b: Clearing leftover Kamaji datastore-secret finalizer on {{ .Release.Name }}-datastore-config"
+              # Kamaji creates a per-tenant datastore connection Secret named
+              # <tcp-name>-datastore-config (tcp-name == .Release.Name) and adds
+              # the finalizer "finalizer.kamaji.clastix.io/datastore-secret" to
+              # it. That finalizer is normally removed by Kamaji as part of the
+              # TenantControlPlane deletion above. If the TCP was force-deleted,
+              # or Kamaji did not reconcile the removal in time, the finalizer
+              # stays on the Secret and blocks deletion of the entire namespace
+              # (the Secret cannot be garbage-collected, see issue #3062).
+              #
+              # By this point the TenantControlPlane is gone (Step 4 waited for
+              # it), so Kamaji no longer has any legitimate use for this Secret:
+              # the Secret has an ownerReference to the now-deleted TCP and is
+              # only awaiting garbage collection. Stripping the finalizer here is
+              # therefore safe and merely lets the GC reap it. We only patch the
+              # finalizers field of this one named Secret.
+              # Only clear the finalizer if the TenantControlPlane is actually gone.
+              # Step 4 may have timed out with the TCP still present; in that case
+              # Kamaji still legitimately owns the datastore Secret, and stripping
+              # the finalizer would interfere with its lifecycle management. Gate
+              # the patch on the TCP being confirmed absent (CodeRabbit #3078).
+              if kubectl -n {{ .Release.Namespace }} get tenantcontrolplanes.kamaji.clastix.io {{ .Release.Name }} >/dev/null 2>&1; then
+                echo "  TenantControlPlane {{ .Release.Name }} still present (deletion not complete); leaving the datastore-secret finalizer untouched"
+              elif kubectl -n {{ .Release.Namespace }} get secret {{ .Release.Name }}-datastore-config >/dev/null 2>&1; then
+                echo "  Removing finalizers from secret/{{ .Release.Name }}-datastore-config"
+                kubectl -n {{ .Release.Namespace }} patch secret {{ .Release.Name }}-datastore-config \
+                  --type=merge -p '{"metadata":{"finalizers":null}}' \
+                  || echo "WARNING: failed to clear datastore-secret finalizer for {{ .Release.Name }}; the namespace may stay in Terminating (issue #3062)" >&2
+              else
+                echo "  Secret {{ .Release.Name }}-datastore-config not present; nothing to do"
+              fi
 
               echo "Step 5: Cleaning up DataVolumes"
               kubectl -n {{ .Release.Namespace }} delete datavolumes \
@@ -64,7 +125,12 @@ spec:
                 --ignore-not-found=true
 
               echo "Cleanup completed successfully"
-
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -130,6 +196,18 @@ rules:
       - list
       - watch
       - delete
+  # Scoped to the single Kamaji datastore connection Secret so Step 4b can
+  # strip the leftover finalizer.kamaji.clastix.io/datastore-secret finalizer
+  # (issue #3062). resourceNames limits get/patch to exactly this Secret.
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    resourceNames:
+      - {{ .Release.Name }}-datastore-config
+    verbs:
+      - get
+      - patch
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

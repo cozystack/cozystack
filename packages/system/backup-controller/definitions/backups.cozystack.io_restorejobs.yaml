@@ -4,6 +4,8 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
+    options.cozystack.io/source.backupRef.name: backup
+    options.cozystack.io/source.targetApplicationRef.kind: appkind
   name: restorejobs.backups.cozystack.io
 spec:
   group: backups.cozystack.io
@@ -59,6 +61,12 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              options:
+                description: |-
+                  Options is a driver-specific blob of restore options, typed based on
+                  targetApplicationRef and the current controller implementation.
+                type: object
+                x-kubernetes-preserve-unknown-fields: true
               targetApplicationRef:
                 description: |-
                   TargetApplicationRef refers to the application into which the backup

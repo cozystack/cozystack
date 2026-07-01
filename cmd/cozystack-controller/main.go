@@ -36,12 +36,20 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+	networkv1alpha1 "github.com/cozystack/cozystack/api/network/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
-	"github.com/cozystack/cozystack/internal/controller/dashboard"
+	"github.com/cozystack/cozystack/internal/controller/serviceexposure"
+	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
+	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/telemetry"
 
+	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	cosiv1alpha1 "sigs.k8s.io/container-object-storage-interface-api/apis/objectstorage/v1alpha1"
+	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
+	gatewayv1alpha2 "sigs.k8s.io/gateway-api/apis/v1alpha2"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -54,8 +62,13 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
-	utilruntime.Must(dashboard.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(networkv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(gatewayv1.Install(scheme))
+	utilruntime.Must(gatewayv1alpha2.Install(scheme))
+	utilruntime.Must(cmv1.AddToScheme(scheme))
 	utilruntime.Must(helmv2.AddToScheme(scheme))
+	utilruntime.Must(cosiv1alpha1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
 
@@ -68,6 +81,7 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var quotaBufferPercent int64
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
 		"Use :8443 for HTTPS or :8080 for HTTP, or leave as 0 to disable the metrics service.")
@@ -85,6 +99,8 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.Int64Var(&quotaBufferPercent, "tenant-quota-buffer-percent", 0,
+		"Temporary buffer (e.g. 130 = +30%) added to every hierarchical tenant quota pool so workloads already over a freshly-introduced quota keep running during rollout. 0 disables it.")
 	opts := zap.Options{
 		Development: false,
 	}
@@ -209,12 +225,37 @@ func main() {
 		os.Exit(1)
 	}
 
-	dashboardManager := &dashboard.Manager{
+	if err = (&tenantgateway.Reconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantGateway")
+		os.Exit(1)
 	}
-	if err = dashboardManager.SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "DashboardReconciler")
+
+	if err = (&serviceexposure.Reconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ServiceExposure")
+		os.Exit(1)
+	}
+
+	if err = (&serviceexposure.ClassReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ExposureClass")
+		os.Exit(1)
+	}
+
+	if err = (&tenantquota.Reconciler{
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Recorder:      mgr.GetEventRecorderFor("tenantquota-controller"),
+		BufferPercent: quotaBufferPercent,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "TenantQuota")
 		os.Exit(1)
 	}
 
@@ -243,9 +284,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	ctx := ctrl.SetupSignalHandler()
-	dashboardManager.InitializeStaticResources(ctx)
-	if err := mgr.Start(ctx); err != nil {
+	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

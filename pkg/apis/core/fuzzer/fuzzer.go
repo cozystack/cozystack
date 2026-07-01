@@ -18,16 +18,19 @@ package fuzzer
 
 import (
 	"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
-	fuzz "github.com/google/gofuzz"
 
 	runtimeserializer "k8s.io/apimachinery/pkg/runtime/serializer"
+	"sigs.k8s.io/randfill"
 )
 
 // Funcs returns the fuzzer functions for the core api group.
 var Funcs = func(codecs runtimeserializer.CodecFactory) []interface{} {
 	return []interface{}{
-		func(s *v1alpha1.TenantNamespace, c fuzz.Continue) {
-			c.FuzzNoCustom(s) // fuzz self without calling this function again
+		func(s *v1alpha1.TenantNamespace, c randfill.Continue) {
+			c.FillNoCustom(s) // fill self without calling this function again
+		},
+		func(s *v1alpha1.Option, c randfill.Continue) {
+			c.FillNoCustom(s) // fill self without calling this function again
 		},
 	}
 }

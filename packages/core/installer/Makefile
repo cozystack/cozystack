@@ -19,13 +19,12 @@ image: pre-checks image-operator image-packages chart
 
 image-operator:
 	docker buildx build -f images/cozystack-operator/Dockerfile ../../.. \
-		--tag $(REGISTRY)/cozystack-operator:$(call settag,$(TAG)) \
-		--build-arg VERSION=$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-operator:latest \
-		--cache-to type=inline \
+		$(call image-tags,cozystack-operator,v$(COZYSTACK_VERSION)) \
+		--build-arg VERSION=v$(COZYSTACK_VERSION) \
+		$(call cache-args,cozystack-operator) \
 		--metadata-file images/cozystack-operator.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/cozystack-operator:$(call settag,$(TAG))@$$(yq -e '.["containerimage.digest"]' images/cozystack-operator.json -o json -r)" \
+	IMAGE="$(REGISTRY)/cozystack-operator:$(IMAGE_TAG)@$$(yq -e '.["containerimage.digest"]' images/cozystack-operator.json -o json -r)" \
 		yq -i '.cozystackOperator.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-operator.json
 
@@ -33,7 +32,7 @@ image-packages:
 	mkdir -p ../../../_out/assets images
 	echo $$(git rev-parse HEAD; git diff HEAD; git ls-files --others --exclude-standard) | shasum -a 256 > ../platform/.build-revision
 	flux push artifact \
-		oci://$(REGISTRY)/cozystack-packages:$(call settag,$(TAG)) \
+		oci://$(REGISTRY)/cozystack-packages:$(IMAGE_TAG) \
 		--path=../../../packages \
 		--source=https://github.com/cozystack/cozystack \
 		--revision="$$(git describe --tags):$$(git rev-parse HEAD)" \

@@ -1,0 +1,82 @@
+suite: backup-controller CRDs expose dropdown option sources via annotations, not schema
+
+# The x-cozystack-options vendor extension cannot live in an apiextensions CRD
+# validation schema: JSONSchemaProps only preserves x-kubernetes-* extensions,
+# so server-side apply rejects the unknown key and the apiserver drops it on
+# decode. The dashboard's field->source mapping therefore lives in CRD metadata
+# annotations (preserved by the apiserver) and is reattached client-side. These
+# tests pin that contract and guard against re-introducing the in-schema
+# injector that previously broke CRD apply: each dropdown field must carry its
+# source in metadata.annotations and must NOT carry x-cozystack-options in the
+# OpenAPI schema.
+templates:
+  - templates/crds.yaml
+
+release:
+  name: backup-controller
+  namespace: cozy-backup-controller
+
+tests:
+  - it: backupjobs CRD carries source annotations and no in-schema extension
+    documentSelector:
+      path: metadata.name
+      value: backupjobs.backups.cozystack.io
+    asserts:
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.applicationRef.kind"]
+          value: appkind
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.planRef.name"]
+          value: plan
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.backupClassName"]
+          value: backupclass
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.applicationRef.properties.kind["x-cozystack-options"]
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.planRef.properties.name["x-cozystack-options"]
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.backupClassName["x-cozystack-options"]
+
+  - it: backups CRD carries the appkind source annotation only
+    documentSelector:
+      path: metadata.name
+      value: backups.backups.cozystack.io
+    asserts:
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.applicationRef.kind"]
+          value: appkind
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.applicationRef.properties.kind["x-cozystack-options"]
+
+  - it: plans CRD carries appkind and backupclass source annotations
+    documentSelector:
+      path: metadata.name
+      value: plans.backups.cozystack.io
+    asserts:
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.applicationRef.kind"]
+          value: appkind
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.backupClassName"]
+          value: backupclass
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.applicationRef.properties.kind["x-cozystack-options"]
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.backupClassName["x-cozystack-options"]
+
+  - it: restorejobs CRD carries backup and appkind source annotations
+    documentSelector:
+      path: metadata.name
+      value: restorejobs.backups.cozystack.io
+    asserts:
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.backupRef.name"]
+          value: backup
+      - equal:
+          path: metadata.annotations["options.cozystack.io/source.targetApplicationRef.kind"]
+          value: appkind
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.backupRef.properties.name["x-cozystack-options"]
+      - notExists:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.spec.properties.targetApplicationRef.properties.kind["x-cozystack-options"]

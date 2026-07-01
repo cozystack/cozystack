@@ -1,0 +1,21 @@
+suite: mongodb-operator applies CRD updates on upgrade
+# psmdb-operator evolves its CRD schema between minor versions (1.21 -> 1.22 adds
+# storageScaling/storageAutoscaling, vault and other fields). Helm never upgrades
+# CRDs shipped in crds/, so the PackageSource must opt into CreateReplace; without
+# it the operator binary upgrades while the live CRD stays behind and the
+# apiserver rejects the new fields on existing clusters. Pin the policy so an
+# upgrade cannot silently regress.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: mongodb-operator PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.mongodb-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace

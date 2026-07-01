@@ -3,6 +3,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.replicas }}
   minReplicas: 1
@@ -17,6 +19,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-keeper
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.clickhouseKeeper.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.clickhouseKeeper.replicas }}
   minReplicas: 1

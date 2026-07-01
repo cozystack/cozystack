@@ -1,4 +1,34 @@
-{{- if .Values.addons.gpuOperator.enabled }}
+{{- define "cozystack.defaultGpuOperatorValues" -}}
+{{- /*
+  GPU passthrough default: cozystack passes individual SXM GPUs (e.g.
+  H200) into tenant worker VMs WITHOUT the NVSwitches. The nvidia driver
+  then waits forever for an NVLink fabric that can never come up (no
+  NVSwitch / fabricmanager), leaving Fabric State: In Progress — every
+  CUDA call fails with "system not yet initialized" and the
+  nvidia-operator-validator crashloops. Loading the kernel module with
+  NVreg_NvLinkDisable=1 flips Fabric State to N/A so CUDA initializes.
+  This is correct for per-GPU passthrough since there is no in-VM
+  NVLink/NVSwitch peering anyway.
+
+  The upstream chart only references an existing ConfigMap by name; the
+  wrapper chart (packages/system/gpu-operator) renders that ConfigMap
+  when kernelModuleConfig.create is true. Overridable via
+  addons.gpuOperator.valuesOverride (mergeOverwrite below keeps user
+  values winning).
+*/}}
+kernelModuleConfig:
+  create: true
+gpu-operator:
+  driver:
+    kernelModuleConfig:
+      name: nvidia-kernel-module-params
+{{- if .Values.addons.hami.enabled }}
+  devicePlugin:
+    enabled: false
+{{- end }}
+{{- end }}
+
+{{- if and .Values.addons.gpuOperator.enabled .Values._namespace.etcd }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
@@ -26,19 +56,17 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
-  {{- with .Values.addons.gpuOperator.valuesOverride }}
+  {{- $defaults := fromYaml (include "cozystack.defaultGpuOperatorValues" .) }}
+  {{- $overrides := deepCopy (default (dict) .Values.addons.gpuOperator.valuesOverride) }}
+  {{- $merged := mergeOverwrite (default (dict) $defaults) $overrides }}
+  {{- if $merged }}
   values:
-    {{- toYaml . | nindent 4 }}
+    {{- toYaml $merged | nindent 4 }}
   {{- end }}
 
   dependsOn:
-  {{- if lookup "helm.toolkit.fluxcd.io/v2" "HelmRelease" .Release.Namespace .Release.Name }}
-  - name: {{ .Release.Name }}
-    namespace: {{ .Release.Namespace }}
-  {{- end }}
   - name: {{ .Release.Name }}-cilium
     namespace: {{ .Release.Namespace }}
 {{- end }}

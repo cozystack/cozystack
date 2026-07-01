@@ -19,10 +19,26 @@ spec:
 EOF
 
   # Wait for the bucket to be ready
-  kubectl -n tenant-test wait hr bucket-${name} --timeout=100s --for=condition=ready
-  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=300s --for=jsonpath='{.status.bucketReady}'
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'
-  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'
+  kubectl -n tenant-test wait hr bucket-${name} --timeout=5m --for=condition=ready
+  timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} >/dev/null 2>&1; do sleep 2; done"
+  # The COSI controller requeues the BucketClaim until the backend Bucket's
+  # readiness propagates, so this converges within tens of seconds. Assert
+  # bucketReady=true explicitly: a bare jsonpath match also matches the literal
+  # "false", so the unqualified form passed against an unready claim. The tight
+  # bound makes a propagation-race regression fail fast instead of hiding.
+  kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io bucket-${name} --timeout=120s --for=jsonpath='{.status.bucketReady}'=true || {
+    echo "=== BucketClaim did not converge to bucketReady=true ==="
+    kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io bucket-${name} -o yaml 2>&1 || true
+    echo "=== backend Buckets (cluster-scoped) ==="
+    kubectl get buckets.objectstorage.k8s.io -o wide 2>&1 || true
+    echo "=== objectstorage-controller ==="
+    kubectl -n cozy-objectstorage-controller get pods 2>&1 || true
+    false
+  }
+  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-admin >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-admin --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
+  timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io bucket-${name}-viewer --timeout=300s --for=jsonpath='{.status.accessGranted}'=true
 
   # Get admin (readwrite) credentials
   kubectl -n tenant-test get secret bucket-${name}-admin -ojsonpath='{.data.BucketInfo}' | base64 -d > bucket-admin-credentials.json
@@ -35,14 +51,20 @@ EOF
   VIEWER_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' bucket-viewer-credentials.json)
   VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' bucket-viewer-credentials.json)
 
-  # Start port-forwarding
-  bash -c 'timeout 100s kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 > /dev/null 2>&1 &'
+  # Start port-forwarding in this shell (not via `bash -c '... &'` — the
+  # wrapper subshell exits immediately, the backgrounded kubectl becomes an
+  # orphan and gets reaped before the first mc S3 request, so `mc cp` sees
+  # `dial tcp 127.0.0.1:8333: connect: connection refused` even though the
+  # earlier `nc -z` probe succeeded). The forked port-forward inherits the
+  # test process group; cozytest.sh kills the whole group when the test
+  # function returns, so no explicit cleanup is needed.
+  kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
 
   # Wait for port-forward to be ready
-  timeout 30 sh -ec 'until nc -z localhost 8333; do sleep 1; done'
+  timeout 30 sh -ec 'until nc -z 127.0.0.1 8333; do sleep 1; done'
 
   # --- Test readwrite user (admin) ---
-  mc alias set rw-user https://localhost:8333 $ADMIN_ACCESS_KEY $ADMIN_SECRET_KEY --insecure
+  mc alias set rw-user https://127.0.0.1:8333 $ADMIN_ACCESS_KEY $ADMIN_SECRET_KEY --insecure
 
   # Admin can upload
   echo "readwrite test" > /tmp/rw-test.txt
@@ -55,7 +77,7 @@ EOF
   mc cp --insecure rw-user/$BUCKET_NAME/rw-test.txt /tmp/rw-test-download.txt
 
   # --- Test readonly user (viewer) ---
-  mc alias set ro-user https://localhost:8333 $VIEWER_ACCESS_KEY $VIEWER_SECRET_KEY --insecure
+  mc alias set ro-user https://127.0.0.1:8333 $VIEWER_ACCESS_KEY $VIEWER_SECRET_KEY --insecure
 
   # Viewer can list
   mc ls --insecure ro-user/$BUCKET_NAME/rw-test.txt
@@ -63,9 +85,12 @@ EOF
   # Viewer can download
   mc cp --insecure ro-user/$BUCKET_NAME/rw-test.txt /tmp/ro-test-download.txt
 
-  # Viewer cannot upload (must fail with Access Denied)
+  # Viewer cannot upload (must fail with Access Denied). A bare `! mc cp` is
+  # vacuous under cozytest's `set -e` (errexit is suppressed for a `!` pipeline),
+  # so a real access-control regression that let the upload through would pass
+  # silently — assert via `if mc cp; then ...; false` so it fails loudly.
   echo "readonly test" > /tmp/ro-test.txt
-  ! mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt
+  if mc cp --insecure /tmp/ro-test.txt ro-user/$BUCKET_NAME/ro-test.txt; then echo "FAIL: read-only user must NOT be able to upload (bucket access-control regression)"; false; fi
 
   # --- Cleanup ---
   mc rm --insecure rw-user/$BUCKET_NAME/rw-test.txt

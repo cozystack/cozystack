@@ -11,6 +11,10 @@ concurrency:
   group: auto-release-${{ github.workflow }}
   cancel-in-progress: false
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+permissions:
+  contents: read
+
 jobs:
   auto-release:
     name: Auto Patch Release
@@ -20,44 +24,70 @@ jobs:
       pull-requests: read
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Configure git
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name  "cozystack-bot"
-          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
-          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           git config --unset-all http.https://github.com/.extraheader || true
 
       - name: Process release branches
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const { execSync } = require('child_process');
 
-            // Configure git to use PAT for authentication
-            execSync('git config user.name "cozystack-bot"', { encoding: 'utf8' });
-            execSync('git config user.email "217169706+cozystack-bot@users.noreply.github.com"', { encoding: 'utf8' });
-            execSync(`git remote set-url origin https://cozystack-bot:${process.env.GH_PAT}@github.com/${process.env.GITHUB_REPOSITORY}`, { encoding: 'utf8' });
-            // Remove GITHUB_TOKEN extraheader to ensure PAT is used (needed to trigger other workflows)
+            // Configure git to use GitHub App token for authentication
+            execSync('git config user.name "cozystack-ci[bot]"', { encoding: 'utf8' });
+            execSync('git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"', { encoding: 'utf8' });
+            execSync(`git remote set-url origin https://x-access-token:${process.env.APP_TOKEN}@github.com/${process.env.GITHUB_REPOSITORY}`, { encoding: 'utf8' });
+            // Remove GITHUB_TOKEN extraheader to ensure App token is used (needed to trigger other workflows)
             execSync('git config --unset-all http.https://github.com/.extraheader || true', { encoding: 'utf8' });
 
             // Get all release-X.Y branches
-            const branches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
+            const allBranches = execSync('git branch -r | grep -E "origin/release-[0-9]+\\.[0-9]+$" | sed "s|origin/||" | tr -d " "', { encoding: 'utf8' })
               .split('\n')
               .filter(b => b.trim())
               .filter(b => /^release-\d+\.\d+$/.test(b));
-            
-            console.log(`Found ${branches.length} release branches: ${branches.join(', ')}`);
+
+            // Only auto-patch-release the N newest minor lines. Older lines are
+            // EOL: we don't want stray patch tags (and broken release PRs) cut
+            // on them. The window slides automatically as new release-X.Y
+            // branches are created — once release-1.5 exists the window becomes
+            // {1.5, 1.4} and the trailing line retires on its own.
+            const SUPPORTED_LINE_COUNT = 2;
+            const lineNum = b => {
+              const [maj, min] = b.replace('release-', '').split('.').map(Number);
+              return maj * 1000 + min;
+            };
+            const branches = [...allBranches]
+              .sort((a, b) => lineNum(b) - lineNum(a))
+              .slice(0, SUPPORTED_LINE_COUNT);
+
+            const skipped = allBranches.filter(b => !branches.includes(b)).sort((a, b) => lineNum(a) - lineNum(b));
+            console.log(`Found ${allBranches.length} release branches; auto-releasing the ${SUPPORTED_LINE_COUNT} newest: ${branches.join(', ')}`);
+            if (skipped.length) {
+              console.log(`Skipping ${skipped.length} EOL release branches: ${skipped.join(', ')}`);
+            }
             
             // Get all published releases (not draft)
             const allReleases = await github.rest.repos.listReleases({

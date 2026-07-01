@@ -1,0 +1,26 @@
+# Grants the backupstrategy-controller permission to manage ResourceModifier
+# ConfigMaps in the Velero install namespace. Lives here (not in the
+# backupstrategy-controller chart) so that the Role is only created when
+# velero is actually installed — otherwise the chart would try to create it
+# in a namespace that does not exist.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: backups.cozystack.io:strategy-controller:velero-configmaps
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["create", "get", "list", "delete", "deletecollection", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: backups.cozystack.io:strategy-controller:velero-configmaps
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: backups.cozystack.io:strategy-controller:velero-configmaps
+subjects:
+- kind: ServiceAccount
+  name: backupstrategy-controller
+  namespace: cozy-backup-controller

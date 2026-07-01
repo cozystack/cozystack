@@ -4,67 +4,54 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-update: update-crd update-dockerfiles
-image: image-openapi-ui image-openapi-ui-k8s-bff image-token-proxy update-tenant-text
+.PHONY: image image-console image-token-proxy test test-go test-helm
+.PHONY: build-console update-values-console
+.NOTPARALLEL: image
 
+test: test-helm test-go
 
-update-dockerfiles:
-	@echo Update dockerfiles manually
+test-helm:
+	helm unittest .
 
-update-crd:
-	rm -rf crds
-	mkdir -p crds
-	wget -O- https://github.com/PRO-Robotech/helmfile-manifests/archive/refs/heads/main.tar.gz | tar -C crds -xzvf- helmfile-manifests-main/charts/incloud-main/incloud-web-1.0.0/incloud-web/templates --strip-components=6
-	rm -f crds/_helpers.tpl
-	sed -i '/{{/d' crds/*.yml crds/*.yaml
+test-go:
+	cd images/token-proxy && go test ./...
 
-image-openapi-ui:
-	docker buildx build images/openapi-ui \
+image: image-console image-token-proxy
+
+image-console: build-console update-values-console
+
+# Console source lives in-tree under images/console (vendored from the former
+# cozystack-ui repo). Build from that context directly — no clone step.
+build-console:
+	docker buildx build images/console \
+		--file images/console/Containerfile \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
-		--tag $(REGISTRY)/openapi-ui:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/openapi-ui:latest \
-		--cache-to type=inline \
-		--metadata-file images/openapi-ui.json \
+		$(call image-tags,cozystack-ui,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,cozystack-ui) \
+		--metadata-file images/console.json \
+		--build-arg APP_VERSION=$(COZYSTACK_VERSION) \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
 		--load=$(LOAD)
-	IMAGE="$(REGISTRY)/openapi-ui:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/openapi-ui.json -r)" \
-		yq -i '.openapiUI.image = strenv(IMAGE)' values.yaml
-	rm -f images/openapi-ui.json
 
-image-openapi-ui-k8s-bff:
-	docker buildx build images/openapi-ui-k8s-bff \
-		--provenance false \
-		--builder=$(BUILDER) \
-		--platform=linux/amd64 \
-		--tag $(REGISTRY)/openapi-ui-k8s-bff:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/openapi-ui-k8s-bff:latest \
-		--cache-to type=inline \
-		--metadata-file images/openapi-ui-k8s-bff.json \
-		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
-		--load=$(LOAD)
-	IMAGE="$(REGISTRY)/openapi-ui-k8s-bff:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/openapi-ui-k8s-bff.json -r)" \
-		yq -i '.openapiUIK8sBff.image = strenv(IMAGE)' values.yaml
-	rm -f images/openapi-ui-k8s-bff.json
+update-values-console:
+	IMAGE="$(REGISTRY)/cozystack-ui:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/console.json -r)" \
+		yq -i '.console.image = strenv(IMAGE)' values.yaml
+	rm -f images/console.json
 
 image-token-proxy:
 	docker buildx build images/token-proxy \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
-		--tag $(REGISTRY)/token-proxy:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/token-proxy:latest \
-		--cache-to type=inline \
+		$(call image-tags,token-proxy,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,token-proxy) \
 		--metadata-file images/token-proxy.json \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
 		--load=$(LOAD)
-	IMAGE="$(REGISTRY)/token-proxy:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/token-proxy.json -r)" \
+	IMAGE="$(REGISTRY)/token-proxy:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/token-proxy.json -r)" \
 		yq -i '.tokenProxy.image = strenv(IMAGE)' values.yaml
 	rm -f images/token-proxy.json
-
-update-tenant-text:
-	sed -i 's|\($$tenantText := "\)[^"]\+|\1$(TAG)|' templates/configmap.yaml

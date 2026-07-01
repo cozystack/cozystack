@@ -99,16 +99,11 @@ Create the node-Agent runtime class name.
 
 {{/*
 Kubernetes version
-Built-in object .Capabilities.KubeVersion.Minor can provide non-number output
-For examples:
-- on GKE it returns "18+" instead of "18"
-- on EKS it returns "20+" instead of "20"
 */}}
 {{- define "chart.KubernetesVersion" -}}
-{{- $minorVersion := .Capabilities.KubeVersion.Minor | regexFind "[0-9]+" -}}
-{{- printf "%s.%s" .Capabilities.KubeVersion.Major $minorVersion -}}
+{{- $version := .Capabilities.KubeVersion.Version | regexFind "v[0-9]+\\.[0-9]+\\.[0-9]+" -}}
+{{- printf "%s" $version -}}
 {{- end -}}
-
 
 {{/*
 Calculate the checksum of the credentials secret.

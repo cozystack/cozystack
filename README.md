@@ -11,7 +11,7 @@
 
 # Cozystack
 
-**Cozystack** is a free PaaS platform and framework for building clouds.
+**Cozystack** is a free platform and framework for building clouds.
 
 Cozystack is a [CNCF Sandbox Level Project](https://www.cncf.io/sandbox-projects/) that was originally built and sponsored by [Ænix](https://aenix.io/).
 
@@ -59,7 +59,7 @@ If it isn't, you can open a new one. A detailed report will help us replicate it
 You can express your intention to on the fix on your own.
 Commits are used to generate the changelog, and their author will be referenced in it.
 
-If you have **Feature Requests** please use the [Discussion's Feature Request section](https://github.com/cozystack/cozystack/discussions/categories/feature-requests).
+If you have a **concrete feature request**, [open an issue](https://github.com/cozystack/cozystack/issues/new/choose). For a **cross-cutting or architectural change**, open a [design proposal](https://github.com/cozystack/community/tree/main/design-proposals) in the [community](https://github.com/cozystack/community) repo. For **questions or early ideas**, use [GitHub Discussions](https://github.com/cozystack/cozystack/discussions). See [CONTRIBUTING.md](CONTRIBUTING.md#where-do-i-file) for the full routing.
 
 ## Community
 

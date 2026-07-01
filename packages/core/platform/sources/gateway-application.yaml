@@ -1,0 +1,32 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.gateway-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.gateway-api-crds
+        - cozystack.cert-manager
+        # cozystack-engine ships the cozystack-controller chart, which
+        # includes the TenantGateway CRD this chart's templates render.
+        # Without this dep, a fresh install where Flux happens to
+        # reconcile gateway-application before cozystack-engine produces
+        # "no kind TenantGateway in apiVersion gateway.cozystack.io/v1alpha1"
+        # render errors until cozystack-engine catches up. Make the
+        # ordering explicit instead of relying on the implicit chain
+        # via tenant-application → cozystack-api → cozystack-controller.
+        - cozystack.cozystack-engine
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: gateway
+          path: extra/gateway
+          libraries: ["cozy-lib"]

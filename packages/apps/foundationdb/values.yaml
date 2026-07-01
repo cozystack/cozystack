@@ -36,6 +36,8 @@ cluster:
 ## @typedef {struct} Storage - Storage configuration.
 ## @field {quantity} size - Size of persistent volumes for each instance.
 ## @field {string} storageClass - Storage class (if not set, uses cluster default).
+## @immutable
+## @x-cozystack-options {source: storageclass}
 
 ## @param {Storage} storage - Storage configuration.
 storage:
@@ -47,6 +49,48 @@ storage:
 ## @field {quantity} [memory] - Memory (RAM) available to each instance.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
+## @value nano
+## @value micro
 ## @value small
 ## @value medium
 ## @value large
@@ -56,25 +100,25 @@ storage:
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each FoundationDB instance. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="medium" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "medium"
+## @param {ResourcesPreset} resourcesPreset="c1.small" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "c1.small"
 
-## @typedef {struct} BackupS3Credentials - S3 credentials.
-## @field {string} accessKeyId - S3 access key ID.
-## @field {string} secretAccessKey - S3 secret access key.
+## @typedef {struct} BackupS3Credentials - DEPRECATED S3 credentials.
+## @field {string} accessKeyId - DEPRECATED S3 access key ID.
+## @field {string} secretAccessKey - DEPRECATED S3 secret access key.
 
-## @typedef {struct} BackupS3 - S3 configuration for backups.
-## @field {string} bucket - S3 bucket name.
-## @field {string} endpoint - S3 endpoint URL.
-## @field {string} region - S3 region.
-## @field {BackupS3Credentials} credentials - S3 credentials.
+## @typedef {struct} BackupS3 - DEPRECATED S3 configuration for backups.
+## @field {string} bucket - DEPRECATED S3 bucket name.
+## @field {string} endpoint - DEPRECATED S3 endpoint URL.
+## @field {string} region - DEPRECATED S3 region.
+## @field {BackupS3Credentials} credentials - DEPRECATED S3 credentials.
 
-## @typedef {struct} Backup - Backup configuration.
-## @field {bool} enabled - Enable backups.
-## @field {BackupS3} s3 - S3 configuration for backups.
-## @field {string} retentionPolicy - Retention policy for backups.
+## @typedef {struct} Backup - DEPRECATED Backup configuration. The in-chart backup wiring is superseded by the Cozystack backups framework: create a BackupClass + a strategy.backups.cozystack.io/FoundationDB strategy, then drive backups via BackupJob/RestoreJob (see examples/backups/foundationdb/). Existing tenants with backup.enabled=true continue to render the legacy FoundationDBBackup CR unchanged.
+## @field {bool} enabled - DEPRECATED Enable in-chart backups (superseded by BackupClass + FoundationDB strategy).
+## @field {BackupS3} s3 - DEPRECATED S3 configuration for backups.
+## @field {string} retentionPolicy - DEPRECATED Retention policy for backups.
 
-## @param {Backup} backup - Backup configuration.
+## @param {Backup} backup - DEPRECATED Backup configuration (use the Cozystack backups framework: BackupClass + FoundationDB strategy).
 backup:
   enabled: false
   s3:
@@ -104,8 +148,13 @@ customParameters: []
 ## @value unified
 ## @value split
 
-## @param {ImageType} imageType="unified" - Container image deployment type.
-imageType: "unified"
+## @param {ImageType} imageType="split" - Container image deployment type.
+# Defaults to "split" to match the operator default that existing clusters
+# already run: before the Flux v2.8 SSA fix this value was nested under
+# automationOptions and silently dropped, so the operator never saw "unified".
+# Setting it to "split" keeps upgrades non-disruptive; switch to "unified"
+# deliberately to migrate (triggers an in-place image-type change).
+imageType: "split"
 
 ## @typedef {struct} SecurityContext - Security context for containers.
 ## @field {int} runAsUser - User ID to run the container.

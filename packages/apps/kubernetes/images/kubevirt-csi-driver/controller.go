@@ -21,6 +21,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
+	kubevirtv1 "kubevirt.io/api/core/v1"
 	cdiv1 "kubevirt.io/containerized-data-importer-api/pkg/apis/core/v1beta1"
 
 	kubevirtclient "kubevirt.io/csi-driver/pkg/kubevirt"
@@ -237,12 +238,59 @@ func (w *WrappedControllerService) determineDvSource(ctx context.Context, req *c
 	return res, nil
 }
 
+// publishHotplugVolume delegates to upstream for the hotplug attach, then re-verifies
+// that the volume reached VolumeReady in VMI.Status.VolumeStatus before returning
+// success. Upstream's fast path (EnsureVolumeAvailableVM) considers the volume
+// attached based only on its presence in VM.spec.template.spec.volumes — so when an
+// earlier attempt wrote that entry but the volume never became Ready (e.g. the infra
+// PVC is stuck ClaimPending because the storage backend cannot provision), the
+// retried Publish reports success and external-attacher sets Attached=true.
+// QEMU never received device_add, and the tenant kubelet's NodeStageVolume fails
+// with "couldn't find device by serial id". Verifying VMI Ready independently of
+// upstream propagates the not-ready condition back to external-attacher so it keeps
+// retrying instead of silently declaring the volume attached.
+func (w *WrappedControllerService) publishHotplugVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
+	resp, err := w.ControllerService.ControllerPublishVolume(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+
+	vmNamespace, vmName, parseErr := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if parseErr != nil {
+		return nil, status.Errorf(codes.Internal,
+			"cannot verify VMI readiness after publish: failed to parse node ID %q: %v",
+			req.GetNodeId(), parseErr)
+	}
+	dvName := req.GetVolumeId()
+	// GetVirtualMachine on this client returns a VirtualMachineInstance, not a VM.
+	vmi, getErr := w.virtClient.GetVirtualMachine(ctx, vmNamespace, vmName)
+	if getErr != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"cannot verify VMI %s/%s readiness after publish of %s: %v",
+			vmNamespace, vmName, dvName, getErr)
+	}
+	for _, vs := range vmi.Status.VolumeStatus {
+		if vs.Name != dvName {
+			continue
+		}
+		if vs.Phase == kubevirtv1.VolumeReady {
+			return resp, nil
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"volume %s is in VM %s/%s spec but not Ready in VMI status (phase=%q, message=%q)",
+			dvName, vmNamespace, vmName, vs.Phase, vs.Message)
+	}
+	return nil, status.Errorf(codes.Unavailable,
+		"volume %s not present in VMI %s/%s status after publish", dvName, vmNamespace, vmName)
+}
+
 // ControllerPublishVolume for NFS volumes: annotates infra PVC for WFFC binding,
 // waits for PVC bound, extracts NFS export from PV, and creates CiliumNetworkPolicy.
-// For RWO volumes, delegates to upstream (hotplug SCSI).
+// For hotplug volumes (RWO and RWX Block), delegates to upstream and then verifies
+// the volume is actually Ready in VMI.Status.VolumeStatus before returning success.
 func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, req *csi.ControllerPublishVolumeRequest) (*csi.ControllerPublishVolumeResponse, error) {
 	if req.GetVolumeContext()[nfsVolumeKey] != "true" {
-		return w.ControllerService.ControllerPublishVolume(ctx, req)
+		return w.publishHotplugVolume(ctx, req)
 	}
 
 	if len(req.GetVolumeId()) == 0 {
@@ -362,12 +410,71 @@ func (w *WrappedControllerService) ControllerPublishVolume(ctx context.Context, 
 	}, nil
 }
 
-// ControllerUnpublishVolume for NFS volumes: deletes CiliumNetworkPolicy.
-// For RWO volumes, delegates to upstream (hotplug removal).
+// unpublishHotplugVolume delegates to upstream for the hot-unplug, then re-verifies
+// that the volume is gone from VMI.Status.VolumeStatus before returning success.
+// Upstream treats a missing parent VM as "detach succeeded", but during a CAPI/CAPK
+// teardown the VMI (and its hot-plug pod) can outlive the VM: the hot-plug pod then
+// keeps the infra storage device exclusively attached to the source host, and every
+// subsequent attach of the same volume fails (on DRBD with "failed to set source
+// device readwrite"). When the VMI still reports the hot-plug after upstream
+// returned success, detach it from the VMI directly. Backport of
+// kubevirt/csi-driver#184; drop once it is merged and the module is bumped past it.
+func (w *WrappedControllerService) unpublishHotplugVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
+	if _, err := w.ControllerService.ControllerUnpublishVolume(ctx, req); err != nil {
+		return nil, err
+	}
+
+	dvName := req.GetVolumeId()
+	_, vmName, err := cache.SplitMetaNamespaceKey(req.GetNodeId())
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to parse node ID %q: %v", req.GetNodeId(), err)
+	}
+
+	// GetVirtualMachine on this client returns a VirtualMachineInstance, not a VM.
+	vmi, err := w.virtClient.GetVirtualMachine(ctx, w.infraNamespace, vmName)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
+		}
+		return nil, status.Errorf(codes.Unavailable,
+			"cannot verify VMI %s/%s after unpublish of %s: %v", w.infraNamespace, vmName, dvName, err)
+	}
+
+	stillAttached := false
+	for _, vs := range vmi.Status.VolumeStatus {
+		if vs.HotplugVolume != nil && vs.Name == dvName {
+			stillAttached = true
+			break
+		}
+	}
+	if !stillAttached {
+		return &csi.ControllerUnpublishVolumeResponse{}, nil
+	}
+
+	klog.Infof("Volume %s still reported by VMI %s/%s after unpublish – detaching from the VMI", dvName, w.infraNamespace, vmName)
+	if err := w.virtClient.RemoveVolumeFromVMI(ctx, w.infraNamespace, vmName, &kubevirtv1.RemoveVolumeOptions{Name: dvName}); err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"failed to remove volume %s from VMI %s/%s: %v", dvName, w.infraNamespace, vmName, err)
+	}
+	if err := w.virtClient.EnsureVolumeRemoved(ctx, w.infraNamespace, vmName, dvName, 2*time.Minute); err != nil {
+		return nil, status.Errorf(codes.Unavailable,
+			"volume %s failed to be removed from VMI %s/%s in time: %v", dvName, w.infraNamespace, vmName, err)
+	}
+
+	klog.V(3).Infof("Successfully unpublished volume %s from VMI %s/%s", dvName, w.infraNamespace, vmName)
+	return &csi.ControllerUnpublishVolumeResponse{}, nil
+}
+
+// ControllerUnpublishVolume for NFS volumes (RWX Filesystem): deletes CiliumNetworkPolicy.
+// For everything else (RWO and RWX Block), delegates to upstream so the hotplug
+// DataVolume is removed from VM.spec.template.spec.volumes, then verifies the volume
+// actually left VMI.Status.VolumeStatus. RWX Block volumes used
+// for live migration must NOT be treated as NFS — their cleanup goes through upstream
+// hotplug removal, otherwise stale VM-spec entries permanently block re-attachment to
+// a different VM via the anti-split-brain check (issue #2634).
 func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context, req *csi.ControllerUnpublishVolumeRequest) (*csi.ControllerUnpublishVolumeResponse, error) {
 	dvName := req.GetVolumeId()
 
-	// Determine if NFS by checking infra PVC access modes
 	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, dvName, metav1.GetOptions{})
 	if err != nil {
 		if errors.IsNotFound(err) {
@@ -376,8 +483,8 @@ func (w *WrappedControllerService) ControllerUnpublishVolume(ctx context.Context
 		return nil, err
 	}
 
-	if !hasRWXAccessMode(pvc) {
-		return w.ControllerService.ControllerUnpublishVolume(ctx, req)
+	if !isNFSVolume(pvc) {
+		return w.unpublishHotplugVolume(ctx, req)
 	}
 
 	// NFS volume: remove VMI ownerReference from CiliumNetworkPolicy
@@ -404,11 +511,12 @@ func (w *WrappedControllerService) ControllerExpandVolume(ctx context.Context, r
 		return nil, err
 	}
 
-	// For NFS volumes, no node-side expansion is needed
+	// For NFS volumes (RWX Filesystem), no node-side expansion is needed. RWX Block
+	// volumes still require node-side expansion of the in-VM disk.
 	pvc, err := w.infraClient.CoreV1().PersistentVolumeClaims(w.infraNamespace).Get(ctx, req.GetVolumeId(), metav1.GetOptions{})
 	if err != nil {
 		klog.Warningf("Failed to check PVC access mode for %s/%s: %v", w.infraNamespace, req.GetVolumeId(), err)
-	} else if hasRWXAccessMode(pvc) {
+	} else if isNFSVolume(pvc) {
 		resp.NodeExpansionRequired = false
 	}
 
@@ -542,6 +650,16 @@ func hasRWXAccessMode(pvc *corev1.PersistentVolumeClaim) bool {
 		}
 	}
 	return false
+}
+
+// isNFSVolume reports whether the PVC was provisioned by our CreateVolume NFS path
+// (RWX + Filesystem). RWX Block volumes are upstream hotplug volumes used for live
+// migration and must NOT be handled as NFS.
+func isNFSVolume(pvc *corev1.PersistentVolumeClaim) bool {
+	if !hasRWXAccessMode(pvc) {
+		return false
+	}
+	return pvc.Spec.VolumeMode == nil || *pvc.Spec.VolumeMode == corev1.PersistentVolumeFilesystem
 }
 
 // getNFSExport extracts the NFS export URL from a PersistentVolume.

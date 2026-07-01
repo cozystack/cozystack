@@ -1,0 +1,650 @@
+suite: qdrant TLS cert-manager tests
+
+templates:
+  - templates/certmanager.yaml
+
+tests:
+  #####################
+  # TLS disabled      #
+  #####################
+
+  - it: renders no resources when tls.enabled is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  #####################
+  # TLS enabled       #
+  #####################
+
+  - it: renders 4 cert-manager resources when tls.enabled is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: first document is a self-signed Issuer
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - isKind:
+          of: Issuer
+        documentIndex: 0
+      - equal:
+          path: spec.selfSigned
+          value: {}
+        documentIndex: 0
+
+  - it: second document is a CA Certificate
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - isKind:
+          of: Certificate
+        documentIndex: 1
+      - equal:
+          path: spec.isCA
+          value: true
+        documentIndex: 1
+
+  - it: third document is a CA-backed Issuer
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - isKind:
+          of: Issuer
+        documentIndex: 2
+      - isNotNull:
+          path: spec.ca.secretName
+        documentIndex: 2
+
+  - it: fourth document is the TLS Certificate
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - isKind:
+          of: Certificate
+        documentIndex: 3
+      - equal:
+          path: spec.isCA
+          value: false
+        documentIndex: 3
+
+  - it: leaf cert has server auth and client auth EKU
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+        documentIndex: 3
+      - contains:
+          path: spec.usages
+          content: client auth
+        documentIndex: 3
+      - notContains:
+          path: spec.usages
+          content: cert sign
+        documentIndex: 3
+      - notContains:
+          path: spec.usages
+          content: signing
+        documentIndex: 3
+
+  #######################################################
+  # Canonical tri-state cases                           #
+  #######################################################
+
+  # (a) external: false, tls.enabled unset -> TLS OFF -> 0 documents
+  - it: "(a) renders no cert-manager resources when external is false and tls.enabled is unset"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: false
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # (b) external: true, tls.enabled unset -> TLS ON -> 4 documents + external SAN
+  - it: "(b) renders 4 cert-manager resources when external is true and tls.enabled is unset"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozystack.io
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "(b) TLS Certificate contains external SAN when external is true and tls.enabled is unset"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozystack.io
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant.example.cozystack.io
+        documentIndex: 3
+
+  # (c) external: true, tls.enabled: false -> TLS OFF -> 0 documents
+  - it: "(c) renders no cert-manager resources when external is true but tls.enabled is explicitly false"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: true
+      tls:
+        enabled: false
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # (d) external: false, tls.enabled: true -> TLS ON -> 4 documents, no external SAN
+  - it: "(d) renders 4 cert-manager resources when external is false but tls.enabled is explicitly true"
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      external: false
+      tls:
+        enabled: true
+      _namespace:
+        host: example.cozystack.io
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+      - notContains:
+          path: spec.dnsNames
+          content: test-qdrant.example.cozystack.io
+        documentIndex: 3
+
+  #####################
+  # Naming            #
+  #####################
+
+  - it: names resources after release
+    release:
+      name: my-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: my-qdrant-selfsigned
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: my-qdrant-ca
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: my-qdrant-ca
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: my-qdrant-tls
+        documentIndex: 3
+
+  - it: CA Certificate secretName matches CA Issuer secretName
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: test-qdrant-ca
+        documentIndex: 1
+      - equal:
+          path: spec.ca.secretName
+          value: test-qdrant-ca
+        documentIndex: 2
+
+  - it: TLS Certificate secretName is release-tls
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.secretName
+          value: test-qdrant-tls
+        documentIndex: 3
+
+  #####################
+  # SAN — internal    #
+  #####################
+
+  - it: TLS Certificate contains short service DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant
+        documentIndex: 3
+
+  - it: TLS Certificate contains cluster-local service DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant.tenant-test.svc
+        documentIndex: 3
+
+  - it: TLS Certificate contains FQDN service DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant.tenant-test.svc.cozy.local
+        documentIndex: 3
+
+  - it: TLS Certificate contains headless service DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant-headless
+        documentIndex: 3
+
+  - it: TLS Certificate contains headless cluster-local service DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant-headless.tenant-test.svc
+        documentIndex: 3
+
+  - it: TLS Certificate contains headless FQDN service DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant-headless.tenant-test.svc.cozy.local
+        documentIndex: 3
+
+  - it: TLS Certificate contains wildcard per-pod headless DNS name
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.test-qdrant-headless.tenant-test.svc.cozy.local"
+        documentIndex: 3
+
+  - it: TLS Certificate has exactly 10 DNS names when replicas=1 and external is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      external: false
+      replicas: 1
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 10
+        documentIndex: 3
+
+  ####################################
+  # SAN — external                   #
+  ####################################
+
+  - it: TLS Certificate has 11 DNS names when replicas=1 and external is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      external: true
+      replicas: 1
+      _namespace:
+        host: example.cozystack.io
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 11
+        documentIndex: 3
+
+  - it: TLS Certificate contains external DNS SAN when external is true
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozystack.io
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: test-qdrant.example.cozystack.io
+        documentIndex: 3
+
+  - it: does not add external SAN when external is false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      external: false
+      _namespace:
+        host: example.cozystack.io
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: test-qdrant.example.cozystack.io
+        documentIndex: 3
+
+  #######################################################
+  # SAN — per-replica short-form hostnames (issue D)    #
+  #######################################################
+
+  - it: leaf cert contains short-form per-pod SAN for replica 0 with replicas=1
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 1
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "test-qdrant-0.test-qdrant-headless"
+        documentIndex: 3
+
+  - it: leaf cert contains svc-form per-pod SAN for replica 0 with replicas=1
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 1
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "test-qdrant-0.test-qdrant-headless.tenant-test.svc"
+        documentIndex: 3
+
+  - it: leaf cert contains FQDN per-pod SAN for replica 0 with replicas=1
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 1
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "test-qdrant-0.test-qdrant-headless.tenant-test.svc.cozy.local"
+        documentIndex: 3
+
+  - it: leaf cert contains per-pod SANs for all 3 replicas with replicas=3
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 3
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "test-qdrant-0.test-qdrant-headless"
+        documentIndex: 3
+      - contains:
+          path: spec.dnsNames
+          content: "test-qdrant-1.test-qdrant-headless"
+        documentIndex: 3
+      - contains:
+          path: spec.dnsNames
+          content: "test-qdrant-2.test-qdrant-headless"
+        documentIndex: 3
+
+  - it: leaf cert has 16 DNS names with replicas=3 and external=false
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 3
+      external: false
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 16
+        documentIndex: 3
+
+  - it: leaf cert does not contain replica-1 SAN when replicas=1
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      replicas: 1
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "test-qdrant-1.test-qdrant-headless"
+        documentIndex: 3
+
+  #######################################################
+  # ECDSA P-256 private keys (issue ECDSA)              #
+  #######################################################
+
+  - it: CA Certificate uses ECDSA P-256 private key algorithm
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+        documentIndex: 1
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+        documentIndex: 1
+
+  - it: leaf Certificate uses ECDSA P-256 private key algorithm
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+        documentIndex: 3
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+        documentIndex: 3
+
+  - it: CA Certificate rotationPolicy is Never
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+        documentIndex: 1
+
+  - it: leaf Certificate rotationPolicy is Always
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+        documentIndex: 3

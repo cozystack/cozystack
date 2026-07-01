@@ -132,6 +132,16 @@ type ComponentInstall struct {
 	// DependsOn is a list of component names that must be installed before this component
 	// +optional
 	DependsOn []string `json:"dependsOn,omitempty"`
+
+	// UpgradeCRDs controls how CRDs from the chart's crds/ directory are
+	// handled on HelmRelease upgrades. Maps to HelmRelease.Spec.Upgrade.CRDs.
+	// Empty string (default) preserves the helm-controller default (Skip).
+	// Use "CreateReplace" for operators that evolve their CRD set between
+	// versions. Warning: CreateReplace overwrites CRDs and may cause data
+	// loss if upstream drops fields from a CRD with live objects.
+	// +optional
+	// +kubebuilder:validation:Enum=Skip;Create;CreateReplace
+	UpgradeCRDs string `json:"upgradeCRDs,omitempty"`
 }
 
 // Component defines a single Helm release component within a package source

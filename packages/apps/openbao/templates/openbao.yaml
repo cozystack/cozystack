@@ -15,7 +15,6 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   valuesFrom:
@@ -29,6 +28,14 @@ spec:
       server:
         podManagementPolicy: Parallel
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
+        # Ensure the StatefulSet's data PVC is removed when the release is
+        # deleted. Without this, the upstream chart leaves the PVC orphaned
+        # (StatefulSet volumeClaimTemplates are never garbage-collected by
+        # default). Rendered onto the StatefulSet by the upstream chart from
+        # server.persistentVolumeClaimRetentionPolicy. See issue #3058.
+        persistentVolumeClaimRetentionPolicy:
+          whenDeleted: Delete
+          whenScaled: Retain
         dataStorage:
           enabled: true
           size: {{ .Values.size }}

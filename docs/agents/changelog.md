@@ -6,6 +6,20 @@ This file contains detailed instructions for AI-powered IDE on how to generate c
 
 Follow these instructions when the user explicitly asks to generate a changelog.
 
+## Scope and boundaries
+
+**Your single deliverable is the file `docs/changelogs/v<version>.md`.** Write the complete, verified changelog to that path. That is the entire task. Exit as soon as the file is written and verified against the checklist in Step 9.
+
+Unless the caller explicitly instructs otherwise:
+
+- **In the cozystack working tree**, do not run `git commit`, `git push`, `git checkout` (to switch branches), `git branch`, `git tag`, `git reset`, `git merge`, or `git rebase`. Do not write to local branches, tags, or HEAD. `git fetch` is expected and fine (see the read-only analysis list below).
+- **Do not** push to any remote, open pull requests, or issue GitHub API write calls (POST / PATCH / DELETE) for any repository.
+- In the cozystack working tree, the **only** file you create or modify is `docs/changelogs/v<version>.md`. Cloning auxiliary repositories under `_repos/` for cross-repo analysis (see Step 6) is fine; local git operations inside those disposable clones (`git checkout`, `git pull`, etc.) are allowed — just never push from them or open PRs against them.
+
+The caller — a GitHub Actions workflow in CI, or a developer running you interactively — owns branching, committing, pushing, and PR creation. They will perform those actions after you exit. Do not pre-empt them even if the working tree looks ready.
+
+Read-only analysis is expected and encouraged: `git log`, `git show`, `git fetch`, `git diff`, `gh pr view`, `gh api` GET requests, and reading any file in the repository.
+
 ## Required Tools
 
 Before generating changelogs, ensure you have access to `gh` (GitHub CLI) tool, which is used to fetch commit and PR author information. The GitHub CLI is used to correctly identify PR authors from commits and pull requests.
@@ -22,7 +36,7 @@ When the user asks to generate a changelog, follow these steps in the specified 
 - [ ] Step 5: Get the list of commits for the release period
 - [ ] Step 6: Check additional repositories (website is REQUIRED, optional repos if tags exist)
   - [ ] **MANDATORY**: Check website repository for documentation changes WITH authors and PR links via GitHub CLI
-  - [ ] **MANDATORY**: Check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy) for tags during release period
+  - [ ] **MANDATORY**: Check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy, external-apps-example, ansible-cozystack) for tags during release period
   - [ ] **MANDATORY**: For ALL commits from additional repos, get GitHub username via CLI, prioritizing PR author over commit author.
 - [ ] Step 7: Analyze commits (extract PR numbers, authors, user impact)
   - [ ] **MANDATORY**: For EVERY PR in main repo, get PR author via `gh pr view <PR_NUMBER> --json author --jq .author.login` (do NOT skip this step)
@@ -40,11 +54,18 @@ This is necessary to get up-to-date information about tags and commits from the 
 
 ### 2. Checking current branch
 
-Make sure we are on the `main` branch:
+Verify the working tree is at a sensible starting point. Two configurations are valid:
 
-```bash
-git branch --show-current
-```
+- **Interactive use:** the working tree is on the `main` branch.
+  ```bash
+  git branch --show-current   # should print "main"
+  ```
+- **CI use:** HEAD is detached at the release tag being generated (this is how `.github/workflows/tags.yaml` runs).
+  ```bash
+  git describe --exact-match HEAD   # should print e.g. "v1.3.1"
+  ```
+
+If neither holds, stop — the caller invoked you from the wrong place. Do **not** switch branches yourself; the "Scope and boundaries" section forbids it.
 
 ### 3. Determining release type and previous version
 
@@ -89,40 +110,42 @@ git branch --show-current
 
 **Important**: Determine if you're generating a changelog for a **minor release** (vX.Y.0) or a **patch release** (vX.Y.Z where Z > 0).
 
+**⚠️ CRITICAL — use the tag, not HEAD:** Always compare the previous version against the **tag for the release you are generating** (e.g. `v1.3.1`), never against `HEAD`. Patch releases are cut from `release-X.Y` branches, so when CI checks out the tag and runs `git log v<prev>..HEAD` you might get the right answer — but if the tag is missing locally, or if a developer runs this on `main`, `HEAD` will contain commits merged to main that are NOT in the release. Using the tag explicitly removes this footgun.
+
 **For patch releases (vX.Y.Z where Z > 0):**
-Get the list of commits starting from the previous patch version to HEAD:
+Get the list of commits between the previous patch tag and the new tag:
 
 **⚠️ CRITICAL: Do NOT use --first-parent flag! It will skip merge commits including backports!**
 
 ```bash
-# Get all commits including merge commits (backports)
-git log <previous_version>..HEAD --pretty=format:"%h - %s (%an, %ar)"
+# Get all commits including merge commits (backports), bounded by the new tag
+git log v<previous_version>..v<new_version> --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 For example, if generating changelog for `v0.37.2`:
 ```bash
-git log v0.37.1..HEAD --pretty=format:"%h - %s (%an, %ar)"
+git log v0.37.1..v0.37.2 --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 **⚠️ IMPORTANT: Check for backports:**
 - Look for commits with "[Backport release-X.Y]" in the commit message
 - For backport PRs, find the original PR number mentioned in the backport commit message or PR description
 - Use the original PR author (not the backport PR author) when creating changelog entries
-- Include both the original PR number and backport PR number in the changelog entry (e.g., `#1606, #1609`)
+- **MUST** combine the original and backport into a **single entry** with both PR numbers (e.g. `#1606, backport #1609`). Do NOT list the original and the backport as two separate entries — that produces duplicates in the changelog.
 
 **For minor releases (vX.Y.0):**
-Minor releases must include **all changes** from patch releases of the previous minor version. Get commits from the previous minor release:
+Minor releases must include **all changes** from patch releases of the previous minor version. Get commits from the previous minor release tag up to the new tag:
 
 **⚠️ CRITICAL: Do NOT use --first-parent flag! It will skip merge commits including backports!**
 
 ```bash
 # For v0.38.0, get all commits since v0.37.0 (including all patch releases v0.37.1, v0.37.2, etc.)
-git log v<previous_minor_version>..HEAD --pretty=format:"%h - %s (%an, %ar)"
+git log v<previous_minor_version>..v<new_version> --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 For example, if generating changelog for `v0.38.0`:
 ```bash
-git log v0.37.0..HEAD --pretty=format:"%h - %s (%an, %ar)"
+git log v0.37.0..v0.38.0 --pretty=format:"%h - %s (%an, %ar)"
 ```
 
 This will include all commits from v0.37.1, v0.37.2, v0.37.3, etc., up to v0.38.0.
@@ -148,6 +171,8 @@ Cozystack release may include changes from related repositories. Check and inclu
 - [https://github.com/cozystack/boot-to-talos](https://github.com/cozystack/boot-to-talos)
 - [https://github.com/cozystack/cozyhr](https://github.com/cozystack/cozyhr)
 - [https://github.com/cozystack/cozy-proxy](https://github.com/cozystack/cozy-proxy)
+- [https://github.com/cozystack/external-apps-example](https://github.com/cozystack/external-apps-example)
+- [https://github.com/cozystack/ansible-cozystack](https://github.com/cozystack/ansible-cozystack)
 
 **⚠️ IMPORTANT**: You MUST check ALL optional repositories for tags created during the release period. Do NOT skip this step even if you think there might not be any tags. Use the process below to verify.
 
@@ -158,7 +183,7 @@ Cozystack release may include changes from related repositories. Check and inclu
    # Get dates for the release period
    cd /path/to/cozystack
    RELEASE_START=$(git log -1 --format=%ai v<previous_version>)
-   RELEASE_END=$(git log -1 --format=%ai HEAD)
+   RELEASE_END=$(git log -1 --format=%ai v<new_version>)
    ```
 
 2. **Check for commits in website repository (always required):**
@@ -195,20 +220,20 @@ Cozystack release may include changes from related repositories. Check and inclu
 
 3. **For optional repositories, check if tags exist during release period:**
 
-   **⚠️ MANDATORY: You MUST check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy). Do NOT skip any repository!**
+   **⚠️ MANDATORY: You MUST check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy, external-apps-example, ansible-cozystack). Do NOT skip any repository!**
 
    **Use the helper script:**
    ```bash
    # Get release period dates
    RELEASE_START=$(git log -1 --format=%ai v<previous_version>)
-   RELEASE_END=$(git log -1 --format=%ai HEAD)
+   RELEASE_END=$(git log -1 --format=%ai v<new_version>)
    
    # Run the script to check all optional repositories
    ./docs/changelogs/hack/check-optional-repos.sh "$RELEASE_START" "$RELEASE_END"
    ```
    
    The script will:
-   - Check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy)
+   - Check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy, external-apps-example, ansible-cozystack)
    - Look for tags created during the release period
    - Get commits between tags (if tags exist) or by date range (if no tags)
    - Extract PR numbers from commit messages
@@ -256,14 +281,14 @@ Cozystack release may include changes from related repositories. Check and inclu
 
 ```bash
 # Extract all PR numbers from commit messages in the release range (including merge commits)
-git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#'
+git log v<previous_version>..v<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#'
 ```
 
 **⚠️ IMPORTANT: Handle backports correctly:**
 - Backport PRs have format: `[Backport release-X.Y] <original title> (#BACKPORT_PR_NUMBER)`
 - The backport commit message or PR description usually mentions the original PR number
 - For backport entries in changelog, use the original PR author (not the backport PR author)
-- Include both original and backport PR numbers in the changelog entry (e.g., `#1606, #1609`)
+- **MUST** combine the original and backport PR into a **single changelog entry** with both PR numbers (e.g. `#1606, backport #1609`). NEVER list the original and the backport as two separate entries — that produces visible duplicates and was the primary defect that motivated this rule.
 - To find original PR from backport: Check the backport PR description or commit message for "Backport of #ORIGINAL_PR"
 
 **For each PR number, get the author:**
@@ -277,7 +302,7 @@ git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+'
    ```bash
    # Usage: Get PR author - MANDATORY for EVERY PR
    # Loop through ALL PR numbers and get PR author (including backports)
-   git log <previous_version>..<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#' | while read PR_NUMBER; do
+   git log v<previous_version>..v<new_version> --format="%s%n%b" | grep -oE '#[0-9]+' | sort -u | tr -d '#' | while read PR_NUMBER; do
      # Check if this is a backport PR
      BACKPORT_INFO=$(gh pr view "$PR_NUMBER" --json body --jq '.body' 2>/dev/null | grep -i "backport of #" || echo "")
      if [ -n "$BACKPORT_INFO" ]; then
@@ -421,6 +446,8 @@ Create a new changelog file in the format matching previous versions:
 
 3. **Entry format:**
    - Use the format: `* **Brief description**: detailed description ([**@username**](https://github.com/username) in #PR_NUMBER)`
+   - **⚠️ The brief description and the detailed description MUST NOT be the same string.** The brief description is typically the conventional-commit subject (e.g. `fix(api): drop legacy field`); the detailed description is a one-or-two-sentence explanation of what the change means for users — what is fixed, what is now possible, what behavior changed. If you find yourself writing `* **fix(foo): X**: fix(foo): X (...)` you have not done the second half of the work — go read the PR body or commit diff and write the user-facing description.
+   - **⚠️ Do NOT invent entries.** Every entry must correspond to a commit in the `git log v<previous>..v<new>` range. If you can't find a commit for an entry you wrote, drop the entry. PR numbers from outside the release range (e.g. PRs from years ago, or PRs that were merged after the tag commit) MUST NOT appear in the changelog.
    - **CRITICAL - Get authorship correctly**: 
      - **ALWAYS use PR author, not commit author**: Extract PR number from commit message, then use `gh pr view` to get the PR author. The commit author (especially for squash/merge commits) is usually the person who merged the PR (or GitHub bot), NOT the person who wrote the code.
        ```bash
@@ -478,37 +505,43 @@ Create a new changelog file in the format matching previous versions:
    Since you've already generated the changelog with all PR authors correctly identified, simply extract GitHub usernames from the changelog entries:
    
    ```bash
-   # Extract all GitHub usernames from the current release changelog
-   # This method is simpler and more reliable than extracting from git history
-   
-   # For patch releases: extract from the current changelog file
-   grep -oE '\[@[a-zA-Z0-9_-]+\]' docs/changelogs/v<version>.md | \
-     sed 's/\[@/@/' | sed 's/\]//' | \
-     sort -u
-   
-   # For minor releases: extract from the current changelog file
-   grep -oE '\[@[a-zA-Z0-9_-]+\]' docs/changelogs/v<version>.md | \
-     sed 's/\[@/@/' | sed 's/\]//' | \
+   # Extract all GitHub usernames from the current release changelog,
+   # filtering out CI/bot accounts that should not appear as human contributors.
+   # This method is simpler and more reliable than extracting from git history.
+   grep -oE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v<version>.md | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u
    ```
    
+   **⚠️ MANDATORY: Exclude bot/CI accounts from the human Contributors list.** Accounts whose login starts with `app/`, ends with `[bot]`, or matches `cozystack-ci`, `github-actions`, `dependabot`, or `renovate` represent automation, not human contributions, and must NOT appear under "Contributors". They may legitimately appear in **entry attribution** (e.g. a Renovate PR is attributed to `@app/renovate`) — but never in the contributors list.
+   
    **Get all previous contributors (to identify new ones):**
    ```bash
-   # Extract GitHub usernames from all previous changelogs
-   grep -hE '\[@[a-zA-Z0-9_-]+\]' docs/changelogs/v*.md | \
-     grep -oE '@[a-zA-Z0-9_-]+' | \
+   # Extract GitHub usernames from all previous changelogs (filtering out bot/CI accounts).
+   # Exclude the current release file (v<version>.md) — otherwise current contributors
+   # would also appear in the "previous" set, hiding real first-time contributors.
+   find docs/changelogs -maxdepth 1 -name 'v*.md' ! -name 'v<version>.md' -print0 | \
+     xargs -0 grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/previous_contributors.txt
    ```
    
    **Identify new contributors (first-time contributors):**
    ```bash
-   # Get current release contributors from the changelog
-   grep -oE '@[a-zA-Z0-9_-]+' docs/changelogs/v<version>.md | \
+   # Get current release contributors from the changelog (filtering out bot/CI accounts)
+   grep -oE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' docs/changelogs/v<version>.md | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/current_contributors.txt
    
-   # Get all previous contributors
-   grep -hE '@[a-zA-Z0-9_-]+' docs/changelogs/v*.md | \
-     grep -oE '@[a-zA-Z0-9_-]+' | \
+   # Get all previous contributors, excluding the current release file
+   # (filtering out bot/CI accounts)
+   find docs/changelogs -maxdepth 1 -name 'v*.md' ! -name 'v<version>.md' -print0 | \
+     xargs -0 grep -hoE '\[\*\*@[a-zA-Z0-9_/-]+\*\*\]' | \
+     sed -E 's|\[\*\*@||; s|\*\*\]||' | \
+     grep -viE '^(app/|.*\[bot\]$|cozystack-ci$|github-actions$|dependabot$|renovate$)' | \
      sort -u > /tmp/all_previous_contributors.txt
    
    # Find new contributors (those in current but not in previous)
@@ -569,7 +602,7 @@ Create a new changelog file in the format matching previous versions:
 - [ ] Step 5 completed: **ALL commits included** (including merge commits and backports) - do not skip any commits
 - [ ] Step 5 completed: **Backports identified and handled correctly** - original PR author used, both original and backport PR numbers included
 - [ ] Step 6 completed: Website repository checked for documentation changes WITH authors and PR links via GitHub CLI
-- [ ] Step 6 completed: **ALL** optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy) checked for tags during release period
+- [ ] Step 6 completed: **ALL** optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy, external-apps-example, ansible-cozystack) checked for tags during release period
 - [ ] Step 6 completed: For ALL commits from additional repos, GitHub username obtained via GitHub CLI (not skipped). For commits with PR numbers, PR author used via `gh pr view` (not commit author)
 - [ ] Step 7 completed: For EVERY PR in main repo (including backports), PR author obtained via `gh pr view <PR_NUMBER> --json author --jq .author.login` (not skipped or assumed). Commit author NOT used - always use PR author
 - [ ] Step 7 completed: **Backports verified** - for each backport PR, original PR found and original PR author used in changelog
@@ -606,6 +639,8 @@ Create a new changelog file in the format matching previous versions:
 **Save the changelog:**
 Save the changelog to file `docs/changelogs/v<version>.md` according to the version for which the changelog is being generated.
 
+**Then exit.** Do not commit, push, create a branch, or open a pull request — the caller handles all git and GitHub operations after you return. See the "Scope and boundaries" section at the top of this document.
+
 ### Important notes
 
 - **After fetch with --force** local tags are up-to-date, use them for work
@@ -628,7 +663,7 @@ Save the changelog to file `docs/changelogs/v<version>.md` according to the vers
 
 - **Additional repositories (Step 6) - MANDATORY**: 
   - **⚠️ CRITICAL**: Always check the **website** repository for documentation changes during the release period. This is a required step and MUST NOT be skipped.
-  - **⚠️ CRITICAL**: You MUST check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy) for tags during the release period. Do NOT skip any repository even if you think there might not be tags.
+  - **⚠️ CRITICAL**: You MUST check ALL optional repositories (talm, boot-to-talos, cozyhr, cozy-proxy, external-apps-example, ansible-cozystack) for tags during the release period. Do NOT skip any repository even if you think there might not be tags.
   - **CRITICAL**: For ALL entries from additional repositories (website and optional), you MUST:
     - **MANDATORY**: Extract PR number from commit message first
     - **MANDATORY**: For commits with PR numbers, ALWAYS use `gh pr view <PR_NUMBER> --repo cozystack/<repo> --json author --jq .author.login` to get PR author (not commit author)
@@ -637,7 +672,7 @@ Save the changelog to file `docs/changelogs/v<version>.md` according to the vers
     - **MANDATORY**: Do NOT use commit author for PRs - always use PR author
     - Include PR link or commit hash reference
     - Format: `* **[repo] Description**: details ([**@username**](https://github.com/username) in cozystack/repo#123)`
-  - For **optional repositories** (talm, boot-to-talos, cozyhr, cozy-proxy), you MUST check ALL of them for tags during the release period. Use the loop provided in Step 6 to check each repository systematically.
+  - For **optional repositories** (talm, boot-to-talos, cozyhr, cozy-proxy, external-apps-example, ansible-cozystack), you MUST check ALL of them for tags during the release period. Use the loop provided in Step 6 to check each repository systematically.
   - When including changes from additional repositories, use the format: `[repo-name] Description` and link to the repository's PR/issue if available
   - **Prefer PR numbers over commit hashes**: For commits from additional repositories, extract PR number from commit message using GitHub API. Use PR format (`cozystack/website#123`) instead of commit hash (`cozystack/website@abc1234`) when available
   - **Never add entries without author and PR/commit reference**: Every entry from additional repositories must have both author and link

@@ -37,10 +37,10 @@
     {{- $values := $Values -}}
     {{- $ctx := . -}}
     {{- range $ak := $appKey -}}
-      {{- $values = ternary (default dict) (index $values $ak | default dict) (empty $values) -}}
-      {{- $ctx = ternary (default dict) (index $ctx $ak | default dict) (empty $ctx) -}}
+      {{- $values = ternary (dict) (index $values $ak | default dict) (empty $values) -}}
+      {{- $ctx = ternary (dict) (index $ctx $ak | default dict) (empty $ctx) -}}
     {{- end -}}
-    {{- $spec := default dict -}}
+    {{- $spec := dict -}}
     {{- if $ctx -}}
       {{- $spec = $ctx -}}
     {{- else if $values -}}
@@ -69,10 +69,10 @@
     {{- $values := $Values -}}
     {{- $ctx := . -}}
     {{- range $ak := $appKey -}}
-      {{- $values = ternary (default dict) (index $values $ak | default dict) (empty $values) -}}
-      {{- $ctx = ternary (default dict) (index $ctx $ak | default dict) (empty $ctx) -}}
+      {{- $values = ternary (dict) (index $values $ak | default dict) (empty $values) -}}
+      {{- $ctx = ternary (dict) (index $ctx $ak | default dict) (empty $ctx) -}}
     {{- end -}}
-    {{- $spec := default dict -}}
+    {{- $spec := dict -}}
     {{- if $values -}}
       {{- $spec = $values -}}
     {{- else if $ctx -}}

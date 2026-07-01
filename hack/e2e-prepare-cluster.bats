@@ -165,6 +165,17 @@ machine:
           device_ownership_from_security_context = true
     path: /etc/cri/conf.d/20-customization.part
     op: create
+  - op: overwrite
+    path: /etc/lvm/lvm.conf
+    permissions: 0o644
+    content: |
+      backup {
+        backup = 0
+        archive = 0
+      }
+      devices {
+        global_filter = [ "r|^/dev/drbd.*|", "r|^/dev/dm-.*|", "r|^/dev/zd.*|", "r|^/dev/loop.*|" ]
+      }
 
 cluster:
   apiServer:
@@ -220,7 +231,16 @@ EOF
   fi
 
   rm -f controlplane.yaml worker.yaml talosconfig kubeconfig
+  # Pin Kubernetes to v1.33.12. talosctl v1.13.5 now defaults to a much newer
+  # k8s (1.36.x) that is outside cozystack's supported range, so e2e pins back
+  # to the 1.33 line. v1.33.12 also carries the fix for the
+  # kube-controller-manager VAP status type-checker nil-pointer panic on
+  # `additionalProperties: true` schemas (kubernetes/kubernetes#135155,
+  # backported to release-1.33 in #136958, first released in v1.33.10); without
+  # it, cozystack-api's aggregated Tenant schema crash-loops KCM during install.
+  # See cozystack#2863.
   talosctl gen config --with-secrets secrets.yaml cozystack https://192.168.123.10:6443 \
+           --kubernetes-version v1.33.12 \
            --config-patch=@patch.yaml --config-patch-control-plane @patch-controlplane.yaml
 }
 
@@ -235,11 +255,21 @@ EOF
 }
 
 @test "Bootstrap Talos cluster" {
-  # Bootstrap etcd on the first node
-  timeout 10 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 1; done'
+  # Bootstrap etcd on the first node.
+  # Retry for up to 60s: talosctl bootstrap refuses with "time is not in
+  # sync yet" until NTP converges on a freshly booted node, which on fast
+  # ephemeral runners can take several attempts of ~5s each.
+  timeout 60 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 2; done'
 
-  # Wait until etcd is healthy
-  if ! timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
+  # Wait until etcd is healthy.
+  # Budget is 5m, not 3m: a 3-node etcd converges via Talos's serialized
+  # learner promotion (etcd admits one learner at a time), so the third member
+  # is only promoted after the second is fully caught up. On a loaded ephemeral
+  # runner this deterministic path can legitimately approach ~3m wall clock —
+  # a 180s ceiling photo-finishes against it and times out a cluster that is
+  # actually healthy. The wait itself is already event-driven (poll until
+  # members respond); only the ceiling needed widening.
+  if ! timeout 300 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
     talosctl dmesg -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 || true
     exit 1
   fi

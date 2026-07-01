@@ -5,8 +5,8 @@ sourceRef:
   path: /
 migrations:
   enabled: false
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.2.1@sha256:e8fcf006a4451fc0e961455e9b27a61b7103ee49b1a81fe5e4662ffed093fad6
-  targetVersion: 37
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.0@sha256:8bf61f17e99eb4a3365394e3d97ac52a1d68cc84aa104894ecb09de25721dc1d
+  targetVersion: 48
 # Bundle deployment configuration
 bundles:
   system:
@@ -14,6 +14,17 @@ bundles:
     variant: "isp-full" # Options: "isp-full", "isp-full-generic", "isp-hosted", "distro-full"
   iaas:
     enabled: false
+    # gpu-operator variant selector — applies when cozystack.gpu-operator is
+    # in bundles.enabledPackages. "default" runs the vfio-pci passthrough
+    # stack (whole GPU → one VM); "vgpu" runs the vGPU Manager stack. The
+    # platform mirrors this into the KubeVirt CR: passthrough auto-wires the
+    # HostDevices feature gate plus a default permittedHostDevices.pciHostDevices
+    # table covering common NVIDIA datacenter GPUs (vendor 10DE); vgpu
+    # auto-wires permittedHostDevices.mediatedDevices plus a starter
+    # mediatedDevicesConfiguration. Operators with additional or non-NVIDIA
+    # cards extend the defaults via gpu.permittedHostDevices /
+    # gpu.mediatedDevicesConfiguration / gpu.replaceDefaults below.
+    gpuOperatorVariant: default
   paas:
     enabled: false
   naas:
@@ -38,6 +49,13 @@ networking:
 publishing:
   host: "example.org"
   ingressName: tenant-root
+  # Optional namespace of a SEPARATE Gateway / ingressClass that system
+  # components attach their admin routes to (currently Keycloak) — e.g. one
+  # bound to a private IP, unreachable from the public internet. Empty means
+  # admin endpoints share the same ingress as everything else (ingressName).
+  # The private Gateway itself is NOT created by cozystack; provision it out
+  # of band, then point this at its namespace to move admin traffic onto it.
+  ingressNameAdmin: ""
   exposedServices:
     - api
     - dashboard
@@ -45,9 +63,259 @@ publishing:
     - cdi-uploadproxy
   apiServerEndpoint: "" # example: "https://api.example.org"
   externalIPs: []
+  # Mechanism-agnostic LoadBalancer exposure — the foundation for migrating
+  # the host ingress off the deprecated Service.spec.externalIPs (KEP-5707).
+  # When name is set, the platform renders a cluster-scoped ExposureClass
+  # and the host ingress (with externalIPs empty) publishes its Service as
+  # type: LoadBalancer; the cozystack-controller translates the class into
+  # the chosen backend's VIP pool and announcer:
+  #   externalIPs - node-IP pin, no pool/announcer (the historical default)
+  #   metallb     - metallb.io IPAddressPool + L2Advertisement
+  #   cilium      - CiliumLoadBalancerIPPool + CiliumL2AnnouncementPolicy
+  #   robotlb     - cloud (Hetzner) LB; allocation/announcement off-cluster
+  # Leave name empty (default) to keep the externalIPs path unchanged.
+  exposureClass:
+    name: ""
+    backend: externalIPs # externalIPs (default) | metallb | cilium | robotlb
+    addresses: [] # VIP CIDRs or start-end ranges (metallb, cilium backends)
+    l2: true # L2 (ARP/NDP) announcement for bare-metal backends
+    isDefault: true # resolve no-class ServiceExposures to this class
+  # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
+  # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
+  # problem (intra-cluster traffic to the cluster's own public hostnames
+  # arrives at ingress-nginx without the PROXY header it now requires).
+  # Single cozystack-side switch: flipping this to true configures both
+  # pieces in one go — ingress-nginx use-proxy-protocol and the
+  # cozystack.ouroboros Package CR.
+  #
+  # TALOS RE-RENDER NOTE (host scope only): the host CoreDNS is a
+  # Talos-managed Deployment; ouroboros mutates its live Corefile in
+  # place between BEGIN/END markers. A Talos machine-config push or
+  # upgrade re-renders the Corefile and overwrites the markers — there
+  # is a flap window of up to one ouroboros reconcile loop (bounded
+  # by `controller.resync`, default 10 minutes) until the controller
+  # re-applies the block. The reconcile loop is ALSO event-driven on
+  # Ingress/Gateway watches, so on a busy cluster the window often
+  # closes much sooner — but on a stable production cluster with no
+  # incidental Ingress/Gateway churn, the upper bound is the resync
+  # interval. In-cluster DNS for hairpinned hostnames briefly returns
+  # the upstream LB IP instead of the proxy ClusterIP during that
+  # window, which fails the same way pre-PR behaviour fails.
+  # Acceptable, but worth knowing during a Talos roll.
+  #
+  # PRECONDITION: the upstream L4 load balancer / WAN edge in front of
+  # ingress-nginx MUST already be injecting PROXY-protocol v1 headers
+  # before flipping this flag. Without that, every external request
+  # arrives at ingress-nginx without the PROXY header, ingress-nginx
+  # closes the connection, and ALL ingress traffic breaks. cozystack
+  # cannot configure that upstream LB for you — it lives outside the
+  # cluster (cloud LB, F5, MetalLB+haproxy, hcloud-cloud-controller,
+  # etc.). PROXY-protocol frames travel from the upstream LB to
+  # ingress-nginx (the LB opens a fresh TCP connection to the backend
+  # and prepends the frame on that connection), not back to the
+  # client — `nc` from a laptop will never see one. Pick one of:
+  #
+  #   * tcpdump --interface any 'port 80 or port 443' -A on the node
+  #     hosting ingress-nginx and watch for a leading "PROXY TCP4 ..."
+  #     frame on inbound TCP from the LB BEFORE flipping this flag.
+  #   * make any external HTTP request after the LB-side change but
+  #     before flipping this flag, and watch
+  #     `kubectl --namespace cozy-ingress-nginx logs deploy/ingress-nginx-controller`
+  #     for "client sent invalid proxy protocol header" — that error
+  #     means the LB started injecting PROXY frames but ingress-nginx
+  #     is not yet configured to accept them, which is the transition
+  #     state this flag is meant to resolve.
+  #
+  # If neither check shows PROXY frames, fix the upstream LB before
+  # touching this flag. Leave it false on clusters where PROXY-protocol
+  # is not yet wired at the upstream LB; ouroboros wastes resources
+  # when the bug it fixes does not exist.
+  #
+  # FAN-OUT NOTE: this flag affects ONLY the host control plane. To
+  # turn the same hairpin fix on inside a tenant cluster, also set
+  # `addons.ouroboros.enabled: true` in the per-tenant Kubernetes CR
+  # (and `addons.ingressNginx.enabled: true` is a hard precondition
+  # there). The flag does not cascade into tenants on its own.
+  #
+  # DISABLE PATH: flipping this back from true to false has TWO
+  # asymmetric effects. ingress-nginx side: the switch travels through
+  # _cluster.proxy-protocol in the cozystack-values Secret, so the next
+  # reconcile re-renders the host ingress-nginx (extra/ingress) without
+  # the use-proxy-protocol / real-ip-header / enable-real-ip keys
+  # (cozystack deliberately never sets use-forwarded-headers or
+  # compute-full-forwarded-for — those would allow any upstream proxy
+  # to spoof X-Forwarded-For without a paired proxy-real-ip-cidr — see
+  # the rationale in extra/ingress/templates/nginx-ingress.yaml). The
+  # cozystack.ingress-application Package stays the bare default
+  # throughout; the keys never ride on it. ingress-nginx then stops
+  # accepting PROXY-protocol headers. If the upstream L4 LB is
+  # still prepending PROXY frames at that moment, every external
+  # request to ingress-nginx breaks until the LB is also reconfigured
+  # — flip the LB OFF FIRST, then flip this flag. ouroboros side:
+  # stops emitting the cozystack.ouroboros Package CR, but every Package
+  # CR carries `helm.sh/resource-policy: keep`, so Helm leaves the
+  # existing Package on the cluster, ouroboros stays installed, and
+  # the live Corefile rewrite block keeps pointing at the still-running
+  # ouroboros-proxy Service. Flag-flip alone leaves ouroboros idempotent.
+  #
+  # To actually uninstall ouroboros, the operator removes the Package
+  # CR explicitly:
+  #
+  #   kubectl delete package.cozystack.io cozystack.ouroboros
+  #
+  # or adds the package name to bundles.disabledPackages. THAT is the
+  # path that triggers the chart's pre-delete Helm hook
+  # (charts/ouroboros/templates/coredns-cleanup-hook.yaml, vendored at
+  # 0.8.0) — the hook quiesces the controller, sed-strips the
+  # BEGIN/END block from the live kube-system/coredns Corefile, and
+  # restores the cleaned ConfigMap via kubectl replace. The hook is
+  # automatic; operators do NOT need to run a manual sed recipe in
+  # the normal disable path. Documentation of the hook's exact
+  # behaviour lives in the upstream chart's README.
+  #
+  # Manual cleanup recipe (only if the chart's pre-delete hook fails
+  # to land — controller pod stuck in CrashLoop blocking the quiesce
+  # step, ConfigMap RBAC drift on the namespace, helm uninstall
+  # interrupted before the hook ran). Uses a JSON merge-patch so
+  # labels, annotations, and other data keys on the ConfigMap —
+  # including any Talos-managed metadata — are preserved:
+  #
+  #   # === BEGIN cleanup-recipe ===
+  #   existing=$(kubectl --namespace kube-system get configmap coredns \
+  #     --output jsonpath='{.data.Corefile}')
+  #   cleaned=$(printf '%s\n' "$existing" \
+  #     | sed '/# === BEGIN ouroboros/,/# === END ouroboros ===/d')
+  #   kubectl --namespace kube-system patch configmap coredns \
+  #     --type merge \
+  #     --patch "$(jq --null-input --arg c "$cleaned" \
+  #         '{data: {Corefile: $c}}')"
+  #   kubectl --namespace kube-system rollout restart deployment/coredns
+  #   # === END cleanup-recipe ===
+  proxyProtocol: false
+  # Acknowledgement gate for the helm.sh/resource-policy: keep
+  # asymmetry (NOT a substitute for the chart's pre-delete cleanup
+  # hook — the hook handles the Corefile patch automatically when
+  # the chart actually uninstalls). The hazard this gate catches:
+  # flipping publishing.proxyProtocol from true to false stops
+  # emitting the cozystack.ouroboros Package CR, but resource-policy:
+  # keep means Helm leaves the existing Package on the cluster.
+  # ouroboros keeps running, the cleanup hook never fires, the
+  # rewrite block stays live. The platform render fails until the
+  # operator either restores proxyProtocol: true OR runs `kubectl
+  # delete package.cozystack.io cozystack.ouroboros` (which lets
+  # the chart actually uninstall and the hook run) and sets this
+  # flag to true to confirm. Once the cluster has been clean for
+  # one reconcile cycle, flip back to false.
+  #
+  # KNOWN HOLE: the guard keys off a `lookup` for the cozystack.ouroboros
+  # Package CR on the cluster. An operator who manually
+  # `kubectl delete package cozystack.ouroboros` before flipping the
+  # flag back bypasses the check entirely (the lookup returns nil, the
+  # render proceeds). In the chart 0.8.0 that path is mostly safe —
+  # `kubectl delete package` triggers helm uninstall and the chart's
+  # pre-delete hook patches the Corefile automatically. The hole is
+  # the rare case where the hook itself fails (controller pod stuck,
+  # ConfigMap RBAC drift, hook timeout) and the operator never
+  # noticed. The values comment + the acknowledge gate are
+  # defence-in-depth, not an airtight lock; an operator deliberately
+  # working around them gets to keep the broken pieces.
+  proxyProtocolAcknowledgeUnclean: false
   certificates:
     solver: http01 # "http01" or "dns01"
     issuerName: letsencrypt-prod
+    # Shared wildcard issuance on the default ingress-nginx path
+    # (gateway.enabled=false). Opt-in, OFF by default. When set to true
+    # with solver=dns01 and no operator-provided wildcardSecretName, the
+    # platform issues ONE wildcard Certificate (*.<root-host> +
+    # <root-host>) via the DNS-01 ClusterIssuer and serves it as the
+    # ingress controller's default SSL certificate, so system services
+    # (dashboard, grafana, keycloak, harbor, …) stop minting a per-host
+    # ACME cert each. This avoids the Let's Encrypt per-domain rate limit
+    # once a deployment exceeds ~50 endpoints, matching the Gateway API
+    # path which issues a per-apex wildcard in dns01 mode.
+    #
+    # Ignored when solver=http01 (HTTP-01 cannot issue wildcards) and
+    # when gateway.enabled=true (the TenantGateway controller issues the
+    # wildcard there).
+    #
+    # COVERAGE CAVEAT — same contract as wildcardSecretName below: a
+    # single-label wildcard *.<root-host> covers <service>.<root-host>
+    # but NOT a custom service host outside it (e.g. a keycloak
+    # ingress.host / harbor host / grafana host set to auth.example.com,
+    # or a nested a.b.<root-host>). When this is true, services whose
+    # host is not covered fall back to the default SSL certificate and
+    # would serve the wrong certificate. Only enable it when every
+    # exposed system service uses a <service>.<root-host> host (the
+    # default), or provide a covering wildcardSecretName instead. Left
+    # OFF by default precisely so a dns01 cluster with a custom service
+    # host is never silently switched on upgrade.
+    #
+    # BLAST RADIUS — like wildcardSecretName, the chosen name rides the
+    # _cluster channel, which every child tenant inherits verbatim. A
+    # child tenant that inherits the root ingress has nested service
+    # hosts (<service>.<tenant>.<root-host>) that *.<root-host> does NOT
+    # cover; enabling this makes those services drop per-host ACME and
+    # serve the root default certificate too. This is not root-tenant
+    # scoped — only enable it when child-tenant hosts are also covered
+    # (or left on the Gateway path). Per-tenant wildcards are tracked
+    # separately.
+    #
+    # FIRST-ISSUANCE WINDOW: when this is turned on, consumers drop their
+    # per-host certs immediately, but the DNS-01 wildcard takes a few
+    # minutes to issue. Until the Secret is populated ingress-nginx serves
+    # its self-signed default cert (browser warning), then self-heals —
+    # the same delay per-host ACME has on first issue, which an
+    # operator-provided wildcardSecretName avoids only by pre-existing.
+    wildcard: false
+    # Operator-provided wildcard certificate. When set, platform
+    # services and the root tenant's ingress/Gateway serve under this
+    # pre-existing TLS Secret instead of minting per-host ACME certs.
+    # The Secret must already exist in the publishing namespace — the
+    # one that runs the root ingress controller / Gateway, which follows
+    # publishing.ingressName (tenant-root by default) — be of type
+    # kubernetes.io/tls, and cover the root host (typically a wildcard
+    # *.<root-host> + <root-host>). Only the
+    # NAME is distributed through the platform values channel — the
+    # cert/key material is never broadcast. Leave empty to keep ACME
+    # issuance (solver/issuerName above). This is per-controller and
+    # currently applies to the root tenant only; propagating it to
+    # child tenants requires replicating the Secret into each tenant
+    # namespace (tracked separately).
+    wildcardSecretName: ""
+    # Rate-limit note: every tenant with gateway=true issues one
+    # Certificate for its wildcard + apex hostnames. If many tenants share
+    # the same apex domain with issuerName=letsencrypt-prod, the cluster
+    # can hit the Let's Encrypt limits (50 certs / registered domain /
+    # week, 5 duplicate certs / week, 300 new orders / account / 3h).
+    # Use letsencrypt-stage for non-production clusters or gate the
+    # number of certificates per tenant via tenant.spec.resourceQuotas
+    # with count/certificates.cert-manager.io. See
+    # https://letsencrypt.org/docs/rate-limits/.
+    #
+    # DNS-01 solver configuration. Read only when solver=dns01. The
+    # provider key selects which sub-block is consumed; others are
+    # ignored. Cloudflare keeps backwards-compatible defaults so the
+    # most common opt-in path (cloudflare token + dns01) needs only
+    # solver=dns01 + dns01.cloudflare.secretName.
+    dns01:
+      provider: cloudflare # cloudflare | route53 | digitalocean | rfc2136
+      cloudflare:
+        secretName: cloudflare-api-token-secret
+        secretKey: api-token
+      route53:
+        region: ""
+        accessKeyID: ""
+        secretName: ""
+        secretKey: secret-access-key
+      digitalocean:
+        secretName: digitalocean-api-token-secret
+        secretKey: access-token
+      rfc2136:
+        nameserver: ""
+        tsigKeyName: ""
+        tsigAlgorithm: HMACSHA256
+        secretName: ""
+        secretKey: tsig-secret-key
 # Authentication configuration
 authentication:
   oidc:
@@ -59,10 +327,66 @@ authentication:
     # userinfo, logout) through this URL while keeping browser redirects on the external URL.
     # Example: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
     keycloakInternalUrl: ""
+# Gateway API configuration
+gateway:
+  # Enable Gateway API support across the platform. When true:
+  #   - cert-manager ClusterIssuers use an http01.gatewayHTTPRoute solver
+  #     that attaches to the root tenant's Gateway, so Certificate issuance
+  #     works for tenants whose ingress is via Gateway API rather than
+  #     ingress-nginx.
+  #   - Exposed services (dashboard, keycloak, harbor, bucket, grafana,
+  #     cozystack-api, vm-exportproxy, cdi-uploadproxy) render an
+  #     HTTPRoute attached to the tenant's Gateway.
+  # Per-tenant opt-in is still governed by tenant.spec.gateway=true, which
+  # materialises the Gateway itself. This flag only controls platform-wide
+  # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
+  enabled: false
+  # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
+  # Gateway. The publishing tenant namespace is always included implicitly.
+  # Additional entries must be the exact namespace name (matched on the
+  # built-in kubernetes.io/metadata.name label). Tenants not on this list
+  # cannot attach a route to somebody else's Gateway, which prevents
+  # hostname hijacking across tenants.
+  #
+  # The `default` namespace is included because the Kubernetes API's
+  # TLSRoute (shipped by the cozystack-api package) has to live next to
+  # the `kubernetes` Service it points at, which is always in `default`.
+  attachedNamespaces:
+    - cozy-cert-manager
+    - cozy-dashboard
+    - cozy-keycloak
+    - cozy-system
+    - cozy-harbor
+    - cozy-bucket
+    - cozy-kubevirt
+    - cozy-kubevirt-cdi
+    - cozy-monitoring
+    - cozy-linstor-gui
+    - default
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""
-# UI branding configuration
+# UI branding configuration. The whole map is propagated verbatim into
+# _cluster.branding (the cozystack-values Secret) and consumed by the dashboard
+# (config.json) and Keycloak realm provisioning.
+#
+# Recognized keys:
+#   brandName:       realm displayName (the Keycloak login title reads it as
+#                    "Sign in to <brandName>").
+#   brandHtmlName:   realm displayNameHtml (HTML shown in the login header).
+#   loginTheme:      Keycloak login theme name; selected as the realm login
+#                    theme and used as the theme directory/name.
+#   loginThemeImage: OCI image carrying that theme under /themes/. When set
+#                    together with loginTheme, the keycloak chart mounts it via
+#                    an init container, so the theme ships without patching the
+#                    StatefulSet or the keycloak package values.
+#
+# Example:
+# branding:
+#   brandName: "Acme Platform"
+#   brandHtmlName: "<b>Acme</b> Platform"
+#   loginTheme: acme
+#   loginThemeImage: registry.example.com/acme-keycloak-theme:v1
 branding: {}
 # Container registry mirrors configuration
 #
@@ -100,3 +424,85 @@ resources:
   cpuAllocationRatio: 10
   memoryAllocationRatio: 1
   ephemeralStorageAllocationRatio: 40
+# GPU host-device wiring for VirtualMachine workloads. Auto-injected into the
+# KubeVirt CR's permittedHostDevices when bundles.enabledPackages contains
+# cozystack.gpu-operator. Without it the admission webhook rejects any VM
+# that references a GPU host-device by resourceName.
+gpu:
+  # When false (default), the lists below are appended to the platform's
+  # NVIDIA defaults. When true, the user lists fully replace the defaults
+  # — use this for clusters with only non-NVIDIA accelerators or where a
+  # strictly curated allowlist is required.
+  replaceDefaults: false
+  permittedHostDevices:
+    # PCI passthrough devices. Always rendered when non-empty regardless of
+    # gpuOperatorVariant — pciHostDevices covers both the vfio-pci passthrough
+    # path (default variant) and the post-kubevirt#16890 SR-IOV vGPU path
+    # (vgpu variant on Ada Lovelace / Blackwell, where VFs are advertised
+    # via pciHostDevices, not via mediatedDevices). Default-table coverage:
+    # H100, H200, A100 PCIe/SXM, A40, A30, A10, L40, L40S, L4, T4, V100,
+    # V100S (PCI vendor 10DE). Item shape matches KubeVirt's pciHostDevices:
+    #   - pciVendorSelector: "10DE:2335"
+    #     resourceName: nvidia.com/GH100_H200_SXM_141GB
+    #     externalResourceProvider: true
+    pciHostDevices: []
+    # Mediated (mdev) vGPU devices — pre-kubevirt#16890 path used by
+    # Pascal–Ampere on the legacy mdev driver branch. Default-table coverage:
+    # A100-40C/80C, A40-24Q/48Q, A30-24C, A10-24Q, V100D-32C, T4-16Q.
+    # Item shape matches KubeVirt's mediatedDevices:
+    #   - mdevNameSelector: NVIDIA A100-40C
+    #     resourceName: nvidia.com/A100-40C
+    #     externalResourceProvider: true
+    mediatedDevices: []
+  # mediatedDevicesConfiguration makes KubeVirt itself create mdevs on the
+  # node (vgpu variant only). The platform ships NO default here: mdev
+  # creation is delegated to the GPU Operator's vGPU Device Manager
+  # (name-based), and the mediatedDeviceTypes ids below are numeric
+  # nvidia-NNN sysfs indices that vary per GPU SKU and driver branch — no
+  # value is portable, so look yours up on the host
+  # (/sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name) before setting
+  # it. Supplying it opts into KubeVirt-driven creation on top of the
+  # Device Manager. Helm's mergeOverwrite semantics apply: a top-level key
+  # you supply REPLACES that key wholesale rather than appending. Shape
+  # matches KubeVirt's MediatedDevicesConfiguration:
+  #   mediatedDeviceTypes:
+  #     - nvidia-740
+  #   nodeMediatedDeviceTypes:
+  #     - nodeSelector:
+  #         nvidia.com/gpu.product: NVIDIA-L40S
+  #       mediatedDeviceTypes:
+  #         - nvidia-740
+  mediatedDevicesConfiguration: {}
+  # NVIDIA vGPU Manager container image (vgpu variant only). The .run is
+  # proprietary, not redistributable, so the platform cannot ship default
+  # tags — the operator builds the container per
+  # https://github.com/NVIDIA/gpu-driver-container and supplies the
+  # private-registry coordinates here. The platform forwards these as
+  # components.gpu-operator.values.gpu-operator.vgpuManager to the emitted
+  # cozystack.gpu-operator Package CR when bundles.iaas.gpuOperatorVariant
+  # is vgpu. Forwarding triggers when ANY of repository, version, image
+  # (non-default), or imagePullSecrets is set — partial values still
+  # propagate so a private-registry-with-default-tag setup is not
+  # silently dropped.
+  vgpuManager:
+    repository: ""
+    image: vgpu-manager
+    version: ""
+    imagePullSecrets: []
+  # vGPU Device Manager controls whether nvidia.com's
+  # `vgpu-device-manager` DaemonSet is deployed (vgpu variant only). The
+  # DaemonSet walks /sys/class/mdev_bus/ to auto-create mediated devices
+  # from the mediatedDeviceTypes list. Default-off because that path
+  # only exists on Pascal–Ampere (V100, T4, A100, A30, …) with the mdev
+  # driver branch — on Ada Lovelace / Blackwell (L4, L40, L40S, B100)
+  # with the vGPU 17/20 driver branch the directory is missing and the
+  # DaemonSet crash-loops with "no parent devices found". Flip to true
+  # on Pascal–Ampere clusters; leave false on Ada/Blackwell and supply
+  # SR-IOV VFs via .gpu.permittedHostDevices.pciHostDevices instead.
+  # When true the platform also lets the default name-based mediatedDevices
+  # exposure list from files/gpu-vgpu-defaults.yaml flow into the KubeVirt
+  # CR; when false those defaults are suppressed (advertising mediated
+  # resources that nothing can ever allocate is a worse footgun than
+  # missing entries).
+  vgpuDeviceManager:
+    enabled: false

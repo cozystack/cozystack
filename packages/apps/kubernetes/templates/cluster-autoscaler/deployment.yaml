@@ -1,3 +1,14 @@
+{{- /*
+  Gate the control-plane-side workloads on the parent tenant having an etcd
+  DataStore. Without it no KamajiControlPlane is ever created, Kamaji never
+  provisions -admin-kubeconfig, and rendering these Deployments would cause
+  the wait-for-kubeconfig init to CrashLoopBackOff indefinitely, consuming
+  the parent HelmRelease install timeout and triggering the very uninstall
+  remediation cycle this chart is supposed to avoid. Rendering them only
+  when $etcd is set keeps the HelmRelease Ready while flux retries on its
+  interval and picks up the DataStore as soon as the Tenant chart finishes.
+*/}}
+{{- if .Values._namespace.etcd }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -23,6 +34,8 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
       containers:
       - image: "{{ $.Files.Get "images/cluster-autoscaler.tag" | trim }}"
         name: cluster-autoscaler
@@ -56,6 +69,7 @@ spec:
         name: cloud-config
       - secret:
           secretName: {{ .Release.Name }}-admin-kubeconfig
+          optional: true
         name: kubeconfig
       serviceAccountName: {{ .Release.Name }}-cluster-autoscaler
       terminationGracePeriodSeconds: 10
@@ -105,3 +119,4 @@ rules:
     - list
     - update
     - watch
+{{- end }}

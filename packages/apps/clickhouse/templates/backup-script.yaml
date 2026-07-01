@@ -1,4 +1,10 @@
-{{- if .Values.backup.enabled }}
+{{/*
+  Legacy. Backup script Secret consumed by the chart-emitted CronJob in
+  backup-cronjob.yaml. Gated identically (including the `useSystemBucket`
+  exclusion) so the script is only materialised when the legacy CronJob
+  renders.
+*/}}
+{{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
 ---
 apiVersion: v1
 kind: Secret

@@ -3,6 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ template "opencost.fullname" . }}-install-plugins
+  namespace: {{ include "opencost.namespace" . }}
   labels:
     app: {{ template "opencost.name" . }}
     chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
@@ -38,7 +39,8 @@ data:
       VER=$(curl --silent https://api.github.com/repos/opencost/opencost-plugins/releases/latest | grep ".tag_name" | awk -F\" '{print $4}')
       {{- end }}
 
-      {{- range $pluginName, $config := .Values.plugins.configs }}
+      {{- $pluginList := include "opencost.plugins.installList" . | fromYamlArray }}
+      {{- range $pluginName := $pluginList }}
       curl -fsSLO "https://github.com/opencost/opencost-plugins/releases/download/$VER/{{ $pluginName }}.ocplugin.$OS.$ARCH"
       chmod a+rx "{{ $pluginName }}.ocplugin.$OS.$ARCH"
       {{- end }}

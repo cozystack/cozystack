@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"time"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -30,6 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer"
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -40,12 +42,16 @@ import (
 	appsinstall "github.com/cozystack/cozystack/pkg/apis/apps/install"
 	"github.com/cozystack/cozystack/pkg/apis/core"
 	coreinstall "github.com/cozystack/cozystack/pkg/apis/core/install"
+	"github.com/cozystack/cozystack/pkg/apis/sdn"
+	sdninstall "github.com/cozystack/cozystack/pkg/apis/sdn/install"
 	"github.com/cozystack/cozystack/pkg/config"
 	cozyregistry "github.com/cozystack/cozystack/pkg/registry"
 	applicationstorage "github.com/cozystack/cozystack/pkg/registry/apps/application"
+	optionstorage "github.com/cozystack/cozystack/pkg/registry/core/option"
 	tenantmodulestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantmodule"
 	tenantnamespacestorage "github.com/cozystack/cozystack/pkg/registry/core/tenantnamespace"
 	tenantsecretstorage "github.com/cozystack/cozystack/pkg/registry/core/tenantsecret"
+	securitygroupstorage "github.com/cozystack/cozystack/pkg/registry/sdn/securitygroup"
 )
 
 var (
@@ -67,10 +73,16 @@ func init() {
 	klog.SetLogger(ctrl.Log.WithName("klog"))
 	appsinstall.Install(Scheme)
 	coreinstall.Install(Scheme)
+	sdninstall.Install(Scheme)
 
 	// Register HelmRelease types.
 	if err := helmv2.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("Failed to add HelmRelease types to scheme: %w", err))
+	}
+
+	// Register the in-tree CiliumNetworkPolicy mirror backing SecurityGroup.
+	if err := securitygroupstorage.AddToScheme(mgrScheme); err != nil {
+		panic(fmt.Errorf("failed to add CiliumNetworkPolicy mirror to scheme: %w", err))
 	}
 
 	if err := corev1.AddToScheme(mgrScheme); err != nil {
@@ -78,6 +90,11 @@ func init() {
 	}
 	if err := rbacv1.AddToScheme(mgrScheme); err != nil {
 		panic(fmt.Errorf("Failed to add RBAC types to scheme: %w", err))
+	}
+
+	// Register Cozystack types for WorkloadMonitor queries.
+	if err := cozyv1alpha1.AddToScheme(mgrScheme); err != nil {
+		panic(fmt.Errorf("failed to add Cozystack types to scheme: %w", err))
 	}
 	// Add unversioned types.
 	metav1.AddToGroupVersion(Scheme, schema.GroupVersion{Version: "v1"})
@@ -168,6 +185,7 @@ func (c completedConfig) New() (*CozyServer, error) {
 		&corev1.Namespace{},
 		&corev1.Service{},
 		&rbacv1.RoleBinding{},
+		&cozyv1alpha1.WorkloadMonitor{},
 	); err != nil {
 		return nil, fmt.Errorf("failed to get informers: %w", err)
 	}
@@ -187,6 +205,13 @@ func (c completedConfig) New() (*CozyServer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to build watch client: %w", err)
 	}
+	// Dynamic client for the Option resource's providers — direct (uncached)
+	// reads of arbitrary kinds (Nodes, KubeVirt, instancetypes, …) without
+	// registering an informer for each.
+	dyn, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build dynamic client: %w", err)
+	}
 	// --- static, cluster-scoped resource for core group ---
 	coreV1alpha1Storage := map[string]rest.Storage{}
 	coreV1alpha1Storage["tenantnamespaces"] = cozyregistry.RESTInPeace(
@@ -198,10 +223,25 @@ func (c completedConfig) New() (*CozyServer, error) {
 	coreV1alpha1Storage["tenantmodules"] = cozyregistry.RESTInPeace(
 		tenantmodulestorage.NewREST(cli, watchCli),
 	)
+	coreV1alpha1Storage["options"] = cozyregistry.RESTInPeace(
+		optionstorage.NewREST(optionstorage.DefaultProviders(dyn)),
+	)
 
 	coreApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(core.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	coreApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = coreV1alpha1Storage
 	if err := s.GenericAPIServer.InstallAPIGroup(&coreApiGroupInfo); err != nil {
+		return nil, err
+	}
+
+	// --- static, namespaced resource for sdn group ---
+	sdnV1alpha1Storage := map[string]rest.Storage{}
+	sdnV1alpha1Storage["securitygroups"] = cozyregistry.RESTInPeace(
+		securitygroupstorage.NewREST(cli, watchCli),
+	)
+
+	sdnApiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(sdn.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+	sdnApiGroupInfo.VersionedResourcesStorageMap["v1alpha1"] = sdnV1alpha1Storage
+	if err := s.GenericAPIServer.InstallAPIGroup(&sdnApiGroupInfo); err != nil {
 		return nil, err
 	}
 

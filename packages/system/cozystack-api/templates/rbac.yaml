@@ -6,6 +6,12 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces", "secrets", "services"]
   verbs: ["get", "watch", "list"]
+# Hierarchical tenant quota admission reads the rendered ResourceQuota usage of
+# a parent tenant's pool to carve a child's allocation out of what is actually
+# left (see pkg/registry/apps/application/quota.go).
+- apiGroups: [""]
+  resources: ["resourcequotas"]
+  verbs: ["get", "watch", "list"]
 - apiGroups: ["rbac.authorization.k8s.io"]
   resources: ["rolebindings"]
   verbs: ["get", "watch", "list"]
@@ -24,3 +30,30 @@ rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["*"]
   verbs: ["*"]
+# Read-only sources for the Option (dropdown) resource providers.
+- apiGroups: [""]
+  resources: ["nodes", "persistentvolumeclaims"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["kubevirt.io"]
+  resources: ["kubevirts"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["instancetype.kubevirt.io"]
+  resources: ["virtualmachineclusterinstancetypes", "virtualmachineclusterpreferences"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["k8s.cni.cncf.io"]
+  resources: ["network-attachment-definitions"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["backups.cozystack.io"]
+  resources: ["backupclasses", "plans", "backups"]
+  verbs: ["get", "watch", "list"]
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["vmdisks"]
+  verbs: ["get", "watch", "list"]
+# The SecurityGroup resource is a projection over CiliumNetworkPolicy: the
+# storage CRUDs these objects with the cozystack-api ServiceAccount.
+- apiGroups: ["cilium.io"]
+  resources: ["ciliumnetworkpolicies"]
+  verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]

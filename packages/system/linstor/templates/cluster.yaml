@@ -2,6 +2,8 @@ apiVersion: piraeus.io/v1
 kind: LinstorCluster
 metadata:
   name: linstorcluster
+  labels:
+    platform.cozystack.io/no-delete: "true"
 spec:
   #nodeSelector:
   #  node-role.kubernetes.io/linstor: ""
@@ -37,6 +39,16 @@ spec:
         containers:
         - name: linstor-controller
           image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+          # Guarantee CPU/memory so the JVM keeps answering its /health probe
+          # under node contention. Requests only — see values.yaml controller.*.
+          resources:
+            {{- toYaml .Values.controller.resources | nindent 12 }}
+          # Partial override: piraeus-operator merges podTemplate as a strategic
+          # merge patch, so only these timing fields change. The operator's
+          # httpGet (GET /health on the api port) is preserved as-is.
+          livenessProbe:
+            timeoutSeconds: {{ .Values.controller.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.controller.livenessProbe.failureThreshold }}
         - name: plunger
           image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
           command:

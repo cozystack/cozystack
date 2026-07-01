@@ -3,14 +3,37 @@ kamaji:
     deploy: false
   image:
     pullPolicy: IfNotPresent
-    tag: v1.2.1@sha256:34b9af510bbad3e64ea5cd7afdffa2b31c0751009c467355c8f67f8f9c5b3513
+    tag: v1.5.0@sha256:130d5013a9b35be0013b96efefc656210cc30c6fe92a8c39c9d2ab8d47f791e0
     repository: ghcr.io/cozystack/cozystack/kamaji
   resources:
     limits:
       cpu: 200m
-      memory: 500Mi
+      memory: 512Mi
     requests:
       cpu: 100m
-      memory: 100Mi
+      memory: 256Mi
+  startupProbe:
+    httpGet:
+      path: /healthz
+      port: healthcheck
+    initialDelaySeconds: 5
+    periodSeconds: 5
+    timeoutSeconds: 3
+    successThreshold: 1
+    failureThreshold: 12
+  livenessProbe:
+    httpGet:
+      path: /healthz
+      port: healthcheck
+    initialDelaySeconds: 30
+    periodSeconds: 20
+    timeoutSeconds: 1
+  readinessProbe:
+    httpGet:
+      path: /readyz
+      port: healthcheck
+    initialDelaySeconds: 30
+    periodSeconds: 10
+    timeoutSeconds: 1
   extraArgs:
-    - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v1.2.1@sha256:34b9af510bbad3e64ea5cd7afdffa2b31c0751009c467355c8f67f8f9c5b3513
+    - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v1.5.0@sha256:130d5013a9b35be0013b96efefc656210cc30c6fe92a8c39c9d2ab8d47f791e0

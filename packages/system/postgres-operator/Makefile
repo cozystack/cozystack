@@ -3,6 +3,9 @@ export NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add cnpg https://cloudnative-pg.github.io/charts

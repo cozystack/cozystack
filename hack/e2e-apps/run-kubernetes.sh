@@ -1,12 +1,76 @@
+. hack/e2e-apps/remediation-guard.sh
+
+# Unconditional cleanup hook, invoked by cozytest.sh after this file's tests
+# (pass or fail). A failed run otherwise leaves the tenant cluster's worker-VM
+# PVCs (tens of GiB) in tenant-test, exhausting the shared tenant-quota and
+# cascade-failing every storage-heavy app that runs afterwards. Delete the
+# cluster(s) and wait for teardown so the quota is freed. Defined at file scope
+# (not inside the @test) so cozytest.sh's parent-shell EXIT trap can reach it.
+cozy_cleanup() {
+  # Delete any test-scoped tenant API LoadBalancer Services left by a failed run
+  # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
+  # test so a single selector reaps them all.
+  kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
+}
+
+# Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
+# Registered as an EXIT trap INSIDE run_kubernetes_test so it fires during THIS
+# test subshell's exit, before the success path (or cozy_cleanup) deletes the
+# tenant API LoadBalancer. crust-gather reaches the tenant only through the
+# kubeconfig's server URL (it connects directly — no host-proxy mode — and the
+# in-cluster URL is unreachable from the runner), which is the LB IP and stays
+# routable until teardown. CURRENT_TENANT_KC is a global so the handler can read
+# it regardless of function scope at EXIT-trap time.
+_tenant_snapshot_on_fail() {
+  _rc=$?
+  [ "$_rc" -eq 0 ] && return 0
+  command -v crust-gather >/dev/null 2>&1 || return 0
+  [ -n "${CURRENT_TENANT_KC:-}" ] && [ -f "${CURRENT_TENANT_KC}" ] || return 0
+  _snap="${COZY_REPORT_DIR:-_out/cozyreport}/snapshots/$(basename "${TEST_FILE:-tenant}" .bats)"
+  mkdir -p "$_snap" 2>/dev/null || true
+  echo "» capturing tenant crust-gather snapshot (${CURRENT_TENANT_KC}) before teardown"
+  # Bounded with a timeout for the same reason as the host snapshot in
+  # cozytest.sh: an unbounded collect can hang for hours and wedge the job.
+  # (timeout's own -k 30 / 300 are distinct from crust-gather's -k kubeconfig.)
+  timeout -k 30 300 crust-gather collect -k "${CURRENT_TENANT_KC}" --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" >/dev/null 2>&1 || true
+}
+
 run_kubernetes_test() {
     local version_expr="$1"
     local test_name="$2"
     local port="$3"
-    local k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
+    # Optional: when "true", enable the ouroboros addon on the Kubernetes CR
+    # and run the hairpin-NAT reconciliation assertions after the cluster is
+    # Ready. Folded in here so we don't pay a second ~25m Kamaji bringup just
+    # to flip one addon flag — kubernetes-latest passes "true", kubernetes-
+    # previous leaves it empty.
+    local enable_ouroboros="${4:-}"
+    local k8s_version
+    k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
   # Clean up stale resources from a previous failed retry
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
+
+  # Compose the optional ouroboros addon block. Indentation matches the
+  # surrounding addons map (4 spaces).
+  local ouroboros_addon=""
+  if [ "${enable_ouroboros}" = "true" ]; then
+    ouroboros_addon=$(cat <<'YAML'
+    ouroboros:
+      enabled: true
+      # logLevel=debug surfaces controller informer events for failure
+      # diagnosis; scoped to the e2e fixture only, production tenants stay
+      # on the upstream chart default (info).
+      valuesOverride:
+        ouroboros:
+          controller:
+            logLevel: debug
+YAML
+)
+  fi
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -36,6 +100,7 @@ spec:
     monitoringAgents:
       enabled: false
       valuesOverride: {}
+${ouroboros_addon}
     verticalPodAutoscaler:
       valuesOverride: {}
   controlPlane:
@@ -56,11 +121,12 @@ spec:
   host: ""
   nodeGroups:
     md0:
-      ephemeralStorage: 20Gi
+      diskSize: 20Gi
       gpus: []
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 2
+      resources: {}
       roles:
       - ingress-nginx
   storageClass: replicated
@@ -69,47 +135,110 @@ EOF
   # Wait for the tenant-test namespace to be active
   kubectl wait namespace tenant-test --timeout=20s --for=jsonpath='{.status.phase}'=Active
 
-  # Wait for the Kamaji control plane to be created (retry for up to 10 seconds)
-  timeout 10 sh -ec 'until kubectl get kamajicontrolplane -n tenant-test kubernetes-'"${test_name}"'; do sleep 1; done'
+  # Wait for the Kamaji control plane to be created. Under Flux v2.8
+  # kstatus-based health checks helm-controller can take 20-30s to dispatch
+  # the new Kubernetes HR before it renders the KamajiControlPlane CR; the
+  # old 10s budget was tight on v2.7 and consistently fails on v2.8.
+  timeout 2m sh -ec 'until kubectl get kamajicontrolplane -n tenant-test kubernetes-'"${test_name}"'; do sleep 1; done'
 
-  # Wait for the tenant control plane to be fully created (timeout after 4 minutes)
-  kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=4m
+  # Wait for the tenant control plane to be fully created. Pre-Talos this
+  # only spun up Kamaji core; after PR #2610 the apiserver pod also pulls
+  # and starts the talos-csr-signer sidecar and cert-manager has to issue
+  # the Talos PKI Certificates that gate the wait-for-kubeconfig init
+  # container, so cold-start times in a fresh sandbox crossed the original
+  # 4m budget. The 10m wait below sits well inside the
+  # helm-install-timeout: 20m annotation that cozystack-api copies from
+  # cozyrds onto the HR.
+  kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=10m
 
-  # Wait for Kubernetes resources to be ready (timeout after 2 minutes)
-  kubectl wait tcp -n tenant-test kubernetes-${test_name} --timeout=5m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+  # Wait for Kubernetes resources to be ready. Same rationale as the
+  # TenantControlPlaneCreated wait above — Talos PKI issuing + sidecar
+  # readiness probes shift the steady-state Ready point.
+  kubectl wait tcp -n tenant-test kubernetes-${test_name} --timeout=10m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
 
   # Wait for all required deployments to be available (timeout after 4 minutes)
   kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
 
-  # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
-  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
+  # Wait for the machine deployment to scale to 2 replicas. Pre-Talos this
+  # was effectively instant because KubeadmConfigTemplate had no async
+  # dependencies and CAPI/CAPK could create Machine + KubevirtMachine
+  # immediately. Post-Talos the MD bootstrap.configRef gates on the
+  # TalosConfigTemplate, which only renders once the lookup-gated Talos PKI
+  # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
+  # all exist; cold-start in a fresh CI sandbox pushes the time to first
+  # MachineSet scale-up past the old 1m budget.
+  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
-  # Update the kubeconfig to use localhost for the API server
-  yq -i ".clusters[0].cluster.server = \"https://localhost:${port}\"" "tenantkubeconfig-${test_name}"
+  # Expose the tenant Kubernetes API via a test-scoped LoadBalancer instead of
+  # `kubectl port-forward`. The host cluster runs MetalLB on the same /24 as the
+  # sandbox nodes (pool 192.168.123.200-250), so an LB IP is directly routable
+  # from the test — the in-tenant LB test below already curls such an address.
+  # Crucially, a LoadBalancer Service load-balances across ALL ready apiserver
+  # endpoints (both Kamaji control-plane pods), so a single apiserver pod restart
+  # is routed around transparently. `kubectl port-forward` instead pins to one
+  # pod and dies when that pod blips: a lone kube-apiserver restart was observed
+  # leaving localhost refusing connections for the entire 12m node-Ready wait
+  # while the cluster was in fact healthy (CAPI NodeHealthy=True on both nodes),
+  # failing the test on a dead tunnel. The LB endpoint is also stable until
+  # teardown, so the failure snapshot can still reach the tenant. Test-scoped and
+  # additive — no change to the product Kamaji/Kubernetes chart.
+  #
+  # Clean up a stale LB from a previous failed retry of this same test first.
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl apply -n tenant-test -f - <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: kubernetes-${test_name}-e2e-lb
+  labels:
+    cozystack-e2e.io/tenant-api-lb: "${test_name}"
+spec:
+  type: LoadBalancer
+  selector:
+    kamaji.clastix.io/name: kubernetes-${test_name}
+  ports:
+  - name: kube-apiserver
+    port: 6443
+    targetPort: 6443
+EOF
+  # Wait for MetalLB to assign an external IP.
+  timeout 90 sh -ec 'until [ -n "$(kubectl get svc -n tenant-test kubernetes-'"${test_name}"'-e2e-lb -o jsonpath="{.status.loadBalancer.ingress[0].ip}" 2>/dev/null)" ]; do sleep 2; done'
+  TENANT_API_LB_IP=$(kubectl get svc -n tenant-test "kubernetes-${test_name}-e2e-lb" -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+  if [ -z "${TENANT_API_LB_IP}" ]; then
+    echo "tenant API LoadBalancer did not receive an IP" >&2
+    exit 1
+  fi
 
+  # Point the kubeconfig at the LB IP. The MetalLB IP is not in the apiserver
+  # serving-cert SANs, so skip TLS verification (e2e only — we functionally test
+  # the cluster, not its serving identity) and drop the now-mismatched CA data
+  # (kubectl rejects insecure-skip-tls-verify alongside certificate-authority).
+  yq -i ".clusters[0].cluster.server = \"https://${TENANT_API_LB_IP}:6443\" | .clusters[0].cluster.\"insecure-skip-tls-verify\" = true | del(.clusters[0].cluster.\"certificate-authority-data\")" "tenantkubeconfig-${test_name}"
 
-  # Kill any stale port-forward on this port from a previous retry
-  pkill -f "port-forward.*${port}:" 2>/dev/null || true
-  sleep 1
-
-  # Set up port forwarding to the Kubernetes API server
-  # No timeout — process is killed at end of test or by job-level timeout-minutes
-  kubectl port-forward service/kubernetes-"${test_name}" -n tenant-test "${port}":6443 > /dev/null 2>&1 &
-  # Wait for port-forward to be ready before using it
-  timeout 15 sh -ec 'until curl -sk https://localhost:'"${port}"' >/dev/null 2>&1; do sleep 1; done'
+  # Wait for the API to answer through the LB before using it.
+  timeout 60 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get --raw /healthz >/dev/null 2>&1; do sleep 2; done'
+  # The kubeconfig + LB are live now. Arm the tenant snapshot: any failure from
+  # here on captures the tenant cluster (the LB endpoint stays up until teardown,
+  # so crust-gather can reach it). Cleared on the success path below.
+  CURRENT_TENANT_KC="tenantkubeconfig-${test_name}"
+  trap '_tenant_snapshot_on_fail' EXIT
   # Verify the Kubernetes version matches what we expect (retry for up to 20 seconds)
   timeout 20 sh -ec 'until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' version 2>/dev/null | grep -Fq "Server Version: ${k8s_version}"; do sleep 1; done'
 
-  # Wait for at least 2 nodes to join (timeout after 8 minutes)
-  timeout 8m bash -c '
-    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes -o jsonpath="{.items[*].metadata.name}" | wc -w)" -ge 2 ]; do
-      sleep 2
+  # Wait until at least 2 worker nodes have joined AND become Ready, on a single
+  # deadline. This used to be split (8m to join + 3m to become Ready), but the
+  # two budgets starve each other under load: a slow KubeVirt VM boot consumes
+  # the join budget, then the tenant cluster's cilium CNI needs several more
+  # minutes to make the freshly-joined nodes Ready — overflowing the fixed 3m
+  # Ready window even though the CNI converges fine. One 12m deadline that polls
+  # for ">=2 nodes Ready" is robust to wherever the time goes.
+  if ! timeout 12m bash -c '
+    until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
+      sleep 5
     done
-  '
-  # Verify the nodes are ready
-  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait node --all --timeout=3m --for=condition=Ready; then
+  '; then
     # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
     kubectl -n tenant-test get hr
@@ -225,6 +354,11 @@ EOF
     exit 1
   fi
 
+  # TODO(e2e-replace-fixed-timeouts): genuine retry loop. This validates an
+  # external HTTP path (MetalLB-advertised LB IP -> in-tenant ingress ->
+  # backend pod) which is not visible to the Kubernetes API as a single
+  # condition, so kubectl wait cannot replace it. The 20x3s = 60s budget is
+  # capped with `lb_ok=false` then asserted below.
   lb_ok=false
   for i in $(seq 1 20); do
     echo "Attempt $i"
@@ -243,6 +377,56 @@ EOF
   # Cleanup
   kubectl delete deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test
   kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test
+
+  # Block until csi.kubevirt.io is registered on the tenant worker CSINode.
+  # Otherwise the NFS pod schedules while kubevirt-csi-node DaemonSet is
+  # still rolling out, eats ~1m on FailedAttachVolume retries, and trips
+  # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
+  kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
+
+  # ----------------------------------------------------------------------
+  # StorageClass propagation (issue #2094). Remote-accessible LINSTOR infra
+  # classes propagate to the tenant under the same name; node-local classes
+  # ("local", allowRemoteVolumeAccess=false) are filtered out; the legacy
+  # "kubevirt" alias is retained for backward compatibility. The e2e infra
+  # cluster ships both "replicated" (remote) and "local" (node-local).
+  # ----------------------------------------------------------------------
+  echo "Verifying StorageClass propagation to tenant..."
+  timeout 2m bash -c '
+    until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get sc replicated >/dev/null 2>&1; do
+      sleep 5
+    done
+  '
+
+  rep_prov=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc replicated -o jsonpath='{.provisioner}')
+  rep_infra=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc replicated -o jsonpath='{.parameters.infraStorageClassName}')
+  if [ "$rep_prov" != "csi.kubevirt.io" ] || [ "$rep_infra" != "replicated" ]; then
+    echo "replicated SC misconfigured: provisioner=$rep_prov infraStorageClassName=$rep_infra" >&2
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc >&2
+    exit 1
+  fi
+
+  # Legacy kubevirt alias must still exist (existing PVCs depend on it).
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc kubevirt >/dev/null 2>&1; then
+    echo "legacy kubevirt StorageClass alias is missing" >&2
+    exit 1
+  fi
+
+  # Node-local "local" class must NOT be propagated (allowRemoteVolumeAccess=false).
+  if kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc local >/dev/null 2>&1; then
+    echo "node-local StorageClass 'local' should not be propagated to the tenant" >&2
+    exit 1
+  fi
+
+  # Exactly one default StorageClass, and it must be "replicated".
+  default_scs=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc \
+    -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}')
+  default_count=$(printf '%s' "$default_scs" | grep -c .)
+  if [ "$default_count" -ne 1 ] || [ "$default_scs" != "replicated" ]; then
+    echo "expected exactly one default StorageClass 'replicated', got: ${default_scs:-<none>} (count=$default_count)" >&2
+    exit 1
+  fi
+  echo "StorageClass propagation OK (replicated default, kubevirt alias present, local filtered)"
 
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
@@ -291,8 +475,8 @@ spec:
   restartPolicy: Never
 EOF
 
-  # Wait for Pod to complete successfully
-  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=5m --for=jsonpath='{.status.phase}'=Succeeded; then
+  # 10m, not 5m: host CDI prime PVC + tenant CSI mount + busybox pull worst-case bursts past 5m.
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" wait pod nfs-test-pod -n tenant-test --timeout=10m --for=jsonpath='{.status.phase}'=Succeeded; then
     echo "=== NFS test pod did not complete ===" >&2
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe pod nfs-test-pod -n tenant-test >&2 || true
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" get events -n tenant-test --sort-by='.lastTimestamp' >&2 || true
@@ -316,13 +500,295 @@ EOF
   kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=10m --for=jsonpath='{.status.v1beta2.readyReplicas}'=2
 
   for component in cilium coredns csi vsnap-crd; do
-      kubectl wait hr kubernetes-${test_name}-${component} -n tenant-test --timeout=1m --for=condition=ready
+      kubectl wait hr "kubernetes-${test_name}-${component}" -n tenant-test --timeout=5m --for=condition=ready
     done
-    kubectl wait hr kubernetes-${test_name}-ingress-nginx -n tenant-test --timeout=5m --for=condition=ready
+    kubectl wait hr "kubernetes-${test_name}-ingress-nginx" -n tenant-test --timeout=5m --for=condition=ready
 
-  # Clean up
-  pkill -f "port-forward.*${port}:" 2>/dev/null || true
+  # Optional ouroboros addon assertions. Folded in from the standalone
+  # ouroboros.bats so the test reuses this cluster instead of spinning up a
+  # second ~25m Kamaji bringup. The assertions cover: HR Ready, controller
+  # pod Running, Ingress->coredns-custom rewrite line injection, and the
+  # end-to-end DNS resolution proof from inside the tenant cluster.
+  if [ "${enable_ouroboros}" = "true" ]; then
+    kubectl wait hr "kubernetes-${test_name}-ouroboros" -n tenant-test \
+      --timeout=10m --for=condition=ready
+
+    # cozystack coredns wrapper renders an empty coredns-custom ConfigMap in
+    # kube-system; the ouroboros controller writes the rewrite snippet into
+    # its ouroboros.override key.
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n kube-system \
+      get configmap coredns-custom
+
+    # Upstream chart ships no readiness probe — wait covers pod Running only;
+    # the rewrite-snippet check below is the real reconciliation assertion.
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n cozy-ouroboros \
+      wait pod --selector=app.kubernetes.io/component=controller \
+      --timeout=5m --for=condition=ready
+
+    local hairpin_host=hairpin-cozystack-e2e.example.invalid
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: hairpin-probe
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ${hairpin_host}
+      secretName: hairpin-probe-tls
+  rules:
+    - host: ${hairpin_host}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: hairpin-probe
+                port:
+                  number: 80
+EOF
+
+    # Poll the import ConfigMap for the rewrite line. Dump-the-whole-map
+    # form avoids the silent-empty kubectl jsonpath bracket-notation trap
+    # on ConfigMap keys with dots (e.g. ouroboros.override).
+    local deadline=$(( $(date +%s) + 300 ))
+    local snippet=
+    while [ "$(date +%s)" -lt "${deadline}" ]; do
+      snippet=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n kube-system \
+        get configmap coredns coredns-custom \
+        -o 'jsonpath={range .items[*]}{.metadata.name}{"\n"}{.data}{"\n---\n"}{end}' \
+        2>/dev/null || true)
+      if echo "${snippet}" | grep -q "rewrite name ${hairpin_host}"; then break; fi
+      sleep 5
+    done
+    if ! echo "${snippet}" | grep -q "rewrite name ${hairpin_host}"; then
+      echo "ouroboros rewrite snippet for ${hairpin_host} not written to coredns-custom within 5m" >&2
+      kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n cozy-ouroboros \
+        logs --selector=app.kubernetes.io/component=controller --tail=200 --all-containers || true
+      exit 1
+    fi
+
+    # End-to-end proof: resolve the hairpin host from inside the tenant.
+    # CoreDNS reload-period default is 30s, so the in-pod loop is needed.
+    local proxy_ip
+    proxy_ip=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n cozy-ouroboros \
+      get service ouroboros-proxy -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+    if [ -z "${proxy_ip}" ]; then
+      echo "ouroboros-proxy Service has no ClusterIP" >&2
+      exit 1
+    fi
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+      delete pod dnscheck --ignore-not-found 2>/dev/null || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+      run dnscheck --image=nicolaka/netshoot:v0.13 --restart=Never \
+      --command -- sh -c "
+        deadline=\$(( \$(date +%s) + 120 ))
+        while [ \"\$(date +%s)\" -lt \"\${deadline}\" ]; do
+          addr=\$(dig +short +tries=2 +time=5 ${hairpin_host} | head -n 1)
+          echo \"resolved: \${addr:-<empty>}\"
+          if [ \"\${addr}\" = \"${proxy_ip}\" ]; then
+            exit 0
+          fi
+          sleep 5
+        done
+        echo \"timed out waiting for ${hairpin_host} to resolve to ${proxy_ip}\"
+        exit 1
+      "
+    local dns_deadline=$(( $(date +%s) + 180 ))
+    local phase=
+    while [ "$(date +%s)" -lt "${dns_deadline}" ]; do
+      phase=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+        get pod dnscheck -o jsonpath='{.status.phase}' 2>/dev/null || true)
+      case "${phase}" in
+        Succeeded|Failed) break ;;
+      esac
+      sleep 3
+    done
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+      logs dnscheck 2>&1 | sed 's/^/  dnscheck: /' || true
+    if [ "${phase:-}" != "Succeeded" ]; then
+      echo "dnscheck pod did not reach Succeeded phase (last seen: ${phase:-<empty>})" >&2
+      exit 1
+    fi
+
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+      delete pod dnscheck --ignore-not-found 2>/dev/null || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+      delete ingress hairpin-probe --ignore-not-found 2>/dev/null || true
+  fi
+
+  # Wait for the parent kubernetes-${test_name} HR to be Ready before the
+  # remediation guard runs. The guard reads `.status.history`, which is empty
+  # until the helm install action completes — under Flux v2.8 kstatus the
+  # parent's helm install can still be "Running 'install'" after every child
+  # HR (cilium, coredns, csi, vsnap-crd, ingress-nginx) is already Ready,
+  # because kstatus walks all applied resources before flipping the parent
+  # Ready.
+  kubectl wait hr -n tenant-test "kubernetes-${test_name}" --timeout=5m --for=condition=ready
+
+  # Guard: parent HelmRelease must not have entered an install/upgrade remediation cycle.
+  # A non-zero installFailures/upgradeFailures indicates the helm-wait budget expired while
+  # admin-kubeconfig was still being provisioned, which would trigger uninstall remediation
+  # and churn the Cluster CR.
+  # Flux helm-controller v2 retains per-revision release Snapshots in
+  # .status.history; each Snapshot's .status reflects the Helm release
+  # state (deployed/superseded/failed/uninstalled). A remediation cycle
+  # leaves a "failed" or "uninstalled" entry behind that survives a later
+  # successful reinstall, unlike the installFailures/upgradeFailures
+  # counters (which ClearFailures zeroes on every successful reconcile).
+  # The shape is pinned by hack/remediation-guard.bats; the upstream
+  # types are github.com/fluxcd/helm-controller/api v2 Snapshot.
+  history_statuses=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" \
+    -ojsonpath='{range .status.history[*]}{.status}{"\n"}{end}')
+  # Always emit the raw value so a silent future-Flux field rename shows
+  # up as "empty history on a Ready HR" in CI logs rather than vanishing.
+  echo "Parent HelmRelease history statuses:"
+  printf '%s\n' "${history_statuses:-<empty>}"
+  if [ -z "${history_statuses}" ]; then
+    echo "Unexpected empty .status.history on a Ready HelmRelease - Flux API shape may have changed." >&2
+    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
+  if helmrelease_has_remediation_cycle "${history_statuses}"; then
+    echo "Parent HelmRelease entered remediation cycle." >&2
+    kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
+
+  # Success: disarm the tenant-snapshot trap so it doesn't fire on the clean exit.
+  trap - EXIT
+  # Clean up: delete the test-scoped tenant API LoadBalancer (frees its MetalLB
+  # IP) and the local kubeconfig.
+  kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
   rm -f "tenantkubeconfig-${test_name}"
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
+}
+
+# B1 regression coverage (PR #2872 review). The tenant's default StorageClass
+# must be chosen among the *propagated* classes and must never be the legacy
+# "kubevirt" alias -- even when the management cluster exposes only remote
+# LINSTOR classes whose names sort alphabetically after "kubevirt" and none is
+# named the configured storageClass (default "replicated"). That is the
+# feature's own multi-tier target configuration. A regressed `sortAlpha | first`
+# over a candidate set that still contained the inserted "kubevirt" alias would
+# pick it, pointing the tenant default at an infra class absent on the
+# management cluster -> default PVCs stay Pending with no error surfaced.
+#
+# helm-unittest cannot reach this branch: with no live cluster Helm `lookup`
+# returns empty, so the storageClasses map always collapses to the "replicated"
+# fallback (see packages/apps/kubernetes/tests/csi_test.yaml). It is therefore
+# exercised here against the live management cluster with a single server-side
+# dry-run render (helm v4 executes `lookup` against the API): add two remote
+# LINSTOR classes that sort after "kubevirt", remove "replicated" for the one
+# render, restore it immediately, then assert on the rendered -csi HelmRelease's
+# storageClasses map.
+verify_storageclass_fallback_default() {
+  echo "Verifying tenant default StorageClass selection with no 'replicated' class (PR #2872 B1 regression)..."
+
+  # Pre-cleanup: drop probe classes leaked by a previous failed run.
+  kubectl delete sc nvme ssd --ignore-not-found
+
+  # Two remote-accessible LINSTOR classes whose names sort AFTER "kubevirt".
+  kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ssd
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+
+  # Remove "replicated" only for the duration of the render below, so that
+  # neither the configured storageClass (default "replicated") nor "replicated"
+  # is in the propagated set -- forcing the `sortAlpha | first` selection branch.
+  kubectl delete sc replicated --ignore-not-found
+
+  # Server-side dry-run executes Helm `lookup` against the live cluster and
+  # renders the real storageClasses map. rc is captured separately (no pipe) so
+  # the management-cluster state is always restored before any assertion exits.
+  # The release namespace must be a valid tenant identifier (the chart's
+  # dashboard-resourcemap template enforces this), so render under tenant-test.
+  local raw rc
+  raw=$(timeout 120 helm install scprobe packages/apps/kubernetes \
+    --dry-run=server -n tenant-test \
+    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
+  rc=$?
+
+  # Restore management-cluster StorageClasses (inline, unconditional). This MUST
+  # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
+  # (per docs/agents/e2e-testing.md). The "replicated" manifest mirrors
+  # hack/e2e-post-install-prep.sh.
+  kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: replicated
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/autoPlace: "3"
+  linstor.csi.linbit.com/layerList: "drbd storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
+  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+  kubectl delete sc nvme ssd --ignore-not-found
+
+  if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then
+    echo "server-side dry-run render of the kubernetes chart failed (rc=$rc)" >&2
+    cat /tmp/sc-fallback-render.err >&2 || true
+    exit 1
+  fi
+
+  # Isolate the rendered -csi HelmRelease's storageClasses map.
+  local sc
+  sc=$(printf '%s' "$raw" | yq -p=json '.manifest' \
+    | yq 'select(.kind == "HelmRelease" and .metadata.name == "scprobe-csi") | .spec.values.storageClasses')
+  if [ -z "$sc" ] || [ "$sc" = "null" ]; then
+    echo "rendered scprobe-csi HelmRelease carries no storageClasses map" >&2
+    printf '%s' "$raw" | yq -p=json '.manifest' >&2
+    exit 1
+  fi
+
+  local default_count default_key kubevirt_present kubevirt_default
+  default_count=$(printf '%s' "$sc" | yq '[to_entries | .[] | select(.value.default == true)] | length')
+  default_key=$(printf '%s' "$sc" | yq 'to_entries | map(select(.value.default == true)) | .[0].key')
+  kubevirt_present=$(printf '%s' "$sc" | yq 'has("kubevirt")')
+  kubevirt_default=$(printf '%s' "$sc" | yq '.kubevirt.default')
+
+  # 1. Exactly one default. 2. The default is a propagated class (nvme/ssd),
+  # never the kubevirt alias. 3. The kubevirt alias still exists, non-default.
+  if [ "$default_count" != "1" ] \
+    || { [ "$default_key" != "nvme" ] && [ "$default_key" != "ssd" ]; } \
+    || [ "$kubevirt_present" != "true" ] \
+    || [ "$kubevirt_default" != "false" ]; then
+    echo "tenant default StorageClass selection regressed (PR #2872 B1):" >&2
+    echo "  default_count=$default_count default_key=$default_key kubevirt_present=$kubevirt_present kubevirt_default=$kubevirt_default" >&2
+    echo "  expected exactly one default among {nvme,ssd}; kubevirt present and non-default" >&2
+    printf 'rendered storageClasses:\n%s\n' "$sc" >&2
+    exit 1
+  fi
+  echo "StorageClass fallback-default OK (default='$default_key' among propagated classes; kubevirt alias non-default)"
 }

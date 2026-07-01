@@ -2,7 +2,9 @@
 ## @section Common Parameters
 ##
 
-## @param {string} storageClass - StorageClass used to store the data.
+## @param {string} storageClass - Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.
+## @immutable
+## @x-cozystack-options {source: storageclass}
 storageClass: replicated
 
 ##
@@ -10,6 +12,46 @@ storageClass: replicated
 ##
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 ## @value nano
 ## @value micro
 ## @value small
@@ -24,27 +66,31 @@ storageClass: replicated
 
 ## @typedef {struct} GPU - GPU configuration.
 ## @field {string} name - Name of GPU, such as "nvidia.com/AD102GL_L40S".
+## @x-cozystack-options {source: gpu}
+
+## @typedef {struct} Kubelet - Kubelet resource reservations for worker nodes.
+## @field {string} [systemReservedMemory] - Memory reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedMemory] - Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [systemReservedCpu] - CPU reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedCpu] - CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [evictionHardMemory]="7%" - Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
+## @field {string} [evictionSoftMemory]="10%" - Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
 
 ## @typedef {struct} NodeGroup - Worker node group configuration.
 ## @field {int} minReplicas=0 - Minimum number of replicas.
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
 ## @field {string} instanceType="u1.medium" - Virtual machine instance type.
-## @field {quantity} ephemeralStorage="20Gi" - Ephemeral storage size.
+## @x-cozystack-options {source: instancetype}
+## @field {quantity} diskSize="20Gi" - System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
+## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
+## @x-cozystack-options {source: storageclass}
 ## @field {[]string} roles - List of node roles.
-## @field {Resources} resources - CPU and memory resources for each worker node.
+## @field {Resources} [resources] - Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
+## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
 
-## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map.
-nodeGroups:
-  md0:
-    minReplicas: 0
-    maxReplicas: 10
-    instanceType: "u1.medium"
-    ephemeralStorage: 20Gi
-    roles:
-    - ingress-nginx
-    resources: {}
-    gpus: []
+## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map. When left empty, a single default node group `md0` (one `ingress-nginx` worker) is provisioned. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
+nodeGroups: {}
 
 ##
 ## @enum {string} Version
@@ -53,7 +99,6 @@ nodeGroups:
 ## @value v1.33
 ## @value v1.32
 ## @value v1.31
-## @value v1.30
 
 ## @param {Version} version - Kubernetes major.minor version to deploy
 version: "v1.35"
@@ -94,6 +139,10 @@ host: ""
 ## @field {bool} enabled - Enable FluxCD.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
+## @typedef {struct} HAMiAddon - HAMi GPU virtualization middleware.
+## @field {bool} enabled - Enable HAMi (requires GPU Operator).
+## @field {object} valuesOverride - Custom Helm values overrides.
+
 ## @typedef {struct} MonitoringAgentsAddon - Monitoring agents (Fluent Bit, VMAgents).
 ## @field {bool} enabled - Enable monitoring agents.
 ## @field {object} valuesOverride - Custom Helm values overrides.
@@ -108,17 +157,23 @@ host: ""
 ## @typedef {struct} CoreDNSAddon - CoreDNS addon.
 ## @field {object} valuesOverride - Custom Helm values overrides.
 
+## @typedef {struct} OuroborosAddon - Hairpin-NAT fix for ingress-nginx with PROXY-protocol. See cozystack/website docs/networking/hairpin-proxy-protocol for the operator guide.
+## @field {bool} enabled - Enable ouroboros. Requires addons.ingressNginx.enabled (chart-render fail otherwise). Only useful when PROXY-protocol is wired on the tenant ingress-nginx via valuesOverride.
+## @field {object} valuesOverride - Custom Helm values overrides. Operator-key wins over cozystack defaults.
+
 ## @typedef {struct} Addons - Cluster addons configuration.
 ## @field {CertManagerAddon} certManager - Cert-manager addon.
 ## @field {CiliumAddon} cilium - Cilium CNI plugin.
 ## @field {GatewayAPIAddon} gatewayAPI - Gateway API addon.
 ## @field {IngressNginxAddon} ingressNginx - Ingress-NGINX controller.
 ## @field {GPUOperatorAddon} gpuOperator - NVIDIA GPU Operator.
+## @field {HAMiAddon} hami - HAMi GPU virtualization middleware.
 ## @field {FluxCDAddon} fluxcd - FluxCD GitOps operator.
 ## @field {MonitoringAgentsAddon} monitoringAgents - Monitoring agents.
 ## @field {VerticalPodAutoscalerAddon} verticalPodAutoscaler - Vertical Pod Autoscaler.
 ## @field {VeleroAddon} velero - Velero backup/restore addon.
 ## @field {CoreDNSAddon} coredns - CoreDNS addon.
+## @field {OuroborosAddon} ouroboros - Hairpin-NAT fix for ingress-nginx with PROXY-protocol.
 
 ## @param {Addons} addons - Cluster addons configuration.
 addons:
@@ -137,6 +192,9 @@ addons:
   gpuOperator:
     enabled: false
     valuesOverride: {}
+  hami:
+    enabled: false
+    valuesOverride: {}
   fluxcd:
     enabled: false
     valuesOverride: {}
@@ -150,6 +208,9 @@ addons:
     valuesOverride: {}
   coredns:
     valuesOverride: {}
+  ouroboros:
+    enabled: false
+    valuesOverride: {}
 
 ##
 ## @section Kubernetes Control Plane Configuration
@@ -157,19 +218,22 @@ addons:
 
 ## @typedef {struct} APIServer - API Server configuration.
 ## @field {Resources} resources - CPU and memory resources for API Server.
-## @field {ResourcesPreset} resourcesPreset="large" - Preset if `resources` omitted.
+## @field {ResourcesPreset} resourcesPreset="c1.medium" - Preset if `resources` omitted.
+## @field {[]string} extraArgs - Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. Use for OIDC SSO (`--oidc-issuer-url`, `--oidc-client-id`) or structured authentication (`--authentication-config=/etc/kubernetes/authentication/config.yaml`, `--requestheader-uid-headers=X-Remote-Uid`). Empty by default (no change to current behavior).
+## @field {[]object} extraVolumes - Extra volumes added to the control-plane Deployment, passed through to KamajiControlPlane `spec.deployment.extraVolumes`. Use to mount a ConfigMap or Secret holding an AuthenticationConfiguration file referenced by `extraArgs`. Each item is a core/v1 Volume, but because the control-plane pod runs on the management cluster only `configMap` and `secret` sources are allowed (host-reaching sources like `hostPath`/`csi` and token-projection via `projected` are rejected); each volume must have a unique, non-empty name and exactly one source. The names `talos-ca` and `talos-tls-cert` are reserved by the chart. Empty by default.
+## @field {[]object} extraVolumeMounts - Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
 
 ## @typedef {struct} ControllerManager - Controller Manager configuration.
 ## @field {Resources} resources - CPU and memory resources for Controller Manager.
-## @field {ResourcesPreset} resourcesPreset="micro" - Preset if `resources` omitted.
+## @field {ResourcesPreset} resourcesPreset="t1.micro" - Preset if `resources` omitted.
 
 ## @typedef {struct} Scheduler - Scheduler configuration.
 ## @field {Resources} resources - CPU and memory resources for Scheduler.
-## @field {ResourcesPreset} resourcesPreset="micro" - Preset if `resources` omitted.
+## @field {ResourcesPreset} resourcesPreset="t1.micro" - Preset if `resources` omitted.
 
 ## @typedef {struct} KonnectivityServer - Konnectivity Server configuration.
 ## @field {Resources} resources - CPU and memory resources for Konnectivity.
-## @field {ResourcesPreset} resourcesPreset="micro" - Preset if `resources` omitted.
+## @field {ResourcesPreset} resourcesPreset="t1.micro" - Preset if `resources` omitted.
 
 ## @typedef {struct} Konnectivity - Konnectivity configuration.
 ## @field {KonnectivityServer} server - Konnectivity Server configuration.
@@ -186,14 +250,54 @@ controlPlane:
   replicas: 2
   apiServer:
     resources: {}
-    resourcesPreset: "large"
+    resourcesPreset: "c1.medium"
+    extraArgs: []
+    extraVolumes: []
+    extraVolumeMounts: []
   controllerManager:
     resources: {}
-    resourcesPreset: "micro"
+    resourcesPreset: "t1.micro"
   scheduler:
     resources: {}
-    resourcesPreset: "micro"
+    resourcesPreset: "t1.micro"
   konnectivity:
     server:
       resources: {}
-      resourcesPreset: "micro"
+      resourcesPreset: "t1.micro"
+
+## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
+## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+## @field {string} [kubectl] - Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+## @field {string} [talosCsrSigner] - Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
+
+## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
+images:
+  waitForKubeconfig: ""
+  kubectl: ""
+  talosCsrSigner: ""
+
+##
+## @section Talos Worker Image
+##
+
+## @typedef {struct} Talos - Talos worker image configuration.
+## @field {string} version - Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+
+## @param {Talos} talos - Talos worker image configuration.
+talos:
+  version: "v1.13.0"
+  schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+
+##
+## @section Node Health Check
+##
+
+## @typedef {struct} NodeHealthCheck - MachineHealthCheck configuration for worker node groups.
+## @field {string} maxUnhealthy="50%" - Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
+## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
+
+## @param {NodeHealthCheck} nodeHealthCheck - MachineHealthCheck tuning for worker node groups.
+nodeHealthCheck:
+  maxUnhealthy: "50%"
+  nodeStartupTimeout: "10m"

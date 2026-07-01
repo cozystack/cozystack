@@ -1,3 +1,4 @@
+{{- if .Values._namespace.etcd }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,6 +23,8 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
       containers:
       - name: kubevirt-cloud-controller-manager
         args:
@@ -55,5 +58,7 @@ spec:
         name: cloud-config
       - secret:
           secretName: {{ .Release.Name }}-admin-kubeconfig
+          optional: true
         name: kubeconfig
       serviceAccountName: {{ .Release.Name }}-kccm
+{{- end }}

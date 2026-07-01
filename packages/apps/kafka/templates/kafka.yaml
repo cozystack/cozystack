@@ -1,3 +1,19 @@
+{{- /*
+  Tri-state TLS logic for the external listener (port 9094):
+  - .Values.external is the sole gate for the external LoadBalancer listener.
+    The listener is rendered if and only if external is true.
+  - tls.enabled controls TLS *on the external listener* (independent of whether
+    the listener exists):
+    - If tls.enabled is explicitly set (true or false), that value wins.
+    - If tls.enabled is unset (nil / absent), TLS inherits from .Values.external
+      (auto-on when external is true, off otherwise).
+  - tls.enabled does NOT control whether the external listener is created.
+    Setting tls.enabled=true with external=false has no effect on listeners.
+  Internal TLS listener (port 9093) is always on; Strimzi manages the PKI.
+  Null detection uses `kindIs "invalid"` (canonical pattern) — see _tls.tpl.
+*/ -}}
+{{- $tlsEnabled := include "kafka.tls.enabled" . | trim -}}
+{{- $showExternal := .Values.external -}}
 apiVersion: kafka.strimzi.io/v1beta2
 kind: Kafka
 metadata:
@@ -18,14 +34,12 @@ spec:
         port: 9093
         type: internal
         tls: true
+      {{- if $showExternal }}
       - name: external
         port: 9094
-        {{- if .Values.external }}
         type: loadbalancer
-        {{- else }}
-        type: internal
-        {{- end }}
-        tls: false
+        tls: {{ $tlsEnabled }}
+      {{- end }}
     config:
       {{- if eq (int .Values.kafka.replicas) 1 }}
       offsets.topic.replication.factor: 1
@@ -75,7 +89,7 @@ spec:
       {{- with .Values.kafka.storageClass }}
       class: {{ . }}
       {{- end }}
-      deleteClaim: false
+      deleteClaim: true
     metricsConfig:
       type: jmxPrometheusExporter
       valueFrom:
@@ -83,12 +97,33 @@ spec:
           name: {{ .Release.Name }}-metrics
           key: kafka-metrics-config.yml
   entityOperator:
-    topicOperator: {}
-    userOperator: {}
+    # Tenant namespaces ship a LimitRange that defaults containers to 128Mi.
+    # The topic-operator and user-operator are JVM processes and OOMKill at
+    # that default, leaving the entity-operator in CrashLoopBackOff so
+    # KafkaTopics/KafkaUsers never reconcile. Set explicit resources so they
+    # don't inherit the namespace default.
+    topicOperator:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
+    userOperator:
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          memory: 512Mi
     template:
+      # `pod` accepts metadata + a flat set of pod-spec fields
+      # (enableServiceLinks, securityContext, affinity, …) directly.
+      # The previous file nested enableServiceLinks under a phantom
+      # `template.spec` key — Flux v2.7 dropped it silently, v2.8 SSA
+      # rejects it with "field not declared in schema".
       pod:
         metadata:
-         labels:
-           policy.cozystack.io/allow-to-apiserver: "true"
-      spec:
+          labels:
+            policy.cozystack.io/allow-to-apiserver: "true"
         enableServiceLinks: false

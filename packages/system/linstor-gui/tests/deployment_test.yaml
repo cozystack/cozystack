@@ -1,0 +1,95 @@
+suite: linstor-gui deployment
+templates:
+  - templates/deployment.yaml
+  - templates/service.yaml
+  - templates/configmap-nginx.yaml
+
+tests:
+  - it: renders a ClusterIP service on port 80 -> http
+    template: templates/service.yaml
+    release:
+      name: linstor-gui
+      namespace: cozy-linstor
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].port
+          value: 80
+      - equal:
+          path: spec.ports[0].targetPort
+          value: http
+
+  - it: mounts the LINSTOR client TLS secret into the pod
+    template: templates/deployment.yaml
+    release:
+      name: linstor-gui
+      namespace: cozy-linstor
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: linstor-client-tls
+            secret:
+              secretName: linstor-client-tls
+              defaultMode: 0444
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: linstor-client-tls
+            mountPath: /etc/linstor/client
+            readOnly: true
+
+  - it: runs as a non-root user with a read-only root filesystem
+    template: templates/deployment.yaml
+    release:
+      name: linstor-gui
+      namespace: cozy-linstor
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+
+  - it: proxies /v1 to the configured LINSTOR controller with mTLS
+    template: templates/configmap-nginx.yaml
+    release:
+      name: linstor-gui
+      namespace: cozy-linstor
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "location /v1"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_pass https://linstor-controller.cozy-linstor.svc:3371"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_ssl_certificate\\s+/etc/linstor/client/tls.crt"
+
+  - it: overrides linstor endpoint and client secret
+    template: templates/configmap-nginx.yaml
+    release:
+      name: linstor-gui
+      namespace: cozy-linstor
+    set:
+      linstor.endpoint: https://my-controller.example.svc:3371
+    asserts:
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_pass https://my-controller.example.svc:3371"
+      - matchRegex:
+          path: data["nginx.conf"]
+          pattern: "proxy_ssl_name         my-controller.example.svc"

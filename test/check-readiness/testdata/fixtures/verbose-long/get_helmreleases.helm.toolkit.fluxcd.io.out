@@ -1,0 +1,1 @@
+tenant-prod<US>chatty-app<US>False<US>UpgradeFailed<US>Helm upgrade failed because the apiserver rejected the manifest with a very long validation error that keeps going and going well past the readable limit<US>false

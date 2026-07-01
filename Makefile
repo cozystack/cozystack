@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -20,16 +20,20 @@ build: build-deps
 	make -C packages/system/backup-controller image
 	make -C packages/system/backupstrategy-controller image
 	make -C packages/system/lineage-controller-webhook image
+	make -C packages/system/flux-shard-operator image
 	make -C packages/system/cilium image
 	make -C packages/system/linstor image
+	make -C packages/system/linstor-gui image
 	make -C packages/system/kubeovn-webhook image
 	make -C packages/system/kubeovn-plunger image
 	make -C packages/system/dashboard image
 	make -C packages/system/metallb image
 	make -C packages/system/kamaji image
+	make -C packages/system/capi-providers-cpprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
+	make -C packages/system/securitygroup-controller image
 	make -C packages/system/grafana-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
@@ -40,24 +44,39 @@ build: build-deps
 manifests:
 	mkdir -p _out/assets
 	cat internal/crdinstall/manifests/*.yaml > _out/assets/cozystack-crds.yaml
+	# kubectl-apply install path: render the bare Namespace resource alongside
+	# the operator. bareNamespace=true gates a Namespace cozy-system with PSA +
+	# identity labels (see packages/core/installer/templates/cozy-system-namespace.yaml).
+	# helm install/upgrade users keep the default (false) and use --create-namespace
+	# + the pre-install labeler hook.
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
 	# Generic Kubernetes variant (k3s, kubeadm, RKE2)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
 		--set cozystackOperator.variant=generic \
 		--set cozystack.apiServerHost=REPLACE_ME \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-generic.yaml
 	# Hosted variant (managed Kubernetes)
 	helm template installer packages/core/installer -n cozy-system \
+		--set bareNamespace=true \
 		--set cozystackOperator.variant=hosted \
+		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
 
 cozypkg:
 	go build -ldflags "-X github.com/cozystack/cozystack/cmd/cozypkg/cmd.Version=v$(COZYSTACK_VERSION)" -o _out/bin/cozypkg ./cmd/cozypkg
+
+# Operator diagnostic: reports non-ready cozystack / Flux / Kubernetes resources.
+check-readiness:
+	go build -ldflags "-X main.Version=v$(COZYSTACK_VERSION)" -o _out/bin/check-readiness ./cmd/check-readiness
 
 assets: assets-talos assets-cozypkg openapi-json
 
@@ -82,10 +101,68 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing test
 
-unit-tests: helm-unit-tests
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+# Pin the resourcesPreset enum in every ApplicationDefinition openAPISchema
+# to the canonical 47-value set (40 instance-type names + 7 legacy aliases).
+# Catches the regression where one chart's Makefile forgets to invoke
+# hack/update-crd.sh and that RD's schema drifts from values.schema.json.
+rd-presets-check:
+	hack/check-rd-presets.sh
+
+# Scoped go test over the cozystack-api surface that this repo owns. Kept
+# narrow intentionally - running `go test ./...` pulls in generated code
+# round-trip suites whose behavior depends on tool versions outside this
+# repo's control (kubebuilder, openapi-gen, etc.) and is better exercised
+# from their generator workflows.
+go-unit-tests:
+	go test ./pkg/registry/... ./pkg/config/... ./pkg/cmd/server/...
+
+# Go tests for the controllers and supporting packages under ./internal.
+# Excludes ./pkg/... and ./cmd/... — those are run separately by
+# go-unit-tests above (pkg subset) and skipped (cmd) until their tests
+# stabilise. Run as its own step in CI alongside helm/bats unit tests;
+# locally invoke directly (`make test-controllers`) or chain
+# (`make unit-tests test-controllers`).
+test-controllers:
+	go test ./internal/... -count=1
+
+# Black-box golden test for cmd/check-readiness. Builds the binary and runs it
+# against a mock kubectl (fixtures under test/check-readiness/testdata),
+# diffing stdout/stderr/exit against golden files. Regenerate goldens with:
+#   go test ./test/check-readiness/ -update
+test-check-readiness:
+	go test ./test/check-readiness/ -count=1
+
+# Discover every hack/*.bats file that is NOT an e2e test and run it
+# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
+# up automatically on the next `make unit-tests` run.
+#
+# Caveat: $(wildcard ...) returns space-separated names, so a filename
+# containing a literal space would split into multiple tokens here. All
+# current bats files use hyphen-separated names; if the project ever
+# introduces whitespace-bearing filenames this recipe must be rewritten
+# (e.g. to use `find ... -print0 | xargs -0`).
+BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+
+bats-unit-tests:
+	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
+		echo "ERROR: no hack/*.bats unit test files found"; \
+		exit 1; \
+	fi
+	@for f in $(BATS_UNIT_FILES); do \
+		echo "--- running $$f ---"; \
+		hack/cozytest.sh "$$f" || exit 1; \
+	done
+
+# Operator-facing host preflight check. Warns about a standalone
+# containerd.service or docker.service running alongside the embedded
+# k3s runtime. Safe to run at any time; always exits 0.
+preflight:
+	@hack/check-host-runtime.sh
 
 prepare-env:
 	make -C packages/core/testing apply

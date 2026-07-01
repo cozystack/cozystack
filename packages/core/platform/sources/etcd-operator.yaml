@@ -21,3 +21,4 @@ spec:
       install:
         namespace: cozy-etcd-operator
         releaseName: etcd-operator
+        upgradeCRDs: CreateReplace

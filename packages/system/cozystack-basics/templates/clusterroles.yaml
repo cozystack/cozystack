@@ -33,6 +33,9 @@ rules:
 - apiGroups: ["apps.cozystack.io"]
   resources: ['*']
   verbs: ['*']
+- apiGroups: ["sdn.cozystack.io"]
+  resources: ["securitygroups"]
+  verbs: ['*']
 - apiGroups:
   - cozystack.io
   resources:
@@ -44,6 +47,7 @@ rules:
   resources:
   - tenantmodules
   - tenantsecrets
+  - options
   verbs: ["get", "list", "watch"]
 ---
 # == view cluster role ==
@@ -85,6 +89,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - sdn.cozystack.io
+  resources:
+  - securitygroups
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - ""
   resources:
   - pods
@@ -118,6 +130,11 @@ rules:
   resources:
   - workloadmonitors
   - workloads
+  verbs: ["get", "list", "watch"]
+- apiGroups:
+  - core.cozystack.io
+  resources:
+  - options
   verbs: ["get", "list", "watch"]
 ---
 # == use cluster role ==
@@ -155,6 +172,17 @@ rules:
   - virtualmachineinstances/portforward
   verbs:
   - get
+  - update
+# Power controls (start/stop/restart) for VMs owned by the tenant.
+# Operational, like console/vnc above, so granted at the "use" level
+# (aggregates into admin and super-admin). Without these the dashboard
+# power buttons return 403 even for tenant admins.
+- apiGroups: ["subresources.kubevirt.io"]
+  resources:
+  - virtualmachines/start
+  - virtualmachines/stop
+  - virtualmachines/restart
+  verbs:
   - update
 - apiGroups:
   - core.cozystack.io
@@ -227,6 +255,14 @@ rules:
   - vpns
   - infos
   - virtualprivateclouds
+  verbs:
+  - create
+  - update
+  - patch
+  - delete
+- apiGroups: ["sdn.cozystack.io"]
+  resources:
+  - securitygroups
   verbs:
   - create
   - update

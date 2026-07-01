@@ -1,4 +1,22 @@
-{{- if .Values.backup.enabled }}
+{{/*
+  Legacy chart-managed scheduled backup.
+
+  Emits a CronJob that runs the per-table Restic dump (see backup-script.yaml).
+  Superseded by the BackupClass + Plan flow under `backups.cozystack.io` driven
+  by the Altinity backup strategy (see packages/apps/clickhouse/README.md),
+  which is the recommended path for tenant-managed backup orchestration.
+
+  Gating: rendered only when `backup.enabled` and `backup.schedule` are
+  non-empty AND `backup.useSystemBucket` is false. `backup.enabled=true` alone
+  is the documented way to materialise the chart-emitted `<release>-backup-s3`
+  Secret consumed by the Altinity strategy; leaving `backup.schedule=""` lets
+  users opt into the new flow without also getting the legacy CronJob. The
+  `useSystemBucket` exclusion prevents tenants who flip to the platform flow
+  from carrying a legacy CronJob that would still try to read the (no longer
+  rendered) `<release>-backup` Secret — the platform flow is BackupClass-driven
+  and has no chart-side CronJob counterpart.
+*/}}
+{{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
 {{ $image := .Files.Get "images/backup.json" | fromJson }}
 
 apiVersion: batch/v1
@@ -13,9 +31,6 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 2
-      template:
-        spec:
-          restartPolicy: OnFailure
       template:
         metadata:
           annotations:

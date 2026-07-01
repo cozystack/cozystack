@@ -1,0 +1,37 @@
+_cluster: {}
+_namespace:
+  etcd: cozy-etcd
+  ingress: nginx
+  host: example.com
+version: "v1.32"
+controlPlane:
+  replicas: 2
+  apiServer:
+    resources: {}
+    resourcesPreset: "large"
+  controllerManager:
+    resources: {}
+    resourcesPreset: "micro"
+  scheduler:
+    resources: {}
+    resourcesPreset: "micro"
+  konnectivity:
+    server:
+      resources: {}
+      resourcesPreset: "micro"
+# storageClass is intentionally omitted from md0 to verify the template falls back
+# to the cluster default StorageClass. diskSize is set to the default 20Gi (it is a
+# required field now that the chart no longer ships a default md0 node group to
+# supply it via values merge).
+nodeGroups:
+  md0:
+    minReplicas: 0
+    maxReplicas: 10
+    instanceType: ""
+    diskSize: 20Gi
+    roles:
+      - worker
+    resources:
+      cpu: 2
+      memory: 4Gi
+    gpus: []

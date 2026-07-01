@@ -23,9 +23,19 @@ working with the **Cozystack** project.
   - Read: [`overview.md`](./docs/agents/overview.md)
   - Action: Read relevant sections to understand project structure and conventions
 
+- **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
+  - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
+  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no `EXIT`/`RETURN` traps, fail-fast on HelmRelease readiness
+
 - **General questions about contributing**
   - Read: [`contributing.md`](./docs/agents/contributing.md)
   - Action: Read the file to understand git workflow, commit format, PR process
+
+- **Issue and PR labeling, triage** (e.g., "label this issue", "what label should I use", "triage this", "categorize")
+  - Read: [`.github/labels.yml`](./.github/labels.yml)
+  - Action: Use labels defined there. Conventions follow the Kubernetes scheme — `kind/*` (type), `area/*` (subsystem), `priority/*` (urgency), `triage/*` (review state), `lifecycle/*` (auto-close), `do-not-merge/*` (PR blockers), `security/*` (severity)
+  - For `area/*`: accuracy outweighs reuse. If no existing `area/*` truly fits the change, propose a new one via PR (extend `.github/labels.yml` and the scope mapping in `.github/workflows/pr-labeler.yaml`) — do not shoehorn the change into a wrong area. `area/uncategorized` is the auto-labeler fallback; treat it as a signal to pick a fit, create a new area, or correct the PR title
+  - PR titles: a Conventional Commits header (`type(scope): description`, types from [`contributing.md`](./docs/agents/contributing.md)) auto-applies `kind/*` and `area/*` via `.github/workflows/pr-labeler.yaml`. Append `!` (or add a `BREAKING CHANGE:` footer) to apply `kind/breaking-change`
 
 **Important rules:**
 - ✅ **ONLY read the file if the task matches the documented process scope** - do not read files for tasks that don't match their purpose
@@ -53,7 +63,7 @@ working with the **Cozystack** project.
 ### Conventions
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
-- **Git Commits**: `[component] Description` format with `--signoff`
+- **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`
 
 ### What NOT to Do
 - ❌ Edit `/vendor/`, `zz_generated.*.go`, upstream charts directly

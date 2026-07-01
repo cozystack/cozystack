@@ -1,0 +1,93 @@
+suite: keycloak login theme via platform branding
+
+# branding.loginTheme + branding.loginThemeImage (delivered through
+# _cluster.branding in the cozystack-values Secret) must append a theme entry
+# to the effective theme list so the login theme image is mounted via an init
+# container without anyone editing this chart's values or the StatefulSet.
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+tests:
+  - it: branding loginTheme + image adds a theme init container, volume and mount
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      _cluster:
+        root-host: example.com
+        cluster-domain: cozy.local
+        branding:
+          loginTheme: aenix
+          loginThemeImage: registry.example.com/aenix-keycloak-theme:v1
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: theme-aenix
+      - equal:
+          path: spec.template.spec.initContainers[0].image
+          value: registry.example.com/aenix-keycloak-theme:v1
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: themes
+            emptyDir:
+              sizeLimit: 256Mi
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: themes
+            mountPath: /opt/keycloak/themes
+
+  - it: branding loginTheme without an image does not add an init container
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      _cluster:
+        root-host: example.com
+        cluster-domain: cozy.local
+        branding:
+          loginTheme: aenix
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+
+  - it: no themes and no branding theme leaves the pod without theme machinery
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      _cluster:
+        root-host: example.com
+        cluster-domain: cozy.local
+    asserts:
+      - notExists:
+          path: spec.template.spec.initContainers
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: explicit themes value still renders, with the branding theme appended after it
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      _cluster:
+        root-host: example.com
+        cluster-domain: cozy.local
+        branding:
+          loginTheme: aenix
+          loginThemeImage: registry.example.com/aenix-keycloak-theme:v1
+      themes:
+        - name: foo
+          image: registry.example.com/foo:1
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: theme-foo
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: theme-aenix

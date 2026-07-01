@@ -7,6 +7,19 @@
       "type": "object",
       "default": {},
       "properties": {
+        "disk": {
+          "description": "Clone an existing vm-disk.",
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "description": "Name of the vm-disk to clone.",
+              "type": "string"
+            }
+          }
+        },
         "http": {
           "description": "Download image from an HTTP source.",
           "type": "object",
@@ -21,15 +34,18 @@
           }
         },
         "image": {
-          "description": "Use image by name.",
+          "description": "Use image by name from default collection.",
           "type": "object",
           "required": [
             "name"
           ],
           "properties": {
             "name": {
-              "description": "Name of the image to use (uploaded as \"golden image\" or from the list: `ubuntu`, `fedora`, `cirros`, `alpine`, `talos`).",
-              "type": "string"
+              "description": "Name of the image to use.",
+              "type": "string",
+              "x-cozystack-options": {
+                "source": "image"
+              }
             }
           }
         },
@@ -61,7 +77,16 @@
     "storageClass": {
       "description": "StorageClass used to store the data.",
       "type": "string",
-      "default": "replicated"
+      "default": "replicated",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "storageClass is immutable"
+        }
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
     }
   }
 }

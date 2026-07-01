@@ -39,9 +39,9 @@ Render probe
 {{- define "vm.probe" -}}
   {{- /* undefined value */ -}}
   {{- $null := (fromYaml "value: null").value -}}
-  {{- $probe := dig .type (default dict) .app.probe -}}
+  {{- $probe := dig .type (dict) .app.probe -}}
   {{- $probeType := "" -}}
-  {{- $defaultProbe := default dict -}}
+  {{- $defaultProbe := dict -}}
   {{- if ne (dig "httpGet" $null $probe) $null -}}
     {{- /* httpGet probe */ -}}
     {{- $defaultProbe = dict "path" (include "vm.probe.http.path" .) "scheme" (include "vm.probe.http.scheme" .) "port" (include "vm.probe.port" .) -}}
@@ -51,7 +51,7 @@ Render probe
     {{- $defaultProbe = dict "port" (include "vm.probe.port" .) -}}
     {{- $probeType = "tcpSocket" -}}
   {{- end -}}
-  {{- $defaultProbe = ternary (default dict) (dict $probeType $defaultProbe) (empty $probeType) -}}
+  {{- $defaultProbe = ternary (dict) (dict $probeType $defaultProbe) (empty $probeType) -}}
   {{- $probe = mergeOverwrite $defaultProbe $probe -}}
   {{- range $key, $value := $probe -}}
     {{- if and (has (kindOf $value) (list "object" "map")) (ne $key $probeType) -}}
@@ -100,7 +100,7 @@ Net probe port
 command line arguments
 */ -}}
 {{- define "vm.args" -}}
-  {{- $args := default list -}}
+  {{- $args := list -}}
   {{- range $key, $value := . -}}
     {{- if not $key -}}
       {{- fail "Empty key in command line args is not allowed" -}}

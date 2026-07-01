@@ -4,6 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
+    options.cozystack.io/source.applicationRef.kind: appkind
+    options.cozystack.io/source.backupClassName: backupclass
+    options.cozystack.io/source.planRef.name: plan
   name: backupjobs.backups.cozystack.io
 spec:
   group: backups.cozystack.io

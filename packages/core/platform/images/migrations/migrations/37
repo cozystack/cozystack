@@ -1,42 +1,77 @@
-#!/bin/sh
+#!/bin/bash
 # Migration 37 --> 38
-# Backfill spec.version on postgreses.apps.cozystack.io resources.
+# Pin PostgreSQL image to 17.7-standard-trixie for system databases.
 #
-# Before this migration PostgreSQL had a default version field set to v18.
-# This migration sets spec.version to "v17" for any postgres app resource that
-# does not already have it set, to ensure compatibility with monitoring
-# configurations that are hardcoded to PostgreSQL 17.
+# This migration updates the imageName for all CNPG clusters belonging to
+# system components (keycloak-db, grafana-db, alerta-db, seaweedfs-db, and
+# harbor's dynamically-named DB):
+# - If imageName is not set: pins to 17.7-standard-trixie
+# - If imageName has any PG 17 tag: forces 17.7-standard-trixie
+# - If imageName has a bare version tag (e.g. :18.1): appends -standard-trixie
+#
+# NOTE: This migration ONLY updates system CNPG Cluster resources (clusters.postgresql.cnpg.io),
+# NOT user-created Postgres applications.
 
 set -euo pipefail
 
-DEFAULT_VERSION="v17"
+TARGET_IMAGE="ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie"
 
-# Skip if the CRD does not exist (postgres was never installed)
-if ! kubectl api-resources --api-group=apps.cozystack.io -o name 2>/dev/null | grep -q '^postgreses\.'; then
-  echo "CRD postgreses.apps.cozystack.io not found, skipping migration"
-  kubectl create configmap -n cozy-system cozystack-version \
-    --from-literal=version=38 --dry-run=client -o yaml | kubectl apply -f-
-  exit 0
-fi
+# Static system database names
+STATIC_DB_NAMES="keycloak-db grafana-db alerta-db seaweedfs-db"
 
-POSTGRESES=$(kubectl get postgreses.apps.cozystack.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}')
-for resource in $POSTGRESES; do
-  NS="${resource%%/*}"
-  APP_NAME="${resource##*/}"
+echo "=== Updating PostgreSQL images for system databases ==="
+echo "Target image: $TARGET_IMAGE"
 
-  # Skip if spec.version is already set
-  CURRENT_VER=$(kubectl get postgreses.apps.cozystack.io -n "$NS" "$APP_NAME" \
-    -o jsonpath='{.spec.version}')
-  if [ -n "$CURRENT_VER" ]; then
-    echo "SKIP $NS/$APP_NAME: spec.version already set to '$CURRENT_VER'"
+# Fetch all CNPG clusters with their name, namespace, imageName, and Helm release annotation in one call
+ALL_CLUSTERS=$(kubectl get clusters.postgresql.cnpg.io -A \
+  -o jsonpath='{range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\t"}{.spec.imageName}{"\t"}{.metadata.annotations.meta\.helm\.sh/release-name}{"\n"}{end}' 2>/dev/null || true)
+
+while IFS=$'\t' read -r NAMESPACE CLUSTER_NAME CURRENT_IMAGE HELM_RELEASE; do
+  [ -z "$NAMESPACE" ] && continue
+
+  # Check if cluster name matches one of the static system databases
+  MATCH=false
+  for db_name in $STATIC_DB_NAMES; do
+    if [ "$CLUSTER_NAME" = "$db_name" ]; then
+      MATCH=true
+      break
+    fi
+  done
+
+  # For harbor: match clusters ending with -db whose Helm release ends with -system
+  if [ "$MATCH" = false ] && [[ "$CLUSTER_NAME" == *-db ]] && [[ "$HELM_RELEASE" == *-system ]]; then
+    MATCH=true
+  fi
+
+  if [ "$MATCH" = false ]; then
     continue
   fi
 
-  echo "Patching postgres/$APP_NAME in $NS: setting version=$DEFAULT_VERSION"
+  PATCH_IMAGE=""
 
-  kubectl patch postgreses.apps.cozystack.io -n "$NS" "$APP_NAME" --type=merge \
-    --patch "{\"spec\":{\"version\":\"${DEFAULT_VERSION}\"}}"
-done
+  if [ -z "$CURRENT_IMAGE" ]; then
+    # imageName not set — pin to target
+    PATCH_IMAGE="$TARGET_IMAGE"
+    echo "PATCH $NAMESPACE/$CLUSTER_NAME: imageName not set, setting to $PATCH_IMAGE"
+  elif [[ "$CURRENT_IMAGE" =~ :17\. ]]; then
+    # Any PG 17 image — force to the pinned 17.7-standard-trixie
+    PATCH_IMAGE="$TARGET_IMAGE"
+    echo "PATCH $NAMESPACE/$CLUSTER_NAME: PG 17 detected, $CURRENT_IMAGE -> $PATCH_IMAGE"
+  elif [[ "$CURRENT_IMAGE" =~ :[0-9]+\.[0-9]+$ ]]; then
+    # Bare version tag for other majors (e.g. :18.1) — append -standard-trixie suffix
+    PATCH_IMAGE="${CURRENT_IMAGE}-standard-trixie"
+    echo "PATCH $NAMESPACE/$CLUSTER_NAME: bare tag detected, $CURRENT_IMAGE -> $PATCH_IMAGE"
+  else
+    echo "SKIP $NAMESPACE/$CLUSTER_NAME: imageName already set to $CURRENT_IMAGE"
+    continue
+  fi
+
+  kubectl patch clusters.postgresql.cnpg.io -n "$NAMESPACE" "$CLUSTER_NAME" \
+    --type=merge \
+    --patch "{\"spec\":{\"imageName\":\"${PATCH_IMAGE}\"}}"
+done <<< "$ALL_CLUSTERS"
+
+echo "=== PostgreSQL image update completed ==="
 
 # Stamp version
 kubectl create configmap -n cozy-system cozystack-version \

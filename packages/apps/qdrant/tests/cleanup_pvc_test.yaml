@@ -1,0 +1,67 @@
+suite: qdrant data PVC cleanup on delete
+
+# Guards the fix for issue #3059: the upstream Qdrant chart does NOT support
+# persistentVolumeClaimRetentionPolicy, so its StatefulSet-templated data PVC
+# (qdrant-storage-<release>-0) is orphaned when the StatefulSet is deleted.
+#
+# A post-delete hook reclaims the data by deleting PVCs whose name matches the
+# deterministic StatefulSet template prefix (qdrant-storage-<release>-). A
+# name-prefix scheme is used instead of a label because volumeClaimTemplates
+# labels are immutable on an existing StatefulSet — routing a release-unique
+# label through the subchart would break reconciliation for already-deployed
+# instances and still would not match their pre-existing PVCs.
+
+release:
+  name: qdrant-test
+  namespace: tenant-test
+
+tests:
+  #####################################################
+  # post-delete cleanup hook                          #
+  #####################################################
+
+  - it: "renders a post-delete Job that deletes the data PVC by anchored name"
+    templates:
+      - templates/hooks/cleanup-pvc.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - isKind:
+          of: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: qdrant-test-qdrant-cleanup
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "kubectl get pvc -n tenant-test -o name"
+      # The ordinal MUST be anchored ("-[0-9]+$"). Without it, deleting release
+      # "qdrant-test" would also match a sibling "qdrant-test-2"'s PVCs
+      # (qdrant-storage-qdrant-test-2-0) and irreversibly delete its data.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'grep -E "\^persistentvolumeclaim/qdrant-storage-qdrant-test-\[0-9\]\+\$"'
+      # Guard against regressing to the unanchored prefix (plain grep, no $).
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'grep "\^persistentvolumeclaim/qdrant-storage-qdrant-test-"'
+
+  - it: "creates qdrant-scoped RBAC for the cleanup hook"
+    templates:
+      - templates/hooks/cleanup-pvc.yaml
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: qdrant-test-qdrant-cleanup
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "list", "delete"]

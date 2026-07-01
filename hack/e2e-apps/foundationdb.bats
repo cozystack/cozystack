@@ -42,7 +42,9 @@ spec:
   imageType: "unified"
   automaticReplacements: true
 EOF
-  sleep 15
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr foundationdb-$name >/dev/null 2>&1; do sleep 2; done"
 
   # Wait for HelmRelease to be ready
   kubectl -n tenant-test wait hr foundationdb-$name --timeout=300s --for=condition=ready
@@ -89,15 +91,27 @@ EOF
   # Validate status.desiredProcessGroups field
   timeout 60 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.desiredProcessGroups}' | grep -q '^[0-9][0-9]*$'; do sleep 10; done"
 
-  # Validate status.generations.reconciled field
-  timeout 60 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.generations.reconciled}' | grep -q '^[0-9][0-9]*$'; do sleep 10; done"
+  # Validate status.generations.reconciled field.
+  # The operator only stamps generations.reconciled after every process has
+  # held its role for minimumUptimeSecondsForBounce (60s, see
+  # packages/apps/foundationdb/templates/cluster.yaml), so this is structurally
+  # the last status field to converge. It needs at least the same budget as the
+  # earlier health.available gate (300s), not the short 60s ceiling.
+  timeout 300 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.generations.reconciled}' | grep -q '^[0-9][0-9]*$'; do sleep 10; done"
 
-  # Validate status.hasListenIPsForAllPods field
-  timeout 60 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.hasListenIPsForAllPods}' | grep -q 'true'; do sleep 10; done"
+  # Validate status.hasListenIPsForAllPods field. A bounce restarts fdbserver
+  # in-place, so pods and their listen IPs do not churn and this usually settles
+  # before the reconciled gate. Widened to 300s for a conservative ceiling
+  # consistent with the surrounding gates; the 300s is headroom, not because
+  # this field is as late-converging as generations.reconciled.
+  timeout 300 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.hasListenIPsForAllPods}' | grep -q 'true'; do sleep 10; done"
 
-  # Validate comprehensive status.health fields
-  timeout 60 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.health.fullReplication}' | grep -q 'true'; do sleep 10; done"
-  timeout 60 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.health.healthy}' | grep -q 'true'; do sleep 10; done"
+  # Validate comprehensive status.health fields. fullReplication and healthy
+  # settle only once the cluster is fully reconciled (after the post-bounce
+  # uptime gate), so they share the same 300s budget rather than the short 60s
+  # ceiling.
+  timeout 300 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.health.fullReplication}' | grep -q 'true'; do sleep 10; done"
+  timeout 300 sh -ec "until kubectl -n tenant-test get foundationdbclusters.apps.foundationdb.org foundationdb-$name -o jsonpath='{.status.health.healthy}' | grep -q 'true'; do sleep 10; done"
 
   # Verify security context is applied correctly (non-root user)
   storage_pod=$(kubectl -n tenant-test get pods -l foundationdb.org/fdb-cluster-name=foundationdb-$name,foundationdb.org/fdb-process-class=storage --no-headers | head -n1 | awk '{print $1}')

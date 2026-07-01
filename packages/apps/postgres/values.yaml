@@ -7,6 +7,46 @@
 ## @field {quantity} [memory] - Memory (RAM) available to each replica.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 ## @value nano
 ## @value micro
 ## @value small
@@ -21,13 +61,15 @@ replicas: 2
 ## @param {Resources} [resources] - Explicit CPU and memory configuration for each PostgreSQL replica. When omitted, the preset defined in `resourcesPreset` is applied.
 resources: {}
 
-## @param {ResourcesPreset} resourcesPreset="micro" - Default sizing preset used when `resources` is omitted.
-resourcesPreset: "micro"
+## @param {ResourcesPreset} resourcesPreset="t1.micro" - Default sizing preset used when `resources` is omitted.
+resourcesPreset: "t1.micro"
 
 ## @param {quantity} size - Persistent Volume Claim size available for application data.
 size: 10Gi
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
 storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
@@ -45,19 +87,45 @@ external: false
 ## @param {Version} version - PostgreSQL major version to deploy
 version: v18
 
+##
+## @section TLS configuration
+##
+
+## @typedef {struct} TLS - TLS configuration for PostgreSQL server connections.
+## @field {*bool} enabled - Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+
+## @param {TLS} tls - TLS configuration for server connections.
+tls: {}
+
 ## @section Application-specific parameters
 ##
 
-## @typedef {struct} PostgreSQLParameters - PostgreSQL server parameters.
-## @field {int} [max_connections] - Maximum number of concurrent connections to the database server.
-
 ## @typedef {struct} PostgreSQL - PostgreSQL server configuration.
-## @field {PostgreSQLParameters} [parameters] - PostgreSQL server parameters.
+## @field {map[string]intOrString} [parameters] - PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
 
 ## @param {PostgreSQL} postgresql - PostgreSQL server configuration.
 postgresql:
   parameters:
-    max_connections: 100
+    max_connections: "100"
+## Additional parameters examples:
+##   shared_buffers: "1GB"
+##   effective_cache_size: "4GB"
+##   bgwriter_delay: "200ms"
+##   commit_delay: "100"
+##   commit_siblings: "5"
+##   work_mem: "256MB"
+##
+## SECURITY: The following parameters are BLOCKED (enable arbitrary code execution):
+##   archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command (shell commands),
+##   dynamic_library_path, local_preload_libraries, session_preload_libraries,
+##   shared_preload_libraries (arbitrary .so loading)
+##
+## IMPORTANT: Do NOT override CloudNativePG-managed parameters:
+##   archive_mode, primary_conninfo, wal_level, max_replication_slots
+##
+## NOTE: Some parameters require pod restart (not just reload):
+##   shared_buffers, max_connections, max_prepared_transactions,
+##   wal_buffers, max_wal_senders
 
 ##
 ## @section Quorum-based synchronous replication
@@ -127,24 +195,66 @@ databases: {}
 ## @section Backup parameters
 ##
 
+## @typedef {struct} S3CredentialsSecret - Reference to a pre-existing Secret with S3 credentials. Setting `name` makes the chart bind the cnpg.io Cluster's barmanObjectStore directly to that Secret instead of materialising `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`. Use this to keep credentials out of the Postgres CR's `.spec`.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.
+## @field {string} [accessKeyIDKey] - Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
+## @field {string} [secretAccessKeyKey] - Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
+
+## @typedef {struct} EndpointCA - Reference to a Secret holding a PEM-encoded CA bundle the Barman client should trust when reaching a self-signed S3 endpoint. Required when the cluster's S3 (e.g. cozystack's seaweedfs-s3) presents a certificate not signed by a publicly-trusted CA. Used by both spec.backup.barmanObjectStore.endpointCA and the bootstrap-time externalClusters[].barmanObjectStore.endpointCA so backup *and* recovery can verify TLS.
+## @field {string} [name] - Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+## @field {string} [key] - Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+
 ## @typedef {struct} Backup - Backup configuration.
 ## @field {bool} enabled - Enable regular backups.
-## @field {string} [schedule] - Cron schedule for automated backups.
+## @field {bool} [useSystemBucket] - Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.backup.barmanObjectStore` is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-patches the live Cluster with destinationPath/endpointURL/credentials when the first BackupJob runs. Consequence: `archive_command` is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
+## @field {string} [schedule] - Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.backup.barmanObjectStore` is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `barmanObjectStore` and the CNPG driver SSA-patches it onto the live Cluster at first BackupJob time.
 ## @field {string} [retentionPolicy] - Retention policy (e.g. "30d").
-## @field {string} [destinationPath] - Destination path for backups (e.g. s3://bucket/path/).
-## @field {string} [endpointURL] - S3 endpoint URL for uploads.
-## @field {string} [s3AccessKey] - Access key for S3 authentication.
-## @field {string} [s3SecretKey] - Secret key for S3 authentication.
+## @field {string} [destinationPath] - DEPRECATED. Per-tenant S3 configuration is superseded by the platform-managed `cozy-default` BackupClass and the `cozy-backups` system bucket. Leave empty for new installations; the BackupClass driver picks up the system-managed coordinates. Kept for in-place upgrade compatibility.
+## @field {string} [endpointURL] - DEPRECATED. See `destinationPath`.
+## @field {string} [s3AccessKey] - DEPRECATED. Tenants no longer supply S3 keys; the system Bucket Secret is projected into the tenant namespace by the backup controller. Ignored when `s3CredentialsSecret.name` is set or `useSystemBucket` is true. The chart skips materialising `<release>-s3-creds` whenever this field is empty so a default install does not leak placeholder credentials into the tenant namespace.
+## @field {string} [s3SecretKey] - DEPRECATED. See `s3AccessKey`.
+## @field {S3CredentialsSecret} [s3CredentialsSecret] - DEPRECATED. Pre-existing Secret with S3 credentials. Use the platform-managed `cozy-default` BackupClass instead. When set, the chart references this Secret directly (legacy chart-managed flow). The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+## @field {EndpointCA} [endpointCA] - DEPRECATED. Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery in the legacy chart-managed flow.
 
 ## @param {Backup} backup - Backup configuration.
+##
+## Note on defaults: destinationPath/endpointURL keep their pre-PR
+## placeholder values so existing tenants on the legacy chart-managed
+## flow continue to render a barmanObjectStore on upgrade (the
+## placeholder coordinates never produced a working archive_command,
+## but the CR shape stays compatible with what Flux already applied).
+##
+## BEHAVIOUR CHANGE on upgrade for tenants with backup.enabled=true and
+## empty s3AccessKey / s3SecretKey: the pre-PR defaults were the literal
+## "<your-access-key>" / "<your-secret-key>" placeholders, so the chart
+## still rendered barmanObjectStore (with junk creds, archive_command
+## failing at runtime). After this PR the defaults are empty strings,
+## $hasInlineCreds is false, and the chart NO LONGER renders the backup
+## block at all. Such tenants stop seeing chart-emitted barmanObjectStore
+## on the cnpg.io Cluster. Action: either set real s3AccessKey/s3SecretKey
+## (legacy flow), set useSystemBucket=true (platform flow), or supply
+## s3CredentialsSecret.name (external Secret).
+##
+## New tenants should set useSystemBucket=true and leave the placeholders
+## alone — the chart skips rendering barmanObjectStore entirely in that
+## mode and the CNPG driver SSA-patches it onto the live Cluster at
+## first BackupJob time.
 backup:
   enabled: false
+  useSystemBucket: false
   retentionPolicy: 30d
   destinationPath: "s3://bucket/path/to/folder/"
   endpointURL: "http://minio-gateway-service:9000"
-  schedule: "0 2 * * * *"
-  s3AccessKey: "<your-access-key>"
-  s3SecretKey: "<your-secret-key>"
+  schedule: ""
+  s3AccessKey: ""
+  s3SecretKey: ""
+  s3CredentialsSecret:
+    name: ""
+    accessKeyIDKey: ""
+    secretAccessKeyKey: ""
+  endpointCA:
+    name: ""
+    key: ""
 
 ##
 ## @section Bootstrap (recovery) parameters
@@ -154,6 +264,7 @@ backup:
 ## @field {bool} enabled - Whether to restore from a backup.
 ## @field {string} [recoveryTime] - Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 ## @field {string} oldName - Previous cluster name before deletion.
+## @field {string} [serverName] - Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
 
 ## @param {Bootstrap} bootstrap - Bootstrap configuration.
 bootstrap:
@@ -161,3 +272,4 @@ bootstrap:
   # example: 2020-11-26 15:22:00.00000+00
   recoveryTime: ""
   oldName: ""
+  serverName: ""

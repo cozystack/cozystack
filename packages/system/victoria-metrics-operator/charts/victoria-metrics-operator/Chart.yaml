@@ -1,7 +1,7 @@
 annotations:
   artifacthub.io/category: monitoring-logging
   artifacthub.io/changes: |
-    - updates operator to [v0.68.1](https://github.com/VictoriaMetrics/operator/releases/tag/v0.68.1) version
+    - revert change in Deployment's matchLabels, that was introduced in release 0.60.0
   artifacthub.io/license: Apache-2.0
   artifacthub.io/links: |
     - name: Sources
@@ -16,13 +16,14 @@ annotations:
   artifacthub.io/readme: |
     # VictoriaMetrics Operator Helm chart
 
-    Chart documentation is available [here](https://docs.victoriametrics.com/helm/victoria-metrics-operator/)
+    Chart documentation is available [here](https://docs.victoriametrics.com/helm/victoria-metrics-operator/).
+    Changelog is [here](https://docs.victoriametrics.com/helm/victoria-metrics-operator/changelog/).
 apiVersion: v2
-appVersion: v0.68.1
+appVersion: v0.68.4
 dependencies:
 - name: victoria-metrics-common
-  repository: https://victoriametrics.github.io/helm-charts
-  version: 0.0.*
+  repository: oci://ghcr.io/victoriametrics/helm-charts
+  version: 0.3.*
 - condition: crds.plain
   name: crds
   repository: ""
@@ -46,4 +47,4 @@ sources:
 - https://github.com/VictoriaMetrics/helm-charts
 - https://github.com/VictoriaMetrics/operator
 type: application
-version: 0.59.1
+version: 0.61.0

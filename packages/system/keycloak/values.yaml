@@ -1,10 +1,26 @@
-image: quay.io/keycloak/keycloak:26.5.2
+image: quay.io/keycloak/keycloak:26.6.3
 
 ingress:
   # Custom hostname for the Keycloak Ingress.
   # If set, this value will be used as the Ingress hostname (e.g., "auth.example.com").
   # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
   host: ""
+  # Optional separate hostname for the Keycloak admin console (opt-in).
+  # When set (e.g., "keycloak-admin.example.com"):
+  #   - KC_HOSTNAME_ADMIN is configured so the admin console generates its
+  #     URLs on this hostname;
+  #   - the main `host` (login) route is narrowed to the public OIDC paths
+  #     (/realms, /resources, /.well-known) only, so the admin console and
+  #     Administration REST API (/admin) are NOT served on the login hostname;
+  #   - a dedicated Ingress/HTTPRoute for this hostname routes /  to Keycloak.
+  # The admin route attaches to the Gateway/ingressClass selected by the
+  # cluster-level expose-ingress-admin (defaults to expose-ingress). Point
+  # that at a separate, e.g. private-IP, Gateway to keep the admin console off
+  # the public internet. Note: KC_HOSTNAME_ADMIN alone is NOT a security
+  # boundary (admin REST stays reachable on any hostname routed to Keycloak);
+  # the network/path separation here is what restricts access.
+  # If left empty, the admin console stays on the main hostname (default).
+  adminHost: ""
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
@@ -21,6 +37,53 @@ themes: []
 # Theme images must contain theme files under /themes/ directory.
 # Each theme is copied into Keycloak's /opt/keycloak/themes/ via init container.
 # If multiple themes contain files with the same path, later entries take precedence.
+#
+# In addition to this explicit list, a single login theme can be shipped through
+# platform branding values: setting branding.loginTheme (the theme name) together
+# with branding.loginThemeImage (the OCI image carrying it under /themes/) appends
+# an entry here automatically and selects it as the realm login theme. branding
+# arrives via _cluster.branding, so no per-package values plumbing is required.
 
 imagePullSecrets: []
 # - name: my-registry-secret
+
+# Extra environment variables to inject into the Keycloak container.
+# Useful for passing runtime values that custom themes read via
+# kcContext.properties (Keycloakify themes, FTL templates with
+# ${env.NAME} substitution, etc.).
+# Each entry is appended verbatim to the container's env list and
+# supports the full corev1.EnvVar schema (value, valueFrom, ...).
+extraEnv: []
+# - name: MY_VAR
+#   value: "some-value"
+# - name: MY_SECRET_VAR
+#   valueFrom:
+#     secretKeyRef:
+#       name: my-secret
+#       key: my-key
+
+# Database connection. By default Keycloak connects directly to the chart's
+# CNPG cluster using the keycloak-db-app secret. Override these to route the
+# connection through an external endpoint (e.g. a connection proxy such as
+# PgBouncer) without the chart needing to know about it.
+db:
+  # DB host. Empty = use the keycloak-db-app secret's "host" key.
+  host: ""
+  # DB port. Empty = use the keycloak-db-app secret's "port" key.
+  port: ""
+  # Extra JDBC URL properties, appended verbatim as KC_DB_URL_PROPERTIES, e.g.
+  #   "?sslmode=verify-full&prepareThreshold=0&sslrootcert=/etc/keycloak-db-ca/ca.crt"
+  # Empty = KC_DB_URL_PROPERTIES is not set.
+  urlProperties: ""
+
+# Extra volumes and volume mounts on the Keycloak container (in addition to
+# themes). Useful for mounting a CA so KC_DB_URL_PROPERTIES can reference an
+# sslrootcert when routing the DB connection through a proxy.
+extraVolumes: []
+# - name: keycloak-db-ca
+#   secret:
+#     secretName: keycloak-db-ca
+extraVolumeMounts: []
+# - name: keycloak-db-ca
+#   mountPath: /etc/keycloak-db-ca
+#   readOnly: true

@@ -1,0 +1,43 @@
+suite: seaweedfs s3 trafficDistribution
+
+# Pins the s3.trafficDistribution behaviour that replaced the former
+# s3-traffic-distribution.patch (dropped in the 4.31 bump). The native chart
+# field gates on Kubernetes >=1.31 and auto-converts PreferClose to
+# PreferSameZone on >=1.35, so this guards both the value the package sets and
+# the version-gating now relied on instead of the hardcoded patch.
+
+templates:
+  - charts/seaweedfs/templates/s3/s3-service.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: keeps PreferClose on Kubernetes 1.33
+    capabilities:
+      majorVersion: 1
+      minorVersion: 33
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.trafficDistribution
+          value: PreferClose
+
+  - it: auto-converts to PreferSameZone on Kubernetes 1.35
+    capabilities:
+      majorVersion: 1
+      minorVersion: 35
+    asserts:
+      - equal:
+          path: spec.trafficDistribution
+          value: PreferSameZone
+
+  - it: omits the field on Kubernetes 1.30 (below the 1.31 gate)
+    capabilities:
+      majorVersion: 1
+      minorVersion: 30
+    asserts:
+      - notExists:
+          path: spec.trafficDistribution

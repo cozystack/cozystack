@@ -13,7 +13,8 @@ spec:
   - name: noop
     components: []
   - name: cilium
-    dependsOn: []
+    dependsOn:
+    - cozystack.gateway-api-crds
     components:
     - name: cilium
       path: system/cilium
@@ -34,7 +35,8 @@ spec:
         dependsOn:
         - cilium
   - name: cilium-kilo
-    dependsOn: []
+    dependsOn:
+    - cozystack.gateway-api-crds
     components:
     - name: cilium
       path: system/cilium
@@ -60,12 +62,14 @@ spec:
         - cilium
   # Generic Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
   - name: cilium-generic
-    dependsOn: []
+    dependsOn:
+    - cozystack.gateway-api-crds
     components:
     - name: cilium
       path: system/cilium
       valuesFiles:
       - values.yaml
+      - values-apparmor.yaml
       install:
         privileged: true
         namespace: cozy-cilium
@@ -80,7 +84,8 @@ spec:
         dependsOn:
         - cilium
   - name: kubeovn-cilium
-    dependsOn: []
+    dependsOn:
+    - cozystack.gateway-api-crds
     components:
     - name: cilium
       path: system/cilium
@@ -111,12 +116,14 @@ spec:
         - cilium
   # Generic KubeOVN+Cilium variant for non-Talos clusters (kubeadm, k3s, RKE2, etc.)
   - name: kubeovn-cilium-generic
-    dependsOn: []
+    dependsOn:
+    - cozystack.gateway-api-crds
     components:
     - name: cilium
       path: system/cilium
       valuesFiles:
       - values.yaml
+      - values-apparmor.yaml
       - values-kubeovn.yaml
       install:
         privileged: true

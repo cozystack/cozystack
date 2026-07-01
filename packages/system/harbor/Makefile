@@ -3,6 +3,9 @@ export NAMESPACE=cozy-system
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add harbor https://helm.goharbor.io

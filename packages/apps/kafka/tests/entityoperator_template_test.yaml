@@ -1,0 +1,34 @@
+suite: Kafka entityOperator pod template
+
+# Regression cover for the strict-SSA fix that moved enableServiceLinks out of
+# a phantom `entityOperator.template.spec` key (silently dropped by Flux v2.7,
+# rejected by v2.8 SSA as "field not declared in schema") into the flat
+# `entityOperator.template.pod` set where the Strimzi CRD actually reads it.
+
+templates:
+  - templates/kafka.yaml
+
+tests:
+  - it: enableServiceLinks lives under entityOperator.template.pod
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.entityOperator.template.pod.enableServiceLinks
+          value: false
+      # the phantom template.spec key must not reappear
+      - notExists:
+          path: spec.entityOperator.template.spec
+
+  - it: topic-operator and user-operator set explicit resources (avoid 128Mi LimitRange OOM)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.entityOperator.topicOperator.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.entityOperator.userOperator.resources.limits.memory
+          value: 512Mi

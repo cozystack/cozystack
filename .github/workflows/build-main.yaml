@@ -1,0 +1,109 @@
+name: Build cache (main)
+
+# Warms the shared mode=max build cache so PR builds start hot.
+#
+# PR builds (pull-requests.yaml) read the cache but never write it
+# (WRITE_CACHE unset -> 0). Only this serialized main build writes
+# CACHE_REGISTRY/<img>:buildcache, so concurrent PR builds never race on the
+# cache manifest -- the 409 collisions PR #2711 fixed for image tags would
+# otherwise reappear on the cache ref. Cache is mode=max so all multistage
+# `builder` stages are cached, not just the final stage as with inline.
+#
+# This job builds on a docker-container buildx builder, NOT the host's default
+# embedded `docker` driver: `--cache-to type=registry,mode=max` is unsupported
+# on the docker driver unless the daemon runs the containerd image store, so on
+# a classic store the warmer would otherwise fail to export any cache. The
+# container driver also gives this build its own buildkit (separate bbolt), so
+# the warmer never contends with PR builds on the shared embedded buildkit.
+
+env:
+  # Same per-CI registry as pull-requests.yaml; the cache is co-located here.
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - 'docs/**'
+
+# Only the newest main commit's cache matters; cancel older in-flight warmers.
+concurrency:
+  group: build-main-cache
+  cancel-in-progress: true
+
+jobs:
+  warm-cache:
+    name: Warm build cache
+    # Runs on the ephemeral pool, not the dedicated self-hosted runner, so the
+    # build path no longer depends on that host (#2937 decommission). Serial
+    # `make build` is CPU-bound, so use the large shape; the warmer is a
+    # background main-push job, latency is not critical.
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          # This privileged workflow has packages:write and an OCIR push token;
+          # it never pushes git, so don't leave the checkout's GITHUB_TOKEN in
+          # .git/config where a later build step could read it.
+          persist-credentials: false
+
+      # Ephemeral runners lack the flux CLI the installer's image-packages step
+      # shells out to; install if absent (idempotent).
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+
+      - name: Login to OCIR
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      # docker-container driver: required for `--cache-to type=registry,mode=max`
+      # (unsupported on the host's default docker driver) and gives this build an
+      # isolated buildkit so it never contends with PR builds on the shared one.
+      - name: Set up Buildx (docker-container driver)
+        id: buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker-container
+        env:
+          # buildx stores builder instances under $DOCKER_CONFIG/buildx/instances/.
+          # Create the builder in the SAME config the build step reads
+          # (runner.temp/.docker, seeded above and holding the OCIR auth); without
+          # this the builder lands in the default ~/.docker and the build step fails
+          # with `no builder "<name>" found`.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+
+      - name: Build all images and write mode=max cache
+        run: make build
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Build on the docker-container builder created above (BUILDX_ARGS adds
+          # --builder=$(BUILDER)); buildx forwards the OCIR auth from DOCKER_CONFIG
+          # to the container builder for cache reads/writes and image pushes.
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
+          WRITE_CACHE: '1'
+          # Publish a floating :main handle; do not move :latest (releases do).
+          IMAGE_TAG: main
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'

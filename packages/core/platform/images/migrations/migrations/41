@@ -1,0 +1,113 @@
+#!/bin/bash
+# Migration 41 --> 42
+# Rename nodeGroups[*].ephemeralStorage to nodeGroups[*].diskSize in every
+# kuberneteses.apps.cozystack.io Application CR.
+#
+# PR #2454 renamed the field in the kubernetes app chart with no fallback.
+# Without this migration, upgraded clusters either fail to reconcile (hard fail
+# behavior) or silently lose their disk size (silent-drop behavior).
+#
+# Idempotent: re-running on already-migrated values is a no-op
+# (has("ephemeralStorage") is false on the post-migration shape).
+# Best-effort: a failed patch is logged and leaves the version stamp at 41 so
+# the migration retries on the next platform upgrade.
+
+set -euo pipefail
+
+DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+FAILURES=0
+PATCHED=0
+SKIPPED=0
+
+# Emit ephemeralStorage: null rather than dropping the key, because JSON merge
+# patch only deletes a field when an explicit null is present in the patch
+# document. A patch that simply omits a key leaves the existing key intact.
+JQ_TRANSFORM='
+  walk(
+    if type == "object" and has("nodeGroups") and (.nodeGroups | type) == "object" then
+      .nodeGroups |= with_entries(
+        .value |= (
+          if type == "object" and has("ephemeralStorage") then
+            (if has("diskSize") and (.diskSize // "") != "" then .
+             else .diskSize = .ephemeralStorage end)
+            | .ephemeralStorage = null
+          else . end
+        )
+      )
+    else . end
+  )
+'
+
+patch_object() {
+  local kind="$1" ns="$2" name="$3" selector="$4"
+  local obj current new patch
+
+  obj=$(kubectl get "$kind" --namespace "$ns" "$name" --output json 2>/dev/null || true)
+  if [ -z "$obj" ]; then SKIPPED=$((SKIPPED + 1)); return 0; fi
+
+  current=$(printf '%s' "$obj" | jq -c "$selector // null")
+  if [ "$current" = "null" ]; then SKIPPED=$((SKIPPED + 1)); return 0; fi
+
+  new=$(printf '%s' "$current" | jq -c "$JQ_TRANSFORM")
+  if [ "$current" = "$new" ]; then SKIPPED=$((SKIPPED + 1)); return 0; fi
+
+  patch=$(jq --null-input --argjson val "$new" --arg path "${selector#.}" '
+    def to_path: split(".");
+    {} | setpath($path | to_path; $val)
+  ')
+
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "[dry-run] would patch $kind $ns/$name ($selector)"
+    diff <(printf '%s' "$current" | jq --sort-keys .) \
+         <(printf '%s' "$new"     | jq --sort-keys .) || true
+    PATCHED=$((PATCHED + 1))
+    return 0
+  fi
+
+  local kubectl_err
+  if kubectl_err=$(printf '%s' "$patch" | kubectl patch "$kind" --namespace "$ns" "$name" \
+       --type merge --patch-file /dev/stdin 2>&1 >/dev/null); then
+    echo "Patched $kind $ns/$name ($selector)"
+    PATCHED=$((PATCHED + 1))
+  else
+    echo "WARN: failed to patch $kind $ns/$name ($selector): ${kubectl_err:-unknown error}" >&2
+    FAILURES=$((FAILURES + 1))
+  fi
+}
+
+list_objects() {
+  local kind="$1" out
+  if ! out=$(kubectl get "$kind" --all-namespaces \
+       --output 'jsonpath={range .items[*]}{.metadata.namespace}{"\t"}{.metadata.name}{"\n"}{end}' \
+       2>&1); then
+    case "$out" in
+      *"the server doesn't have a resource type"*|*"no matches for kind"*|*"NotFound"*) return 0 ;;
+    esac
+    echo "ERROR: kubectl get $kind failed: $out" >&2
+    return 1
+  fi
+  printf '%s' "$out"
+}
+
+echo "==> Migrating kuberneteses.apps.cozystack.io"
+items=$(list_objects kuberneteses.apps.cozystack.io) || exit 1
+while IFS=$'\t' read -r ns name; do
+  [ -z "$ns" ] && continue
+  patch_object kuberneteses.apps.cozystack.io "$ns" "$name" .spec
+done <<<"$items"
+
+echo "==> Summary: patched=$PATCHED skipped=$SKIPPED failures=$FAILURES" | tee /dev/stderr
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "Dry-run complete; version stamp not advanced"
+  exit 0
+fi
+
+if [ "$FAILURES" -gt 0 ]; then
+  echo "WARN: $FAILURES patch(es) failed; leaving CURRENT_VERSION at 41 for retry on next upgrade."
+  exit 0
+fi
+
+kubectl create configmap --namespace cozy-system cozystack-version \
+  --from-literal version=42 --dry-run=client --output yaml \
+  | kubectl apply --filename -

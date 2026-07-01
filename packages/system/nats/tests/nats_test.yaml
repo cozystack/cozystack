@@ -1,0 +1,36 @@
+suite: cozy-nats chart rendering invariants
+release:
+  name: nats
+  namespace: cozy-nats
+tests:
+  - it: renders the nats StatefulSet on the pinned server image
+    template: charts/nats/templates/stateful-set.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: nats:2.11.10-alpine
+
+  - it: keeps the cozystack PVC retention policy (delete on scale-down and teardown)
+    template: charts/nats/templates/stateful-set.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    asserts:
+      - equal:
+          path: spec.persistentVolumeClaimRetentionPolicy.whenDeleted
+          value: Delete
+      - equal:
+          path: spec.persistentVolumeClaimRetentionPolicy.whenScaled
+          value: Delete
+
+  - it: emits a PodMonitor when the cozystack prometheus exporter is enabled
+    template: charts/nats/templates/pod-monitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: PodMonitor

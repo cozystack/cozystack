@@ -1,0 +1,52 @@
+suite: vm-instance update-hook runs non-root
+
+# The update hook only renders when an existing VM/Service needs reconciling
+# (lookup-gated). Mock a Service whose type differs from the desired one
+# (existing LoadBalancer vs desired ClusterIP) to drive the render, then pin
+# the non-root securityContext. Scope to the hook template so the chart's
+# instanceType lookups elsewhere don't need a live cluster.
+release:
+  name: test-vm
+  namespace: tenant-test
+templates:
+  - templates/vm-update-hook.yaml
+set:
+  fullnameOverride: test-vm
+  external: false
+kubernetesProvider:
+  scheme:
+    "v1/Service":
+      gvr:
+        group: ""
+        version: "v1"
+        resource: "services"
+      namespaced: true
+  objects:
+    - kind: Service
+      apiVersion: v1
+      metadata:
+        name: test-vm
+        namespace: tenant-test
+      spec:
+        type: LoadBalancer
+tests:
+  - it: update-hook Job runs under a restrictive non-root securityContext
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65534
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL

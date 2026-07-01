@@ -16,7 +16,7 @@ spec:
   storageClass: ""
   postgresql:
     parameters:
-      max_connections: 100
+      max_connections: "100"
   quorum:
     minSyncReplicas: 0
     maxSyncReplicas: 0
@@ -40,8 +40,11 @@ spec:
   resources: {}
   resourcesPreset: "nano"
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr postgres-$name --timeout=100s --for=condition=ready
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr postgres-$name >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr postgres-$name --timeout=5m --for=condition=ready
+  timeout 60 sh -ec "until kubectl -n tenant-test get job.batch postgres-$name-init-job >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait job.batch postgres-$name-init-job --timeout=50s --for=condition=Complete
   timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-r -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc postgres-$name-ro -o jsonpath='{.spec.ports[0].port}' | grep -q '5432'; do sleep 10; done"

@@ -14,10 +14,10 @@ app.kubernetes.io/component: crds
 {{- end -}}
 
 {{/*
-Common labels
+Labels
 */}}
 {{- define "vertical-pod-autoscaler.crds.labels" -}}
-{{ include "vertical-pod-autoscaler.labels" . }}
+{{ include "vertical-pod-autoscaler.commonLabels" . }}
 {{ include "vertical-pod-autoscaler.crds.componentLabels" . }}
 {{- end -}}
 
@@ -25,6 +25,6 @@ Common labels
 Selector labels
 */}}
 {{- define "vertical-pod-autoscaler.crds.selectorLabels" -}}
-{{ include "vertical-pod-autoscaler.selectorLabels" . }}
+{{ include "vertical-pod-autoscaler.commonSelectorLabels" . }}
 {{ include "vertical-pod-autoscaler.crds.componentLabels" . }}
 {{- end -}}

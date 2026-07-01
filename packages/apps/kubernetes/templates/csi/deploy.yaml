@@ -1,3 +1,4 @@
+{{- if .Values._namespace.etcd }}
 kind: Deployment
 apiVersion: apps/v1
 metadata:
@@ -24,6 +25,8 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: "NoSchedule"
+      initContainers:
+      {{- include "kubernetes.waitForAdminKubeconfig" $ | nindent 6 }}
       containers:
         - name: csi-driver
           imagePullPolicy: Always
@@ -234,4 +237,6 @@ spec:
           emptyDir: {}
         - secret:
             secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
           name: kubeconfig
+{{- end }}

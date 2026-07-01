@@ -1,0 +1,30 @@
+suite: apps.yaml publishing.proxyProtocol → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# publishing.proxyProtocol is the host PROXY-protocol switch. It reaches the
+# host ingress-nginx through _cluster.proxy-protocol in the cozystack-values
+# Secret (the same path expose-external-ips travels): cozystack-basics
+# propagates the whole _cluster block into the tenant-root Secret, and the
+# extra/ingress chart applies it to the external-facing ingress. These
+# assertions pin that the switch lands in the Secret; without them the host
+# ingress would silently never see the flag (the bug fixed here).
+
+tests:
+  - it: writes proxy-protocol false by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*proxy-protocol:\s*"false"'
+
+  - it: writes proxy-protocol true when publishing.proxyProtocol is enabled
+    set:
+      publishing.proxyProtocol: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*proxy-protocol:\s*"true"'

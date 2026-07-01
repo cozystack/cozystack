@@ -1,4 +1,5 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $tlsEnabled := (include "nats.tls.enabled" .) | eq "true" }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace (printf "%s-credentials" .Release.Name) }}
 {{- $passwords := dict }}
 
@@ -46,7 +47,6 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   valuesFrom:
@@ -58,6 +58,11 @@ spec:
         merge:
           resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 12 }}
       fullnameOverride: {{ .Release.Name }}
+      {{- if $tlsEnabled }}
+      tlsCA:
+        enabled: true
+        secretName: {{ .Release.Name }}-ca
+      {{- end }}
       config:
         {{- if or $passwords .Values.config.merge }}
         merge:
@@ -78,11 +83,25 @@ spec:
         resolver:
           {{- toYaml . | nindent 10 }}
         {{- end }}
+        {{- if $tlsEnabled }}
+        nats:
+          tls:
+            enabled: true
+            secretName: {{ .Release.Name }}-tls
+        {{- end }}
         cluster:
           enabled: true
           routeURLs:
             k8sClusterDomain: {{ $clusterDomain }}
+            {{- if $tlsEnabled }}
+            useFQDN: true
+            {{- end }}
           replicas: {{ .Values.replicas }}
+          {{- if $tlsEnabled }}
+          tls:
+            enabled: true
+            secretName: {{ .Release.Name }}-tls
+          {{- end }}
         monitor:
           enabled: true
         jetstream:

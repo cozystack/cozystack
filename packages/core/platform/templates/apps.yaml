@@ -23,13 +23,109 @@ stringData:
       bundle-name: {{ .Values.bundles.system.variant | quote }}
       solver: {{ .Values.publishing.certificates.solver | quote }}
       issuer-name: {{ .Values.publishing.certificates.issuerName | quote }}
+      {{- /*
+        Wildcard certificate mode. Only the Secret NAME rides this
+        channel — never the cert/key material (unlike a private key, the
+        name is not sensitive). When set, the ingress flow points the
+        root ingress controller's --default-ssl-certificate at it and
+        drops per-host ACME, and the gateway chart switches the
+        TenantGateway to certMode=existingSecret.
+
+        The name comes from one of two sources, with the operator-
+        provided (BYO) name always winning:
+          1. publishing.certificates.wildcardSecretName — a Secret the
+             operator pre-creates in the publishing namespace
+             (tenant-root). wildcard-issue stays false: the platform
+             mints nothing.
+          2. Otherwise, on the ingress-nginx path (gateway.enabled=false)
+             with solver=dns01 and publishing.certificates.wildcard=true,
+             the platform issues its own shared wildcard. wildcard-issue
+             becomes true and the publishing ingress package renders the
+             Certificate into this Secret name. http01 cannot issue
+             wildcards, and the Gateway API path issues its own wildcard
+             via the TenantGateway controller, so both are excluded.
+        Empty name + wildcard-issue=false = per-host ACME as before.
+      */}}
+      {{- $byoWildcard := .Values.publishing.certificates.wildcardSecretName | default "" }}
+      {{- $wildcardSecretName := $byoWildcard }}
+      {{- $wildcardIssue := false }}
+      {{- if and (not $byoWildcard) (eq .Values.publishing.certificates.solver "dns01") .Values.publishing.certificates.wildcard (not .Values.gateway.enabled) }}
+      {{- $wildcardSecretName = "cozystack-wildcard-tls" }}
+      {{- $wildcardIssue = true }}
+      {{- end }}
+      wildcard-secret-name: {{ $wildcardSecretName | quote }}
+      wildcard-issue: {{ $wildcardIssue | quote }}
+      {{- /*
+        DNS-01 solver wiring. Read only when solver=dns01, but the
+        keys are written unconditionally so a render-time switch from
+        http01 to dns01 doesn't require chart redeploy of every
+        consumer. Each consumer (extra/gateway, ingress flow) reads
+        the keys it needs and validates per-provider requirements.
+      */}}
+      {{- with .Values.publishing.certificates.dns01 }}
+      dns01-provider: {{ .provider | default "cloudflare" | quote }}
+      {{- with .cloudflare }}
+      dns01-cloudflare-secret-name: {{ .secretName | default "cloudflare-api-token-secret" | quote }}
+      dns01-cloudflare-secret-key: {{ .secretKey | default "api-token" | quote }}
+      {{- end }}
+      {{- with .route53 }}
+      dns01-route53-region: {{ .region | default "" | quote }}
+      dns01-route53-access-key-id: {{ .accessKeyID | default "" | quote }}
+      dns01-route53-secret-name: {{ .secretName | default "" | quote }}
+      dns01-route53-secret-key: {{ .secretKey | default "secret-access-key" | quote }}
+      {{- end }}
+      {{- with .digitalocean }}
+      dns01-digitalocean-secret-name: {{ .secretName | default "digitalocean-api-token-secret" | quote }}
+      dns01-digitalocean-secret-key: {{ .secretKey | default "access-token" | quote }}
+      {{- end }}
+      {{- with .rfc2136 }}
+      dns01-rfc2136-nameserver: {{ .nameserver | default "" | quote }}
+      dns01-rfc2136-tsig-key-name: {{ .tsigKeyName | default "" | quote }}
+      dns01-rfc2136-tsig-algorithm: {{ .tsigAlgorithm | default "HMACSHA256" | quote }}
+      dns01-rfc2136-secret-name: {{ .secretName | default "" | quote }}
+      dns01-rfc2136-secret-key: {{ .secretKey | default "tsig-secret-key" | quote }}
+      {{- end }}
+      {{- end }}
       oidc-enabled: {{ .Values.authentication.oidc.enabled | quote }}
       oidc-insecure-skip-verify: {{ .Values.authentication.oidc.insecureSkipVerify | quote }}
       extra-keycloak-redirect-uri-for-dashboard: {{ index .Values.authentication.oidc.keycloakExtraRedirectUri | quote }}
       keycloak-internal-url: {{ .Values.authentication.oidc.keycloakInternalUrl | quote }}
       expose-services: {{ .Values.publishing.exposedServices | join "," | quote }}
+      {{- /*
+        expose-ingress carries two semantically distinct values that
+        happen to coincide in the default cozystack deployment:
+          1. The ingressClassName the per-system app (dashboard,
+             cozystack-api, etc.) sets on its Ingress resource when
+             gateway-enabled=false.
+          2. The namespace of the Gateway that the same per-system
+             app's HTTPRoute / TLSRoute parentRefs target when
+             gateway-enabled=true (publishing tenant namespace).
+        Default `tenant-root` satisfies both because the ingress-nginx
+        controller and the publishing Gateway both live in tenant-root.
+        If a future deployment splits these (e.g. an ingress controller
+        in cozy-ingress vs a publishing Gateway in tenant-root), the
+        per-system templates need a separate _cluster.gateway-namespace
+        key. Documented here as a known limitation.
+      */}}
       expose-ingress: {{ .Values.publishing.ingressName | quote }}
+      {{- /* Optional namespace of a SEPARATE Gateway/ingressClass that
+             system components (currently Keycloak) attach their admin
+             routes to — e.g. a private-IP Gateway unreachable from the
+             public internet. Empty -> admin shares expose-ingress. The
+             Gateway itself is provisioned out of band; this only selects
+             where the admin route attaches. */}}
+      expose-ingress-admin: {{ .Values.publishing.ingressNameAdmin | default "" | quote }}
       expose-external-ips: {{ .Values.publishing.externalIPs | join "," | quote }}
+      {{- /* Name of the ExposureClass the host ingress publishes through.
+             Empty keeps the externalIPs path; set it to render a
+             ServiceExposure for the ingress Service (see extra/ingress). */}}
+      exposure-class: {{ .Values.publishing.exposureClass.name | default "" | quote }}
+      {{- /* Host PROXY-protocol switch. extra/ingress reads this and applies
+             use-proxy-protocol to the external-facing ingress (the namespace
+             named by expose-ingress), keeping it host-scoped like expose-external-ips. */}}
+      proxy-protocol: {{ .Values.publishing.proxyProtocol | default false | quote }}
+      gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
+      gateway-attached-namespaces: {{ .Values.gateway.attachedNamespaces | default (list) | join "," | quote }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
       {{- with .Values.branding }}

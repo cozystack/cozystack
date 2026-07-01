@@ -1,0 +1,18 @@
+{{- if and .Values.proxy.enabled .Values.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "ouroboros.proxyFullname" . }}
+  labels:
+    {{- include "ouroboros.proxyLabels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "ouroboros.proxySelectorLabels" . | nindent 6 }}
+  {{- if .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  {{- if .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+{{- end }}

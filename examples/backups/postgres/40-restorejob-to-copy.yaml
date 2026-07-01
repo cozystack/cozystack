@@ -1,0 +1,20 @@
+# To-copy restore. Targets the empty pg-target Postgres app from
+# 30-postgres-target.yaml; the chart bootstraps a fresh cnpg.io Cluster
+# from the source's Barman archive while pg-src stays running and
+# untouched.
+#
+# Driven by the CI e2e (hack/e2e-apps/backup-postgres.bats) for the
+# same-namespace happy path. The cross-tenant variant stays manual; see
+# 30-postgres-target.yaml for the network-policy reason.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: pg-src-to-pg-target
+spec:
+  backupRef:
+    name: pg-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: pg-target

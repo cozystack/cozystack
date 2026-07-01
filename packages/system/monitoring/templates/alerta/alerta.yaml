@@ -2,6 +2,9 @@
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
+{{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
+{{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
 {{- $apiKey := randAlphaNum 32 }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace "alerta" }}
@@ -73,7 +76,7 @@ spec:
     spec:
       containers:
         - name: alerta
-          image: "alerta/alerta-web:9.0.4"
+          image: "alerta/alerta-web:9.1.0"
           imagePullPolicy: IfNotPresent
           resources: {{- toYaml .Values.alerta.resources | nindent 12 }}
           env:
@@ -172,6 +175,7 @@ spec:
         - name: alerta-config
           configMap:
             name: alerta
+{{- if ne $gatewayEnabled "true" }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -179,17 +183,25 @@ metadata:
   name: alerta
   labels:
     app: alerta
+  {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+  {{- if not $wildcardSecret }}
   annotations:
     {{- if eq $solver "http01" }}
-    acme.cert-manager.io/http01-ingress-class: {{ $ingress }}
+    acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+  {{- end }}
 spec:
   ingressClassName: {{ $ingress }}
   tls:
     - hosts:
         - "{{ printf "alerta.%s" (.Values.host | default $host) }}"
+      {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+             back to the default SSL certificate while the tls section keeps
+             the HTTP-to-HTTPS redirect enforced. */}}
+      {{- if not $wildcardSecret }}
       secretName: alerta-tls
+      {{- end }}
   rules:
     - host: "{{ printf "alerta.%s" (.Values.host | default $host) }}"
       http:
@@ -201,6 +213,27 @@ spec:
                 name: alerta
                 port:
                   name: http
+{{- else }}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: alerta
+  labels:
+    app: alerta
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cozystack
+    namespace: {{ $exposeIngress }}
+  hostnames:
+  - {{ printf "alerta.%s" (.Values.host | default $host) | quote }}
+  rules:
+  - backendRefs:
+    - name: alerta
+      port: 80
+{{- end }}
 ---
 apiVersion: v1
 kind: Secret

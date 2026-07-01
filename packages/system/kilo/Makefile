@@ -4,10 +4,21 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
-	tag=$$(git ls-remote --tags --sort="v:refname" https://github.com/squat/kilo | awk -F'[/^]' 'END{print $$3}') && \
-	digest=$$(skopeo inspect --override-os linux --override-arch amd64 --format '{{.Digest}}' docker://ghcr.io/squat/kilo:$${tag}) && \
-	REPOSITORY="ghcr.io/squat/kilo" \
-		yq -i '.kilo.image.repository = strenv(REPOSITORY)' values.yaml && \
-	TAG="$${tag}@$${digest}" \
+	sha=$$(git ls-remote https://github.com/squat/kilo refs/heads/main | awk '{print $$1}') && \
+	sed -i "/ARG VERSION/ s|=.*|=$${sha}|g" images/kilo/Dockerfile
+
+image:
+	docker buildx build images/kilo \
+		$(call image-tags,kilo,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,kilo) \
+		--metadata-file images/kilo.json \
+		$(BUILDX_ARGS)
+	REPOSITORY="$(REGISTRY)/kilo" \
+		yq -i '.kilo.image.repository = strenv(REPOSITORY)' values.yaml
+	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/kilo.json -o json -r) \
 		yq -i '.kilo.image.tag = strenv(TAG)' values.yaml
+	rm -f images/kilo.json

@@ -63,8 +63,7 @@ spec:
             description: ScheduleSpec defines the specification for a Velero schedule
             properties:
               paused:
-                description: Paused specifies whether the schedule is paused or
-                  not
+                description: Paused specifies whether the schedule is paused or not
                 type: boolean
               schedule:
                 description: |-
@@ -145,12 +144,12 @@ spec:
                     nullable: true
                     type: array
                   hooks:
-                    description: Hooks represent custom behaviors that should be
-                      executed at different phases of the backup.
+                    description: Hooks represent custom behaviors that should be executed
+                      at different phases of the backup.
                     properties:
                       resources:
-                        description: Resources are hooks that should be executed
-                          when backing up individual instances of a resource.
+                        description: Resources are hooks that should be executed when
+                          backing up individual instances of a resource.
                         items:
                           description: |-
                             BackupResourceHookSpec defines one or more BackupResourceHooks that should be executed based on
@@ -187,14 +186,13 @@ spec:
                               nullable: true
                               type: array
                             labelSelector:
-                              description: LabelSelector, if specified, filters
-                                the resources to which this hook spec applies.
+                              description: LabelSelector, if specified, filters the
+                                resources to which this hook spec applies.
                               nullable: true
                               properties:
                                 matchExpressions:
                                   description: matchExpressions is a list of label
-                                    selector requirements. The requirements are
-                                    ANDed.
+                                    selector requirements. The requirements are ANDed.
                                   items:
                                     description: |-
                                       A label selector requirement is a selector that contains values, a key, and an operator that
@@ -250,8 +248,8 @@ spec:
                                     description: Exec defines an exec hook.
                                     properties:
                                       command:
-                                        description: Command is the command and
-                                          arguments to execute.
+                                        description: Command is the command and arguments
+                                          to execute.
                                         items:
                                           type: string
                                         minItems: 1
@@ -293,8 +291,8 @@ spec:
                                     description: Exec defines an exec hook.
                                     properties:
                                       command:
-                                        description: Command is the command and
-                                          arguments to execute.
+                                        description: Command is the command and arguments
+                                          to execute.
                                         items:
                                           type: string
                                         minItems: 1
@@ -535,8 +533,8 @@ spec:
                     nullable: true
                     type: boolean
                   storageLocation:
-                    description: StorageLocation is a string containing the name
-                      of a BackupStorageLocation where the backup should be stored.
+                    description: StorageLocation is a string containing the name of
+                      a BackupStorageLocation where the backup should be stored.
                     type: string
                   ttl:
                     description: |-
@@ -544,18 +542,18 @@ spec:
                       the Backup should be retained for.
                     type: string
                   uploaderConfig:
-                    description: UploaderConfig specifies the configuration for
-                      the uploader.
+                    description: UploaderConfig specifies the configuration for the
+                      uploader.
                     nullable: true
                     properties:
                       parallelFilesUpload:
-                        description: ParallelFilesUpload is the number of files
-                          parallel uploads to perform when using the uploader.
+                        description: ParallelFilesUpload is the number of files parallel
+                          uploads to perform when using the uploader.
                         type: integer
                     type: object
                   volumeGroupSnapshotLabelKey:
-                    description: VolumeGroupSnapshotLabelKey specifies the label
-                      key to group PVCs under a VGS.
+                    description: VolumeGroupSnapshotLabelKey specifies the label key
+                      to group PVCs under a VGS.
                     type: string
                   volumeSnapshotLocations:
                     description: VolumeSnapshotLocations is a list containing names

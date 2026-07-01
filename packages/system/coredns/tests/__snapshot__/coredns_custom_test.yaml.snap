@@ -1,0 +1,22 @@
+pins the cozystack Corefile against drift in the upstream chart:
+  1: |
+    |-
+      .:53 {
+          errors
+          health {
+              lameduck 10s
+          }
+          ready
+          kubernetes cluster.local in-addr.arpa ip6.arpa {
+              pods insecure
+              fallthrough in-addr.arpa ip6.arpa
+              ttl 30
+          }
+          prometheus 0.0.0.0:9153
+          forward . /etc/resolv.conf
+          cache 30
+          loop
+          reload
+          import /etc/coredns/custom/*.override
+          loadbalance
+      }

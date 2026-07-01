@@ -27,13 +27,14 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="t1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 	// Size of Persistent Volume for logs.
 	// +kubebuilder:default:="2Gi"
@@ -53,30 +54,42 @@ type ConfigSpec struct {
 }
 
 type Backup struct {
-	// Retention strategy for cleaning up old backups.
+	// Legacy. Restic retention policy passed to the legacy CronJob (`restic forget …`). Unused by the Altinity strategy.
 	// +kubebuilder:default:="--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
-	CleanupStrategy string `json:"cleanupStrategy"`
-	// Enable regular backups (default: false).
+	CleanupStrategy string `json:"cleanupStrategy,omitempty"`
+	// Enable backup integration. Materialises the chart-emitted `<release>-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Password for Restic backup encryption.
+	// DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.
+	// +kubebuilder:default:=""
+	Endpoint string `json:"endpoint,omitempty"`
+	// Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.
 	// +kubebuilder:default:="<password>"
-	ResticPassword string `json:"resticPassword"`
-	// Access key for S3 authentication.
+	ResticPassword string `json:"resticPassword,omitempty"`
+	// DEPRECATED. Tenants no longer supply S3 keys; the platform-managed Bucket Secret is the source of truth. Optional now so `useSystemBucket: true` tenants can omit it.
 	// +kubebuilder:default:="<your-access-key>"
-	S3AccessKey string `json:"s3AccessKey"`
-	// S3 bucket used for storing backups.
+	S3AccessKey string `json:"s3AccessKey,omitempty"`
+	// DEPRECATED. Optional; see `s3Region`.
 	// +kubebuilder:default:="s3.example.org/clickhouse-backups"
-	S3Bucket string `json:"s3Bucket"`
-	// AWS S3 region where backups are stored.
+	S3Bucket string `json:"s3Bucket,omitempty"`
+	// DEPRECATED. Pre-existing Secret reference for the legacy chart-emitted sidecar. The platform flow projects `cozy-backups-creds` instead.
+	// +kubebuilder:default:={}
+	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	// DEPRECATED. Object-key prefix inside the legacy `s3Bucket`; the new platform flow scopes by namespace automatically.
+	// +kubebuilder:default:=""
+	S3PathOverride string `json:"s3PathOverride,omitempty"`
+	// DEPRECATED. Per-tenant S3 configuration is being phased out in favour of the platform-managed `cozy-default` BackupClass. Optional now so tenants on `useSystemBucket: true` can omit it.
 	// +kubebuilder:default:="us-east-1"
-	S3Region string `json:"s3Region"`
-	// Secret key for S3 authentication.
+	S3Region string `json:"s3Region,omitempty"`
+	// DEPRECATED. Optional; see `s3AccessKey`.
 	// +kubebuilder:default:="<your-secret-key>"
-	S3SecretKey string `json:"s3SecretKey"`
-	// Cron schedule for automated backups.
-	// +kubebuilder:default:="0 2 * * *"
-	Schedule string `json:"schedule"`
+	S3SecretKey string `json:"s3SecretKey,omitempty"`
+	// Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.
+	// +kubebuilder:default:=""
+	Schedule string `json:"schedule,omitempty"`
+	// Opt-in: when true, the chart-emitted `<release>-backup-s3` Secret is skipped and the `clickhouse-backup` sidecar reads bucket coordinates + S3 credentials from the platform-projected `cozy-backups-creds` Secret. `S3_PATH` is set to `<namespace>/<release>` for cross-tenant isolation. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill any `s3*` field below.
+	// +kubebuilder:default:=false
+	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
 }
 
 type ClickHouseKeeper struct {
@@ -87,7 +100,7 @@ type ClickHouseKeeper struct {
 	// +kubebuilder:default:=3
 	Replicas int `json:"replicas,omitempty"`
 	// Default sizing preset.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset,omitempty"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="1Gi"
@@ -101,6 +114,27 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type S3CredentialsSecret struct {
+	// Key in the Secret holding the access key ID. Defaults to `accessKey`.
+	// +kubebuilder:default:=""
+	AccessKeyIDKey string `json:"accessKeyIDKey,omitempty"`
+	// Key in the Secret holding the bucket name. Defaults to `bucketName`.
+	// +kubebuilder:default:=""
+	BucketKey string `json:"bucketKey,omitempty"`
+	// Key in the Secret holding the S3 endpoint URL. Defaults to `endpoint`.
+	// +kubebuilder:default:=""
+	EndpointKey string `json:"endpointKey,omitempty"`
+	// Name of the Secret in the application namespace. Empty means the chart materialises `<release>-backup-s3` from the legacy `s3*` fields.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// Key in the Secret holding the S3 region. Defaults to `region`.
+	// +kubebuilder:default:=""
+	RegionKey string `json:"regionKey,omitempty"`
+	// Key in the Secret holding the secret access key. Defaults to `secretKey`.
+	// +kubebuilder:default:=""
+	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
+}
+
 type User struct {
 	// Password for the user.
 	Password string `json:"password,omitempty"`
@@ -108,5 +142,5 @@ type User struct {
 	Readonly bool `json:"readonly,omitempty"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

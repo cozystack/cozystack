@@ -13,6 +13,28 @@ spec:
   - name: default
     dependsOn:
     - cozystack.tenant-application
+    # cozystack-basics ships cluster-wide ValidatingAdmissionPolicies (the
+    # gateway / route / tenant host policies). kube-controller-manager's VAP
+    # status type-checker panics (nil-pointer deref in cel/openapi) when it
+    # type-checks a policy against a matched type whose schema it cannot
+    # resolve yet, so these policies must never predate the APIs they match:
+    #   - cozystack-engine serves tenants.apps.cozystack.io (via cozystack-api);
+    #     without this dependency the tenant-host policy is created before
+    #     cozystack-api is Ready, crashes KCM, and deadlocks the whole install
+    #     (KCM down -> cert/token issuance stalls -> cozystack-api never starts
+    #     -> the tenants schema never resolves -> KCM keeps crashing).
+    #   - gateway-api-crds establishes gateways/httproutes/tlsroutes for the
+    #     gateway/route host policies.
+    # Drift detection is off on operator-generated HelmReleases, so a
+    # capability gate in the templates would render the policy out at first
+    # install and never add it back; ordering via dependsOn is the reliable
+    # fix. The cozystack-engine and gateway-api-crds packages it depends on
+    # consume none of cozystack-basics' outputs and do not depend back on it,
+    # so these edges add no cycle. (Downstream packages such as backupstrategy-
+    # controller dependsOn cozystack-basics, but those do not feed engine or
+    # gateway-api-crds, so they cannot close a loop here.)
+    - cozystack.cozystack-engine
+    - cozystack.gateway-api-crds
     components:
     - name: cozystack-basics
       path: system/cozystack-basics

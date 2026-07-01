@@ -1,4 +1,4 @@
-FROM grafana/grafana:11.4.0
+FROM grafana/grafana:11.6.15
 
 USER root
 
@@ -7,7 +7,7 @@ RUN mkdir -p /var/lib/grafana-plugins \
 
 USER grafana
 
-ARG VLOGS_VERSION=v0.14.1
+ARG VLOGS_VERSION=v0.28.0
 RUN curl -L https://github.com/VictoriaMetrics/victorialogs-datasource/releases/download/${VLOGS_VERSION}/victoriametrics-logs-datasource-${VLOGS_VERSION}.tar.gz | \
       tar -xzf - -C /var/lib/grafana-plugins
 

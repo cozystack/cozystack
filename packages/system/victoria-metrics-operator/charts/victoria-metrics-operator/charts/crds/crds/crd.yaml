@@ -6079,6 +6079,7 @@ spec:
                 - spec
                 type: object
               shardCount:
+                format: int32
                 type: integer
               startupProbe:
                 type: object
@@ -6087,6 +6088,14 @@ spec:
                 type: boolean
               statefulRollingUpdateStrategy:
                 type: string
+              statefulRollingUpdateStrategyBehavior:
+                properties:
+                  maxUnavailable:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    x-kubernetes-int-or-string: true
+                type: object
               statefulStorage:
                 properties:
                   emptyDir:
@@ -12326,6 +12335,7 @@ spec:
                 type: object
                 x-kubernetes-preserve-unknown-fields: true
               shardCount:
+                format: int32
                 type: integer
               startupProbe:
                 type: object
@@ -16808,6 +16818,9 @@ spec:
                 type: boolean
               vmauth:
                 properties:
+                  enabled:
+                    default: true
+                    type: boolean
                   name:
                     type: string
                   spec:
@@ -24727,6 +24740,14 @@ spec:
                             type: boolean
                           statefulRollingUpdateStrategy:
                             type: string
+                          statefulRollingUpdateStrategyBehavior:
+                            properties:
+                              maxUnavailable:
+                                anyOf:
+                                - type: integer
+                                - type: string
+                                x-kubernetes-int-or-string: true
+                            type: object
                           statefulStorage:
                             properties:
                               emptyDir:
@@ -28628,6 +28649,14 @@ spec:
                               type: boolean
                             statefulRollingUpdateStrategy:
                               type: string
+                            statefulRollingUpdateStrategyBehavior:
+                              properties:
+                                maxUnavailable:
+                                  anyOf:
+                                  - type: integer
+                                  - type: string
+                                  x-kubernetes-int-or-string: true
+                              type: object
                             statefulStorage:
                               properties:
                                 emptyDir:

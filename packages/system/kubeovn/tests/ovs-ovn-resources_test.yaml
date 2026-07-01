@@ -1,0 +1,37 @@
+suite: ovs-ovn container CPU resources
+
+# Pins the CPU headroom this package gives the ovs-ovn DaemonSet container.
+# ovn-controller runs inside that one container (alongside ovsdb-server and
+# ovs-vswitchd) and is CPU-bound while programming OpenFlow for newly created
+# logical ports; under a burst install it CFS-throttles against the container
+# CPU limit, lengthening flow-programming lag. The limit must stay at 4 cores
+# (not the upstream/legacy 2) and the request must keep a guaranteed share so
+# the controller keeps up under contention.
+
+templates:
+  - charts/kube-ovn/templates/ovsovn-ds.yaml
+
+release:
+  name: kubeovn
+  namespace: cozy-kubeovn
+
+tests:
+  - it: ovs-ovn container carries the raised CPU limit and a guaranteed request
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: openvswitch
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 4
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 100m
+
+  - it: ovs-ovn CPU limit is not the throttle-prone 2 cores
+    asserts:
+      - notEqual:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 2

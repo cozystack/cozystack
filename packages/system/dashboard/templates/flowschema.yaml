@@ -10,7 +10,7 @@ spec:
     - subjects:
         - kind: ServiceAccount
           serviceAccount:
-            name: incloud-web-web
+            name: cozy-dashboard-console
             namespace: {{ .Release.Namespace }}
       resourceRules:
         - verbs: ["*"]

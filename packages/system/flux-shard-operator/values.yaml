@@ -1,0 +1,27 @@
+fluxShardOperator:
+  image: ghcr.io/cozystack/cozystack/flux-shard-operator:v1.5.0@sha256:22f99597b1d21a913cb7b81f2faa3cdb983f2121164d220955d4d6e120ef4cd3
+  debug: false
+  replicas: 2
+  ## Number of helm-controller shards to provision and distribute tenants
+  ## over. "auto" (default) sizes from the tenant HelmRelease count
+  ## (~100 HR per shard, capped by tenant count, with hysteresis); set a
+  ## positive integer to pin it explicitly, e.g. shardCount: 7.
+  shardCount: auto
+  ## Load spread ratio (maxLoad-minLoad)/avgLoad above which tenants are
+  ## rebalanced between shards.
+  rebalanceThreshold: 0.25
+  ## Pin heavy tenants to dedicated shards, e.g.:
+  ##   pinnedTenants:
+  ##     tenant-bigone: shard3
+  pinnedTenants: {}
+  shard:
+    ## --concurrent for each shard helm-controller.
+    concurrent: 5
+    ## Resources of each shard helm-controller; empty values inherit the
+    ## flux-aio helm-controller resources.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 64Mi
+      limits:
+        memory: 1Gi

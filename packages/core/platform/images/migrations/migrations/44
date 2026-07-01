@@ -1,0 +1,31 @@
+#!/bin/sh
+# Migration 44 --> 45
+# Tenant Flux sharding: the hand-rolled flux-tenants helm-controller shard is
+# replaced by operator-managed helm-controller-shard<i> Deployments
+# (flux-shard-operator). The operator itself drains and deletes flux-tenants
+# at runtime once no HelmRelease carries sharding.fluxcd.io/key=tenants; this
+# migration only removes a leftover Deployment defensively, and only when that
+# guard is already satisfied — flux-tenants must keep reconciling any
+# HelmRelease still on the legacy bucket.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+if kubectl get deployment flux-tenants -n cozy-fluxcd >/dev/null 2>&1; then
+  # No early-close (head) in the pipe: under pipefail a large name list would
+  # SIGPIPE kubectl and abort the migration.
+  remaining=$(kubectl get helmreleases.helm.toolkit.fluxcd.io -A \
+    -l sharding.fluxcd.io/key=tenants -o name | wc -l)
+  if [ "$remaining" -eq 0 ]; then
+    echo "No HelmReleases left on the legacy tenants shard; removing flux-tenants Deployment"
+    kubectl delete deployment flux-tenants -n cozy-fluxcd --ignore-not-found=true
+  else
+    echo "HelmReleases still carry sharding.fluxcd.io/key=tenants; leaving flux-tenants in place (flux-shard-operator retires it after the backfill drains)"
+  fi
+fi
+
+# Stamp version. The labeled manifest lives in the shared helper so it cannot
+# drift back to a label-less apply that strips platform.cozystack.io/no-delete.
+stamp_cozystack_version 45

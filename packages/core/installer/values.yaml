@@ -1,9 +1,44 @@
+# Render a bare `Namespace cozy-system` resource (with PSA + identity labels).
+# Off by default: helm install/upgrade callers create the namespace via
+# `--create-namespace` and let the pre-install labeler hook stamp the labels.
+# The top-level Makefile turns this on for the kubectl-apply release artifacts
+# (_out/assets/cozystack-operator-*.yaml).
+bareNamespace: false
 cozystackOperator:
   # Deployment variant: talos, generic, hosted
   variant: talos
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.2.1@sha256:c89352808022944c4791d63cf82cc95d78124ce799d355b60427f317087e8909
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.5.0@sha256:05027a381a8a97276ec426dabb87e1b7df753d4d76925b68e2dd8819f7eb22df
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:d02f211f79d4912f04c21856de078b5b41bb3976d84504d37cf8d9108f7cbec6'
+  platformSourceRef: 'digest=sha256:e2e7bc7664a9799332dc8d59ae312879ba3675929edfc0fd6ce005ec41cbeb7b'
+  # When non-empty, overrides the operator's --helmrelease-interval flag
+  # (operator default: 5m). E2E sets this to 30s; production should leave empty.
+  helmReleaseInterval: ""
+  # When non-empty, overrides the operator's --helmrelease-retry-interval flag
+  # (operator default: 30s). Controls how fast failed install/upgrade attempts
+  # are retried. Decoupled from helmReleaseInterval (healthy reconcile cadence).
+  helmReleaseRetryInterval: ""
+  # When non-empty, overrides the operator's --helmrelease-install-timeout flag
+  # (operator default: 10m). Bounds individual k8s operations (job/hook/wait)
+  # during Helm install. Charts with long-running install hooks may need longer.
+  helmReleaseInstallTimeout: ""
+  # When non-empty, overrides the operator's --helmrelease-upgrade-timeout flag
+  # (operator default: 10m). Same semantics as helmReleaseInstallTimeout, for
+  # the Helm upgrade action.
+  helmReleaseUpgradeTimeout: ""
+  # When non-empty, overrides the operator's --helmrelease-max-history flag
+  # (operator default: 5). Number of release revisions Helm keeps per HR.
+  # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
+  helmReleaseMaxHistory: ""
+  # Name of the Secret in cozy-system namespace containing credentials for the
+  # platform source. When non-empty, sets spec.secretRef on the generated
+  # OCIRepository or GitRepository resource. Secret type depends on source kind:
+  #   OCI (oci://...): kubernetes.io/dockerconfigjson with registry credentials.
+  #   Git over HTTPS:  Opaque secret with `username`+`password`, or `bearerToken`.
+  #   Git over SSH:    Opaque secret with `identity` (PEM private key) and `known_hosts`.
+  # The Secret must already exist in cozy-system before the operator reconciles;
+  # otherwise source-controller will report a failed condition until it is created.
+  # See FluxCD source-controller docs for the exact key layout per scheme.
+  platformSourceSecret: ''
 # Generic variant configuration (only used when cozystackOperator.variant=generic)
 cozystack:
   # Kubernetes API server host (IP only, no protocol/port)

@@ -16,12 +16,11 @@ image: image-e2e-sandbox
 
 image-e2e-sandbox:
 	docker buildx build -f images/e2e-sandbox/Dockerfile images/e2e-sandbox \
-		--tag $(REGISTRY)/e2e-sandbox:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/e2e-sandbox:latest \
-		--cache-to type=inline \
+		$(call image-tags,e2e-sandbox,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,e2e-sandbox) \
 		--metadata-file images/e2e-sandbox.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/e2e-sandbox:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/e2e-sandbox.json -o json -r)" \
+	IMAGE="$(REGISTRY)/e2e-sandbox:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/e2e-sandbox.json -o json -r)" \
 		yq -i '.e2e.image = strenv(IMAGE)' values.yaml
 	rm -f images/e2e-sandbox.json
 

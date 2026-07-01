@@ -56,6 +56,8 @@ The deployment architecture is illustrated in the diagram below:
 
 - VTS module shows wrong upstream response time, [github.com/vozlt/nginx-module-vts#198](https://github.com/vozlt/nginx-module-vts/issues/198)
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## Parameters
 
 ### Common parameters
@@ -76,26 +78,26 @@ The deployment architecture is illustrated in the diagram below:
 
 ### HAProxy parameters
 
-| Name                       | Description                                                                                              | Type       | Value  |
-| -------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ------ |
-| `haproxy`                  | HAProxy configuration.                                                                                   | `object`   | `{}`   |
-| `haproxy.replicas`         | Number of HAProxy replicas.                                                                              | `int`      | `2`    |
-| `haproxy.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`   |
-| `haproxy.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`   |
-| `haproxy.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`   |
-| `haproxy.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano` |
+| Name                       | Description                                                                                              | Type       | Value     |
+| -------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `haproxy`                  | HAProxy configuration.                                                                                   | `object`   | `{}`      |
+| `haproxy.replicas`         | Number of HAProxy replicas.                                                                              | `int`      | `2`       |
+| `haproxy.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `haproxy.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`      |
+| `haproxy.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`      |
+| `haproxy.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.nano` |
 
 
 ### Nginx parameters
 
-| Name                     | Description                                                                                              | Type       | Value  |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | ------ |
-| `nginx`                  | Nginx configuration.                                                                                     | `object`   | `{}`   |
-| `nginx.replicas`         | Number of Nginx replicas.                                                                                | `int`      | `2`    |
-| `nginx.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`   |
-| `nginx.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`   |
-| `nginx.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`   |
-| `nginx.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano` |
+| Name                     | Description                                                                                              | Type       | Value     |
+| ------------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `nginx`                  | Nginx configuration.                                                                                     | `object`   | `{}`      |
+| `nginx.replicas`         | Number of Nginx replicas.                                                                                | `int`      | `2`       |
+| `nginx.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `nginx.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`      |
+| `nginx.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`      |
+| `nginx.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.nano` |
 
 
 ## Parameter examples and reference

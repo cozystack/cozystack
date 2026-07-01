@@ -9,3 +9,27 @@ spec:
     selector:
       matchLabels:
         bootstrap-components: cozy
+        bootstrap-provider: kubeadm
+  deployment:
+    containers:
+    - name: manager
+      resources:
+        limits:
+          cpu: 500m
+          memory: 256Mi
+        requests:
+          cpu: 10m
+          memory: 64Mi
+---
+apiVersion: operator.cluster.x-k8s.io/v1alpha2
+kind: BootstrapProvider
+metadata:
+  name: talos
+spec:
+  # https://github.com/siderolabs/cluster-api-bootstrap-provider-talos
+  version: v0.6.12-bootstrap-talos
+  fetchConfig:
+    selector:
+      matchLabels:
+        bootstrap-components: cozy
+        bootstrap-provider: talos

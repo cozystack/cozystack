@@ -1,0 +1,190 @@
+diff --git a/controller/pkg/bucketclaim/bucketclaim.go b/controller/pkg/bucketclaim/bucketclaim.go
+index 2b55c49..9195195 100644
+--- a/controller/pkg/bucketclaim/bucketclaim.go
++++ b/controller/pkg/bucketclaim/bucketclaim.go
+@@ -213,8 +213,23 @@ func (b *BucketClaimListener) provisionBucketClaimOperation(ctx context.Context,
+ 			return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.FailedCreateBucket, err)
+ 		}
+ 
++		// The Bucket for this claim may already exist from an earlier reconcile,
++		// in which case the sidecar may have provisioned the backend and flipped
++		// the Bucket to ready in the meantime. The controller does not watch
++		// Buckets, so re-read the live object and propagate its readiness here;
++		// otherwise the BucketClaim stays BucketReady=false forever (each resync
++		// re-enters this branch, Create returns AlreadyExists, and the readiness
++		// transition is never reflected), so BucketAccess can never be granted.
++		createdBucket, getErr := b.buckets().Get(ctx, bucketName, metav1.GetOptions{})
++		if getErr != nil {
++			klog.V(3).ErrorS(getErr, "Error reading bucket after create",
++				"bucket", bucketName,
++				"bucketClaim", bucketClaim.ObjectMeta.Name)
++			return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.FailedCreateBucket, getErr)
++		}
++
+ 		bucketClaim.Status.BucketName = bucketName
+-		bucketClaim.Status.BucketReady = false
++		bucketClaim.Status.BucketReady = createdBucket.Status.BucketReady
+ 	}
+ 
+ 	// Update status with retry logic for conflict errors
+@@ -282,6 +297,22 @@ func (b *BucketClaimListener) provisionBucketClaimOperation(ctx context.Context,
+ 		return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.FailedCreateBucket, err)
+ 	}
+ 
++	// The backend Bucket is provisioned asynchronously by the sidecar, which
++	// flips Bucket.status.bucketReady on an object this controller does not
++	// watch. The periodic informer resync cannot re-drive convergence either:
++	// the generic controller drops no-op resync deltas (reflect.DeepEqual in
++	// internal/runtime/controller.go) and nothing mutates the BucketClaim after
++	// this point. So while the Bucket is not ready, return an error to force a
++	// rate-limited requeue; each retry re-reads the live Bucket above until its
++	// readiness has been propagated onto the claim. Surface a Warning event so
++	// an operator can see why the claim is still pending (the returned error is
++	// logged at klog.V(3), suppressed at default verbosity); event aggregation
++	// folds the per-requeue repetition into a single counted entry.
++	if !statusBucketReady {
++		err := fmt.Errorf("backend Bucket %q for BucketClaim %q not ready yet; requeuing", bucketName, bucketClaim.ObjectMeta.Name)
++		return b.recordError(inputBucketClaim, v1.EventTypeWarning, v1alpha1.WaitingForBucket, err)
++	}
++
+ 	klog.V(3).Infof("Finished creating Bucket %v", bucketName)
+ 	return nil
+ }
+diff --git a/controller/pkg/bucketclaim/bucketclaim_test.go b/controller/pkg/bucketclaim/bucketclaim_test.go
+index fea6f16..837f7e5 100644
+--- a/controller/pkg/bucketclaim/bucketclaim_test.go
++++ b/controller/pkg/bucketclaim/bucketclaim_test.go
+@@ -3,6 +3,7 @@ package bucketclaim
+ import (
+ 	"context"
+ 	"fmt"
++	"strings"
+ 	"sync"
+ 	"testing"
+ 
+@@ -379,6 +380,18 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
+ 		t.Fatalf("Error occurred when creating BucketClaim: %v", err)
+ 	}
+ 
++	// Pre-create the backend Bucket already flipped to ready so readiness
++	// propagation lands true and Add completes. This test exercises the
++	// status-update conflict-retry path, not the not-ready requeue path
++	// (the latter is covered by TestProvisionRequeuesUntilBucketReady).
++	readyBucket := &v1alpha1.Bucket{
++		ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("bucket-%s", bucketClaim.UID)},
++		Status:     v1alpha1.BucketStatus{BucketReady: true},
++	}
++	if _, err := client.ObjectstorageV1alpha1().Buckets().Create(ctx, readyBucket, metav1.CreateOptions{}); err != nil {
++		t.Fatalf("Error occurred when pre-creating ready Bucket: %v", err)
++	}
++
+ 	// Cleanup
+ 	defer util.DeleteObjects(ctx, client, *bucketClaim, *bucketclass)
+ 
+@@ -436,8 +449,8 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
+ 		t.Errorf("Expected BucketName %s, got %s", expectedBucketName, updatedClaim.Status.BucketName)
+ 	}
+ 
+-	if updatedClaim.Status.BucketReady != false {
+-		t.Errorf("Expected BucketReady to be false, got %v", updatedClaim.Status.BucketReady)
++	if updatedClaim.Status.BucketReady != true {
++		t.Errorf("Expected BucketReady to be true, got %v", updatedClaim.Status.BucketReady)
+ 	}
+ 
+ 	// Verify finalizer was added
+@@ -445,3 +458,95 @@ func TestRetryOnConflictStatusUpdate(t *testing.T) {
+ 		t.Errorf("Expected finalizer to be added, but it was not found")
+ 	}
+ }
++
++// TestProvisionRequeuesUntilBucketReady pins the readiness-propagation contract.
++// The controller does not watch Bucket objects and the generic controller drops
++// no-op resync deltas, so the BucketClaim must be driven to ready by the
++// provision path itself: Add returns an error (forcing a rate-limited requeue)
++// while the backend Bucket is not ready, and returns nil with BucketReady=true
++// once the Bucket's readiness has propagated. Without the requeue the claim
++// would stay BucketReady=false forever and BucketAccess would never be granted.
++func TestProvisionRequeuesUntilBucketReady(t *testing.T) {
++	newListener := func(client *fakebucketclientset.Clientset) *BucketClaimListener {
++		l := NewBucketClaimListener()
++		l.InitializeKubeClient(fakekubeclientset.NewSimpleClientset())
++		l.InitializeBucketClient(client)
++		l.InitializeEventRecorder(record.NewFakeRecorder(3))
++		return l
++	}
++
++	t.Run("requeues while backend Bucket is not ready", func(t *testing.T) {
++		ctx, cancel := context.WithCancel(context.Background())
++		defer cancel()
++
++		client := fakebucketclientset.NewSimpleClientset()
++		if _, err := util.CreateBucketClass(ctx, client, &goldClass); err != nil {
++			t.Fatalf("Error occurred when creating BucketClass: %v", err)
++		}
++		bucketClaim, err := util.CreateBucketClaim(ctx, client, &bucketClaim1)
++		if err != nil {
++			t.Fatalf("Error occurred when creating BucketClaim: %v", err)
++		}
++
++		// The controller creates the Bucket with BucketReady=false and nothing
++		// flips it here, so Add must report an error to force a requeue.
++		err = newListener(client).Add(ctx, bucketClaim)
++		if err == nil {
++			t.Fatal("Add should return an error to requeue while the backend Bucket is not ready")
++		}
++		// Pin the stable substring the production requeue error carries. A
++		// refactor that drops the requeue (returning nil or a different error)
++		// would silently regress convergence; this keeps the contract loud.
++		if !strings.Contains(err.Error(), "not ready yet") {
++			t.Fatalf("Expected requeue error to contain %q, got: %v", "not ready yet", err)
++		}
++
++		updated, err := client.ObjectstorageV1alpha1().BucketClaims(bucketClaim.Namespace).Get(ctx, bucketClaim.Name, metav1.GetOptions{})
++		if err != nil {
++			t.Fatalf("Error occurred when reading BucketClaim: %v", err)
++		}
++		if updated.Status.BucketReady {
++			t.Errorf("Expected BucketReady to stay false while the backend Bucket is not ready")
++		}
++		// Status (name + finalizer) is still persisted before the requeue.
++		if updated.Status.BucketName != fmt.Sprintf("bucket-%s", bucketClaim.UID) {
++			t.Errorf("Expected BucketName to be set even while not ready, got %q", updated.Status.BucketName)
++		}
++	})
++
++	t.Run("converges once the backend Bucket is ready", func(t *testing.T) {
++		ctx, cancel := context.WithCancel(context.Background())
++		defer cancel()
++
++		client := fakebucketclientset.NewSimpleClientset()
++		if _, err := util.CreateBucketClass(ctx, client, &goldClass); err != nil {
++			t.Fatalf("Error occurred when creating BucketClass: %v", err)
++		}
++		bucketClaim, err := util.CreateBucketClaim(ctx, client, &bucketClaim1)
++		if err != nil {
++			t.Fatalf("Error occurred when creating BucketClaim: %v", err)
++		}
++
++		// Simulate the sidecar having already provisioned the backend and
++		// flipped the Bucket to ready before this reconcile.
++		readyBucket := &v1alpha1.Bucket{
++			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("bucket-%s", bucketClaim.UID)},
++			Status:     v1alpha1.BucketStatus{BucketReady: true},
++		}
++		if _, err := client.ObjectstorageV1alpha1().Buckets().Create(ctx, readyBucket, metav1.CreateOptions{}); err != nil {
++			t.Fatalf("Error occurred when pre-creating ready Bucket: %v", err)
++		}
++
++		if err := newListener(client).Add(ctx, bucketClaim); err != nil {
++			t.Fatalf("Add should succeed once the backend Bucket is ready: %v", err)
++		}
++
++		updated, err := client.ObjectstorageV1alpha1().BucketClaims(bucketClaim.Namespace).Get(ctx, bucketClaim.Name, metav1.GetOptions{})
++		if err != nil {
++			t.Fatalf("Error occurred when reading BucketClaim: %v", err)
++		}
++		if !updated.Status.BucketReady {
++			t.Errorf("Expected BucketReady to propagate true once the backend Bucket is ready")
++		}
++	})
++}

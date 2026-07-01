@@ -10,6 +10,8 @@ This managed service is controlled by mariadb-operator, ensuring efficient manag
 - Docs: https://mariadb.com/kb/en/documentation/
 - GitHub: https://github.com/mariadb-operator/mariadb-operator
 
+> `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
+
 ## HowTos
 
 ### How to switch master/slave replica
@@ -33,7 +35,21 @@ NAME        READY   STATUS    PRIMARY POD   AGE
 <instance>  True    Running   app-db1-1     41d
 ```
 
-### How to restore backup:
+### How to back up and restore a MariaDB application
+
+The recommended path is the Cozystack `BackupClass` / `Plan` /
+`RestoreJob` flow with the operator-native `strategy.backups.cozystack.io/MariaDB`
+strategy. See [examples/backups/mariadb](../../../examples/backups/mariadb/)
+for a numbered, end-to-end walkthrough (bucket, source, strategy,
+BackupClass, Plan, ad-hoc BackupJob, and both in-place + to-copy
+RestoreJob fixtures).
+
+The chart's `backup.*` block (mariadb-dump + restic CronJob) is
+**deprecated** and remains supported for backward compatibility only.
+Existing tenants can keep using it unchanged; new deployments should
+use the operator-native flow above.
+
+#### How to restore from a deprecated restic-based backup
 
 find snapshot:
 ```bash
@@ -69,17 +85,17 @@ more details:
 
 ### Common parameters
 
-| Name               | Description                                                                                                                       | Type       | Value   |
-| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
-| `replicas`         | Number of MariaDB replicas.                                                                                                       | `int`      | `2`     |
-| `resources`        | Explicit CPU and memory configuration for each MariaDB replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`    |
-| `resources.cpu`    | CPU available to each replica.                                                                                                    | `quantity` | `""`    |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                           | `quantity` | `""`    |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                           | `string`   | `nano`  |
-| `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`  |
-| `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`    |
-| `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false` |
-| `version`          | MariaDB major.minor version to deploy                                                                                             | `string`   | `v11.8` |
+| Name               | Description                                                                                                                       | Type       | Value     |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `replicas`         | Number of MariaDB replicas.                                                                                                       | `int`      | `2`       |
+| `resources`        | Explicit CPU and memory configuration for each MariaDB replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                                                    | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                           | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                           | `string`   | `t1.nano` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                      | `quantity` | `10Gi`    |
+| `storageClass`     | StorageClass used to store the data.                                                                                              | `string`   | `""`      |
+| `external`         | Enable external access from outside the cluster.                                                                                  | `bool`     | `false`   |
+| `version`          | MariaDB major.minor version to deploy                                                                                             | `string`   | `v11.8`   |
 
 
 ### Application-specific parameters
@@ -95,19 +111,19 @@ more details:
 | `databases[name].roles.readonly` | List of users with read-only privileges. | `[]string`          | `[]`  |
 
 
-### Backup parameters
+### Backup parameters (DEPRECATED)
 
-| Name                     | Description                                     | Type     | Value                                                  |
-| ------------------------ | ----------------------------------------------- | -------- | ------------------------------------------------------ |
-| `backup`                 | Backup configuration.                           | `object` | `{}`                                                   |
-| `backup.enabled`         | Enable regular backups (default: false).        | `bool`   | `false`                                                |
-| `backup.s3Region`        | AWS S3 region where backups are stored.         | `string` | `us-east-1`                                            |
-| `backup.s3Bucket`        | S3 bucket used for storing backups.             | `string` | `s3.example.org/mariadb-backups`                       |
-| `backup.schedule`        | Cron schedule for automated backups.            | `string` | `0 2 * * *`                                            |
-| `backup.cleanupStrategy` | Retention strategy for cleaning up old backups. | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
-| `backup.s3AccessKey`     | Access key for S3 authentication.               | `string` | `<your-access-key>`                                    |
-| `backup.s3SecretKey`     | Secret key for S3 authentication.               | `string` | `<your-secret-key>`                                    |
-| `backup.resticPassword`  | Password for Restic backup encryption.          | `string` | `<password>`                                           |
+| Name                     | Description                                                                                           | Type     | Value                                                  |
+| ------------------------ | ----------------------------------------------------------------------------------------------------- | -------- | ------------------------------------------------------ |
+| `backup`                 | DEPRECATED: Backup configuration. Prefer the BackupClass / Plan flow under examples/backups/mariadb/. | `object` | `{}`                                                   |
+| `backup.enabled`         | DEPRECATED: Enable regular backups (default: false).                                                  | `bool`   | `false`                                                |
+| `backup.s3Region`        | DEPRECATED: AWS S3 region where backups are stored.                                                   | `string` | `us-east-1`                                            |
+| `backup.s3Bucket`        | DEPRECATED: S3 bucket used for storing backups.                                                       | `string` | `s3.example.org/mariadb-backups`                       |
+| `backup.schedule`        | DEPRECATED: Cron schedule for automated backups.                                                      | `string` | `0 2 * * *`                                            |
+| `backup.cleanupStrategy` | DEPRECATED: Retention strategy for cleaning up old backups.                                           | `string` | `--keep-last=3 --keep-daily=3 --keep-within-weekly=1m` |
+| `backup.s3AccessKey`     | DEPRECATED: Access key for S3 authentication.                                                         | `string` | `<your-access-key>`                                    |
+| `backup.s3SecretKey`     | DEPRECATED: Secret key for S3 authentication.                                                         | `string` | `<your-secret-key>`                                    |
+| `backup.resticPassword`  | DEPRECATED: Password for Restic backup encryption.                                                    | `string` | `<password>`                                           |
 
 
 ## Parameter examples and reference
@@ -126,15 +142,9 @@ resources:
 `resourcesPreset` sets named CPU and memory configurations for each replica.
 This setting is ignored if the corresponding `resources` value is set.
 
-| Preset name | CPU    | memory  |
-|-------------|--------|---------|
-| `nano`      | `250m` | `128Mi` |
-| `micro`     | `500m` | `256Mi` |
-| `small`     | `1`    | `512Mi` |
-| `medium`    | `1`    | `1Gi`   |
-| `large`     | `2`    | `2Gi`   |
-| `xlarge`    | `4`    | `4Gi`   |
-| `2xlarge`   | `8`    | `8Gi`   |
+Presets follow a cloud-style `<series>.<size>` naming convention. Five series cover the full CPU-to-memory ratio range (`t1` 1:0.5, `c1` 1:1, `s1` 1:2, `u1` 1:4, `m1` 1:8) and each series ships eight sizes (`nano` through `4xlarge`). The legacy flat names (`nano`, `micro`, `small`, `medium`, `large`, `xlarge`, `2xlarge`) remain accepted as deprecated aliases of their 1:1 instance-type equivalents.
+
+See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 
 ### users
 

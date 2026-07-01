@@ -7,4 +7,7 @@ export CHART_VERSION=^0.25
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update: clean openbao-update

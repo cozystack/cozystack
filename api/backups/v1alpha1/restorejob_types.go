@@ -42,6 +42,12 @@ type RestoreJobSpec struct {
 	// application as referenced by backup.spec.applicationRef.
 	// +optional
 	TargetApplicationRef *corev1.TypedLocalObjectReference `json:"targetApplicationRef,omitempty"`
+
+	// Options is a driver-specific blob of restore options, typed based on
+	// targetApplicationRef and the current controller implementation.
+	// +optional
+	// +kubebuilder:pruning:PreserveUnknownFields
+	Options *runtime.RawExtension `json:"options,omitempty"`
 }
 
 // RestoreJobStatus represents the observed state of a RestoreJob.
@@ -73,6 +79,7 @@ type RestoreJobStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",priority=0
+// +kubebuilder:metadata:annotations={"options.cozystack.io/source.backupRef.name=backup","options.cozystack.io/source.targetApplicationRef.kind=appkind"}
 
 // RestoreJob represents a single execution of a restore from a Backup.
 type RestoreJob struct {

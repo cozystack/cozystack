@@ -21,3 +21,4 @@ spec:
       install:
         namespace: cozy-mongodb-operator
         releaseName: mongodb-operator
+        upgradeCRDs: CreateReplace

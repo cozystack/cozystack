@@ -11,7 +11,9 @@ metadata:
 spec:
   accessModes:
     - {{ .Values.opencost.exporter.persistence.accessMode | quote }}
-  storageClassName: {{ default "" .Values.opencost.exporter.persistence.storageClass }}
+  {{- if .Values.opencost.exporter.persistence.storageClass }}
+  storageClassName: {{ .Values.opencost.exporter.persistence.storageClass }}
+  {{- end }}
   resources:
     requests:
       storage: {{ .Values.opencost.exporter.persistence.size | quote }}

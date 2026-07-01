@@ -1,168 +1,232 @@
 diff --git a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
-index d93a18014..cc8ce4f04 100644
+index d93a18014..a944cb809 100644
 --- a/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
 +++ b/controller/src/main/java/com/linbit/linstor/core/apicallhandler/controller/CtrlRscToggleDiskApiCallHandler.java
-@@ -57,7 +57,9 @@ import com.linbit.linstor.stateflags.StateFlags;
- import com.linbit.linstor.storage.StorageException;
- import com.linbit.linstor.storage.data.adapter.drbd.DrbdRscData;
- import com.linbit.linstor.storage.interfaces.categories.resource.AbsRscLayerObject;
-+import com.linbit.linstor.storage.interfaces.categories.resource.VlmProviderObject;
- import com.linbit.linstor.storage.kinds.DeviceLayerKind;
-+import com.linbit.linstor.storage.kinds.DeviceProviderKind;
- import com.linbit.linstor.storage.utils.LayerUtils;
- import com.linbit.linstor.tasks.AutoDiskfulTask;
- import com.linbit.linstor.utils.layer.LayerRscUtils;
-@@ -387,21 +389,84 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+@@ -111,6 +111,14 @@ import reactor.util.function.Tuple2;
+ @Singleton
+ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionListener
+ {
++    private enum ToggleDiskAction
++    {
++        NOOP,
++        NORMAL,
++        ABORT,
++        RETRY
++    }
++
+     private final AccessContext apiCtx;
+     private final ScopeRunner scopeRunner;
+     private final BackgroundRunner backgroundRunner;
+@@ -386,69 +394,33 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+             "Toggle Disk on %s/%s %s", nodeNameStr, rscNameStr, removeDisk ? "removing disk" : "adding disk");
  
          Resource rsc = ctrlApiDataLoader.loadRsc(nodeName, rscName, true);
++        ResourceDefinition rscDfn = rsc.getResourceDefinition();
  
-+        // Allow retry of the same operation if the previous attempt failed
-+        // (the requested flag remains set for retry on reconnection, but we should also allow manual retry)
-+        // Also allow cancellation of a failed operation by requesting the opposite operation
-         if (hasDiskAddRequested(rsc))
-         {
+-        if (hasDiskAddRequested(rsc))
+-        {
 -            throw new ApiRcException(ApiCallRcImpl.simpleEntry(
 -                ApiConsts.FAIL_RSC_BUSY,
 -                "Addition of disk to resource already requested",
 -                true
 -            ));
-+            if (removeDisk)
-+            {
-+                // User wants to cancel the failed add-disk operation and go back to diskless
-+                // Use the existing disk removal flow to properly cleanup storage on satellite
-+                errorReporter.logInfo(
-+                    "Toggle Disk cancel on %s/%s - cancelling failed DISK_ADD_REQUESTED, reverting to diskless",
-+                    nodeNameStr, rscNameStr);
-+                unmarkDiskAddRequested(rsc);
-+                // Also clear DISK_ADDING if it was set
-+                unmarkDiskAdding(rsc);
-+
-+                // Set storage pool to diskless pool (overwrite the diskful pool that was set)
-+                Props rscProps = ctrlPropsHelper.getProps(rsc);
-+                rscProps.map().put(ApiConsts.KEY_STOR_POOL_NAME, LinStor.DISKLESS_STOR_POOL_NAME);
-+
-+                // Set DISK_REMOVE_REQUESTED to use the existing disk removal flow
-+                // This will:
-+                // 1. updateAndAdjustDisk sets DISK_REMOVING flag
-+                // 2. Satellite sees DISK_REMOVING and deletes LUKS/storage devices
-+                // 3. finishOperation rebuilds layer stack as diskless
-+                // We keep the existing layer data so satellite can properly cleanup
-+                markDiskRemoveRequested(rsc);
-+
-+                ctrlTransactionHelper.commit();
-+
-+                // Use existing disk removal flow - this will properly cleanup storage on satellite
-+                return Flux
-+                    .<ApiCallRc>just(ApiCallRcImpl.singleApiCallRc(
-+                        ApiConsts.MODIFIED,
-+                        "Cancelling disk addition, reverting to diskless"
-+                    ))
-+                    .concatWith(updateAndAdjustDisk(nodeName, rscName, true, toggleIntoTiebreakerRef, context))
-+                    .concatWith(ctrlRscDfnApiCallHandler.get().updateProps(rsc.getResourceDefinition()));
-+            }
-+            // If adding disk and DISK_ADD_REQUESTED is already set, treat as retry
-+            // Simply retry the operation with existing layer data - satellite will handle it idempotently
-+            // NOTE: We don't remove/recreate layer data here because removeLayerData() only deletes
-+            // from controller DB without calling drbdadm down on satellite, leaving orphaned DRBD devices
-+            errorReporter.logInfo(
-+                "Toggle Disk retry on %s/%s - DISK_ADD_REQUESTED already set, retrying operation",
-+                nodeNameStr, rscNameStr);
-+            ctrlTransactionHelper.commit();
-+            return Flux
-+                .<ApiCallRc>just(new ApiCallRcImpl())
-+                .concatWith(updateAndAdjustDisk(nodeName, rscName, false, toggleIntoTiebreakerRef, context))
-+                .concatWith(ctrlRscDfnApiCallHandler.get().updateProps(rsc.getResourceDefinition()));
-         }
-         if (hasDiskRemoveRequested(rsc))
-         {
+-        }
+-        if (hasDiskRemoveRequested(rsc))
+-        {
 -            throw new ApiRcException(ApiCallRcImpl.simpleEntry(
 -                ApiConsts.FAIL_RSC_BUSY,
 -                "Removal of disk from resource already requested",
 -                true
 -            ));
-+            if (!removeDisk)
-+            {
-+                // User wants to cancel the failed remove-disk operation
+-        }
++        ToggleDiskAction action = determineToggleDiskAction(rsc, removeDisk);
++        errorReporter.logDebug("Toggle Disk action: %s", action);
+ 
+-        if (!removeDisk && !ctrlVlmCrtApiHelper.isDiskless(rsc))
++        switch (action)
+         {
+-            throw new ApiRcException(ApiCallRcImpl.simpleEntry(
+-                ApiConsts.WARN_RSC_ALREADY_HAS_DISK,
+-                "Resource already has disk",
+-                true
+-            ));
+-        }
+-        if (removeDisk && ctrlVlmCrtApiHelper.isDiskless(rsc))
+-        {
+-            throw new ApiRcException(ApiCallRcImpl.simpleEntry(
+-                ApiConsts.WARN_RSC_ALREADY_DISKLESS,
+-                "Resource already diskless",
+-                true
+-            ));
++            case NOOP:
++                return handleNoopAction(rsc, removeDisk);
++            case RETRY:
++                return handleRetryAction(rsc, removeDisk, toggleIntoTiebreakerRef, context);
++            case ABORT:
++                clearToggleDiskFlags(rsc);
 +                errorReporter.logInfo(
-+                    "Toggle Disk cancel on %s/%s - cancelling failed DISK_REMOVE_REQUESTED",
-+                    nodeNameStr, rscNameStr);
-+                unmarkDiskRemoveRequested(rsc);
-+                ctrlTransactionHelper.commit();
-+                return Flux.<ApiCallRc>just(
-+                    ApiCallRcImpl.singleApiCallRc(
-+                        ApiConsts.MODIFIED,
-+                        "Cancelled disk removal request"
-+                    )
++                    "Aborting previous toggle disk transition, starting new transition to %s",
++                    removeDisk ? "diskless" : "diskful"
 +                );
-+            }
-+            // If removing disk and DISK_REMOVE_REQUESTED is already set, treat as retry
-+            errorReporter.logInfo(
-+                "Toggle Disk retry on %s/%s - DISK_REMOVE_REQUESTED already set, continuing operation",
-+                nodeNameStr, rscNameStr);
-+            ctrlTransactionHelper.commit();
-+            return Flux
-+                .<ApiCallRc>just(new ApiCallRcImpl())
-+                .concatWith(updateAndAdjustDisk(nodeName, rscName, true, toggleIntoTiebreakerRef, context))
-+                .concatWith(ctrlRscDfnApiCallHandler.get().updateProps(rsc.getResourceDefinition()));
++                break;
++            case NORMAL:
++                break;
++            default:
++                throw new ImplementationError("Unhandled case: " + action);
          }
  
-         if (!removeDisk && !ctrlVlmCrtApiHelper.isDiskless(rsc))
-@@ -412,17 +477,43 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
-                 true
-             ));
-         }
-+        ResourceDefinition rscDfn = rsc.getResourceDefinition();
-+        AccessContext peerCtx = peerAccCtx.get();
-+
-         if (removeDisk && ctrlVlmCrtApiHelper.isDiskless(rsc))
-         {
-+            // Resource is marked as diskless - check if it has orphaned storage layers that need cleanup
-+            AbsRscLayerObject<Resource> layerData = getLayerData(peerCtx, rsc);
-+            if (layerData != null && (LayerUtils.hasLayer(layerData, DeviceLayerKind.LUKS) ||
-+                hasNonDisklessStorageLayer(layerData)))
-+            {
-+                // Resource is marked as diskless but has orphaned storage layers - need cleanup
-+                // Use the existing disk removal flow to properly cleanup storage on satellite
-+                errorReporter.logInfo(
-+                    "Toggle Disk cleanup on %s/%s - resource is diskless but has orphaned storage layers, cleaning up",
-+                    nodeNameStr, rscNameStr);
-+
-+                // Set DISK_REMOVE_REQUESTED to use the existing disk removal flow
-+                // This will trigger proper satellite cleanup via DISK_REMOVING flag
-+                markDiskRemoveRequested(rsc);
-+
-+                ctrlTransactionHelper.commit();
-+
-+                // Use existing disk removal flow - this will properly cleanup storage on satellite
-+                return Flux
-+                    .<ApiCallRc>just(ApiCallRcImpl.singleApiCallRc(
-+                        ApiConsts.MODIFIED,
-+                        "Cleaning up orphaned storage layers"
-+                    ))
-+                    .concatWith(updateAndAdjustDisk(nodeName, rscName, true, toggleIntoTiebreakerRef, context))
-+                    .concatWith(ctrlRscDfnApiCallHandler.get().updateProps(rsc.getResourceDefinition()));
-+            }
-             throw new ApiRcException(ApiCallRcImpl.simpleEntry(
-                 ApiConsts.WARN_RSC_ALREADY_DISKLESS,
-                 "Resource already diskless",
-                 true
-             ));
-         }
--
 -        ResourceDefinition rscDfn = rsc.getResourceDefinition();
 -        AccessContext peerCtx = peerAccCtx.get();
-         if (removeDisk)
-         {
-             // Prevent removal of the last disk
-@@ -1446,6 +1537,30 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+-        if (removeDisk)
+-        {
+-            // Prevent removal of the last disk
+-            int haveDiskCount = countDisksAndIsOnline(rscDfn);
+-            if (haveDiskCount <= 1)
+-            {
+-                throw new ApiRcException(ApiCallRcImpl.simpleEntry(
+-                    ApiConsts.FAIL_INSUFFICIENT_REPLICA_COUNT,
+-                    "Cannot remove the disk from the only online resource with a disk",
+-                    true
+-                ));
+-            }
++        validateToggleDiskPreconditions(rsc, removeDisk);
+ 
+-            if (!LayerUtils.hasLayer(getLayerData(peerCtx, rsc), DeviceLayerKind.DRBD))
+-            {
+-                throw new ApiRcException(ApiCallRcImpl.simpleEntry(
+-                    ApiConsts.FAIL_INVLD_LAYER_STACK,
+-                    "Toggle disk is only supported in combination with DRBD",
+-                    true
+-                ));
+-            }
+-        }
+-        else
+-        {
+-            ensureAllPeersHavePeerSlotLeft(rscDfn);
+-        }
++        AccessContext peerCtx = peerAccCtx.get();
+ 
+         // Save the requested storage pool in the resource properties.
+         // This does not cause the storage pool to be used automatically.
+@@ -628,10 +600,10 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+ 
+         ctrlTransactionHelper.commit();
+ 
+-        String action = removeDisk ? "Removal of disk from" : "Addition of disk to";
++        String actionStr = removeDisk ? "Removal of disk from" : "Addition of disk to";
+         responses.addEntry(ApiCallRcImpl.simpleEntry(
+             ApiConsts.MODIFIED,
+-            action + " resource '" + rscDfn.getName().displayValue + "' " +
++            actionStr + " resource '" + rscDfn.getName().displayValue + "' " +
+                 "on node '" + rsc.getNode().getName().displayValue + "' registered"
+         ));
+ 
+@@ -651,6 +623,40 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
+             );
+     }
+ 
++    private Flux<ApiCallRc> handleNoopAction(Resource rscRef, boolean removeDiskRef)
++    {
++        String state = removeDiskRef ? "diskless" : "diskful";
++        ApiCallRcImpl responses = new ApiCallRcImpl();
++        responses.addEntry(ApiCallRcImpl.simpleEntry(
++            ApiConsts.INFO_NOOP,
++            "Resource '" + rscRef.getResourceDefinition().getName().displayValue + "' on node '" +
++                rscRef.getNode().getName().displayValue + "' is already " + state
++        ));
++        return Flux.just(responses);
++    }
++
++    private Flux<ApiCallRc> handleRetryAction(
++        Resource rscRef,
++        boolean removeDisk,
++        boolean toggleIntoTiebreakerRef,
++        ResponseContext context
++    )
++    {
++        String direction = removeDisk ? "diskless" : "diskful";
++        ApiCallRcImpl responses = new ApiCallRcImpl();
++        NodeName nodeName = rscRef.getNode().getName();
++        ResourceName rscName = rscRef.getResourceDefinition().getName();
++        responses.addEntry(ApiCallRcImpl.simpleEntry(
++            ApiConsts.INFO_NOOP,
++            "Retrying toggle disk to " + direction + " for resource '" + rscName.displayValue +
++                "' on node '" + nodeName.displayValue + "'"
++        ));
++
++        return Flux
++            .<ApiCallRc>just(responses)
++            .concatWith(updateAndAdjustDisk(nodeName, rscName, removeDisk, toggleIntoTiebreakerRef, context));
++    }
++
+     private long getVlmDfnSizePrivileged(VolumeDefinition vlmDfnRef)
+     {
+         try
+@@ -781,6 +787,96 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
          }
      }
  
-+    private void unmarkDiskAddRequested(Resource rsc)
++    private ToggleDiskAction determineToggleDiskAction(Resource rsc, boolean removeDisk)
++    {
++        boolean isDiskless = ctrlVlmCrtApiHelper.isDiskless(rsc);
++        boolean diskAddRequested = hasDiskAddRequested(rsc);
++        boolean diskRemoveRequested = hasDiskRemoveRequested(rsc);
++
++        ToggleDiskAction action;
++        if (isDiskless)
++        {
++            if (diskAddRequested)
++            {
++                action = removeDisk ? ToggleDiskAction.ABORT : ToggleDiskAction.RETRY;
++            }
++            else if (diskRemoveRequested)
++            {
++                action = removeDisk ? ToggleDiskAction.RETRY : ToggleDiskAction.ABORT;
++            }
++            else
++            {
++                action = removeDisk ? ToggleDiskAction.NOOP : ToggleDiskAction.NORMAL;
++            }
++        }
++        else
++        {
++            if (diskRemoveRequested)
++            {
++                action = removeDisk ? ToggleDiskAction.RETRY : ToggleDiskAction.ABORT;
++            }
++            else
++            {
++                action = removeDisk ? ToggleDiskAction.NORMAL : ToggleDiskAction.NOOP;
++            }
++        }
++
++        return action;
++    }
++
++    private void validateToggleDiskPreconditions(Resource rsc, boolean removeDisk)
++    {
++        ResourceDefinition rscDfn = rsc.getResourceDefinition();
++        if (removeDisk)
++        {
++            validateDiskRemovalAllowed(rsc, rscDfn);
++        }
++        else
++        {
++            ensureAllPeersHavePeerSlotLeft(rscDfn);
++        }
++    }
++
++    private void clearToggleDiskFlags(Resource rsc)
 +    {
 +        try
 +        {
-+            rsc.getStateFlags().disableFlags(apiCtx, Resource.Flags.DISK_ADD_REQUESTED);
++            rsc.getStateFlags().disableFlags(
++                apiCtx,
++                Resource.Flags.DISK_ADD_REQUESTED,
++                Resource.Flags.DISK_ADDING,
++                Resource.Flags.DISK_REMOVE_REQUESTED,
++                Resource.Flags.DISK_REMOVING
++            );
 +        }
 +        catch (AccessDeniedException | DatabaseException exc)
 +        {
@@ -170,60 +234,28 @@ index d93a18014..cc8ce4f04 100644
 +        }
 +    }
 +
-+    private void unmarkDiskRemoveRequested(Resource rsc)
++    private void validateDiskRemovalAllowed(Resource rsc, ResourceDefinition rscDfn)
 +    {
-+        try
++        int haveDiskCount = countDisksAndIsOnline(rscDfn);
++        if (haveDiskCount <= 1)
 +        {
-+            rsc.getStateFlags().disableFlags(apiCtx, Resource.Flags.DISK_REMOVE_REQUESTED);
++            throw new ApiRcException(ApiCallRcImpl.simpleEntry(
++                ApiConsts.FAIL_INSUFFICIENT_REPLICA_COUNT,
++                "Cannot remove the disk from the only online resource with a disk",
++                true
++            ));
 +        }
-+        catch (AccessDeniedException | DatabaseException exc)
++
++        if (!LayerUtils.hasLayer(getLayerData(peerAccCtx.get(), rsc), DeviceLayerKind.DRBD))
 +        {
-+            throw new ImplementationError(exc);
++            throw new ApiRcException(ApiCallRcImpl.simpleEntry(
++                ApiConsts.FAIL_INVLD_LAYER_STACK,
++                "Toggle disk is only supported in combination with DRBD",
++                true
++            ));
 +        }
 +    }
 +
-     private void markDiskAdded(Resource rscData)
-     {
-         try
-@@ -1511,6 +1626,41 @@ public class CtrlRscToggleDiskApiCallHandler implements CtrlSatelliteConnectionL
-         return layerData;
-     }
- 
-+    /**
-+     * Check if the layer stack has a non-diskless STORAGE layer.
-+     * This is used to detect orphaned storage layers that need cleanup.
-+     */
-+    private boolean hasNonDisklessStorageLayer(AbsRscLayerObject<Resource> layerDataRef)
-+    {
-+        boolean hasNonDiskless = false;
-+        if (layerDataRef != null)
-+        {
-+            if (layerDataRef.getLayerKind() == DeviceLayerKind.STORAGE)
-+            {
-+                for (VlmProviderObject<Resource> vlmData : layerDataRef.getVlmLayerObjects().values())
-+                {
-+                    if (vlmData.getProviderKind() != DeviceProviderKind.DISKLESS)
-+                    {
-+                        hasNonDiskless = true;
-+                        break;
-+                    }
-+                }
-+            }
-+            if (!hasNonDiskless)
-+            {
-+                for (AbsRscLayerObject<Resource> child : layerDataRef.getChildren())
-+                {
-+                    if (hasNonDisklessStorageLayer(child))
-+                    {
-+                        hasNonDiskless = true;
-+                        break;
-+                    }
-+                }
-+            }
-+        }
-+        return hasNonDiskless;
-+    }
-+
-     private LockGuard createLockGuard()
-     {
-         return lockGuardFactory.buildDeferred(LockType.WRITE, LockObj.NODES_MAP, LockObj.RSC_DFN_MAP);
+     /**
+      * Although we need to rebuild the layerData as the layerList might have changed, if we do not
+      * deactivate (i.e. down) the current resource, we need to make sure that deleting DrbdRscData

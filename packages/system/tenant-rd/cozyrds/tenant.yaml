@@ -2,13 +2,26 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: tenant
+  annotations:
+    # Tenant charts install a serial chain of child HelmReleases (seaweedfs,
+    # monitoring, etcd, ingress). The seaweedfs subtree alone is now
+    # seaweedfs-db -> seaweedfs-system -> seaweedfs (~5 min wall-clock for
+    # CNPG bootstrap + master quorum). Flux helm-controller's default 5m
+    # wait budget on the parent tenant HR fires before children reach Ready,
+    # which rolls back the children and starts an oscillation loop. This
+    # override is applied by cozystack-api to the HelmRelease
+    # Spec.Install.Timeout and Spec.Upgrade.Timeout for sub-tenants.
+    # tenant-root uses a static HR defined in
+    # packages/system/cozystack-basics/templates/tenant-root.yaml; its
+    # timeout is set there directly. Keep the two values aligned.
+    release.cozystack.io/helm-install-timeout: "15m"
 spec:
   application:
     kind: Tenant
     singular: tenant
     plural: tenants
     openAPISchema: |-
-      {"title":"Chart Values","type":"object","properties":{"host":{"description":"The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).","type":"string","default":""},"etcd":{"description":"Deploy own Etcd cluster.","type":"boolean","default":false},"monitoring":{"description":"Deploy own Monitoring Stack.","type":"boolean","default":false},"ingress":{"description":"Deploy own Ingress Controller.","type":"boolean","default":false},"seaweedfs":{"description":"Deploy own SeaweedFS.","type":"boolean","default":false},"schedulingClass":{"description":"The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.","type":"string","default":""},"resourceQuotas":{"description":"Define resource quotas for the tenant.","type":"object","default":{},"additionalProperties":{"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}}}
+      {"title":"Chart Values","type":"object","properties":{"host":{"description":"The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).","type":"string","default":""},"etcd":{"description":"Deploy own Etcd cluster.","type":"boolean","default":false},"monitoring":{"description":"Deploy own Monitoring Stack.","type":"boolean","default":false},"ingress":{"description":"Deploy own Ingress Controller.","type":"boolean","default":false},"gateway":{"description":"Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default), the chart auto-enables the Gateway for tenants whose apex is derived from the parent (i.e. `host` is empty), and leaves it off for tenants with a custom non-derived apex. Set to `true` or `false` explicitly to override that auto-behaviour. Note: leave the key absent (do not write `gateway: null`) — the chart distinguishes \"unset\" via missing-key, not via null value, to satisfy the JSON schema generated from this comment.","type":"boolean"},"seaweedfs":{"description":"Deploy own SeaweedFS.","type":"boolean","default":false},"schedulingClass":{"description":"The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.","type":"string","default":""},"resourceQuotas":{"description":"Define resource quotas for the tenant.","type":"object","default":{},"additionalProperties":{"pattern":"^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$","anyOf":[{"type":"integer"},{"type":"string"}],"x-kubernetes-int-or-string":true}}}}
   release:
     prefix: tenant-
     labels:

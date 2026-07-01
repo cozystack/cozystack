@@ -1,0 +1,94 @@
+suite: cozy-kubevirt CR parameterization
+templates:
+  - templates/kubevirt-cr.yaml
+release:
+  name: kubevirt
+  namespace: cozy-kubevirt
+tests:
+  - it: keeps the upstream default feature-gate set and omits permittedHostDevices when values are empty
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.featureGates
+          value:
+          - HotplugVolumes
+          - ExpandDisks
+          - LiveMigration
+          - AutoResourceLimitsGate
+          - CPUManager
+          - GPU
+          - VMExport
+      - notExists:
+          path: spec.configuration.developerConfiguration.cpuAllocationRatio
+      - notExists:
+          path: spec.configuration.permittedHostDevices
+      - notExists:
+          path: spec.configuration.mediatedDevicesConfiguration
+
+  - it: emits cpuAllocationRatio under developerConfiguration when set
+    set:
+      cpuAllocationRatio: 10
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.cpuAllocationRatio
+          value: 10
+
+  - it: appends extraFeatureGates after the static defaults
+    set:
+      extraFeatureGates:
+      - HostDevices
+      - WorkloadEncryptionSEV
+    asserts:
+      - equal:
+          path: spec.configuration.developerConfiguration.featureGates
+          value:
+          - HotplugVolumes
+          - ExpandDisks
+          - LiveMigration
+          - AutoResourceLimitsGate
+          - CPUManager
+          - GPU
+          - VMExport
+          - HostDevices
+          - WorkloadEncryptionSEV
+
+  - it: renders permittedHostDevices verbatim from the values block
+    set:
+      permittedHostDevices:
+        pciHostDevices:
+        - pciVendorSelector: "10DE:2335"
+          resourceName: nvidia.com/GH100_H200_SXM_141GB
+          externalResourceProvider: true
+        - pciVendorSelector: "10DE:26B9"
+          resourceName: nvidia.com/AD102GL_L40S
+          externalResourceProvider: true
+    asserts:
+      - exists:
+          path: spec.configuration.permittedHostDevices.pciHostDevices
+      - equal:
+          path: spec.configuration.permittedHostDevices.pciHostDevices[0].resourceName
+          value: nvidia.com/GH100_H200_SXM_141GB
+      - equal:
+          path: spec.configuration.permittedHostDevices.pciHostDevices[0].externalResourceProvider
+          value: true
+      - equal:
+          path: spec.configuration.permittedHostDevices.pciHostDevices[1].pciVendorSelector
+          value: "10DE:26B9"
+
+  - it: renders mediatedDevices and mediatedDevicesConfiguration for the vGPU shape
+    set:
+      permittedHostDevices:
+        mediatedDevices:
+        - mdevNameSelector: NVIDIA L40S-24Q
+          resourceName: nvidia.com/L40S-24Q
+          externalResourceProvider: true
+      mediatedDevicesConfiguration:
+        mediatedDeviceTypes:
+        - nvidia-740
+    asserts:
+      - equal:
+          path: spec.configuration.permittedHostDevices.mediatedDevices[0].mdevNameSelector
+          value: NVIDIA L40S-24Q
+      - equal:
+          path: spec.configuration.mediatedDevicesConfiguration.mediatedDeviceTypes
+          value:
+          - nvidia-740

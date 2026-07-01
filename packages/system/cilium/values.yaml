@@ -1,5 +1,13 @@
 cilium:
   kubeProxyReplacement: true
+  # Upstream cilium with hostFirewall enabled and the IPv6 datapath disabled
+  # (ipv6.enabled=false, the default here) drops ALL node IPv6 before any
+  # policy evaluation ("Unsupported L3 protocol", DROP_UNKNOWN_L3 in
+  # bpf/bpf_host.c), breaking ICMPv6 Neighbor Discovery and BGP unnumbered on
+  # IPv6/L3 fabrics. The cozystack cilium image carries a BPF patch
+  # (images/cilium/patches/) that passes IPv6 to the kernel stack instead.
+  # Consequence: Cilium host policies apply to IPv4 only; node IPv6 is not
+  # filtered by Cilium.
   hostFirewall:
     enabled: true
   hubble:
@@ -15,10 +23,23 @@ cilium:
     mode: "kubernetes"
   image:
     repository: ghcr.io/cozystack/cozystack/cilium
-    tag: 1.19.1
-    digest: "sha256:ab3acf270821df4614a8456348a4e0d3098aed72a4b2016a0edfa30d91428c3d"
+    tag: v1.5.0
+    digest: "sha256:94dc74c9301f0da5695c80e77b77ee0486ad0086b5be60a94136a2cafd410b73"
   envoy:
-    enabled: false
+    enabled: true
+    # Upstream default is {} — no requests/limits. The embedded envoy DaemonSet
+    # idles at ~100 MB RAM/node and grows under L7 traffic; without requests
+    # the DaemonSet schedules onto any node with no reserved headroom, and
+    # without a memory limit a runaway listener could OOM the node.
+    # The baseline matches the commented-out example in the upstream Helm values.
+    resources:
+      requests:
+        cpu: 100m
+        memory: 512Mi
+      limits:
+        memory: 1Gi
+  gatewayAPI:
+    enabled: true
   rollOutCiliumPods: true
   operator:
     rollOutPods: true

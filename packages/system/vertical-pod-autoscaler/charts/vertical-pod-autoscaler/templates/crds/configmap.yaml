@@ -3,6 +3,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "vertical-pod-autoscaler.crds.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.crds.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}
@@ -15,7 +16,7 @@ metadata:
     {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
     {{- end }}
 data:
-  {{- range $path, $_ := .Files.Glob  "files/crds/*" }}
+  {{- range $path, $_ := .Files.Glob  "files/crds/*.yaml" }}
   {{ base $path }}: |
     {{- tpl ($.Files.Get $path) $ | nindent 4 }}
   {{- end }}

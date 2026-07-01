@@ -1,0 +1,23 @@
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: seaweedfs-db
+spec:
+  instances: {{ .Values.db.replicas }}
+  {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "seaweedfs-db" }}
+  {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
+  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
+  storage:
+    size: {{ .Values.db.size }}
+    {{- with .Values.db.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+
+  monitoring:
+    enablePodMonitor: true
+  resources:
+    {{- toYaml .Values.db.resources | nindent 4 }}
+  inheritedMetadata:
+    labels:
+      policy.cozystack.io/allow-to-apiserver: "true"

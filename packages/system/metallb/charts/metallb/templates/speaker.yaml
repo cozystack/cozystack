@@ -115,7 +115,7 @@ data:
     frr defaults traditional
     hostname Router
     line vty
-    log file /etc/frr/frr.log informational
+    log stdout informational
 {{- end }}
 ---
 {{- if .Values.speaker.enabled }}
@@ -145,6 +145,7 @@ spec:
         {{- if .Values.prometheus.scrapeAnnotations }}
         prometheus.io/scrape: "true"
         {{- if not .Values.speaker.frr.enabled }}
+        prometheus.io/scheme: "https"
         prometheus.io/port: "{{ .Values.prometheus.metricsPort }}"
         {{- end }}
         {{- end }}
@@ -174,10 +175,10 @@ spec:
         {{- toYaml .Values.speaker.securityContext | nindent 8 }}
       {{- end }}
       volumes:
-      {{- if .Values.prometheus.speakerMetricsTLSSecret }}
+      {{- if .Values.tls.speakerMetricsTLSSecret }}
         - name: metrics-certs
           secret:
-            secretName: {{ .Values.prometheus.speakerMetricsTLSSecret }}
+            secretName: {{ .Values.tls.speakerMetricsTLSSecret }}
       {{- end }}
       {{- if .Values.speaker.memberlist.enabled }}
         - name: memberlist
@@ -191,6 +192,10 @@ spec:
             defaultMode: 256
             name: metallb-excludel2
       {{- end }}
+        - name: memberlist-config
+          configMap:
+            name: metallb-memberlist-config
+            optional: true
       {{- if .Values.speaker.frr.enabled }}
         - name: frr-sockets
           emptyDir: {}
@@ -202,6 +207,12 @@ spec:
         - name: reloader
           emptyDir: {}
         - name: metrics
+          emptyDir: {}
+        - name: frr-tmp
+          emptyDir: {}
+        - name: frr-lib
+          emptyDir: {}
+        - name: frr-log
           emptyDir: {}
       initContainers:
         # Copies the initial config files with the right permissions to the shared volume.
@@ -216,6 +227,10 @@ spec:
               mountPath: /tmp/frr
             - name: frr-conf
               mountPath: /etc/frr
+          {{- with .Values.speaker.initContainers.cpFrrFiles.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
         # Copies the reloader to the shared volume between the speaker and reloader.
         - name: cp-reloader
           image: {{ .Values.speaker.image.repository }}:{{ .Values.speaker.image.tag | default .Chart.AppVersion }}
@@ -223,6 +238,10 @@ spec:
           volumeMounts:
             - name: reloader
               mountPath: /etc/frr_reloader
+          {{- with .Values.speaker.initContainers.cpReloader.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
         # Copies the metrics exporter
         - name: cp-metrics
           image: {{ .Values.speaker.image.repository }}:{{ .Values.speaker.image.tag | default .Chart.AppVersion }}
@@ -230,6 +249,10 @@ spec:
           volumeMounts:
             - name: metrics
               mountPath: /etc/frr_metrics
+          {{- with .Values.speaker.initContainers.cpMetrics.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
       shareProcessNamespace: true
       {{- end }}
       containers:
@@ -256,11 +279,23 @@ spec:
         {{- if .Values.speaker.ignoreExcludeLB}}
         - --ignore-exclude-lb
         {{- end }}
-        {{- if .Values.prometheus.secureMetricsPort }}
-        - --host=localhost
+        {{- if .Values.speaker.bgpDebounceTimeout }}
+        - --bgp-debounce-timeout={{ .Values.speaker.bgpDebounceTimeout }}
         {{- end }}
         {{- if .Values.frrk8s.external }}
         - --frrk8s-namespace={{ required "namespace is required when frrk8s is external" .Values.frrk8s.namespace }}
+        {{- end }}
+        {{- if .Values.tls.cipherSuites }}
+        - --tls-cipher-suites={{ .Values.tls.cipherSuites }}
+        {{- end }}
+        {{- if .Values.tls.curvePreferences }}
+        - --tls-curve-preferences={{ .Values.tls.curvePreferences }}
+        {{- end }}
+        {{- if .Values.tls.minVersion }}
+        - --tls-min-version={{ .Values.tls.minVersion }}
+        {{- end }}
+        {{- if .Values.tls.speakerMetricsTLSSecret }}
+        - --metrics-cert-dir=/etc/metrics
         {{- end }}
         env:
         - name: METALLB_NODE_NAME
@@ -305,7 +340,7 @@ spec:
             fieldRef:
               fieldPath: metadata.name
         ports:
-        - name: monitoring
+        - name: metricshttps
           containerPort: {{ .Values.prometheus.metricsPort }}
         {{- if .Values.speaker.memberlist.enabled }}
         - name: memberlist-tcp
@@ -318,11 +353,9 @@ spec:
         {{- if .Values.speaker.livenessProbe.enabled }}
         livenessProbe:
           httpGet:
-            {{- if .Values.prometheus.secureMetricsPort }}
-            host: localhost
-            {{- end }}
-            path: /metrics
-            port: monitoring
+            path: /healthz
+            port: {{ .Values.speaker.livenessProbe.port }}
+            host: 127.0.0.1
           initialDelaySeconds: {{ .Values.speaker.livenessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.speaker.livenessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.speaker.livenessProbe.timeoutSeconds }}
@@ -332,11 +365,9 @@ spec:
         {{- if .Values.speaker.readinessProbe.enabled }}
         readinessProbe:
           httpGet:
-            {{- if .Values.prometheus.secureMetricsPort }}
-            host: localhost
-            {{- end }}
-            path: /metrics
-            port: monitoring
+            path: /readyz
+            port: {{ .Values.speaker.readinessProbe.port }}
+            host: 127.0.0.1
           initialDelaySeconds: {{ .Values.speaker.readinessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.speaker.readinessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.speaker.readinessProbe.timeoutSeconds }}
@@ -355,8 +386,11 @@ spec:
             - ALL
             add:
             - NET_RAW
-        {{- if or .Values.speaker.frr.enabled .Values.speaker.memberlist.enabled .Values.speaker.excludeInterfaces.enabled }}
+        {{- if or .Values.speaker.frr.enabled .Values.speaker.memberlist.enabled .Values.speaker.excludeInterfaces.enabled .Values.tls.speakerMetricsTLSSecret }}
         volumeMounts:
+          - name: memberlist-config
+            mountPath: /etc/metallb/memberlist
+            readOnly: true
           {{- if .Values.speaker.memberlist.enabled }}
           - name: memberlist
             mountPath: {{ .Values.speaker.memberlist.mlSecretKeyPath }}
@@ -369,10 +403,17 @@ spec:
           - name: metallb-excludel2
             mountPath: /etc/metallb
           {{- end }}
+          {{- if .Values.tls.speakerMetricsTLSSecret }}
+          - name: metrics-certs
+            mountPath: /etc/metrics
+            readOnly: true
+          {{- end }}
         {{- end }}
       {{- if .Values.speaker.frr.enabled }}
       - name: frr
         securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
           capabilities:
             add:
             - NET_ADMIN
@@ -391,20 +432,14 @@ spec:
             mountPath: /var/run/frr
           - name: frr-conf
             mountPath: /etc/frr
-        # The command is FRR's default entrypoint & waiting for the log file to appear and tailing it.
-        # If the log file isn't created in 60 seconds the tail fails and the container is restarted.
-        # This workaround is needed to have the frr logs as part of kubectl logs -c frr < speaker_pod_name >.
+          - name: frr-tmp
+            mountPath: /var/tmp/frr
+          - name: frr-lib
+            mountPath: /var/lib/frr
         command:
           - /bin/sh
           - -c
-          - |
-            /sbin/tini -- /usr/lib/frr/docker-start &
-            attempts=0
-            until [[ -f /etc/frr/frr.log || $attempts -eq 60 ]]; do
-              sleep 1
-              attempts=$(( $attempts + 1 ))
-            done
-            tail -f /etc/frr/frr.log
+          - /sbin/tini -- /usr/lib/frr/docker-start
         {{- with .Values.speaker.frr.resources }}
         resources:
           {{- toYaml . | nindent 12 }}
@@ -412,11 +447,9 @@ spec:
         {{- if .Values.speaker.livenessProbe.enabled }}
         livenessProbe:
           httpGet:
-            {{- if .Values.prometheus.secureMetricsPort }}
-            host: localhost
-            {{- end }}
-            path: livez
+            path: /livez
             port: {{ .Values.speaker.frr.metricsPort }}
+            scheme: HTTPS
           initialDelaySeconds: {{ .Values.speaker.livenessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.speaker.livenessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.speaker.livenessProbe.timeoutSeconds }}
@@ -426,11 +459,9 @@ spec:
         {{- if .Values.speaker.startupProbe.enabled }}
         startupProbe:
           httpGet:
-            {{- if .Values.prometheus.secureMetricsPort }}
-            host: localhost
-            {{- end }}
             path: /livez
             port: {{ .Values.speaker.frr.metricsPort }}
+            scheme: HTTPS
           failureThreshold: {{ .Values.speaker.startupProbe.failureThreshold }}
           periodSeconds: {{ .Values.speaker.startupProbe.periodSeconds }}
         {{- end }}
@@ -439,6 +470,9 @@ spec:
         {{- if .Values.speaker.frr.image.pullPolicy }}
         imagePullPolicy: {{ .Values.speaker.frr.image.pullPolicy }}
         {{- end }}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
         command: ["/etc/frr_reloader/frr-reloader.sh"]
         volumeMounts:
           - name: frr-sockets
@@ -447,24 +481,40 @@ spec:
             mountPath: /etc/frr
           - name: reloader
             mountPath: /etc/frr_reloader
+          - name: frr-log
+            mountPath: /var/log/frr
         {{- with .Values.speaker.reloader.resources }}
         resources:
           {{- toYaml . | nindent 12 }}
         {{- end }}
       - name: frr-metrics
         image: {{ .Values.speaker.frr.image.repository }}:{{ .Values.speaker.frr.image.tag | default .Chart.AppVersion }}
+        securityContext:
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
         command: ["/etc/frr_metrics/frr-metrics"]
         args:
           - --metrics-port={{ .Values.speaker.frr.metricsPort }}
-          {{- if .Values.prometheus.secureMetricsPort }}
-          - --host=localhost
+          - --metrics-bind-address=0.0.0.0
+          {{- if .Values.tls.speakerMetricsTLSSecret }}
+          - --tls-cert-file=/etc/metrics/tls.crt
+          - --tls-private-key-file=/etc/metrics/tls.key
+          {{- end }}
+          {{- if .Values.tls.cipherSuites }}
+          - --tls-cipher-suites={{ .Values.tls.cipherSuites }}
+          {{- end }}
+          {{- if .Values.tls.curvePreferences }}
+          - --tls-curve-preferences={{ .Values.tls.curvePreferences }}
+          {{- end }}
+          {{- if .Values.tls.minVersion }}
+          - --tls-min-version={{ .Values.tls.minVersion }}
           {{- end }}
         env:
           - name: VTYSH_HISTFILE
             value: /dev/null
         ports:
           - containerPort: {{ .Values.speaker.frr.metricsPort }}
-            name: monitoring
+            name: frrmetricshttps
         volumeMounts:
           - name: frr-sockets
             mountPath: /var/run/frr
@@ -472,73 +522,15 @@ spec:
             mountPath: /etc/frr
           - name: metrics
             mountPath: /etc/frr_metrics
+          {{- if .Values.tls.speakerMetricsTLSSecret }}
+          - name: metrics-certs
+            mountPath: /etc/metrics
+            readOnly: true
+          {{- end }}
         {{- with .Values.speaker.frrMetrics.resources }}
         resources:
           {{- toYaml . | nindent 12 }}
         {{- end }}
-      {{- end }}
-      {{- if .Values.prometheus.secureMetricsPort }}
-      - name: kube-rbac-proxy
-        image: {{ .Values.prometheus.rbacProxy.repository }}:{{ .Values.prometheus.rbacProxy.tag }}
-        imagePullPolicy: {{ .Values.prometheus.rbacProxy.pullPolicy }}
-        args:
-          - --logtostderr
-          - --secure-listen-address=:{{ .Values.prometheus.secureMetricsPort }}
-          - --upstream=http://localhost:{{ .Values.prometheus.metricsPort }}/
-          - --tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_RSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
-        {{- if .Values.prometheus.speakerMetricsTLSSecret }}
-          - --tls-private-key-file=/etc/metrics/tls.key
-          - --tls-cert-file=/etc/metrics/tls.crt
-        {{- end }}
-        ports:
-          - containerPort: {{ .Values.prometheus.secureMetricsPort }}
-            name: metricshttps
-        resources:
-          requests:
-            cpu: 10m
-            memory: 20Mi
-        terminationMessagePolicy: FallbackToLogsOnError
-        {{- if .Values.prometheus.speakerMetricsTLSSecret }}
-        volumeMounts:
-          - name: metrics-certs
-            mountPath: /etc/metrics
-            readOnly: true
-        {{- end }}
-      {{ end }}
-      {{- if .Values.speaker.frr.enabled }}
-      {{- if .Values.speaker.frr.secureMetricsPort }}
-      - name: kube-rbac-proxy-frr
-        image: {{ .Values.prometheus.rbacProxy.repository }}:{{ .Values.prometheus.rbacProxy.tag | default .Chart.AppVersion }}
-        imagePullPolicy: {{ .Values.prometheus.rbacProxy.pullPolicy }}
-        args:
-          - --logtostderr
-          - --secure-listen-address=:{{ .Values.speaker.frr.secureMetricsPort }}
-          - --tls-cipher-suites=TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,TLS_RSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256
-          - --upstream=http://localhost:{{ .Values.speaker.frr.metricsPort }}/
-        {{- if .Values.prometheus.speakerMetricsTLSSecret }}
-          - --tls-private-key-file=/etc/metrics/tls.key
-          - --tls-cert-file=/etc/metrics/tls.crt
-        {{- end }}
-        ports:
-          - containerPort: {{ .Values.speaker.frr.secureMetricsPort }}
-            name: frrmetricshttps
-        env:
-          - name: METALLB_HOST
-            valueFrom:
-              fieldRef:
-                fieldPath: status.hostIP
-        resources:
-          requests:
-            cpu: 10m
-            memory: 20Mi
-        terminationMessagePolicy: FallbackToLogsOnError
-        {{- if .Values.prometheus.speakerMetricsTLSSecret }}
-        volumeMounts:
-          - name: metrics-certs
-            mountPath: /etc/metrics
-            readOnly: true
-        {{- end }}
-      {{ end }}
       {{- end }}
       {{- if .Values.speaker.extraContainers }}
       {{- toYaml .Values.speaker.extraContainers | nindent 6 }}

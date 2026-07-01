@@ -2,6 +2,7 @@ apiVersion: v1
 kind: Pod
 metadata:
   name: {{ include "vertical-pod-autoscaler.tests.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.tests.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}

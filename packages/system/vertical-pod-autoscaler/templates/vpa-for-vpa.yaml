@@ -20,9 +20,14 @@ spec:
     kind: ExternalArtifact
     name: cozystack-vertical-pod-autoscaler-default-vpa-for-vpa
     namespace: cozy-system
-  dependsOn:
-  - name: monitoring-agents
-    namespace: cozy-monitoring
+  # Do NOT add dependsOn: monitoring-agents — it creates a circular wait:
+  # helm install of the parent vertical-pod-autoscaler HR waits for this nested
+  # HR's Ready condition; this HR waits for monitoring-agents; monitoring-agents
+  # PackageSource waits for cozystack.vertical-pod-autoscaler Ready; that waits
+  # for the parent HR. The recommender's /health-check probe is served by the
+  # binary itself and doesn't require Prometheus, so the pod becomes Ready
+  # immediately and starts producing recommendations when monitoring-agents
+  # finishes installing later.
   install:
     crds: Skip
     remediation:
@@ -64,7 +69,10 @@ spec:
     kind: Deployment
     name: {{ dig "vertical-pod-autoscaler" "nameOverride" "" .Values.AsMap | default "vertical-pod-autoscaler" | trunc 63 | trimSuffix "-" }}-recommender
   updatePolicy:
-    updateMode: Auto
+    # Initial (not Recreate): size at pod creation without ever evicting.
+    # Recreate here evicts the VPA recommender during install, adding pod churn
+    # on an already busy cluster. Matches the monitoring/etcd VPA->Initial fixes.
+    updateMode: Initial
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -77,5 +85,5 @@ spec:
     kind: Deployment
     name: vpa-for-vpa-recommender
   updatePolicy:
-    updateMode: Auto
+    updateMode: Initial
 {{- end }}

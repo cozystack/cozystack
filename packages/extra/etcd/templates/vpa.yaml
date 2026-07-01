@@ -9,7 +9,12 @@ spec:
     kind: StatefulSet
     name: etcd
   updatePolicy:
-    updateMode: Auto
+    # Initial, not Auto: Auto evicts running etcd members to apply new
+    # recommendations, churning the StatefulSet (and tripping the Cilium
+    # IP-reuse leak under load). Evicting an etcd member is also disruptive to
+    # quorum. Initial sets requests at pod creation without evicting; the
+    # minAllowed floor below is the safety net since running pods aren't resized.
+    updateMode: Initial
   resourcePolicy:
     containerPolicies:
     - containerName: etcd

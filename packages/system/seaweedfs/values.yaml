@@ -1,14 +1,27 @@
 global:
-  enableSecurity: true
-  serviceAccountName: "tenant-foo-seaweedfs"
-  extraEnvironmentVars:
-    WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
-    WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
-  monitoring:
-    enabled: true
+  # App-specific globals were namespaced under global.seaweedfs in chart 4.18
+  # (upstream commit moving global.* -> global.seaweedfs.* to avoid polluting the
+  # shared global namespace when the chart is used as a subchart).
+  seaweedfs:
+    enableSecurity: true
+    serviceAccountName: "tenant-foo-seaweedfs"
+    extraEnvironmentVars:
+      WEED_CLUSTER_SW_MASTER: "seaweedfs-master:9333"
+      WEED_CLUSTER_SW_FILER: "seaweedfs-filer-client:8888"
+    monitoring:
+      enabled: true
 seaweedfs:
   master:
-    volumeSizeLimitMB: 30000
+    # 30 GB per volume × 10 GiB PVC = 0 → rounded to 1 maxVolume per
+    # volume server. With defaultReplication=001 (one replica on a
+    # different node) two volume servers can host exactly one logical
+    # volume between them. The platform now ships a default
+    # bucket-cozy-backups Bucket that grabs that single slot, so any
+    # second collection (the bucket E2E, a tenant app bucket, etc.)
+    # blocks on `assign volume: No writable volumes` until the test
+    # times out. Smaller volumes = more parallel collections on a
+    # 10 GiB E2E sandbox PVC. The upstream chart default is 1000.
+    volumeSizeLimitMB: 1000
     replicas: 3
     #  replication type is XYZ:
     # X number of replica in other data centers
@@ -19,10 +32,23 @@ seaweedfs:
       type: "emptyDir"
     logs:
       type: ""
+    # The master's /cluster/status handler calls topo.Leader(), which backs off
+    # up to ~20s (MaxElapsedTime=20s) while the node has no leader in view — e.g.
+    # a master that was briefly the initial raft leader then was demoted during
+    # bootstrap. The default 10s probe timeout is shorter than that worst case, so
+    # such a master is liveness-killed every ~137s into a permanent CrashLoop and
+    # the master StatefulSet never reaches full readiness, timing out the install.
+    # Both probes must allow more than the 20s backoff (the volume component in
+    # this chart already uses 30s). Override only timeoutSeconds; Helm deep-merges
+    # these onto the subchart defaults, keeping enabled/path/initialDelay/etc.
+    livenessProbe:
+      timeoutSeconds: 30
+    readinessProbe:
+      timeoutSeconds: 30
   volume:
     replicas: 2
     resizeHook:
-      image: docker.io/alpine/k8s:1.33.4
+      image: docker.io/alpine/k8s:1.36.2
     # minimum free disk space(in percents). If free disk space lower this value - all volumes marks as ReadOnly
     minFreeSpacePercent: 5
     dataDirs:
@@ -86,6 +112,10 @@ seaweedfs:
     enabled: true
     replicas: 2
     port: 8333
+    # Keep S3 traffic on same-zone endpoints. Native chart support landed in 4.12
+    # (replaces the former s3-traffic-distribution.patch); the chart gates the
+    # field on Kubernetes >=1.31 and auto-converts to PreferSameZone on >=1.35.
+    trafficDistribution: PreferClose
     extraArgs:
       - -idleTimeout=60
     enableAuth: false
@@ -102,7 +132,10 @@ seaweedfs:
       className: "tenant-root"
       host: "seaweedfs.demo.cozystack.io"
       annotations:
-        nginx.ingress.kubernetes.io/proxy-body-size: "0"
+        # Limit single PUT request to 5GB to enforce multipart uploads for large files.
+        # This prevents issues with large file uploads and reduces support load.
+        # For files >5GB, clients must use S3 multipart upload API.
+        nginx.ingress.kubernetes.io/proxy-body-size: "5g"
         nginx.ingress.kubernetes.io/proxy-buffering: "off"
         nginx.ingress.kubernetes.io/proxy-request-buffering: "off"
         nginx.ingress.kubernetes.io/backend-protocol: "HTTPS"
@@ -111,7 +144,7 @@ seaweedfs:
         nginx.ingress.kubernetes.io/client-body-timeout: "3600"
         nginx.ingress.kubernetes.io/client-header-timeout: "120"
         nginx.ingress.kubernetes.io/service-upstream: "true"
-        acme.cert-manager.io/http01-ingress-class: tenant-root
+        acme.cert-manager.io/http01-ingress-ingressclassname: tenant-root
         cert-manager.io/cluster-issuer: letsencrypt-prod
       tls:
         - hosts:
@@ -171,13 +204,18 @@ seaweedfs:
               topologyKey: kubernetes.io/hostname
   cosi:
     enabled: true
+    # Override the vendored chart default (v0.1.2), which hardcodes read-write
+    # S3 actions for every BucketAccess and ignores the accessPolicy parameter.
+    # v0.3.x honours accessPolicy: readonly, so a -readonly BucketAccessClass
+    # actually issues read-only (Read,List) credentials instead of read-write.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1"
     podLabels:
       policy.cozystack.io/allow-to-apiserver: "true"
     driverName: "seaweedfs.objectstorage.k8s.io"
     bucketClassName: "seaweedfs"
     region: ""
     sidecar:
-      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.2.1@sha256:1ad07fb9e96477e5c322f240f6023ceedd8762261d8379ec784dde92797ee206"
+      image: "ghcr.io/cozystack/cozystack/objectstorage-sidecar:v1.5.0@sha256:fdc09634688d5579a329b48aabf6706cc55bcd9503b0331fa47764706f0d6f62"
   certificates:
     commonName: "SeaweedFS CA"
     ipAddresses: []
@@ -185,7 +223,3 @@ seaweedfs:
     keySize: 2048
     duration: 87600h # 10 years
     renewBefore: 720h # 30d
-db:
-  replicas: 2
-  size: 10Gi
-  storageClass: ""

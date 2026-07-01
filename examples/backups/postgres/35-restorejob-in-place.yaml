@@ -1,0 +1,15 @@
+# In-place restore. With targetApplicationRef omitted, the driver restores
+# back into pg-src. WARNING: deletes the live cnpg.io Cluster and its PVCs
+# before re-bootstrapping from S3 - any data not yet streamed to WAL is lost.
+#
+# Optional: spec.options.recoveryTime (RFC3339) for point-in-time recovery.
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: pg-src-in-place
+spec:
+  backupRef:
+    name: pg-src-adhoc
+  options:
+    # recoveryTime: "2026-05-01T12:00:00Z"

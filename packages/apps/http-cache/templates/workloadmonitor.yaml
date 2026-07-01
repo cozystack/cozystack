@@ -3,6 +3,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-haproxy
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.haproxy.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.haproxy.replicas }}
   minReplicas: 1
@@ -16,6 +18,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-nginx
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.nginx.resourcesPreset | quote }}
 spec:
   replicas: {{ .Values.nginx.replicas }}
   minReplicas: 1

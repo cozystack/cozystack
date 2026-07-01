@@ -7,6 +7,7 @@ package postgresql
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	intstr "k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // +kubebuilder:object:root=true
@@ -24,13 +25,14 @@ type ConfigSpec struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="micro"
+	// +kubebuilder:default:="t1.micro"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume Claim size available for application data.
 	// +kubebuilder:default:="10Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
@@ -38,6 +40,9 @@ type ConfigSpec struct {
 	// PostgreSQL major version to deploy
 	// +kubebuilder:default:="v18"
 	Version Version `json:"version"`
+	// TLS configuration for server connections.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// PostgreSQL server configuration.
 	// +kubebuilder:default:={}
 	Postgresql PostgreSQL `json:"postgresql"`
@@ -59,27 +64,36 @@ type ConfigSpec struct {
 }
 
 type Backup struct {
-	// Destination path for backups (e.g. s3://bucket/path/).
+	// DEPRECATED. Per-tenant S3 configuration is superseded by the platform-managed `cozy-default` BackupClass and the `cozy-backups` system bucket. Leave empty for new installations; the BackupClass driver picks up the system-managed coordinates. Kept for in-place upgrade compatibility.
 	// +kubebuilder:default:="s3://bucket/path/to/folder/"
 	DestinationPath string `json:"destinationPath,omitempty"`
 	// Enable regular backups.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// S3 endpoint URL for uploads.
+	// DEPRECATED. Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery in the legacy chart-managed flow.
+	// +kubebuilder:default:={}
+	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
+	// DEPRECATED. See `destinationPath`.
 	// +kubebuilder:default:="http://minio-gateway-service:9000"
 	EndpointURL string `json:"endpointURL,omitempty"`
 	// Retention policy (e.g. "30d").
 	// +kubebuilder:default:="30d"
 	RetentionPolicy string `json:"retentionPolicy,omitempty"`
-	// Access key for S3 authentication.
-	// +kubebuilder:default:="<your-access-key>"
+	// DEPRECATED. Tenants no longer supply S3 keys; the system Bucket Secret is projected into the tenant namespace by the backup controller. Ignored when `s3CredentialsSecret.name` is set or `useSystemBucket` is true. The chart skips materialising `<release>-s3-creds` whenever this field is empty so a default install does not leak placeholder credentials into the tenant namespace.
+	// +kubebuilder:default:=""
 	S3AccessKey string `json:"s3AccessKey,omitempty"`
-	// Secret key for S3 authentication.
-	// +kubebuilder:default:="<your-secret-key>"
+	// DEPRECATED. Pre-existing Secret with S3 credentials. Use the platform-managed `cozy-default` BackupClass instead. When set, the chart references this Secret directly (legacy chart-managed flow). The CNPG backup driver writes this field on restore so credentials never land in the CR `.spec`.
+	// +kubebuilder:default:={}
+	S3CredentialsSecret S3CredentialsSecret `json:"s3CredentialsSecret,omitempty"`
+	// DEPRECATED. See `s3AccessKey`.
+	// +kubebuilder:default:=""
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
-	// Cron schedule for automated backups.
-	// +kubebuilder:default:="0 2 * * * *"
+	// Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.backup.barmanObjectStore` is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `barmanObjectStore` and the CNPG driver SSA-patches it onto the live Cluster at first BackupJob time.
+	// +kubebuilder:default:=""
 	Schedule string `json:"schedule,omitempty"`
+	// Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.backup.barmanObjectStore` is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-patches the live Cluster with destinationPath/endpointURL/credentials when the first BackupJob runs. Consequence: `archive_command` is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
+	// +kubebuilder:default:=false
+	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
 }
 
 type Bootstrap struct {
@@ -92,6 +106,9 @@ type Bootstrap struct {
 	// Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 	// +kubebuilder:default:=""
 	RecoveryTime string `json:"recoveryTime,omitempty"`
+	// Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
+	// +kubebuilder:default:=""
+	ServerName string `json:"serverName,omitempty"`
 }
 
 type Database struct {
@@ -108,16 +125,19 @@ type DatabaseRoles struct {
 	Readonly []string `json:"readonly,omitempty"`
 }
 
-type PostgreSQL struct {
-	// PostgreSQL server parameters.
-	// +kubebuilder:default:={}
-	Parameters PostgreSQLParameters `json:"parameters,omitempty"`
+type EndpointCA struct {
+	// Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
+	// +kubebuilder:default:=""
+	Key string `json:"key,omitempty"`
+	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
 }
 
-type PostgreSQLParameters struct {
-	// Maximum number of concurrent connections to the database server.
-	// +kubebuilder:default:=100
-	MaxConnections int `json:"max_connections,omitempty"`
+type PostgreSQL struct {
+	// PostgreSQL server parameters. Values may be strings or integers; integers are coerced to strings by the template (e.g. both `max_connections: 100` and `max_connections: "100"` are accepted). BLOCKED (enable arbitrary code execution): archive_command, restore_command, ssl_passphrase_command, archive_cleanup_command, recovery_end_command, dynamic_library_path, local_preload_libraries, session_preload_libraries, shared_preload_libraries. Do NOT override CloudNativePG-managed parameters: archive_mode, primary_conninfo, wal_level, max_replication_slots.
+	// +kubebuilder:default:={"max_connections":"100"}
+	Parameters map[string]intstr.IntOrString `json:"parameters,omitempty"`
 }
 
 type Quorum struct {
@@ -136,6 +156,23 @@ type Resources struct {
 	Memory resource.Quantity `json:"memory,omitempty"`
 }
 
+type S3CredentialsSecret struct {
+	// Key in the Secret holding the access key ID. Defaults to `AWS_ACCESS_KEY_ID`.
+	// +kubebuilder:default:=""
+	AccessKeyIDKey string `json:"accessKeyIDKey,omitempty"`
+	// Name of the Secret in the application namespace. Empty means the chart materialises `<release>-s3-creds` from `s3AccessKey`/`s3SecretKey`.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+	// Key in the Secret holding the secret access key. Defaults to `AWS_SECRET_ACCESS_KEY`.
+	// +kubebuilder:default:=""
+	SecretAccessKeyKey string `json:"secretAccessKeyKey,omitempty"`
+}
+
+type TLS struct {
+	// Tri-state switch controlling whether the chart injects the external hostname into the operator-managed CNPG cert via spec.certificates.serverAltDNSNames. When omitted, the chart injects the SAN if `external: true` and skips it otherwise. Set explicitly to `true` to inject regardless of `external` (no-op when `external: false` since there is no external hostname to add). Set to `false` to skip injection. Note that CNPG keeps its built-in TLS on the wire regardless of this flag — this toggle only controls the chart-side SAN injection; to disable PostgreSQL TLS entirely set `postgresql.parameters.ssl = "off"` at the CNPG layer.
+	Enabled *bool `json:"enabled,omitempty"`
+}
+
 type User struct {
 	// Password for the user.
 	Password string `json:"password,omitempty"`
@@ -143,7 +180,7 @@ type User struct {
 	Replication bool `json:"replication,omitempty"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
 // +kubebuilder:validation:Enum="v18";"v17";"v16";"v15";"v14";"v13"

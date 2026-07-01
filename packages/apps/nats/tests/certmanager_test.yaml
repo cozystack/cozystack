@@ -1,0 +1,441 @@
+suite: cert-manager TLS chain tests
+
+templates:
+  - templates/certmanager.yaml
+
+release:
+  name: my-nats
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+  _namespace:
+    host: example.cozy.local
+
+tests:
+  ###################################################
+  # tls.enabled = false: no cert-manager resources  #
+  ###################################################
+
+  - it: renders no documents when tls.enabled is explicitly false
+    set:
+      tls:
+        enabled: false
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders no documents when tls.enabled is false and external is true
+    set:
+      tls:
+        enabled: false
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###################################################
+  # tls.enabled = true: full chain (4 documents)    #
+  ###################################################
+
+  - it: renders 4 cert-manager documents when tls.enabled is true
+    set:
+      tls:
+        enabled: true
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: document 0 is a selfsigned Issuer
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Issuer
+      - isAPIVersion:
+          of: cert-manager.io/v1
+      - equal:
+          path: metadata.name
+          value: my-nats-selfsigned
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - isNotNull:
+          path: spec.selfSigned
+
+  - it: document 1 is the CA Certificate
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Certificate
+      - isAPIVersion:
+          of: cert-manager.io/v1
+      - equal:
+          path: metadata.name
+          value: my-nats-ca
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.secretName
+          value: my-nats-ca
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.issuerRef.name
+          value: my-nats-selfsigned
+
+  - it: document 2 is the CA Issuer
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Issuer
+      - isAPIVersion:
+          of: cert-manager.io/v1
+      - equal:
+          path: metadata.name
+          value: my-nats-ca
+      - equal:
+          path: spec.ca.secretName
+          value: my-nats-ca
+
+  - it: document 3 is the leaf Certificate
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - isAPIVersion:
+          of: cert-manager.io/v1
+      - equal:
+          path: metadata.name
+          value: my-nats-tls
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+      - equal:
+          path: spec.secretName
+          value: my-nats-tls
+      - equal:
+          path: spec.issuerRef.name
+          value: my-nats-ca
+
+  ###################################################
+  # SAN coverage (internal, tls.enabled=true)       #
+  ###################################################
+
+  - it: leaf cert includes client-facing short name SAN
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats
+
+  - it: leaf cert includes client-facing namespace-scoped SAN
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats.tenant-test.svc
+
+  - it: leaf cert includes client-facing FQDN SAN
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats.tenant-test.svc.cluster.local
+
+  - it: leaf cert includes headless short name SAN
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats-headless
+
+  - it: leaf cert includes headless namespace-scoped SAN
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats-headless.tenant-test.svc
+
+  - it: leaf cert includes headless FQDN SAN
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats-headless.tenant-test.svc.cluster.local
+
+  - it: leaf cert includes wildcard per-pod SAN for cluster routing
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-nats-headless.tenant-test.svc.cluster.local"
+
+  - it: leaf cert has exactly 7 SANs when external is false
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 7
+
+  ###################################################
+  # SAN coverage with external=true                 #
+  ###################################################
+
+  - it: leaf cert includes external hostname SAN when external is true
+    set:
+      tls:
+        enabled: true
+      external: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: my-nats.example.cozy.local
+
+  - it: leaf cert has exactly 8 SANs when external is true
+    set:
+      tls:
+        enabled: true
+      external: true
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 8
+
+  - it: leaf cert does NOT include external SAN when external is false
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: my-nats.example.cozy.local
+
+  ###################################################
+  # Tri-state: tls.enabled defaults to external     #
+  ###################################################
+
+  - it: renders cert-manager chain when tls.enabled is not set and external is true
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders no documents when tls.enabled is not set and external is false
+    set:
+      external: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###################################################
+  # Leaf cert EKU (usages)                          #
+  ###################################################
+
+  - it: leaf cert has server auth usage
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+
+  - it: leaf cert has client auth usage
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: client auth
+
+  - it: leaf cert has digital signature usage
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: digital signature
+
+  - it: leaf cert has key encipherment usage
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: key encipherment
+
+  - it: leaf cert does not have cert sign usage
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: cert sign
+
+  - it: leaf cert does not have signing usage
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.usages
+          content: signing
+
+  ###################################################
+  # External SAN guard: _namespace.host required    #
+  ###################################################
+
+  - it: external SAN block fails clearly when _namespace.host is empty
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: ""
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"
+
+  ###################################################
+  # ECDSA P-256 for CA and leaf certificates        #
+  ###################################################
+
+  - it: CA certificate uses ECDSA algorithm
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+
+  - it: CA certificate uses P256 curve
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: CA certificate retains rotationPolicy Never
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  - it: leaf certificate uses ECDSA algorithm
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+
+  - it: leaf certificate uses P256 curve
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: leaf certificate retains rotationPolicy Always
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always

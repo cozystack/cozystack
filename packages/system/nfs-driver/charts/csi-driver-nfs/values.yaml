@@ -3,31 +3,31 @@ image:
     baseRepo: registry.k8s.io
     nfs:
         repository: registry.k8s.io/sig-storage/nfsplugin
-        tag: v4.11.0
+        tag: v4.13.3
         pullPolicy: IfNotPresent
     csiProvisioner:
-        repository: registry.k8s.io/sig-storage/csi-provisioner
-        tag: v5.2.0
+        repository: /sig-storage/csi-provisioner
+        tag: v6.1.0
         pullPolicy: IfNotPresent
     csiResizer:
-        repository: registry.k8s.io/sig-storage/csi-resizer
-        tag: v1.13.1
+        repository: /sig-storage/csi-resizer
+        tag: v2.0.0
         pullPolicy: IfNotPresent
     csiSnapshotter:
-        repository: registry.k8s.io/sig-storage/csi-snapshotter
-        tag: v8.2.0
+        repository: /sig-storage/csi-snapshotter
+        tag: v8.4.0
         pullPolicy: IfNotPresent
     livenessProbe:
-        repository: registry.k8s.io/sig-storage/livenessprobe
-        tag: v2.15.0
+        repository: /sig-storage/livenessprobe
+        tag: v2.17.0
         pullPolicy: IfNotPresent
     nodeDriverRegistrar:
-        repository: registry.k8s.io/sig-storage/csi-node-driver-registrar
-        tag: v2.13.0
+        repository: /sig-storage/csi-node-driver-registrar
+        tag: v2.15.0
         pullPolicy: IfNotPresent
     externalSnapshotter:
-        repository: registry.k8s.io/sig-storage/snapshot-controller
-        tag: v8.2.0
+        repository: /sig-storage/snapshot-controller
+        tag: v8.4.0
         pullPolicy: IfNotPresent
 
 serviceAccount:
@@ -58,6 +58,7 @@ controller:
   runOnControlPlane: false
   enableSnapshotter: true
   useTarCommandInSnapshot: false
+  enableSnapshotCompression: true
   livenessProbe:
     healthPort: 29652
   logLevel: 5
@@ -111,6 +112,16 @@ controller:
       requests:
         cpu: 10m
         memory: 20Mi
+
+nodeDriverRegistrar:
+  timeout: 60
+  healthPort: 19809
+  livenessProbe:
+    enabled: true
+    initialDelaySeconds: 20
+    timeoutSeconds: 10
+    periodSeconds: 5
+    failureThreshold: 2
 
 node:
   name: csi-nfs-node
@@ -183,7 +194,7 @@ storageClass:
 #     server: nfs-server.default.svc.cluster.local
 #     share: /
 #     subDir:
-#     mountPermissions: "0"
+#     mountPermissions: "0755"
 #     csi.storage.k8s.io/provisioner-secret is only needed for providing mountOptions in DeleteVolume
 #     csi.storage.k8s.io/provisioner-secret-name: "mount-options"
 #     csi.storage.k8s.io/provisioner-secret-namespace: "default"
@@ -191,3 +202,30 @@ storageClass:
 #   volumeBindingMode: Immediate
 #   mountOptions:
 #     - nfsvers=4.1
+
+## StorageClass resources for creating multiple storage classes:
+## If you want multiple storage classes with different configurations, use this instead of storageClass above
+# storageClasses:
+#   - name: nfs-delete
+#     annotations:
+#       storageclass.kubernetes.io/is-default-class: "true"
+#     parameters:
+#       server: nfs-server.default.svc.cluster.local
+#       share: /
+#       # subDir:
+#       # mountPermissions: "0"
+#       # csi.storage.k8s.io/provisioner-secret is only needed for providing mountOptions in DeleteVolume
+#       # csi.storage.k8s.io/provisioner-secret-name: "mount-options"
+#       # csi.storage.k8s.io/provisioner-secret-namespace: "default"
+#     reclaimPolicy: Delete
+#     volumeBindingMode: Immediate
+#     mountOptions:
+#       - nfsvers=4.1
+#   - name: nfs-retain
+#     parameters:
+#       server: nfs-server.default.svc.cluster.local
+#       share: /
+#     reclaimPolicy: Retain
+#     volumeBindingMode: Immediate
+#     mountOptions:
+#       - nfsvers=4.1

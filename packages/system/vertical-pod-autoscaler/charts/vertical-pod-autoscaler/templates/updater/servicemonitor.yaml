@@ -4,7 +4,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: {{ include "vertical-pod-autoscaler.updater.fullname" . }}
-  namespace: {{ default .Release.Namespace .Values.updater.metrics.serviceMonitor.namespace | quote }}
+  namespace: {{ default (include "common.names.namespace" .) .Values.updater.metrics.serviceMonitor.namespace | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.updater.labels" . | nindent 4 }}
     {{- if .Values.updater.metrics.serviceMonitor.labels }}
@@ -25,13 +25,13 @@ spec:
     - port: http-metrics
       {{- if .Values.updater.metrics.serviceMonitor.interval }}
       interval: {{ .Values.updater.metrics.serviceMonitor.interval }}
-      {{- end}}
+      {{- end }}
       {{- if .Values.updater.metrics.serviceMonitor.scrapeTimeout }}
       scrapeTimeout: {{ .Values.updater.metrics.serviceMonitor.scrapeTimeout }}
-      {{- end}}
+      {{- end }}
       {{- if .Values.updater.metrics.serviceMonitor.honorLabels }}
       honorLabels: {{ .Values.updater.metrics.serviceMonitor.honorLabels }}
-      {{- end}}
+      {{- end }}
       {{- if .Values.updater.metrics.serviceMonitor.metricRelabelings }}
       metricRelabelings: {{ toYaml .Values.updater.metrics.serviceMonitor.metricRelabelings | nindent 8 }}
       {{- end }}
@@ -41,7 +41,7 @@ spec:
       path: /metrics
   namespaceSelector:
     matchNames:
-      - {{ .Release.Namespace | quote }}
+      - {{ include "common.names.namespace" . | quote }}
   selector:
     matchLabels:
       {{- include "vertical-pod-autoscaler.updater.selectorLabels" . | nindent 6 }}

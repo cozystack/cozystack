@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine as builder
+FROM golang:1.26-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -17,7 +17,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
   -o /cozystack-operator \
   ./cmd/cozystack-operator
 
-FROM alpine:3.22
+FROM alpine:3.24
 
 COPY --from=builder /cozystack-operator /usr/bin/cozystack-operator
 

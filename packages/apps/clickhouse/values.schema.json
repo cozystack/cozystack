@@ -48,8 +48,48 @@
     "resourcesPreset": {
       "description": "Default sizing preset used when `resources` is omitted.",
       "type": "string",
-      "default": "small",
+      "default": "t1.small",
       "enum": [
+        "t1.nano",
+        "t1.micro",
+        "t1.small",
+        "t1.medium",
+        "t1.large",
+        "t1.xlarge",
+        "t1.2xlarge",
+        "t1.4xlarge",
+        "c1.nano",
+        "c1.micro",
+        "c1.small",
+        "c1.medium",
+        "c1.large",
+        "c1.xlarge",
+        "c1.2xlarge",
+        "c1.4xlarge",
+        "s1.nano",
+        "s1.micro",
+        "s1.small",
+        "s1.medium",
+        "s1.large",
+        "s1.xlarge",
+        "s1.2xlarge",
+        "s1.4xlarge",
+        "u1.nano",
+        "u1.micro",
+        "u1.small",
+        "u1.medium",
+        "u1.large",
+        "u1.xlarge",
+        "u1.2xlarge",
+        "u1.4xlarge",
+        "m1.nano",
+        "m1.micro",
+        "m1.small",
+        "m1.medium",
+        "m1.large",
+        "m1.xlarge",
+        "m1.2xlarge",
+        "m1.4xlarge",
         "nano",
         "micro",
         "small",
@@ -76,7 +116,16 @@
     "storageClass": {
       "description": "StorageClass used to store the data.",
       "type": "string",
-      "default": ""
+      "default": "",
+      "x-kubernetes-validations": [
+        {
+          "rule": "self == oldSelf",
+          "message": "storageClass is immutable"
+        }
+      ],
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
     },
     "logStorageSize": {
       "description": "Size of Persistent Volume for logs.",
@@ -120,55 +169,100 @@
       "type": "object",
       "default": {},
       "required": [
-        "cleanupStrategy",
-        "enabled",
-        "resticPassword",
-        "s3AccessKey",
-        "s3Bucket",
-        "s3Region",
-        "s3SecretKey",
-        "schedule"
+        "enabled"
       ],
       "properties": {
         "cleanupStrategy": {
-          "description": "Retention strategy for cleaning up old backups.",
+          "description": "Legacy. Restic retention policy passed to the legacy CronJob (`restic forget …`). Unused by the Altinity strategy.",
           "type": "string",
           "default": "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
         },
         "enabled": {
-          "description": "Enable regular backups (default: false).",
+          "description": "Enable backup integration. Materialises the chart-emitted `\u003crelease\u003e-backup-s3` Secret consumed by the Altinity backup strategy and, when `schedule` is non-empty, also renders the legacy chart-managed CronJob.",
           "type": "boolean",
           "default": false
         },
+        "endpoint": {
+          "description": "DEPRECATED. S3 endpoint URL for the legacy chart-emitted sidecar.",
+          "type": "string",
+          "default": ""
+        },
         "resticPassword": {
-          "description": "Password for Restic backup encryption.",
+          "description": "Legacy. Password for Restic backup encryption used by the legacy CronJob. Unused by the Altinity strategy.",
           "type": "string",
           "default": "\u003cpassword\u003e"
         },
         "s3AccessKey": {
-          "description": "Access key for S3 authentication.",
+          "description": "DEPRECATED. Tenants no longer supply S3 keys; the platform-managed Bucket Secret is the source of truth. Optional now so `useSystemBucket: true` tenants can omit it.",
           "type": "string",
           "default": "\u003cyour-access-key\u003e"
         },
         "s3Bucket": {
-          "description": "S3 bucket used for storing backups.",
+          "description": "DEPRECATED. Optional; see `s3Region`.",
           "type": "string",
           "default": "s3.example.org/clickhouse-backups"
         },
+        "s3CredentialsSecret": {
+          "description": "DEPRECATED. Pre-existing Secret reference for the legacy chart-emitted sidecar. The platform flow projects `cozy-backups-creds` instead.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "accessKeyIDKey": {
+              "description": "Key in the Secret holding the access key ID. Defaults to `accessKey`.",
+              "type": "string",
+              "default": ""
+            },
+            "bucketKey": {
+              "description": "Key in the Secret holding the bucket name. Defaults to `bucketName`.",
+              "type": "string",
+              "default": ""
+            },
+            "endpointKey": {
+              "description": "Key in the Secret holding the S3 endpoint URL. Defaults to `endpoint`.",
+              "type": "string",
+              "default": ""
+            },
+            "name": {
+              "description": "Name of the Secret in the application namespace. Empty means the chart materialises `\u003crelease\u003e-backup-s3` from the legacy `s3*` fields.",
+              "type": "string",
+              "default": ""
+            },
+            "regionKey": {
+              "description": "Key in the Secret holding the S3 region. Defaults to `region`.",
+              "type": "string",
+              "default": ""
+            },
+            "secretAccessKeyKey": {
+              "description": "Key in the Secret holding the secret access key. Defaults to `secretKey`.",
+              "type": "string",
+              "default": ""
+            }
+          }
+        },
+        "s3PathOverride": {
+          "description": "DEPRECATED. Object-key prefix inside the legacy `s3Bucket`; the new platform flow scopes by namespace automatically.",
+          "type": "string",
+          "default": ""
+        },
         "s3Region": {
-          "description": "AWS S3 region where backups are stored.",
+          "description": "DEPRECATED. Per-tenant S3 configuration is being phased out in favour of the platform-managed `cozy-default` BackupClass. Optional now so tenants on `useSystemBucket: true` can omit it.",
           "type": "string",
           "default": "us-east-1"
         },
         "s3SecretKey": {
-          "description": "Secret key for S3 authentication.",
+          "description": "DEPRECATED. Optional; see `s3AccessKey`.",
           "type": "string",
           "default": "\u003cyour-secret-key\u003e"
         },
         "schedule": {
-          "description": "Cron schedule for automated backups.",
+          "description": "Legacy. Cron schedule for the chart-emitted CronJob that runs the dump+restic backup. Empty (default) skips the legacy CronJob; recommended when a `BackupClass` + `Plan` from `backups.cozystack.io` already drives backup orchestration via the Altinity strategy.",
           "type": "string",
-          "default": "0 2 * * *"
+          "default": ""
+        },
+        "useSystemBucket": {
+          "description": "Opt-in: when true, the chart-emitted `\u003crelease\u003e-backup-s3` Secret is skipped and the `clickhouse-backup` sidecar reads bucket coordinates + S3 credentials from the platform-projected `cozy-backups-creds` Secret. `S3_PATH` is set to `\u003cnamespace\u003e/\u003crelease\u003e` for cross-tenant isolation. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill any `s3*` field below.",
+          "type": "boolean",
+          "default": false
         }
       }
     },
@@ -190,8 +284,48 @@
         "resourcesPreset": {
           "description": "Default sizing preset.",
           "type": "string",
-          "default": "micro",
+          "default": "t1.micro",
           "enum": [
+            "t1.nano",
+            "t1.micro",
+            "t1.small",
+            "t1.medium",
+            "t1.large",
+            "t1.xlarge",
+            "t1.2xlarge",
+            "t1.4xlarge",
+            "c1.nano",
+            "c1.micro",
+            "c1.small",
+            "c1.medium",
+            "c1.large",
+            "c1.xlarge",
+            "c1.2xlarge",
+            "c1.4xlarge",
+            "s1.nano",
+            "s1.micro",
+            "s1.small",
+            "s1.medium",
+            "s1.large",
+            "s1.xlarge",
+            "s1.2xlarge",
+            "s1.4xlarge",
+            "u1.nano",
+            "u1.micro",
+            "u1.small",
+            "u1.medium",
+            "u1.large",
+            "u1.xlarge",
+            "u1.2xlarge",
+            "u1.4xlarge",
+            "m1.nano",
+            "m1.micro",
+            "m1.small",
+            "m1.medium",
+            "m1.large",
+            "m1.xlarge",
+            "m1.2xlarge",
+            "m1.4xlarge",
             "nano",
             "micro",
             "small",

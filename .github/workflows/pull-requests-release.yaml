@@ -11,6 +11,10 @@ concurrency:
   group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+permissions:
+  contents: read
+
 jobs:
   finalize:
     name: Finalize Release
@@ -23,10 +27,18 @@ jobs:
       contains(github.event.pull_request.labels.*.name, 'release')
 
     steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
       # Extract tag from branch name  (branch = release-X.Y.Z*)
       - name: Extract tag from branch name
         id: get_tag
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
             const branch = context.payload.pull_request.head.ref;
@@ -41,25 +53,25 @@ jobs:
 
       # Checkout repo & create / push annotated tag
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Create tag on merge commit
         env:
-          GH_PAT: ${{ secrets.GH_PAT }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          git config user.name  "cozystack-bot"
-          git config user.email "217169706+cozystack-bot@users.noreply.github.com"
-          git remote set-url origin https://cozystack-bot:${GH_PAT}@github.com/${GITHUB_REPOSITORY}
+          git config user.name  "cozystack-ci[bot]"
+          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
+          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           git tag -f ${{ steps.get_tag.outputs.tag }} ${{ github.sha }}
           git push -f origin ${{ steps.get_tag.outputs.tag }}
 
       # Ensure maintenance branch release-X.Y
       - name: Ensure maintenance branch release-X.Y
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
-          github-token: ${{ secrets.GH_PAT }}
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';  // e.g. v0.1.3 or v0.1.3-rc3
             const match = tag.match(/^v(\d+)\.(\d+)\.\d+(?:[-\w\.]+)?$/);
@@ -112,8 +124,9 @@ jobs:
 
       # Publish draft release and ensure correct latest flag
       - name: Publish draft release
-        uses: actions/github-script@v7
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
+          github-token: ${{ steps.app-token.outputs.token }}
           script: |
             const tag = '${{ steps.get_tag.outputs.tag }}';
             const m = tag.match(/^v(\d+\.\d+\.\d+)(-(?:alpha|beta|rc)\.\d+)?$/);
@@ -150,9 +163,30 @@ jobs:
               per_page: 100
             });
 
-            // Find draft release to publish
-            const draft = releases.data.find(r => r.tag_name === tag && r.draft);
-            if (!draft) throw new Error(`Draft release for ${tag} not found`);
+            // Find draft release to publish.
+            //
+            // Normally the draft was created by tags.yaml with tag_name === tag.
+            // But if the git tag was deleted and re-created between draft creation
+            // and merge (e.g. the release branch was force-updated), GitHub orphans
+            // the draft: tag_name becomes "untagged-<hash>" while `name` is kept.
+            // Fall back to matching by `name` and repair the draft's tag_name
+            // before publishing — otherwise the published release would not point
+            // at the real git tag.
+            let draft = releases.data.find(r => r.draft && r.tag_name === tag);
+            if (!draft) {
+              const orphan = releases.data.find(r =>
+                r.draft && r.name === tag && /^untagged-/.test(r.tag_name)
+              );
+              if (!orphan) throw new Error(`Draft release for ${tag} not found`);
+              console.log(`🔧 Repairing orphaned draft ${orphan.id}: tag_name '${orphan.tag_name}' -> '${tag}'`);
+              const repaired = await github.rest.repos.updateRelease({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                release_id: orphan.id,
+                tag_name: tag
+              });
+              draft = repaired.data;
+            }
 
             // Find max semver among published releases (excluding current draft)
             const publishedReleases = releases.data

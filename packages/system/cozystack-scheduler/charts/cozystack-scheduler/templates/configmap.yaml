@@ -52,3 +52,7 @@ data:
               - name: CozystackInterPodAffinity
               - name: CozystackNodeAffinity
               - name: CozystackPodTopologySpread
+    {{- with .Values.extenders }}
+    extenders:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}

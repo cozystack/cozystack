@@ -1,0 +1,58 @@
+# NVIDIA vGPU profiles to EXPOSE to VMs in vGPU mode. Used by
+# bundles/iaas.yaml when bundles.iaas.gpuOperatorVariant=vgpu and
+# cozystack.gpu-operator is in bundles.enabledPackages. Auto-injected
+# into the KubeVirt CR at spec.configuration.permittedHostDevices.mediatedDevices.
+#
+# Division of labour: the GPU Operator's vGPU Device Manager CREATES the
+# mdev devices on each node from a name-based profile config; KubeVirt
+# only EXPOSES the already-created mdevs to VMs, matched by profile name
+# via mdevNameSelector. This file therefore carries only the name-based
+# exposure list — it does NOT ship a mediatedDevicesConfiguration block.
+# That block's mediatedDeviceTypes are numeric nvidia-NNN ids that make
+# KubeVirt itself create mdevs, but those ids are per-(SKU, driver) sysfs
+# indices with no portable value, and would duplicate the Device
+# Manager. Operators who deliberately want KubeVirt to drive creation set
+# host-verified ids via .Values.gpu.mediatedDevicesConfiguration instead.
+#
+# mdevNameSelector must match the on-host profile name the driver exposes
+# under /sys/bus/pci/devices/<BDF>/mdev_supported_types/*/name — which is
+# driver-branch-dependent ("NVIDIA A100-40C" on the vGPU 13+/AIE branch,
+# "GRID A100-40C" on older GRID drivers). The profiles below cover the
+# 24Q/48Q and whole-card C splits on the families cozystack supports for
+# vGPU (Ampere and earlier — Ada Lovelace and Blackwell use per-VF NVIDIA
+# sysfs and are out of scope; see system/gpu-operator/values-vgpu.yaml).
+# Verify against the live node and override via
+# .Values.gpu.permittedHostDevices / .Values.gpu.replaceDefaults if your
+# driver exposes different names:
+#
+#   for t in /sys/bus/pci/devices/<BDF>/mdev_supported_types/*; do \
+#     echo "$(basename "$t") -> $(cat "$t"/name)"; done
+#
+# externalResourceProvider: true is mandatory — the mediated devices are
+# published by the vGPU Manager DaemonSet, not by KubeVirt itself.
+permittedHostDevices:
+  mediatedDevices:
+  - mdevNameSelector: NVIDIA A100-40C
+    resourceName: nvidia.com/A100-40C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A100-80C
+    resourceName: nvidia.com/A100-80C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A40-48Q
+    resourceName: nvidia.com/A40-48Q
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A40-24Q
+    resourceName: nvidia.com/A40-24Q
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A30-24C
+    resourceName: nvidia.com/A30-24C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA A10-24Q
+    resourceName: nvidia.com/A10-24Q
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA V100D-32C
+    resourceName: nvidia.com/V100D-32C
+    externalResourceProvider: true
+  - mdevNameSelector: NVIDIA T4-16Q
+    resourceName: nvidia.com/T4-16Q
+    externalResourceProvider: true

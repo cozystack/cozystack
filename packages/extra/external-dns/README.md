@@ -10,7 +10,7 @@
 | `domainFilters`    | List of domains this external-dns instance can manage.                             | `[]string` | `[]`          |
 | `policy`           | How DNS records are synchronized.                                                  | `string`   | `upsert-only` |
 | `extraArgs`        | Extra arguments for external-dns.                                                  | `[]string` | `[]`          |
-| `gatewayAPI`       | Enable Gateway API HTTPRoute as a source for DNS records.                          | `bool`     | `false`       |
+| `gatewayAPI`       | Enable Gateway API HTTPRoute and TLSRoute as sources for DNS records.              | `bool`     | `false`       |
 | `annotationPrefix` | Custom annotation prefix for external-dns (useful for running multiple instances). | `string`   | `""`          |
 
 
@@ -79,10 +79,10 @@
 
 ### Resources
 
-| Name               | Description                                                                                              | Type       | Value  |
-| ------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | ------ |
-| `resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`   |
-| `resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`   |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`   |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `nano` |
+| Name               | Description                                                                                              | Type       | Value     |
+| ------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| `resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
+| `resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `t1.nano` |
 

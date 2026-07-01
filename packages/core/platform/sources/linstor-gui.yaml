@@ -1,0 +1,21 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.linstor-gui
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn:
+    - cozystack.linstor
+    components:
+    - name: linstor-gui
+      path: system/linstor-gui
+      install:
+        namespace: cozy-linstor
+        releaseName: linstor-gui

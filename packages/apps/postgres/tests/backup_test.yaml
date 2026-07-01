@@ -1,0 +1,88 @@
+suite: chart-managed scheduled backup gating
+
+# Locks in the dual-gate on cnpg.io/ScheduledBackup. The chart's legacy
+# scheduled-backup template used to render whenever backup.enabled was
+# true, which forced users who only wanted archive_command running (so a
+# BackupClass driver could take ad-hoc / Plan-driven backups against a
+# live WAL archive) to also accept a chart-emitted hourly ScheduledBackup
+# they did not ask for.
+
+templates:
+  - templates/backup.yaml
+
+tests:
+  - it: does not render when backup is disabled
+    release:
+      name: pg-test
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render when schedule is empty even with backup enabled
+    release:
+      name: pg-test
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        schedule: ""
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: does not render under useSystemBucket even with schedule set
+    # In the platform useSystemBucket flow the Cluster's barmanObjectStore
+    # is left unset until the BackupClass driver SSA-patches it at first
+    # BackupJob time, so a chart-emitted ScheduledBackup would fire against
+    # an unconfigured Cluster and fail. Mirrors the ClickHouse gates.
+    release:
+      name: pg-test
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: true
+        schedule: "0 2 * * * *"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders ScheduledBackup when both enabled and schedule are set
+    release:
+      name: pg-test
+      namespace: tenant-test
+    set:
+      backup:
+        enabled: true
+        schedule: "0 2 * * * *"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ScheduledBackup
+      - equal:
+          path: metadata.name
+          value: pg-test
+      - equal:
+          path: spec.schedule
+          value: "0 2 * * * *"
+      - equal:
+          path: spec.cluster.name
+          value: pg-test
+
+  - it: default values produce no ScheduledBackup
+    # Defends the new default - users who deploy with no overrides do not
+    # get a surprise hourly backup chain that competes with whatever
+    # BackupClass policy the platform may have applied. backup.enabled
+    # defaults to false anyway; the assertion is here so a future change
+    # that flips that default does not silently re-enable the legacy path.
+    release:
+      name: pg-test
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 0

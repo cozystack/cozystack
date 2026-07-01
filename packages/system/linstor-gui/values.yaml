@@ -1,0 +1,15 @@
+## @section Image
+## @param image.repository LINSTOR GUI container image repository
+## @param image.tag LINSTOR GUI container image tag (digest recommended)
+image:
+  repository: ghcr.io/cozystack/cozystack/linstor-gui
+  tag: v1.5.0@sha256:6e11829de86709f5e21636cdd1a1ada1239a7dcc1741f91e9d95d9f6ade603a2
+## @section Deployment
+## @param replicas Number of linstor-gui replicas
+replicas: 1
+## @section LINSTOR controller connection
+## @param linstor.endpoint In-cluster URL of the LINSTOR controller REST API (HTTPS, mTLS)
+## @param linstor.clientSecret Kubernetes Secret with `tls.crt`, `tls.key`, `ca.crt` used as the mTLS client certificate against the LINSTOR controller. Created by the `linstor` package.
+linstor:
+  endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
+  clientSecret: "linstor-client-tls"

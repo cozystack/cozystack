@@ -1,0 +1,74 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits"
+  ],
+  "enabledManagers": ["gomod", "dockerfile", "github-actions", "custom.regex"],
+  "postUpdateOptions": ["gomodTidy", "gomodUpdateImportPaths"],
+  "labels": ["automated", "do-not-merge/hold"],
+  "semanticCommitType": "chore",
+  "semanticCommitScope": "deps",
+  "automerge": false,
+  "platformAutomerge": false,
+  "prConcurrentLimit": 5,
+  "osvVulnerabilityAlerts": true,
+  "vulnerabilityAlerts": {
+    "enabled": true,
+    "labels": ["automated", "security"]
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Track the etcd image pinned in the extra/etcd EtcdCluster podTemplate. etcd-operator v0.4.5 bakes etcd 3.5.12 into its binary, and the chart overrides it with a hardcoded image string that the gomod/dockerfile managers cannot see. Without this manager the security-relevant pin (etcd 3.5.x releases are overwhelmingly security fixes) would silently age.",
+      "managerFilePatterns": ["/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"],
+      "matchStrings": ["image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
+      "datasourceTemplate": "docker"
+    }
+  ],
+  "packageRules": [
+    {
+      "description": "Force chore(deps) for all Go module bumps. config:recommended pulls in :semanticPrefixFixDepsChoreOthers, whose packageRule re-sets semanticCommitType=fix for direct deps (depType require), overriding the top-level chore. packageRules override top-level config, so a user rule evaluated last is required to win it back; without this, direct-dep PRs land as fix(deps) and get auto-labeled kind/bug.",
+      "matchManagers": ["gomod"],
+      "semanticCommitType": "chore",
+      "semanticCommitScope": "deps"
+    },
+    {
+      "description": "Bump indirect Go modules too. Transitive deps such as golang.org/x/crypto, golang.org/x/net and golang.org/x/sys carry OSV advisories that drive the OpenSSF Scorecard Vulnerabilities check to 0, but Renovate skips indirect gomod deps by default so they never get a PR. Grouped into one rolling PR to keep volume sane; security fixes are still split out by vulnerabilityAlerts above. Placed before the kubernetes rule on purpose: an indirect k8s.io/** dep matches both, and Renovate applies last-match-wins, so the later kubernetes rule keeps it in the kubernetes lockstep group.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["indirect"],
+      "enabled": true,
+      "groupName": "indirect go modules"
+    },
+    {
+      "description": "Keep controller-runtime and the Kubernetes libraries in lockstep. A split bump breaks compilation because a given controller-runtime release expects a matching client-go / apimachinery line.",
+      "groupName": "kubernetes",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["sigs.k8s.io/controller-runtime", "k8s.io/**"]
+    },
+    {
+      "description": "Never bump the Go toolchain directive. go.mod is generated and the toolchain is pinned deliberately; raising it needs a matching setup-go and a codegen run, which is out of scope for an automated dependency bump.",
+      "matchManagers": ["gomod"],
+      "matchDepTypes": ["golang"],
+      "enabled": false
+    },
+    {
+      "description": "Pin Dockerfile base images and GitHub Actions to immutable digests so OpenSSF Scorecard Pinned-Dependencies passes and supply-chain refs stay reproducible. The tag is kept in front of the digest so it stays human-readable and trackable.",
+      "matchManagers": ["dockerfile", "github-actions"],
+      "pinDigests": true
+    },
+    {
+      "description": "Batch the initial pin and all digest-only refreshes (same tag, rebuilt upstream) into a single weekly PR. Without this, frequently-rebuilt bases (alpine, debian, golang, distroless) would trickle in one rebuild-triggering PR each, loading the shared CI runner. Real tag bumps (major/minor/patch) are intentionally left out of this group so they get individual review.",
+      "matchManagers": ["dockerfile", "github-actions"],
+      "matchUpdateTypes": ["digest", "pinDigest"],
+      "groupName": "container image & action digests",
+      "schedule": ["before 6am on monday"]
+    },
+    {
+      "description": "kubevirt.io/csi-driver is pinned to an untagged pseudo-version commit and publishes no release tags, so Renovate's go datasource returns no-result and the lookup failure lingers on the Dependency Dashboard. Disable it; this module is advanced deliberately alongside the kubevirt-csi-driver image build.",
+      "matchManagers": ["gomod"],
+      "matchPackageNames": ["kubevirt.io/csi-driver"],
+      "enabled": false
+    }
+  ]
+}

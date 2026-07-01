@@ -10,7 +10,10 @@
     "storagePool": {
       "description": "Selects a specific BucketClass by storage pool name.",
       "type": "string",
-      "default": ""
+      "default": "",
+      "x-cozystack-options": {
+        "source": "storagepool"
+      }
     },
     "users": {
       "description": "Users configuration map.",

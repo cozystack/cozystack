@@ -6,6 +6,8 @@
 host: ""
 
 ## @param {string} storageClass - StorageClass used to store the data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
 storageClass: ""
 
 ##
@@ -17,6 +19,46 @@ storageClass: ""
 ## @field {quantity} [memory] - Amount of memory allocated.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 ## @value nano
 ## @value micro
 ## @value small
@@ -32,7 +74,7 @@ storageClass: ""
 ## @param {Core} core - Core API server configuration.
 core:
   resources: {}
-  resourcesPreset: "small"
+  resourcesPreset: "t1.small"
 
 ## @typedef {struct} Registry - Container image registry configuration.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -41,7 +83,7 @@ core:
 ## @param {Registry} registry - Container image registry configuration.
 registry:
   resources: {}
-  resourcesPreset: "small"
+  resourcesPreset: "t1.small"
 
 ## @typedef {struct} Jobservice - Background job service configuration.
 ## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
@@ -50,7 +92,7 @@ registry:
 ## @param {Jobservice} jobservice - Background job service configuration.
 jobservice:
   resources: {}
-  resourcesPreset: "nano"
+  resourcesPreset: "t1.nano"
 
 ## @typedef {struct} Trivy - Trivy vulnerability scanner configuration.
 ## @field {bool} enabled - Enable or disable the vulnerability scanner.
@@ -63,7 +105,7 @@ trivy:
   enabled: true
   size: 5Gi
   resources: {}
-  resourcesPreset: "nano"
+  resourcesPreset: "t1.nano"
 
 ## @typedef {struct} Database - PostgreSQL database configuration (provisioned via CloudNativePG).
 ## @field {quantity} size - Persistent Volume size for database storage.

@@ -23,10 +23,52 @@
   {{- end }}
 {{- end }}
 
+{{- /*
+  storageClassName on a PVC is immutable, and a StatefulSet's volumeClaimTemplate
+  cannot be patched at all. The upstream chart renders both the jobservice PVC and
+  the trivy VCT without a storageClassName unless one is passed, so on first install
+  the default-StorageClass admission stamps the cluster default onto the live object.
+  To avoid an immutable-field rejection on upgrade we keep the rendered value equal
+  to the live one: preserve an existing object's storageClassName, and only fall back
+  to the configured storageClass for a fresh install. See issue #2368.
+
+  A live object pinned to an explicit "" (no dynamic provisioning) must round-trip
+  too: upstream maps the "-" sentinel back to storageClassName: "", so forward "-"
+  rather than letting "" collapse to an omitted field. An object carrying no
+  storageClassName key at all keeps the empty fallback so the field stays omitted,
+  matching the live object.
+*/}}
+{{- $jobservicePvc := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "%s-jobservice" .Release.Name) }}
+{{- $jobserviceStorageClass := .Values.storageClass }}
+{{- if $jobservicePvc }}
+  {{- $jobserviceSpec := $jobservicePvc.spec | default dict }}
+  {{- if hasKey $jobserviceSpec "storageClassName" }}
+    {{- $jobserviceStorageClass = $jobserviceSpec.storageClassName | default "-" }}
+  {{- else }}
+    {{- $jobserviceStorageClass = "" }}
+  {{- end }}
+{{- end }}
+
+{{- /* The trivy StatefulSet's VCT is named "data", so its PVCs are
+       data-<release>-trivy-0..N; the class is identical across ordinals, so the
+       first ordinal is representative. */}}
+{{- $trivyPvc := lookup "v1" "PersistentVolumeClaim" .Release.Namespace (printf "data-%s-trivy-0" .Release.Name) }}
+{{- $trivyStorageClass := .Values.storageClass }}
+{{- if $trivyPvc }}
+  {{- $trivySpec := $trivyPvc.spec | default dict }}
+  {{- if hasKey $trivySpec "storageClassName" }}
+    {{- $trivyStorageClass = $trivySpec.storageClassName | default "-" }}
+  {{- else }}
+    {{- $trivyStorageClass = "" }}
+  {{- end }}
+{{- end }}
+
 apiVersion: v1
 kind: Secret
 metadata:
   name: {{ .Release.Name }}-credentials
+  labels:
+    apps.cozystack.io/user-secret: "true"
 stringData:
   admin-password: {{ $adminPassword | quote }}
   redis-password: {{ $redisPassword | quote }}
@@ -51,7 +93,6 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   valuesFrom:
@@ -65,9 +106,15 @@ spec:
     name: {{ .Release.Name }}-credentials
     valuesKey: redis-password
     targetPath: harbor.redis.external.password
+  # BucketInfo is the JSON blob populated by the COSI BucketAccess controller.
+  # Merge it at the values root (no targetPath) so Flux unmarshals it as YAML
+  # instead of running it through Helm's strvals parser, which would split the
+  # JSON on commas. This also gates reconciliation on the Secret being ready and
+  # forces a config-digest change when its contents change.
+  - kind: Secret
+    name: {{ .Release.Name }}-registry-bucket
+    valuesKey: BucketInfo
   values:
-    bucket:
-      secretName: {{ .Release.Name }}-registry-bucket
     db:
       replicas: {{ .Values.database.replicas }}
       size: {{ .Values.database.size }}
@@ -101,16 +148,23 @@ spec:
             bucket: {{ .Release.Name }}-registry
             secure: false
             v4auth: true
-        {{- if .Values.trivy.enabled }}
+        {{- if or $jobserviceStorageClass .Values.trivy.enabled }}
         persistentVolumeClaim:
+          {{- with $jobserviceStorageClass }}
+          jobservice:
+            jobLog:
+              storageClass: {{ . | quote }}
+          {{- end }}
+          {{- if .Values.trivy.enabled }}
           trivy:
             size: {{ .Values.trivy.size }}
-            {{- with .Values.storageClass }}
-            storageClass: {{ . }}
+            {{- with $trivyStorageClass }}
+            storageClass: {{ . | quote }}
             {{- end }}
+          {{- end }}
         {{- end }}
       portal:
-        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "nano" (dict) $) | nindent 10 }}
+        resources: {{- include "cozy-lib.resources.defaultingSanitize" (list "t1.nano" (dict) $) | nindent 10 }}
       core:
         {{- if and $tokenKey $tokenCert }}
         tokenKey: {{ $tokenKey | quote }}
@@ -158,6 +212,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-core
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.core.resourcesPreset | quote }}
 spec:
   replicas: 1
   minReplicas: 1
@@ -174,6 +230,8 @@ apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor
 metadata:
   name: {{ $.Release.Name }}-registry
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.registry.resourcesPreset | quote }}
 spec:
   replicas: 1
   minReplicas: 1

@@ -5,6 +5,12 @@
 ## @param {bool} external - Enable external access from outside the cluster.
 external: false
 
+## @typedef {struct} TLS - TLS configuration for the external listener.
+## @field {*bool} enabled - Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks.
+
+## @param {TLS} tls - TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
+tls: {}
+
 ##
 ## @section Application-specific parameters
 ##
@@ -42,6 +48,46 @@ topics: []
 ## @field {quantity} [memory] - Memory (RAM) available to each replica.
 
 ## @enum {string} ResourcesPreset - Default sizing preset.
+## @value t1.nano
+## @value t1.micro
+## @value t1.small
+## @value t1.medium
+## @value t1.large
+## @value t1.xlarge
+## @value t1.2xlarge
+## @value t1.4xlarge
+## @value c1.nano
+## @value c1.micro
+## @value c1.small
+## @value c1.medium
+## @value c1.large
+## @value c1.xlarge
+## @value c1.2xlarge
+## @value c1.4xlarge
+## @value s1.nano
+## @value s1.micro
+## @value s1.small
+## @value s1.medium
+## @value s1.large
+## @value s1.xlarge
+## @value s1.2xlarge
+## @value s1.4xlarge
+## @value u1.nano
+## @value u1.micro
+## @value u1.small
+## @value u1.medium
+## @value u1.large
+## @value u1.xlarge
+## @value u1.2xlarge
+## @value u1.4xlarge
+## @value m1.nano
+## @value m1.micro
+## @value m1.small
+## @value m1.medium
+## @value m1.large
+## @value m1.xlarge
+## @value m1.2xlarge
+## @value m1.4xlarge
 ## @value nano
 ## @value micro
 ## @value small
@@ -56,12 +102,14 @@ topics: []
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
 ## @field {quantity} size - Persistent Volume size for Kafka.
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
 
 ## @param {Kafka} kafka - Kafka configuration.
 kafka:
   replicas: 3
   resources: {}
-  resourcesPreset: "small"
+  resourcesPreset: "c1.small"
   size: 10Gi
   storageClass: ""
 
@@ -75,11 +123,13 @@ kafka:
 ## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
 ## @field {quantity} size - Persistent Volume size for ZooKeeper.
 ## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
+## @immutable
+## @x-cozystack-options {source: storageclass}
 
 ## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
 zookeeper:
   replicas: 3
   resources: {}
-  resourcesPreset: "small"
+  resourcesPreset: "c1.small"
   size: 5Gi
   storageClass: ""

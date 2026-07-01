@@ -1,0 +1,76 @@
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $tlsEnabled := (include "nats.tls.enabled" .) | eq "true" }}
+
+{{- if $tlsEnabled }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-ca
+  duration: 43800h  # 5 years
+  commonName: {{ .Release.Name }}-ca
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+  isCA: true
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+  commonName: {{ .Release.Name }}
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - digital signature
+    - key encipherment
+    - server auth
+    - client auth
+  dnsNames:
+    # Client-facing service (ClusterIP / LoadBalancer on :4222)
+    - {{ .Release.Name }}
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+    - {{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    # Headless service for cluster routing on :6222
+    - {{ .Release.Name }}-headless
+    - {{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc
+    - {{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+    # Wildcard for per-pod StatefulSet routing
+    - "*.{{ .Release.Name }}-headless.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}"
+    {{- if .Values.external }}
+    {{- $extHost := required "external is true but _namespace.host is not set" (index .Values "_namespace" "host") }}
+    # External hostname for LoadBalancer access
+    - {{ printf "%s.%s" .Release.Name $extHost }}
+    {{- end }}
+{{- end }}

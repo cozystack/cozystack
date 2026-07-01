@@ -1,0 +1,51 @@
+# MariaDB backup strategy. String fields are go-templated against the live
+# MariaDB application object (.Application) and BackupClass parameters
+# (.Parameters), letting one strategy CR serve every MariaDB instance in
+# the tenant.
+#
+# The driver materialises a k8s.mariadb.com/v1alpha1 Backup CR per
+# BackupJob using this template. Restores run as k8s.mariadb.com/v1alpha1
+# Restore CRs whose mariaDbRef points at the target MariaDB CR (in-place
+# = source, to-copy = a separate target instance), so this strategy CR
+# does not carry a restore-side template - the operator replays the
+# logical dump directly into the live MariaDB.
+---
+apiVersion: strategy.backups.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: mariadb-strategy-default
+spec:
+  template:
+    storage:
+      s3:
+        # Bucket name comes from the COSI BucketClaim materialised by the
+        # 00-bucket.yaml above. Look it up via:
+        #   kubectl -n <ns> get bucketclaim bucket-mariadb-backups -o jsonpath='{.status.bucketName}'
+        bucket: "REPLACE_WITH_COSI_BUCKET_NAME"
+        # Path-style endpoint without scheme. For Cozystack's seaweedfs-s3
+        # in tenant-root this is e.g. seaweedfs-s3.tenant-root.svc:8333.
+        endpoint: "REPLACE_WITH_S3_ENDPOINT"
+        prefix: "{{ .Application.metadata.name }}/"
+        # The COSI Bucket flow materialises the credentials Secret as
+        # "bucket-<bucket>-<user>" carrying a single BucketInfo JSON blob;
+        # mariadb-operator wants the keys as separate Secret data entries,
+        # so deploy a per-app Secret named "<app>-mariadb-backup-creds"
+        # holding AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY extracted from
+        # BucketInfo (extract the access key id / secret access key from
+        # the BucketInfo JSON and project them under those two keys; a
+        # bats e2e harness lands in a follow-up PR).
+        accessKeyIdSecretKeyRef:
+          name: "{{ .Application.metadata.name }}-mariadb-backup-creds"
+          key: "AWS_ACCESS_KEY_ID"
+        secretAccessKeySecretKeyRef:
+          name: "{{ .Application.metadata.name }}-mariadb-backup-creds"
+          key: "AWS_SECRET_ACCESS_KEY"
+        # The cozystack default seaweedfs-s3 ingress serves a self-signed
+        # cert, so TLS verification needs a trusted CA bundle. Drop the
+        # block entirely when the endpoint is publicly trusted.
+        tls:
+          enabled: true
+          caSecretKeyRef:
+            name: "{{ .Application.metadata.name }}-mariadb-backup-ca"
+            key: "ca.crt"
+    compression: gzip

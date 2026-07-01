@@ -1,4 +1,14 @@
 opensearch-operator:
   manager:
+    # Number of operator replicas. Leader election is enabled automatically only
+    # when this is greater than 1. On a single replica leader election adds no HA
+    # value but lets a transient apiserver/etcd lease-renewal blip self-terminate
+    # the manager (controller-runtime exits on "leader election lost"), which
+    # surfaces at install time as a crashlooping, Failed Deployment.
+    replicaCount: 1
     # Enable cluster-wide mode to watch all namespaces
     watchNamespace: ""
+  kubeRbacProxy:
+    image:
+      # gcr.io/kubebuilder/kube-rbac-proxy was sunset; use the original upstream
+      repository: "quay.io/brancz/kube-rbac-proxy"

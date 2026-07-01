@@ -1,0 +1,25 @@
+{{- if .Values.proxy.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "ouroboros.proxyFullname" . }}
+  labels:
+    {{- include "ouroboros.proxyLabels" . | nindent 4 }}
+  {{- with .Values.proxy.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.proxy.service.type }}
+  selector:
+    {{- include "ouroboros.proxySelectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
+    - name: https
+      port: 443
+      targetPort: https
+      protocol: TCP
+{{- end }}

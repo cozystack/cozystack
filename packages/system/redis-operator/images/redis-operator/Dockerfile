@@ -1,4 +1,4 @@
-FROM golang:1.20 AS builder
+FROM golang:1.26 AS builder
 
 ARG VERSION=v1.3.0-rc1
 
@@ -14,7 +14,7 @@ RUN git apply /patches/*.diff
 
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH VERSION=$VERSION ./scripts/build.sh
 
-FROM alpine:latest
+FROM alpine:3.24
 RUN apk --no-cache add \
   ca-certificates
 COPY --from=builder /workspace/bin/redis-operator /usr/local/bin

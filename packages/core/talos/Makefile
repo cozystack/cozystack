@@ -12,19 +12,21 @@ image: image-matchbox image-talos
 
 image-talos:
 	test -f ../../../_out/assets/installer-amd64.tar || make talos-installer
-	skopeo copy docker-archive:../../../_out/assets/installer-amd64.tar docker://$(REGISTRY)/talos:$(call settag,$(TALOS_VERSION))
+	set -e; \
+	SRC=docker-archive:../../../_out/assets/installer-amd64.tar; \
+	skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(IMAGE_TAG); \
+	if [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
+	if [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:latest; fi
 
 image-matchbox:
 	test -f ../../../_out/assets/kernel-amd64 || make talos-kernel
 	test -f ../../../_out/assets/initramfs-metal-amd64.xz || make talos-initramfs
 	docker buildx build -f images/matchbox/Dockerfile ../../.. \
-		--tag $(REGISTRY)/matchbox:$(call settag,$(TAG)) \
-		--tag $(REGISTRY)/matchbox:$(call settag,$(TALOS_VERSION)-$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/matchbox:latest \
-		--cache-to type=inline \
+		$(call image-tags,matchbox,$(TALOS_VERSION)) \
+		$(call cache-args,matchbox) \
 		--metadata-file images/matchbox.json \
 		$(BUILDX_ARGS)
-	echo "$(REGISTRY)/matchbox:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/matchbox.json -o json -r)" \
+	echo "$(REGISTRY)/matchbox:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/matchbox.json -o json -r)" \
 		> ../../extra/bootbox/images/matchbox.tag
 	rm -f images/matchbox.json
 

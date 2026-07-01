@@ -25,11 +25,18 @@ kube-ovn:
       cpu: "3"
       memory: "4Gi"
   ovs-ovn:
+    # ovn-controller runs inside this container (alongside ovsdb-server and
+    # ovs-vswitchd) and is CPU-bound while programming OpenFlow for newly
+    # created logical ports. During a burst install (many pods created at
+    # once) it competes for CPU in this one container; too tight a limit makes
+    # it CFS-throttle, lengthening flow-programming lag that leaves fresh pods
+    # unreachable from their node until the flows land. Give it CPU headroom
+    # (limit) plus a guaranteed share (request) so it keeps up under burst.
     requests:
-      cpu: "10m"
+      cpu: "100m"
       memory: "50Mi"
     limits:
-      cpu: "2"
+      cpu: "4"
       memory: "1000Mi"
   kube-ovn-controller:
     requests:
@@ -65,4 +72,4 @@ global:
   images:
     kubeovn:
       repository: kubeovn
-      tag: v1.15.3@sha256:fa53d5f254f640cb626329ad35d9e7aad647dd8e1e645e68f3f13c3659472a30
+      tag: v1.15.10@sha256:741299cbd0081a786a6b60c460fa3156b3a42a38141c559dd8ac031f50c5504f

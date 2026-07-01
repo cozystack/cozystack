@@ -1,0 +1,11 @@
+{{- if .Values.backupStorage.provisionBucket }}
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Bucket
+metadata:
+  name: {{ .Values.backupStorage.bucketName }}
+  namespace: {{ .Values.backupStorage.namespace }}
+spec:
+  users:
+    system:
+      readonly: false
+{{- end }}

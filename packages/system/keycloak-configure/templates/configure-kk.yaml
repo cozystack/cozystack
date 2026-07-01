@@ -36,6 +36,10 @@ spec:
   {{- else if hasKey $brandingConfig "branding" }}
   displayHtmlName: {{ $brandingConfig.branding }}
   {{- end }}
+  {{- if hasKey $brandingConfig "loginTheme" }}
+  themes:
+    loginTheme: {{ $brandingConfig.loginTheme | quote }}
+  {{- end }}
   {{- end }}
   {{- with .Values.login }}
   login:
@@ -43,6 +47,10 @@ spec:
   {{- end }}
   {{- with .Values.smtp }}
   smtp:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  {{- with .Values.userProfile }}
+  userProfileConfig:
     {{- toYaml . | nindent 4 }}
   {{- end }}
   sessions:

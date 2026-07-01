@@ -1,13 +1,20 @@
 {{- include  "isPrometheusConfigValid" . }}
+{{- include  "kubeRBACProxyBearerTokenCheck" . }}
+{{ include "opencost.caCertsSecretConfig.check" . }}
+{{ include "opencost.cloudIntegration.secretConfigCheck" . }}
+{{ include "opencost.plugins.configCheck" . }}
+{{- $cloudIntegrationSecretName := include "opencost.cloudIntegration.secretName" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "opencost.fullname" . }}
   namespace: {{ include "opencost.namespace" . }}
   labels: {{- include "opencost.labels" . | nindent 4 }}
-  {{- with .Values.annotations }}
-  annotations: {{- toYaml . | nindent 4 }}
-  {{- end }}
+  annotations:
+    checksum/configs: {{ include "configsChecksum" . }}
+    {{- with .Values.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   replicas: {{ .Values.opencost.exporter.replicas }}
   selector:
@@ -34,6 +41,7 @@ spec:
       securityContext: {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ template "opencost.serviceAccountName" . }}
+      automountServiceAccountToken: {{ .Values.podAutomountServiceAccountToken }}
       {{- with .Values.opencost.tolerations }}
       tolerations: {{- toYaml . | nindent 8 }}
       {{- end }}
@@ -46,24 +54,53 @@ spec:
       {{- with.Values.opencost.topologySpreadConstraints }}
       topologySpreadConstraints: {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- if (and .Values.plugins.enabled .Values.plugins.install.enabled )}}
       initContainers:
+        {{- if (and .Values.plugins.enabled .Values.plugins.install.enabled ) }}
         - name: plugin-installer
           image: {{ .Values.plugins.install.fullImageName }}
           command: ["sh", "/install/install_plugins.sh"]
-      {{- with .Values.plugins.install.securityContext }}
+          {{- with .Values.plugins.install.securityContext }}
           securityContext: {{- toYaml . | nindent 12 }}
-      {{- end }}
+          {{- end }}
           volumeMounts:
             - name: install-script
               mountPath: /install
             - name: plugins-dir
               mountPath: {{ .Values.plugins.folder }}
-      {{- end }}
+        {{- end }}
+        {{- if .Values.opencost.updateCaTrust.enabled }}
+        - name: update-ca-trust
+          image: {{ include "opencost.fullImageName" . }}
+          imagePullPolicy: {{ .Values.opencost.exporter.image.pullPolicy }}
+          {{- with .Values.opencost.updateCaTrust.securityContext }}
+          securityContext: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.opencost.updateCaTrust.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          command:
+            - 'sh'
+            - '-c'
+            - >
+              mkdir -p /etc/ssl/certs;
+              update-ca-certificates;
+          volumeMounts:
+            - name: ca-certs-secret
+              mountPath: "/usr/local/share/ca-certificates"
+            - name: ssl-path
+              mountPath: "/etc/ssl/certs"
+              readOnly: false
+          {{- end}}
       containers:
         - name: {{ include "opencost.fullname" . }}
           image: {{ include "opencost.fullImageName" . }}
           imagePullPolicy: {{ .Values.opencost.exporter.image.pullPolicy }}
+          {{- with .Values.opencost.exporter.command }}
+          {{- if . }}
+          command: {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- end }}
           args:
           {{- range .Values.opencost.exporter.extraArgs }}
           - --{{ . }}
@@ -71,6 +108,10 @@ spec:
           ports:
             - containerPort: {{ .Values.opencost.exporter.apiPort }}
               name: http
+            {{- if .Values.opencost.mcp.enabled }}
+            - containerPort: {{ .Values.opencost.mcp.port }}
+              name: mcp-server
+            {{- end }}
           resources: {{- toYaml .Values.opencost.exporter.resources | nindent 12 }}
           {{- if .Values.opencost.exporter.startupProbe.enabled }}
           startupProbe:
@@ -107,8 +148,40 @@ spec:
               value: {{ .Values.loglevel }}
             - name: CUSTOM_COST_ENABLED
               value: {{ .Values.plugins.enabled | quote }}
-            - name: KUBECOST_NAMESPACE
+            - name: INSTALL_NAMESPACE
               value: {{ include "opencost.namespace" . }}
+            {{- with .Values.opencost.exporter.prometheusDataSource }}
+            {{- if .queryResolutionSeconds }}
+            - name: PROMETHEUS_QUERY_RESOLUTION_SECONDS
+              value: {{ .queryResolutionSeconds | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.opencost.exporter.collectorDataSource }}
+            {{- if .enabled }}
+            - name: COLLECTOR_DATA_SOURCE_ENABLED
+              value: "true"
+            {{- if .scrapeInterval }}
+            - name: COLLECTOR_SCRAPE_INTERVAL
+              value: {{ .scrapeInterval | quote }}
+            {{- end }}
+            {{- if .networkPort }}
+            - name: NETWORK_PORT
+              value: {{ .networkPort | quote }}
+            {{- end }}
+            {{- if .retention10m }}
+            - name: COLLECTOR_RESOLUTION_10M_RETENTION
+              value: {{ .retention10m | quote }}
+            {{- end }}
+            {{- if .retention1h }}
+            - name: COLLECTOR_RESOLUTION_1H_RETENTION
+              value: {{ .retention1h | quote }}
+            {{- end }}
+            {{- if .retention1d }}
+            - name: COLLECTOR_RESOLUTION_1D_RETENTION
+              value: {{ .retention1d | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- if .Values.opencost.metrics.config.enabled }}
             - name: METRICS_CONFIGMAP_NAME
               value: {{ .Values.opencost.metrics.config.configmapName }}
@@ -123,6 +196,8 @@ spec:
             {{- end }}
             - name: PROMETHEUS_SERVER_ENDPOINT
               value: {{ include "opencost.prometheusServerEndpoint" . | quote }}
+            - name: INSECURE_SKIP_VERIFY
+              value: {{ .Values.opencost.prometheus.insecureSkipVerify | quote }}
             {{- if .Values.opencost.exporter.cloudProviderApiKey }}
             - name: CLOUD_PROVIDER_API_KEY
               valueFrom:
@@ -130,8 +205,17 @@ spec:
                   name: {{ include "opencost.prometheus.secretname" . }}
                   key: CLOUD_PROVIDER_API_KEY
             {{- end }}
+            {{- if and (.Values.opencost.exporter.defaultClusterId) (not .Values.opencost.exporter.clusterIdConfigmap) }}
             - name: CLUSTER_ID
               value: {{ .Values.opencost.exporter.defaultClusterId | quote }}
+            {{- end }}
+            {{- if .Values.opencost.exporter.clusterIdConfigmap }}
+            - name: CLUSTER_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.opencost.exporter.clusterIdConfigmap }}
+                  key: CLUSTER_ID
+            {{- end }}
             {{- if .Values.opencost.exporter.aws.access_key_id }}
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
@@ -166,7 +250,15 @@ spec:
                   name: {{ .Values.opencost.prometheus.existingSecretName | default (include "opencost.prometheus.secretname" .) }}
                   key: {{ .Values.opencost.prometheus.bearer_token_key }}
             {{- end }}
-            {{- if and .Values.opencost.exporter.persistence.enabled .Values.opencost.exporter.csv_path }}
+            {{- if .Values.opencost.prometheus.kubeRBACProxy }}
+            - name: KUBE_RBAC_PROXY_ENABLED
+              value: {{ (quote .Values.opencost.prometheus.kubeRBACProxy) }}
+            {{- end }}
+            {{- if  .Values.opencost.exporter.persistence.enabled }}
+            - name: PV_MOUNT_PATH
+              value: {{ (.Values.opencost.exporter.persistence.mountPath | default "mnt/export") | quote }}
+            {{- end }}
+            {{- if .Values.opencost.exporter.csv_path }}
             - name: EXPORT_CSV_FILE
               value: {{ .Values.opencost.exporter.csv_path | quote }}
             {{- end }}
@@ -190,9 +282,17 @@ spec:
             {{- if .Values.opencost.customPricing.enabled }}
             - name: CONFIG_PATH
               value: {{ .Values.opencost.customPricing.configPath | quote }}
+            - name: PRICING_CONFIGMAP_NAME
+              value: {{ .Values.opencost.customPricing.configmapName | quote }}
             {{- end }}
-            - name: DATA_RETENTION_DAILY_RESOLUTION_DAYS
+            - name: RESOLUTION_1D_RETENTION
+            {{- if (.Values.opencost.dataRetention).dailyResolutionDays}}
               value: {{ .Values.opencost.dataRetention.dailyResolutionDays | quote }}
+            {{- else }}
+              value: {{ .Values.opencost.retention1d | quote }}
+            {{- end }}
+            - name: RESOLUTION_1H_RETENTION
+              value: {{ .Values.opencost.retention1h | quote }}
             - name: CLOUD_COST_ENABLED
               value: {{ .Values.opencost.cloudCost.enabled | quote }}
             - name: CLOUD_COST_MONTH_TO_DATE_INTERVAL
@@ -224,13 +324,31 @@ spec:
             - name: {{ $key }}
               value: {{ $value | quote }}
             {{- end }}
-          {{- if or .Values.plugins.enabled .Values.opencost.exporter.persistence.enabled .Values.opencost.exporter.extraVolumeMounts .Values.opencost.customPricing.enabled .Values.opencost.cloudIntegrationSecret}}
+            {{- if and .Values.opencost.exporter.adminToken.enabled (or .Values.opencost.exporter.adminToken.value .Values.opencost.exporter.adminToken.existingSecret) }}
+            - name: ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.opencost.exporter.adminToken.existingSecret | default (printf "%s-admin-token" (include "opencost.fullname" .)) }}
+                  key: {{ .Values.opencost.exporter.adminToken.secretKey | default "ADMIN_TOKEN" }}
+            {{- end }}
+            {{- if .Values.opencost.mcp.enabled }}
+            # MCP Server Configuration
+            - name: MCP_SERVER_ENABLED
+              value: "true"
+            - name: MCP_HTTP_PORT
+              value: {{ .Values.opencost.mcp.port | quote }}
+            {{- else }}
+            - name: MCP_SERVER_ENABLED
+              value: "false"
+            {{- end }}
+          {{- if or .Values.plugins.enabled .Values.opencost.exporter.persistence.enabled .Values.opencost.exporter.extraVolumeMounts .Values.opencost.customPricing.enabled .Values.opencost.metrics.config.enabled $cloudIntegrationSecretName .Values.opencost.updateCaTrust.enabled}}
           volumeMounts:
             {{- if .Values.plugins.enabled }}
             - mountPath: /opt/opencost/plugin
               name: plugins-dir
               readOnly: false
-            {{- range $key, $config := .Values.plugins.configs }}
+            {{- $pluginList := include "opencost.plugins.installList" . | fromYamlArray }}
+            {{- range $key := $pluginList }}
             - mountPath: /opt/opencost/plugin/config/{{$key}}_config.json
               subPath: {{$key}}_config.json
               name: plugins-config
@@ -238,25 +356,28 @@ spec:
             {{- end }}
             {{- end }}
             {{- if .Values.opencost.exporter.persistence.enabled }}
-            - mountPath: /mnt/export
+            - mountPath: {{ (.Values.opencost.exporter.persistence.mountPath | default "mnt/export") }}
               name: opencost-export
               readOnly: false
             {{- end }}
-            {{- if .Values.opencost.customPricing.enabled }}
-            - mountPath: {{ .Values.opencost.customPricing.configPath }}/{{ include "opencost.configFileName" . }}.json
+            {{- if or .Values.opencost.customPricing.enabled .Values.opencost.metrics.config.enabled }}
+            - mountPath: {{ .Values.opencost.customPricing.configPath }}
               name: custom-configs
-              subPath: {{ include "opencost.configFileName" . }}.json
-              readOnly: true
             {{- end }}
-            {{- if .Values.opencost.metrics.config.enabled }}
-            - mountPath: {{ .Values.opencost.customPricing.configPath }}/metrics.json
-              name: custom-metrics
-              subPath: metrics.json
-              readOnly: true
-            {{- end }}
-            {{- if .Values.opencost.cloudIntegrationSecret }}
+            {{- if $cloudIntegrationSecretName }}
+            - name: var-configs
+              mountPath: /var/configs
             - name: cloud-integration
-              mountPath: /var/configs/cloud-integration
+              mountPath: /var/configs/cloud-integration.json
+              subPath: cloud-integration.json
+              readOnly: true
+            {{- end }}
+            {{- if .Values.opencost.updateCaTrust.enabled }}
+            - name: ca-certs-secret
+              mountPath: "/usr/local/share/ca-certificates"
+            - name: ssl-path
+              mountPath: "/etc/ssl/certs"
+              readOnly: false
             {{- end }}
             {{- with .Values.opencost.exporter.extraVolumeMounts }}
               {{- toYaml . | nindent 12 }}
@@ -307,9 +428,17 @@ spec:
           {{- with .Values.opencost.ui.securityContext }}
           securityContext: {{- toYaml . | nindent 12 }}
           {{- end }}
+          volumeMounts:
           {{- with .Values.opencost.ui.extraVolumeMounts }}
-          volumeMounts: {{- toYaml . | nindent 12 }}
+            {{- toYaml . | nindent 12 }}
           {{- end }}
+            - name: opencost-ui-nginx-config-volume
+              mountPath: /etc/nginx/conf.d/default.nginx.conf
+              subPath: default.nginx.conf
+            {{- if .Values.opencost.platforms.openshift.enabled }}
+            - name: empty-var-www
+              mountPath: /var/www
+            {{- end }}
         {{- end }}
         {{- with .Values.opencost.extraContainers }}
           {{- toYaml . | nindent 8 }}
@@ -347,7 +476,7 @@ spec:
           {{- toYaml . | nindent 12 }}
           {{- end }}
         {{- end }}
-      {{- if or .Values.plugins.enabled .Values.opencost.exporter.persistence.enabled .Values.extraVolumes .Values.opencost.customPricing.enabled .Values.opencost.cloudIntegrationSecret}}
+      {{- if or .Values.plugins.enabled .Values.opencost.exporter.persistence.enabled .Values.extraVolumes .Values.opencost.customPricing.enabled .Values.opencost.metrics.config.enabled $cloudIntegrationSecretName .Values.opencost.ui.enabled .Values.opencost.updateCaTrust.enabled }}
       volumes:
         {{- if .Values.plugins.enabled  }}
         {{- if .Values.plugins.install.enabled}}
@@ -359,31 +488,52 @@ spec:
           emptyDir: {}
         - name: plugins-config
           secret:
-            secretName:  {{ template "opencost.fullname" . }}-plugins-config
+            secretName: {{ include "opencost.pluginsConfigSecretName" . }}
         {{- end }}
-        {{- if .Values.opencost.customPricing.enabled }}
+        {{- if or .Values.opencost.customPricing.enabled .Values.opencost.metrics.config.enabled }}
         - name: custom-configs
-          configMap:
-            name: {{ .Values.opencost.customPricing.configmapName }}
-        {{- end }}
-        {{- if .Values.opencost.metrics.config.enabled }}
-        - name: custom-metrics
-          configMap:
-            name: {{ .Values.opencost.metrics.config.configmapName }}
+          emptyDir: {}
         {{- end }}
         {{- if .Values.opencost.exporter.persistence.enabled }}
         - name: opencost-export
           persistentVolumeClaim:
             claimName: {{ include "opencost.fullname" . }}-pvc
         {{- end }}
-        {{- if .Values.opencost.cloudIntegrationSecret }}
+        {{- if $cloudIntegrationSecretName }}
+        - name: var-configs
+          emptyDir: {}
         - name: cloud-integration
           secret:
-            secretName: {{ .Values.opencost.cloudIntegrationSecret }}
+            secretName: {{ $cloudIntegrationSecretName }}
             items:
               - key: cloud-integration.json
                 path: cloud-integration.json
+        {{- end }}
+        {{- if .Values.opencost.ui.enabled }}
+        - name: opencost-ui-nginx-config-volume
+          configMap:
+            name: opencost-ui-nginx-config
+            items:
+              - key: nginx.conf
+                path: default.nginx.conf
+        {{- if .Values.opencost.platforms.openshift.enabled }}
+        - name: empty-var-www
+          emptyDir: {}
+        {{- end }}
+        {{- end }}
+        {{- if .Values.opencost.updateCaTrust.enabled }}
+        - name: ca-certs-secret
+          {{- if .Values.opencost.updateCaTrust.caCertsSecret }}
+          secret:
+            defaultMode: 420
+            secretName: {{ .Values.opencost.updateCaTrust.caCertsSecret }}
+          {{- else }}
+          configMap:
+            name: {{ .Values.opencost.updateCaTrust.caCertsConfig }}
           {{- end }}
+        - name: ssl-path
+          emptyDir: {}
+        {{- end }}
         {{- with .Values.extraVolumes }}
           {{- toYaml . | nindent 8 }}
         {{- end }}

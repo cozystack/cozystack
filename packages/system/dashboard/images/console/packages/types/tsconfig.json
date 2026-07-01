@@ -1,0 +1,10 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "paths": {
+      "@cozystack/k8s-client": ["../k8s-client/src"]
+    }
+  },
+  "include": ["src/**/*"]
+}

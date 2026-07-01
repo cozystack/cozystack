@@ -4,6 +4,9 @@ NAMESPACE=cozy-system
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 run-local:
 	openssl req -nodes -new -x509 -keyout /tmp/ca.key -out /tmp/ca.crt -subj "/CN=kube-ca"
 	openssl req -out /tmp/client.csr -new -newkey rsa:2048 -nodes -keyout /tmp/client.key -subj "/C=US/ST=SomeState/L=L/OU=Dev/CN=development/O=system:masters"
@@ -20,11 +23,10 @@ image: image-cozystack-api
 
 image-cozystack-api:
 	docker buildx build -f images/cozystack-api/Dockerfile ../../.. \
-		--tag $(REGISTRY)/cozystack-api:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/cozystack-api:latest \
-		--cache-to type=inline \
+		$(call image-tags,cozystack-api,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,cozystack-api) \
 		--metadata-file images/cozystack-api.json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/cozystack-api:$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/cozystack-api.json -o json -r)" \
+	IMAGE="$(REGISTRY)/cozystack-api:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/cozystack-api.json -o json -r)" \
 		yq -i '.cozystackAPI.image = strenv(IMAGE)' values.yaml
 	rm -f images/cozystack-api.json

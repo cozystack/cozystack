@@ -1,0 +1,22 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.vm-default-images
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        - cozystack.networking
+        - cozystack.kubevirt-cdi
+      components:
+        - name: vm-default-images
+          path: system/vm-default-images
+          install:
+            namespace: cozy-system
+            releaseName: vm-default-images

@@ -14,7 +14,7 @@ spec:
   url: http://grafana-dashboards.cozy-grafana-operator.svc/{{ . }}.json
 {{- end }}
 {{- end }}
-{{- if eq .Release.Namespace "tenant-root" }}
+{{- if or (eq .Release.Namespace "tenant-root") (eq .Release.Namespace "cozy-monitoring") }}
 {{- range (split "\n" (.Files.Get "dashboards-infra.list")) }}
 {{- $parts := split "/" . }}
 {{- if eq (len $parts) 2 }}

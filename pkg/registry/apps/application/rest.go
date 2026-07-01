@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	metainternalversion "k8s.io/apimachinery/pkg/apis/meta/internalversion"
@@ -40,9 +41,12 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	fluxshard "github.com/cozystack/cozystack/internal/fluxshardoperator"
+	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
 	"github.com/cozystack/cozystack/pkg/config"
@@ -93,28 +97,40 @@ type REST struct {
 	specSchema    *structuralschema.Structural
 }
 
+// buildSpecSchema parses an OpenAPI-v3 JSON schema string and returns the
+// structural-schema form used for defaulting. Returns (nil, nil) when raw
+// is empty after trimming. Returns (nil, error) for malformed JSON,
+// v1→internal conversion failures, or structural-schema construction
+// errors — callers can decide whether to log-and-continue (NewREST does)
+// or fail hard (tests do).
+func buildSpecSchema(raw string) (*structuralschema.Structural, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+	var v1js apiextv1.JSONSchemaProps
+	if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
+		return nil, fmt.Errorf("unmarshal v1 OpenAPI schema: %w", err)
+	}
+	scheme := runtime.NewScheme()
+	_ = internalapiext.AddToScheme(scheme)
+	_ = apiextv1.AddToScheme(scheme)
+	var ijs internalapiext.JSONSchemaProps
+	if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
+		return nil, fmt.Errorf("convert v1->internal JSONSchemaProps: %w", err)
+	}
+	s, err := structuralschema.NewStructural(&ijs)
+	if err != nil {
+		return nil, fmt.Errorf("build structural schema: %w", err)
+	}
+	return s, nil
+}
+
 // NewREST creates a new REST storage for Application with specific configuration
 func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST {
-	var specSchema *structuralschema.Structural
-
-	if raw := strings.TrimSpace(config.Application.OpenAPISchema); raw != "" {
-		var v1js apiextv1.JSONSchemaProps
-		if err := json.Unmarshal([]byte(raw), &v1js); err != nil {
-			klog.Errorf("Failed to unmarshal v1 OpenAPI schema: %v", err)
-		} else {
-			scheme := runtime.NewScheme()
-			_ = internalapiext.AddToScheme(scheme)
-			_ = apiextv1.AddToScheme(scheme)
-
-			var ijs internalapiext.JSONSchemaProps
-			if err := scheme.Convert(&v1js, &ijs, nil); err != nil {
-				klog.Errorf("Failed to convert v1->internal JSONSchemaProps: %v", err)
-			} else if s, err := structuralschema.NewStructural(&ijs); err != nil {
-				klog.Errorf("Failed to create structural schema: %v", err)
-			} else {
-				specSchema = s
-			}
-		}
+	specSchema, err := buildSpecSchema(config.Application.OpenAPISchema)
+	if err != nil {
+		klog.Errorf("Failed to build spec schema: %v", err)
 	}
 
 	return &REST{
@@ -154,8 +170,8 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, fmt.Errorf("expected *appsv1alpha1.Application object, got %T", obj)
 	}
 
-	// Validate Application name conforms to DNS-1035
-	if errs := validation.ValidateApplicationName(app.Name, field.NewPath("metadata").Child("name")); len(errs) > 0 {
+	// Validate Application name format (DNS-1035 plus any kind-specific rules)
+	if errs := r.validateNameFormat(app.Name); len(errs) > 0 {
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, errs)
 	}
 
@@ -164,9 +180,41 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nameLenErrs)
 	}
 
+	// For Tenant applications, also validate that the computed workload
+	// namespace fits within the DNS-1123 label limit. A deeply-nested tenant
+	// can exceed the limit even when its own name passes the per-name Helm
+	// release length check, because the namespace is formed from the full
+	// ancestor chain.
+	if r.kindName == "Tenant" {
+		if nsErrs := r.validateTenantNamespaceLength(app.Namespace, app.Name); len(nsErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
+		}
+		// Enforce hierarchical quota allocation: a child tenant's declared
+		// quota may not exceed its parent's remaining (un-carved) quota.
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
+	}
+
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, apierrors.NewBadRequest(err.Error())
+	}
+
+	r.warnLegacyPresets(app)
+
+	// Run the genericapiserver-supplied validating admission chain
+	// (validating webhooks + ValidatingAdmissionPolicies) before
+	// persisting anything. Mutating webhooks already ran upstream in
+	// genericapiserver/handlers.create before this REST handler was
+	// invoked; createValidation is documented as validate-only (must
+	// not transform the object). Custom REST handlers must invoke
+	// this hook explicitly — unlike genericregistry.Store, which
+	// wires it automatically.
+	if createValidation != nil {
+		if err := createValidation(ctx, obj); err != nil {
+			return nil, err
+		}
 	}
 
 	// Convert Application to HelmRelease
@@ -491,6 +539,17 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, apierrors.NewBadRequest(err.Error())
 	}
 
+	// Enforce hierarchical quota allocation on quota changes too: raising a
+	// child tenant's declared quota above its parent's remaining budget is
+	// rejected the same way as on create.
+	if r.kindName == "Tenant" {
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
+	}
+
+	r.warnLegacyPresets(app)
+
 	// Convert Application to HelmRelease
 	helmRelease, err := r.ConvertApplicationToHelmRelease(app)
 	if err != nil {
@@ -498,13 +557,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Ensure ResourceVersion
+	// Fetch the live HelmRelease: it backs the ResourceVersion when the
+	// converted object carries none, and runtime-managed labels are carried
+	// over from it below.
+	cur := &helmv2.HelmRelease{}
+	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+	}
 	if helmRelease.ResourceVersion == "" {
-		cur := &helmv2.HelmRelease{}
-		err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}})
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
-		}
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
 
@@ -521,10 +581,38 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
+	}
+
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Update the HelmRelease in Kubernetes
-	err = r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+	// Update the HelmRelease in Kubernetes.
+	//
+	// Flux's helm-controller (and other controllers) continuously write the
+	// HelmRelease's status, which shares the object's resourceVersion. When a
+	// caller updates an app CR while a prior reconcile is still in flight, the
+	// resourceVersion read above goes stale and the Update is rejected with a
+	// 409 Conflict. The HelmRelease spec is fully derived from the Application
+	// the caller just applied, so a stale-resourceVersion conflict is never a
+	// real spec conflict here: refresh the resourceVersion from the live object
+	// and retry.
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		if apierrors.IsConflict(updateErr) {
+			cur := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+				return getErr
+			}
+			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+		}
+		return updateErr
+	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
@@ -576,6 +664,22 @@ func (r *REST) Delete(ctx context.Context, name string, deleteValidation rest.Va
 		klog.Errorf("HelmRelease %s does not match the required application labels", helmReleaseName)
 		// Return NotFound error for Application resource
 		return nil, false, apierrors.NewNotFound(r.gvr.GroupResource(), name)
+	}
+
+	// Run the genericapiserver-supplied admission chain (validating webhooks
+	// and ValidatingAdmissionPolicies) on the resolved Application before
+	// removing the underlying HelmRelease. Custom REST handlers must invoke
+	// this hook explicitly — unlike genericregistry.Store, which wires it
+	// automatically.
+	if deleteValidation != nil {
+		converted, convErr := r.ConvertHelmReleaseToApplication(ctx, helmRelease)
+		if convErr != nil {
+			klog.Errorf("Failed to convert HelmRelease %s to Application for delete admission: %v", helmReleaseName, convErr)
+			return nil, false, convErr
+		}
+		if err := deleteValidation(ctx, &converted); err != nil {
+			return nil, false, err
+		}
 	}
 
 	klog.V(6).Infof("Deleting HelmRelease %s in namespace %s", helmReleaseName, namespace)
@@ -664,13 +768,19 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	helmLabelSelector = labels.NewSelector().Add(labelRequirements...)
 
-	// Handle SendInitialEvents for WatchList feature (Kubernetes 1.27+)
-	// When sendInitialEvents=true, the client expects:
-	// 1. All existing resources as ADDED events
-	// 2. A Bookmark event with "k8s.io/initial-events-end": "true" annotation
-	// controller-runtime cache already sends ADDED events for all cached objects,
-	// so we just need to send the bookmark after those initial events
+	// Honor SendInitialEvents (WatchList): the client expects all existing
+	// objects as ADDED events, then a Bookmark annotated with
+	// metav1.InitialEventsAnnotationKey. controller-runtime's cache already
+	// replays the ADDED events, so we just emit the terminating bookmark.
 	sendInitialEvents := options.SendInitialEvents != nil && *options.SendInitialEvents
+	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
+		app := &appsv1alpha1.Application{}
+		app.TypeMeta = metav1.TypeMeta{
+			APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+			Kind:       r.kindName,
+		}
+		return app
+	})
 
 	// Create a custom watcher to transform events
 	customW := &customWatcher{
@@ -685,6 +795,10 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	helmWatcher, err := r.w.Watch(ctx, hrList, &client.ListOptions{
 		Namespace:     namespace,
 		LabelSelector: helmLabelSelector,
+		// Ask the backing watch for bookmarks on a WatchList request; the
+		// apiserver omits them by default, leaving the terminating
+		// initial-events-end bookmark with no reliable trigger.
+		Raw: &metav1.ListOptions{AllowWatchBookmarks: sendInitialEvents},
 	})
 	if err != nil {
 		klog.Errorf("Error setting up watch for HelmReleases: %v", err)
@@ -692,13 +806,44 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	}
 	customW.underlying = helmWatcher
 
+	// Start watch on WorkloadMonitor to detect pod readiness changes.
+	// For Tenant applications the WorkloadMonitor lives in a computed child
+	// namespace (see computeTenantNamespace), not in the HelmRelease namespace,
+	// so scoping the watch to `namespace` would miss all events. Use a
+	// cluster-wide watch in that case — label selectors still restrict the
+	// stream to the relevant kind/group.
+	wmLabelSelector := labels.NewSelector().Add(*appKindReq, *appGroupReq)
+	wmList := &cozyv1alpha1.WorkloadMonitorList{}
+	wmListOpts := &client.ListOptions{LabelSelector: wmLabelSelector}
+	if r.kindName != "Tenant" {
+		wmListOpts.Namespace = namespace
+	}
+	wmWatcher, err := r.w.Watch(ctx, wmList, wmListOpts)
+	if err != nil {
+		klog.Warningf("Failed to set up WorkloadMonitor watch, workload status changes won't trigger events: %v", err)
+		// Non-fatal: proceed without WorkloadMonitor watch
+		wmWatcher = nil
+	}
+
 	go func() {
+		// Capture wmWatcher for cleanup; the variable may be set to nil
+		// inside the loop when the channel closes, so defer must use this copy.
+		wmWatcherForCleanup := wmWatcher
 		defer close(customW.resultChan)
 		defer customW.underlying.Stop()
+		if wmWatcherForCleanup != nil {
+			defer wmWatcherForCleanup.Stop()
+		}
 
-		// Track whether we've sent the initial-events-end bookmark
-		initialEventsEndSent := !sendInitialEvents // If not sendInitialEvents, consider it already sent
-		var lastResourceVersion string
+		// Buffer of WorkloadMonitor events that arrived before the initial
+		// snapshot finished. The watch-list contract requires the stream to
+		// deliver all ADDED events followed by the initial-events-end bookmark
+		// before any live updates, so we hold WM-triggered Modified events and
+		// replay them once the bookmark has been emitted. Without this, a
+		// workload whose status flips during the snapshot window (after the
+		// Application ADDED but before the bookmark) and then stops changing
+		// would leave the client with a stale WorkloadsReady forever.
+		var pendingWMEvents []watch.Event
 
 		// Get the starting resourceVersion from options
 		// If client provides resourceVersion (e.g., from a previous List), we should skip
@@ -710,32 +855,26 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 			}
 		}
 
-		// Helper function to send initial-events-end bookmark
-		sendInitialEventsEndBookmark := func() {
-			if initialEventsEndSent {
-				return
-			}
-			initialEventsEndSent = true
-
-			bookmarkApp := &appsv1alpha1.Application{}
-			bookmarkApp.SetResourceVersion(lastResourceVersion)
-			bookmarkApp.TypeMeta = metav1.TypeMeta{
-				APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
-				Kind:       r.kindName,
-			}
-			bookmarkApp.SetAnnotations(map[string]string{
-				"k8s.io/initial-events-end": "true",
-			})
-			bookmarkEvent := watch.Event{
-				Type:   watch.Bookmark,
-				Object: bookmarkApp,
-			}
-			klog.V(6).Infof("Sending initial-events-end bookmark with RV=%s", lastResourceVersion)
+		// send forwards an event, returning false if the watch or context ended.
+		send := func(ev watch.Event) bool {
 			select {
-			case customW.resultChan <- bookmarkEvent:
+			case customW.resultChan <- ev:
+				return true
 			case <-customW.stopChan:
+				return false
 			case <-ctx.Done():
+				return false
 			}
+		}
+
+		drainPendingWMEvents := func() bool {
+			for _, ev := range pendingWMEvents {
+				if !send(ev) {
+					return false
+				}
+			}
+			pendingWMEvents = nil
+			return true
 		}
 
 		// Process watch events
@@ -746,39 +885,24 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					// The watcher has been closed
 					klog.Warning("HelmRelease watcher closed")
 					// Send initial-events-end bookmark before closing if not yet sent
-					sendInitialEventsEndBookmark()
+					if bookmark, ok := bookmarker.OnClose(); ok {
+						if send(bookmark) {
+							drainPendingWMEvents()
+						}
+					}
 					return
 				}
 
 				// Handle bookmark events - these are critical for informer sync
 				if event.Type == watch.Bookmark {
 					if hr, ok := event.Object.(*helmv2.HelmRelease); ok {
-						lastResourceVersion = hr.GetResourceVersion()
-
-						// If sendInitialEvents and we haven't sent initial-events-end yet,
-						// add the annotation to this bookmark
-						bookmarkApp := &appsv1alpha1.Application{}
-						bookmarkApp.SetResourceVersion(lastResourceVersion)
-						bookmarkApp.TypeMeta = metav1.TypeMeta{
-							APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
-							Kind:       r.kindName,
-						}
-						if !initialEventsEndSent {
-							initialEventsEndSent = true
-							bookmarkApp.SetAnnotations(map[string]string{
-								"k8s.io/initial-events-end": "true",
-							})
-							klog.V(6).Infof("Sending initial-events-end bookmark with RV=%s", lastResourceVersion)
-						}
-						bookmarkEvent := watch.Event{
-							Type:   watch.Bookmark,
-							Object: bookmarkApp,
-						}
-						select {
-						case customW.resultChan <- bookmarkEvent:
-						case <-customW.stopChan:
+						// controller-runtime bookmarks after the initial list
+						// replay; the first one becomes the terminating marker.
+						bookmark, initialEventsEnd := bookmarker.OnBackingBookmark(hr.GetResourceVersion())
+						if !send(bookmark) {
 							return
-						case <-ctx.Done():
+						}
+						if initialEventsEnd && !drainPendingWMEvents() {
 							return
 						}
 					}
@@ -798,8 +922,8 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					continue
 				}
 
-				// Update lastResourceVersion for bookmark
-				lastResourceVersion = hr.GetResourceVersion()
+				// Track resourceVersion for the eventual bookmark
+				bookmarker.Observe(hr.GetResourceVersion())
 
 				// Apply manual field selector filtering (metadata.name and metadata.namespace)
 				// controller-runtime cache doesn't support field selectors
@@ -836,9 +960,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 					}
 				}
 
-				// If this is not an ADDED event and we haven't sent initial-events-end, send it now
-				if event.Type != watch.Added && !initialEventsEndSent {
-					sendInitialEventsEndBookmark()
+				// Emit the terminating bookmark before the first live event, then
+				// replay any buffered WorkloadMonitor events.
+				if bookmark, ok := bookmarker.BeforeLiveEvent(event.Type); ok {
+					if !send(bookmark) {
+						return
+					}
+					if !drainPendingWMEvents() {
+						return
+					}
 				}
 
 				// Skip ADDED events based on resourceVersion comparison
@@ -853,18 +983,102 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 				}
 				// When startingRV == 0, always send ADDED events (client wants full state)
 
-				// Create watch event with Application object
-				appEvent := watch.Event{
-					Type:   event.Type,
-					Object: &app,
+				// Send event to custom watcher
+				if !send(watch.Event{Type: event.Type, Object: &app}) {
+					return
 				}
 
-				// Send event to custom watcher
-				select {
-				case customW.resultChan <- appEvent:
-				case <-customW.stopChan:
-					return
-				case <-ctx.Done():
+			case wmEvent, ok := <-wmResultChan(wmWatcher):
+				if !ok {
+					klog.V(4).Info("WorkloadMonitor watcher closed")
+					wmWatcher = nil
+					continue
+				}
+				if wmEvent.Type == watch.Bookmark || wmEvent.Type == watch.Error {
+					if wmEvent.Type == watch.Error {
+						klog.V(4).Infof("WorkloadMonitor watch error event: %v", wmEvent.Object)
+					}
+					continue
+				}
+				wm, ok := wmEvent.Object.(*cozyv1alpha1.WorkloadMonitor)
+				if !ok {
+					continue
+				}
+				// All WM event types (Added/Modified/Deleted) produce a Modified
+				// Application event because the Application itself is what changed
+				// from the client's perspective.
+				wmAppName, hasLabel := wm.Labels[ApplicationNameLabel]
+				if !hasLabel {
+					continue
+				}
+				// Filter: skip WorkloadMonitor events for applications not matching
+				// the watch scope (single-resource or field-selector filtered watches)
+				hrName := r.releaseConfig.Prefix + wmAppName
+				if filterByName != "" && hrName != filterByName {
+					continue
+				}
+				if resourceName != "" && wmAppName != resourceName {
+					continue
+				}
+
+				// Locate the owning HelmRelease. For most application kinds the
+				// WorkloadMonitor and its HelmRelease live in the same namespace,
+				// but Tenant workloads live in a child namespace (see
+				// computeTenantNamespace) while the HelmRelease remains in the
+				// parent/requested namespace — so the WM-to-HR namespace mapping
+				// differs.
+				hrNS := wm.Namespace
+				if r.kindName == "Tenant" {
+					hrNS = namespace
+					// Filter out WM events whose child namespace does not
+					// correspond to the Tenant in our watched namespace, since
+					// the cluster-wide WM watch delivers events for all tenants.
+					if r.computeTenantNamespace(namespace, wmAppName) != wm.Namespace {
+						continue
+					}
+					if !fieldFilter.MatchesNamespace(hrNS) {
+						continue
+					}
+				} else if !fieldFilter.MatchesNamespace(hrNS) {
+					continue
+				}
+				hr := &helmv2.HelmRelease{}
+				if err := r.c.Get(ctx, client.ObjectKey{Namespace: hrNS, Name: hrName}, hr); err != nil {
+					klog.V(4).Infof("Cannot find HelmRelease %s/%s for WorkloadMonitor event: %v", hrNS, hrName, err)
+					continue
+				}
+				// Pass the fresh WorkloadMonitor so conversion uses the latest
+				// operational status even if the cache (r.c) has not yet
+				// observed this watch event.
+				app, err := r.ConvertHelmReleaseToApplicationWithMonitor(ctx, hr, wm)
+				if err != nil {
+					klog.V(4).Infof("Error converting HelmRelease for WorkloadMonitor event: %v", err)
+					continue
+				}
+				// Apply label selector filtering (same as HelmRelease event path)
+				if options.LabelSelector != nil {
+					sel, err := labels.Parse(options.LabelSelector.String())
+					if err != nil {
+						klog.Errorf("Invalid label selector: %v", err)
+						continue
+					}
+					if !sel.Matches(labels.Set(app.Labels)) {
+						continue
+					}
+				}
+				// Use the WorkloadMonitor's ResourceVersion for the emitted event
+				// so clients see a monotonically increasing RV and don't skip this update.
+				app.SetResourceVersion(wm.GetResourceVersion())
+				outEvent := watch.Event{Type: watch.Modified, Object: &app}
+				// Buffer WM-triggered events that arrive before the
+				// initial-events-end bookmark. They will be replayed in order
+				// immediately after the bookmark is emitted.
+				if !bookmarker.Sent() {
+					pendingWMEvents = append(pendingWMEvents, outEvent)
+					continue
+				}
+				bookmarker.Observe(wm.GetResourceVersion())
+				if !send(outEvent) {
 					return
 				}
 
@@ -878,6 +1092,15 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 
 	klog.V(6).Infof("Custom watch established successfully")
 	return customW, nil
+}
+
+// wmResultChan returns the result channel of a WorkloadMonitor watcher, or a nil
+// channel (which blocks forever in select) if the watcher is nil.
+func wmResultChan(w watch.Interface) <-chan watch.Event {
+	if w == nil {
+		return nil
+	}
+	return w.ResultChan()
 }
 
 // customWatcher wraps the original watcher and filters/converts events
@@ -983,12 +1206,21 @@ func filterPrefixedMap(original map[string]string, prefix string) map[string]str
 	return processed
 }
 
-// ConvertHelmReleaseToApplication converts a HelmRelease to an Application
+// ConvertHelmReleaseToApplication converts a HelmRelease to an Application.
 func (r *REST) ConvertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+	return r.ConvertHelmReleaseToApplicationWithMonitor(ctx, hr, nil)
+}
+
+// ConvertHelmReleaseToApplicationWithMonitor converts a HelmRelease to an
+// Application, optionally overriding the cached copy of a WorkloadMonitor with
+// a fresher version received from the watch client. This prevents the emitted
+// Application object from carrying stale WorkloadsReady data when r.c (cache)
+// lags behind r.w (watch).
+func (r *REST) ConvertHelmReleaseToApplicationWithMonitor(ctx context.Context, hr *helmv2.HelmRelease, freshMonitor *cozyv1alpha1.WorkloadMonitor) (appsv1alpha1.Application, error) {
 	klog.V(6).Infof("Converting HelmRelease to Application for resource %s", hr.GetName())
 
 	// Convert HelmRelease struct to Application struct
-	app, err := r.convertHelmReleaseToApplication(ctx, hr)
+	app, err := r.convertHelmReleaseToApplication(ctx, hr, freshMonitor)
 	if err != nil {
 		klog.Errorf("Error converting from HelmRelease to Application: %v", err)
 		return appsv1alpha1.Application{}, err
@@ -1049,6 +1281,19 @@ func validateNoInternalKeys(values *apiextv1.JSON) error {
 // chart-generated resource suffixes within the 63-char DNS-1035 label limit.
 const maxHelmReleaseName = 53
 
+// maxNamespaceName is the DNS-1123 label limit for Kubernetes namespace names.
+// The tenant Helm chart creates a Namespace whose name is the computed
+// workload namespace (parent namespace + "-" + tenant name), so the total
+// must fit inside a single 63-char DNS-1123 label.
+const maxNamespaceName = 63
+
+// validateNameFormat checks an Application name against DNS-1035 and any
+// kind-specific format rules (e.g. Tenant names must be alphanumeric — see
+// validation.ValidateApplicationName for the reasoning).
+func (r *REST) validateNameFormat(name string) field.ErrorList {
+	return validation.ValidateApplicationName(name, r.kindName, field.NewPath("metadata").Child("name"))
+}
+
 // validateNameLength checks that the application name won't exceed Kubernetes limits.
 // prefix + name must fit within the Helm release name limit (53 chars).
 func (r *REST) validateNameLength(name string) field.ErrorList {
@@ -1070,8 +1315,29 @@ func (r *REST) validateNameLength(name string) field.ErrorList {
 	return allErrs
 }
 
-// convertHelmReleaseToApplication implements the actual conversion logic
-func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease) (appsv1alpha1.Application, error) {
+// validateTenantNamespaceLength checks that the computed workload namespace
+// for a Tenant application fits within the DNS-1123 label limit. The namespace
+// is formed by dash-joining the parent namespace with the tenant name, so
+// deep nesting can exceed the limit even when each individual name passes the
+// per-name Helm release length check.
+func (r *REST) validateTenantNamespaceLength(currentNamespace, tenantName string) field.ErrorList {
+	fldPath := field.NewPath("metadata").Child("name")
+	allErrs := field.ErrorList{}
+
+	computed := r.computeTenantNamespace(currentNamespace, tenantName)
+	if len(computed) > maxNamespaceName {
+		allErrs = append(allErrs, field.Invalid(fldPath, tenantName,
+			fmt.Sprintf("computed tenant namespace %q would be %d characters, which exceeds the %d-character Kubernetes namespace limit; shorten the tenant name or reduce ancestor nesting depth",
+				computed, len(computed), maxNamespaceName)))
+	}
+	return allErrs
+}
+
+// convertHelmReleaseToApplication implements the actual conversion logic.
+// The optional freshMonitor is used to override the cache copy of a
+// WorkloadMonitor when a newer version was delivered via the watch client —
+// see ConvertHelmReleaseToApplicationWithMonitor for the rationale.
+func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.HelmRelease, freshMonitor *cozyv1alpha1.WorkloadMonitor) (appsv1alpha1.Application, error) {
 	// Filter out internal keys (starting with "_") from spec
 	filteredSpec := filterInternalKeys(hr.Spec.Values)
 
@@ -1108,10 +1374,81 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 			})
 		}
 	}
+	// Enrich conditions with WorkloadMonitor operational status.
+	// Tenant workloads live in a child namespace (computed from the Tenant name),
+	// not in the same namespace as the owning HelmRelease — look there instead.
+	workloadsNS := hr.Namespace
+	if r.kindName == "Tenant" {
+		workloadsNS = r.computeTenantNamespace(hr.Namespace, app.Name)
+	}
+	ws, wsErr := r.getWorkloadsOperational(ctx, workloadsNS, app.Name, freshMonitor)
+	// Derive a stable LastTransitionTime: use the owning HelmRelease's own
+	// condition update time (or CreationTimestamp as a floor) so that repeated
+	// conversions of the same underlying state produce identical timestamps.
+	wrTransition := hr.CreationTimestamp
+	for _, c := range hr.GetConditions() {
+		if c.LastTransitionTime.After(wrTransition.Time) {
+			wrTransition = c.LastTransitionTime
+		}
+	}
+	if ws.transitionTime.After(wrTransition.Time) {
+		wrTransition = ws.transitionTime
+	}
+	if wrTransition.IsZero() {
+		// Fallback for objects that somehow have no timestamps at all
+		// (e.g. hand-crafted test fixtures). In production HelmReleases
+		// always carry a CreationTimestamp, so the stable branch above
+		// is used.
+		wrTransition = metav1.Now()
+	}
+	if wsErr != nil {
+		// Fail-open: if we can't query WorkloadMonitors (e.g., informer cache not ready),
+		// don't override Ready. Prefer operational availability over safety.
+		// The WorkloadsReady=Unknown condition still signals the issue to the user.
+		klog.Warningf("Failed to check workload monitors for %s/%s: %v", workloadsNS, app.Name, wsErr)
+		conditions = append(conditions, metav1.Condition{
+			Type:               "WorkloadsReady",
+			Status:             metav1.ConditionUnknown,
+			LastTransitionTime: wrTransition,
+			Reason:             "Error",
+			Message:            fmt.Sprintf("Failed to check workload status: %v", wsErr),
+		})
+	} else if ws.found {
+		workloadsCondition := metav1.Condition{
+			Type:               "WorkloadsReady",
+			LastTransitionTime: wrTransition,
+			Reason:             "WorkloadMonitorCheck",
+		}
+		switch {
+		case !ws.operational:
+			// Concrete failure takes priority over unknown/pending state
+			workloadsCondition.Status = metav1.ConditionFalse
+			workloadsCondition.Message = "One or more workloads are not operational"
+		case ws.unknown:
+			workloadsCondition.Status = metav1.ConditionUnknown
+			workloadsCondition.Reason = "Pending"
+			workloadsCondition.Message = "One or more workloads have not been reconciled yet"
+		default:
+			workloadsCondition.Status = metav1.ConditionTrue
+			workloadsCondition.Message = "All workloads are operational"
+		}
+		conditions = append(conditions, workloadsCondition)
+
+		// Intentionally do NOT override the Ready condition based on WorkloadsReady.
+		// Ready continues to reflect HelmRelease state only, which:
+		//   - preserves backward compatibility with existing tooling (kubectl wait,
+		//     GitOps health checks) that expect Ready to match HelmRelease
+		//   - avoids false-negative Ready=False during normal startup windows where
+		//     pods are still coming up but WorkloadMonitor has already reported
+		//     Operational=false due to availableReplicas < MinReplicas
+		// WorkloadsReady is a separate condition that surfaces workload health
+		// independently — users and dashboards can observe it for operational visibility.
+	}
+
 	app.SetConditions(conditions)
 
 	// Add namespace field for Tenant applications
-	if r.kindName == "Tenant" {
+	if r.kindName == validation.TenantKind {
 		app.Status.Namespace = r.computeTenantNamespace(hr.Namespace, app.Name)
 		externalIPsCount, err := r.countTenantExternalIPs(ctx, app.Status.Namespace)
 		if err != nil {
@@ -1124,8 +1461,120 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 	return app, nil
 }
 
-// convertApplicationToHelmRelease implements the actual conversion logic
+// workloadsStatus holds the aggregated operational status of WorkloadMonitors.
+type workloadsStatus struct {
+	operational bool
+	found       bool
+	unknown     bool // true when at least one monitor has nil Operational (not yet reconciled)
+	// transitionTime is the most recent metadata update time across the
+	// matching monitors. Used as WorkloadsReady.LastTransitionTime so that
+	// repeated conversions for the same underlying state produce stable
+	// timestamps (preserving the Kubernetes contract that identical
+	// resource versions represent identical content).
+	transitionTime metav1.Time
+}
+
+// getWorkloadsOperational checks WorkloadMonitor resources for an application and returns
+// aggregated operational status. If no monitors exist, returns found=false.
+// When freshOverride is non-nil, its status replaces the cached copy for the
+// corresponding monitor — this keeps the result consistent with watch events
+// when the cache (r.c) lags behind the watch client (r.w).
+func (r *REST) getWorkloadsOperational(ctx context.Context, namespace, appName string, freshOverride *cozyv1alpha1.WorkloadMonitor) (workloadsStatus, error) {
+	monitors := &cozyv1alpha1.WorkloadMonitorList{}
+	if err := r.c.List(ctx, monitors,
+		client.InNamespace(namespace),
+		client.MatchingLabels{
+			appsv1alpha1.ApplicationKindLabel:  r.kindName,
+			appsv1alpha1.ApplicationGroupLabel: r.gvk.Group,
+			appsv1alpha1.ApplicationNameLabel:  appName,
+		},
+	); err != nil {
+		return workloadsStatus{}, err
+	}
+	// Ensure the freshOverride is represented in the aggregation even when
+	// the cache has not yet observed it (brand-new resource) or is behind.
+	replaced := false
+	if freshOverride != nil {
+		for i := range monitors.Items {
+			if monitors.Items[i].UID == freshOverride.UID ||
+				(monitors.Items[i].Name == freshOverride.Name && monitors.Items[i].Namespace == freshOverride.Namespace) {
+				monitors.Items[i] = *freshOverride
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			monitors.Items = append(monitors.Items, *freshOverride)
+		}
+	}
+	if len(monitors.Items) == 0 {
+		return workloadsStatus{operational: true, found: false}, nil
+	}
+	operational := true
+	unknown := false
+	var latest metav1.Time
+	for _, m := range monitors.Items {
+		if m.Status.Operational == nil {
+			unknown = true
+		} else if !*m.Status.Operational {
+			operational = false
+		}
+		// Pick the most recent monitor mtime as a stable transition time.
+		if t := latestMonitorTime(&m); t.After(latest.Time) {
+			latest = t
+		}
+	}
+	return workloadsStatus{operational: operational, found: true, unknown: unknown, transitionTime: latest}, nil
+}
+
+// latestMonitorTime returns the most recent timestamp associated with a
+// WorkloadMonitor — currently only the object creation time is guaranteed.
+// Status does not carry a transition time, so we fall back to CreationTimestamp.
+func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
+	return m.CreationTimestamp
+}
+
+// convertApplicationToHelmRelease implements the actual conversion logic.
+//
+// Spec.Interval, Install/Upgrade.Strategy{Name=RetryOnFailure,RetryInterval},
+// Install/Upgrade.Timeout, and Spec.MaxHistory are populated from
+// ReleaseConfig fields fed by the cozystack-api server flags
+// (--helmrelease-{interval,retry-interval,install-timeout,upgrade-timeout,
+// max-history}). This mirrors cozystack-operator's
+// PackageReconciler.buildHelmReleaseSpec so both HelmRelease-generating paths
+// share the same retry strategy, history retention, and reconcile cadence.
+//
+// Strategy.Name=RetryOnFailure with an explicit RetryInterval (rather than
+// Remediation{Retries:-1}) decouples failed install/upgrade retry timing
+// from Spec.Interval — the previous coupling caused failed installs to
+// retry only every 5m, exceeding E2E budgets.
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	// Per-Application annotation overrides win over the global defaults
+	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout):
+	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
+	//     sets both Install.Timeout and Upgrade.Timeout;
+	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
+	//     then overrides only Upgrade.Timeout, so a kind can carry an
+	//     asymmetric budget (short install, long upgrade or vice versa).
+	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
+	// Kubernetes Application's parent chart contains CAPI/Kamaji
+	// resources whose admin-kubeconfig Secret is provisioned
+	// asynchronously and Kamaji cold-start routinely exceeds flux's
+	// default wait budget, and the Tenant parent chart bootstraps the
+	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
+	// Any future kind with the same shape can opt in by setting the
+	// same annotation.
+	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
+	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
+	if r.releaseConfig.HelmInstallTimeout > 0 {
+		installTimeout = r.releaseConfig.HelmInstallTimeout
+		upgradeTimeout = r.releaseConfig.HelmInstallTimeout
+	}
+	if r.releaseConfig.HelmUpgradeTimeout > 0 {
+		upgradeTimeout = r.releaseConfig.HelmUpgradeTimeout
+	}
+
+	maxHistory := r.releaseConfig.HelmReleaseMaxHistory
 	helmRelease := &helmv2.HelmRelease{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "helm.toolkit.fluxcd.io/v2",
@@ -1145,15 +1594,20 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 				Name:      r.releaseConfig.ChartRef.Name,
 				Namespace: r.releaseConfig.ChartRef.Namespace,
 			},
-			Interval: metav1.Duration{Duration: 5 * time.Minute},
+			Interval:   metav1.Duration{Duration: r.releaseConfig.HelmReleaseInterval},
+			MaxHistory: &maxHistory,
 			Install: &helmv2.Install{
-				Remediation: &helmv2.InstallRemediation{
-					Retries: -1,
+				Timeout: &metav1.Duration{Duration: installTimeout},
+				Strategy: &helmv2.InstallStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			Upgrade: &helmv2.Upgrade{
-				Remediation: &helmv2.UpgradeRemediation{
-					Retries: -1,
+				Timeout: &metav1.Duration{Duration: upgradeTimeout},
+				Strategy: &helmv2.UpgradeStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			ValuesFrom: []helmv2.ValuesReference{
@@ -1164,6 +1618,23 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Values: app.Spec,
 		},
+	}
+
+	// Per-Application HelmRelease wait disablement. An
+	// ApplicationDefinition that sets
+	// release.cozystack.io/helm-install-disable-wait: "true" gets
+	// Install.DisableWait and Upgrade.DisableWait set on the emitted
+	// HelmRelease. Required for parent charts that emit in-tenant child
+	// HelmReleases which cannot become Ready during the parent's own
+	// install (e.g. the Kubernetes Application emits cilium/coredns/csi/etc.
+	// HelmReleases that can never become Ready until worker nodes exist,
+	// plus a main-phase talos-reconcile Job that generates the
+	// TalosConfigTemplate the worker MachineSet clones from; without
+	// DisableWait the helm-controller blocks the release on those addon
+	// HelmReleases, which cannot happen during install).
+	if r.releaseConfig.HelmInstallDisableWait {
+		helmRelease.Spec.Install.DisableWait = true
+		helmRelease.Spec.Upgrade.DisableWait = true
 	}
 
 	return helmRelease, nil
@@ -1375,6 +1846,41 @@ func (r *REST) Kind() string {
 // GroupVersionKind returns the GroupVersionKind for REST
 func (r *REST) GroupVersionKind(schema.GroupVersion) schema.GroupVersionKind {
 	return r.gvk
+}
+
+// deprecationMessagesFor builds the deprecation log lines for any
+// resourcesPreset field on the Application that still carries a legacy
+// flat name (nano/micro/.../2xlarge). Returned in the order
+// presets.FindLegacyPresets discovers them. Pure function so tests can
+// assert the output without intercepting klog.
+//
+// A malformed spec.Raw is reported via a V(2) debug log instead of a
+// hard error: validation upstream of this hook owns rejecting invalid
+// specs, and surfacing the unmarshal failure as a warning here would
+// fire even on transient inputs the caller is about to reject anyway.
+func deprecationMessagesFor(kindName, namespace, name string, raw []byte) []string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		klog.V(2).Infof("deprecationMessagesFor: skipping %s/%s in %s: spec is not valid JSON: %v",
+			kindName, name, namespace, err)
+		return nil
+	}
+	return presets.FormatDeprecationMessages(kindName, namespace, name, presets.FindLegacyPresets(spec))
+}
+
+// warnLegacyPresets emits a klog warning per deprecation message for
+// the given Application. Non-blocking: the value still renders
+// correctly through cozy-lib legacy aliases.
+func (r *REST) warnLegacyPresets(app *appsv1alpha1.Application) {
+	if app == nil || app.Spec == nil {
+		return
+	}
+	for _, msg := range deprecationMessagesFor(r.kindName, app.Namespace, app.Name, app.Spec.Raw) {
+		klog.Warning(msg)
+	}
 }
 
 // errNotAcceptable indicates that the resource does not support conversion to Table

@@ -210,6 +210,12 @@ serviceAccounts:
     name: cilium-coredns-mcsapi-autoconfig
     automount: true
     annotations: {}
+  # -- Ztunnel is used if encryption.type=ztunnel
+  ztunnel:
+    create: true
+    name: ztunnel-cilium
+    automount: false
+    annotations: {}
 # -- Configure termination grace period for cilium-agent DaemonSet.
 terminationGracePeriodSeconds: 1
 # -- Install the cilium agent resources.
@@ -218,6 +224,22 @@ agent: true
 name: cilium
 # -- Roll out cilium agent pods automatically when configmap is updated.
 rollOutCiliumPods: false
+# -- Configuration for the ConfigMap drift detection feature.
+# When enabled, the agent continuously watches the cilium-config ConfigMap
+# and exposes a cilium_drift_checker_config_delta Prometheus metric reporting
+# the number of keys that differ between the ConfigMap and the agent's active
+# settings. A non-zero value indicates that the agent has not yet applied all
+# current ConfigMap changes and needs to be restarted.
+configDriftDetection:
+  # -- Enable watching of the cilium-config ConfigMap and reflecting its
+  # contents into the agent's internal DynamicConfig table.
+  enabled: true
+  # -- Enable the drift checker which compares the DynamicConfig table against
+  # the agent's active settings and publishes the
+  # cilium_drift_checker_config_delta metric.
+  driftChecker: true
+  # -- List of config-map keys to ignore when computing the drift delta.
+  ignoredKeys: []
 # -- Agent container image.
 image:
   # @schema
@@ -225,10 +247,10 @@ image:
   # @schema
   override: ~
   repository: "quay.io/cilium/cilium"
-  tag: "v1.19.1"
+  tag: "v1.19.5"
   pullPolicy: "IfNotPresent"
   # cilium-digest
-  digest: sha256:41f1f74a0000de8656f1de4088ea00c8f2d49d6edea579034c73c5fd5fe01792
+  digest: sha256:20fbbc14ac20b55a292c0dcda5571bf31cde30a7dbc68c29db3e709390ab0732
   useDigest: true
 # -- Scheduling configurations for cilium pods
 scheduling:
@@ -479,10 +501,8 @@ l2announcements:
 l2podAnnouncements:
   # -- Enable L2 pod announcements
   enabled: false
-  # -- Interface used for sending Gratuitous ARP pod announcements
-  interface: "eth0"
   # -- A regular expression matching interfaces used for sending Gratuitous ARP pod announcements
-  # interfacePattern: ""
+  interfacePattern: ""
 # -- This feature set enables virtual BGP routers to be created via BGP CRDs.
 bgpControlPlane:
   # -- Enables the BGP control plane.
@@ -1133,9 +1153,89 @@ encryption:
   wireguard:
     # -- Controls WireGuard PersistentKeepalive option. Set 0s to disable.
     persistentKeepalive: 0s
+  # -- ztunnel encryption configuration.
+  # ztunnel is Istio's purpose-built, per-node proxy for handling L4 traffic in ambient mesh mode.
+  # These settings only apply when encryption.type is set to "ztunnel".
+  ztunnel:
+    # -- ztunnel container image.
+    image:
+      # @schema
+      # type: [null, string]
+      # @schema
+      override: ~
+      repository: "docker.io/istio/ztunnel"
+      tag: "1.28.0-distroless"
+      pullPolicy: "IfNotPresent"
+      # @schema
+      # type: [null, string]
+      # @schema
+      digest: ~
+      useDigest: false
+    # -- CA server address for certificate requests.
+    caAddress: "https://localhost:15012"
+    # -- TCP port for the health API.
+    healthPort: 15021
+    # -- ztunnel resource limits & requests.
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+    # -- ztunnel update strategy.
+    updateStrategy:
+      type: RollingUpdate
+      rollingUpdate:
+        maxSurge: 1
+        maxUnavailable: 0
+    # -- Configure termination grace period for ztunnel DaemonSet.
+    terminationGracePeriodSeconds: 30
+    # -- Readiness probe configuration.
+    readinessProbe:
+      initialDelaySeconds: 0
+      periodSeconds: 10
+      failureThreshold: 3
+    # -- Node selector for ztunnel pods.
+    nodeSelector:
+      kubernetes.io/os: linux
+    # -- Node tolerations for ztunnel scheduling.
+    tolerations:
+      - effect: NoSchedule
+        operator: Exists
+      - key: CriticalAddonsOnly
+        operator: Exists
+      - effect: NoExecute
+        operator: Exists
+    # -- Affinity for ztunnel pods.
+    affinity: {}
+    # @schema
+    # type: [null, string]
+    # @schema
+    # -- The priority class to use for ztunnel pods.
+    priorityClassName: ~
+    # -- Annotations to be added to all ztunnel resources.
+    annotations: {}
+    # -- Annotations to be added to ztunnel pods.
+    podAnnotations: {}
+    # -- Labels to be added to ztunnel pods.
+    podLabels: {}
+    # -- Additional ztunnel container environment variables.
+    extraEnv: []
+    # -- Additional ztunnel volumes.
+    extraVolumes: []
+    # -- Additional ztunnel volumeMounts.
+    extraVolumeMounts: []
+    # -- ztunnel secrets configuration.
+    secrets:
+      # -- Base64-encoded bootstrap root certificate content.
+      # If not provided, the secret must be created manually before deploying.
+      # @schema
+      # type: [null, string]
+      # @schema
+      bootstrapRootCert: ~
 endpointHealthChecking:
   # -- Enable connectivity health checking between virtual endpoints.
   enabled: true
+# -- Max duration to wait for envoy to respond to configuration changes. Default "10s".
+endpointPolicyUpdateTimeoutDuration: null
 endpointRoutes:
   # @schema
   # type: [boolean, string]
@@ -1250,8 +1350,8 @@ certgen:
     # @schema
     override: ~
     repository: "quay.io/cilium/certgen"
-    tag: "v0.3.2"
-    digest: "sha256:19921f48ee7e2295ea4dca955878a6cd8d70e6d4219d08f688e866ece9d95d4d"
+    tag: "v0.4.5"
+    digest: "sha256:f107522ed4dcea62f918b8eb836142875a9b3e3cb2b2d728dc680f76cdbde6cf"
     useDigest: true
     pullPolicy: "IfNotPresent"
   # @schema
@@ -1599,9 +1699,9 @@ hubble:
       # @schema
       override: ~
       repository: "quay.io/cilium/hubble-relay"
-      tag: "v1.19.1"
+      tag: "v1.19.5"
       # hubble-relay-digest
-      digest: sha256:d8c4e13bc36a56179292bb52bc6255379cb94cb873700d316ea3139b1bdb8165
+      digest: sha256:24409bfa1bca075c92acb26ba4b49cd573d99d68d5370f7cc825078185222a0c
       useDigest: true
       pullPolicy: "IfNotPresent"
     # -- Specifies the resources for the hubble-relay pods
@@ -1876,8 +1976,8 @@ hubble:
         # @schema
         override: ~
         repository: "quay.io/cilium/hubble-ui-backend"
-        tag: "v0.13.3"
-        digest: "sha256:db1454e45dc39ca41fbf7cad31eec95d99e5b9949c39daaad0fa81ef29d56953"
+        tag: "v0.13.5"
+        digest: "sha256:fac0c300ae119274edca11fd89b1ad23c788792d8bc4ea2ba631c709e8d3c688"
         useDigest: true
         pullPolicy: "IfNotPresent"
       # -- Hubble-ui backend security context.
@@ -1911,8 +2011,8 @@ hubble:
         # @schema
         override: ~
         repository: "quay.io/cilium/hubble-ui"
-        tag: "v0.13.3"
-        digest: "sha256:661d5de7050182d495c6497ff0b007a7a1e379648e60830dd68c4d78ae21761d"
+        tag: "v0.13.5"
+        digest: "sha256:f7d514fc54d784ed6df9d58cf0e97648b143f92b766dd1780ed3fc845bd4c516"
         useDigest: true
         pullPolicy: "IfNotPresent"
       # -- Hubble-ui frontend security context.
@@ -2313,8 +2413,6 @@ enableMasqueradeRouteSource: false
 enableIPv4BIGTCP: false
 # -- Enables IPv6 BIG TCP support which increases maximum IPv6 GSO/GRO limits for nodes and pods
 enableIPv6BIGTCP: false
-# -- Enable BIG TCP in tunneling mode and increase maximum GRO/GSO limits for VXLAN/GENEVE tunnels
-enableTunnelBIGTCP: false
 nat:
   # -- Number of the top-k SNAT map connections to track in Cilium statedb.
   mapStatsEntries: 32
@@ -2368,10 +2466,6 @@ monitor:
   enabled: false
 # -- Configure service load balancing
 loadBalancer:
-  # -- standalone enables the standalone L4LB which does not connect to
-  # kube-apiserver.
-  # standalone: false
-
   # -- algorithm is the name of the load balancing algorithm for backend
   # selection e.g. random or maglev
   # algorithm: random
@@ -2392,8 +2486,7 @@ loadBalancer:
 
   # -- serviceTopology enables K8s Topology Aware Hints -based service
   # endpoints filtering
-  # serviceTopology: false
-
+  serviceTopology: false
   # -- L7 LoadBalancer
   l7:
     # -- Enable L7 service load balancing via envoy proxy.
@@ -2626,9 +2719,9 @@ envoy:
     # @schema
     override: ~
     repository: "quay.io/cilium/cilium-envoy"
-    tag: "v1.35.9-1770979049-232ed4a26881e4ab4f766f251f258ed424fff663"
+    tag: "v1.36.8-1781157951-a7f42a3390781539911b5b9107881b35ecc4e752"
     pullPolicy: "IfNotPresent"
-    digest: "sha256:8188114a2768b5f49d6ce58e168b20d765e0fbc64eee0d83241aa2b150ccd788"
+    digest: "sha256:326f872e19ce8aa45170efbf583b3f301586ba3feead14b864676d4baf3b45ed"
     useDigest: true
   # -- Init containers added to the cilium Envoy DaemonSet.
   initContainers: []
@@ -3011,15 +3104,15 @@ operator:
     # @schema
     override: ~
     repository: "quay.io/cilium/operator"
-    tag: "v1.19.1"
+    tag: "v1.19.5"
     # operator-generic-digest
-    genericDigest: sha256:e7278d763e448bf6c184b0682cf98cdca078d58a27e1b2f3c906792670aa211a
+    genericDigest: sha256:be848a365776e07d0c5a895eda7aec928ddc52a5a1fa2f432fd7a286609e1db4
     # operator-azure-digest
-    azureDigest: sha256:82bce78603056e709d4c4e9f9ebb25c222c36d8a07f8c05381c2372d9078eca8
+    azureDigest: sha256:8600299cb121f9df00fd32b93fa74de89ed49dd3a67e3d7301c07325c04c77f8
     # operator-aws-digest
-    awsDigest: sha256:18913d05a6c4d205f0b7126c4723bb9ccbd4dc24403da46ed0f9f4bf2a142804
+    awsDigest: sha256:b8473618e8d2bf8a610da445c8c37e1d1e8221aecd05989456d87a7588d66707
     # operator-alibabacloud-digest
-    alibabacloudDigest: sha256:837b12f4239e88ea5b4b5708ab982c319a94ee05edaecaafe5fd0e5b1962f554
+    alibabacloudDigest: sha256:c9706343dde700804c2f50c09a2f8291797c707d1747fd50f70c939c23747c16
     useDigest: true
     pullPolicy: "IfNotPresent"
     suffix: ""
@@ -3344,9 +3437,9 @@ preflight:
     # @schema
     override: ~
     repository: "quay.io/cilium/cilium"
-    tag: "v1.19.1"
+    tag: "v1.19.5"
     # cilium-digest
-    digest: sha256:41f1f74a0000de8656f1de4088ea00c8f2d49d6edea579034c73c5fd5fe01792
+    digest: sha256:20fbbc14ac20b55a292c0dcda5571bf31cde30a7dbc68c29db3e709390ab0732
     useDigest: true
     pullPolicy: "IfNotPresent"
   envoy:
@@ -3357,9 +3450,9 @@ preflight:
       # @schema
       override: ~
       repository: "quay.io/cilium/cilium-envoy"
-      tag: "v1.35.9-1770979049-232ed4a26881e4ab4f766f251f258ed424fff663"
+      tag: "v1.36.8-1781157951-a7f42a3390781539911b5b9107881b35ecc4e752"
       pullPolicy: "IfNotPresent"
-      digest: "sha256:8188114a2768b5f49d6ce58e168b20d765e0fbc64eee0d83241aa2b150ccd788"
+      digest: "sha256:326f872e19ce8aa45170efbf583b3f301586ba3feead14b864676d4baf3b45ed"
       useDigest: true
   # -- The priority class to use for the preflight pod.
   priorityClassName: ""
@@ -3603,9 +3696,9 @@ clustermesh:
       # @schema
       override: ~
       repository: "quay.io/cilium/clustermesh-apiserver"
-      tag: "v1.19.1"
+      tag: "v1.19.5"
       # clustermesh-apiserver-digest
-      digest: sha256:56d6c3dc13b50126b80ecb571707a0ea97f6db694182b9d61efd386d04e5bb28
+      digest: sha256:5ed9334b2254315740f9e2a8b6645bf69920f79ef14f436931579d2038784f9b
       useDigest: true
       pullPolicy: "IfNotPresent"
     # -- TCP port for the clustermesh-apiserver health API.
@@ -4140,7 +4233,7 @@ authentication:
           override: ~
           repository: "docker.io/library/busybox"
           tag: "1.37.0"
-          digest: "sha256:b3255e7dfbcd10cb367af0d409747d511aeb66dfac98cf30e97e87e4207dd76f"
+          digest: "sha256:9532d8c39891ca2ecde4d30d7710e01fb739c87a8b9299685c63704296b16028"
           useDigest: true
           pullPolicy: "IfNotPresent"
         # SPIRE agent configuration

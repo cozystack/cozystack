@@ -134,14 +134,19 @@ func handle() {
 	}
 
 	// Create upstream driver (provides Identity, Controller, Node services)
-	upstreamDriver := service.NewKubevirtCSIDriver(virtClient,
-		identityClientset,
-		*infraClusterNamespace,
-		infraClusterLabelsMap,
-		storageClassEnforcement,
-		nodeID,
-		*runNodeService,
-		*runControllerService)
+	upstreamDriver := service.NewKubevirtCSIDriver().
+		WithIdentityService(identityClientset)
+	if *runControllerService {
+		upstreamDriver = upstreamDriver.WithControllerService(
+			virtClient,
+			*infraClusterNamespace,
+			infraClusterLabelsMap,
+			storageClassEnforcement,
+		)
+	}
+	if *runNodeService {
+		upstreamDriver = upstreamDriver.WithNodeService(nodeID)
+	}
 
 	// Wrap controller and node services with NFS/RWX support
 	var cs csi.ControllerServer

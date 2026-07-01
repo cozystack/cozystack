@@ -1,0 +1,57 @@
+suite: opensearch-operator leader election is gated on replica count
+
+# The operator Deployment ships a single replica. Leader election on one replica
+# adds no HA value but lets a transient apiserver/etcd lease-renewal blip make the
+# manager self-terminate (controller-runtime os.Exit on "leader election lost"),
+# which surfaces at install time as a crashlooping Deployment marked Failed.
+# Gate --leader-elect on replica count: off for the default single replica, back
+# on automatically when an operator scales to more than one replica for real HA.
+release:
+  name: opensearch-operator
+  namespace: cozy-opensearch-operator
+tests:
+  - it: default single-replica install drops --leader-elect from the manager
+    template: charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      # Guard container ordering: kube-rbac-proxy is [0], manager is [1].
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: operator-controller-manager
+      - notContains:
+          path: spec.template.spec.containers[1].args
+          content: --leader-elect
+      # Recreate avoids two uncoordinated managers overlapping during an upgrade
+      # while leader election is gated off on the single replica.
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+
+  - it: scaling past one replica re-enables --leader-elect for real HA
+    template: charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      opensearch-operator:
+        manager:
+          replicaCount: 2
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: operator-controller-manager
+      - contains:
+          path: spec.template.spec.containers[1].args
+          content: --leader-elect
+      # Multi-replica installs keep the default RollingUpdate (no explicit
+      # strategy) so rollouts stay available.
+      - notExists:
+          path: spec.strategy

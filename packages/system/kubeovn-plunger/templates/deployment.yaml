@@ -29,6 +29,8 @@ spec:
         {{- end }}
         - --metrics-bind-address=:8080
         - --metrics-secure=false
+        - --kube-ovn-namespace={{ .Release.Namespace }}
+        - --ovn-central-name={{ .Values.ovnCentralName }}
         ports:
         - name: metrics
           containerPort: 8080

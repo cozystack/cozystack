@@ -1,0 +1,9 @@
+diff --git a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml
+--- a/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml
++++ b/packages/system/linstor-scheduler/charts/linstor-scheduler/templates/deployment.yaml
+@@ -21,4 +21,5 @@
+       labels:
+         {{- include "linstor-scheduler.selectorLabels" . | nindent 8 }}
++        app.kubernetes.io/component: scheduler
+     spec:
+       {{- with .Values.imagePullSecrets }}

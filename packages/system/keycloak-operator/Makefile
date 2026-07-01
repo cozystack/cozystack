@@ -6,12 +6,11 @@ include ../../../hack/package.mk
 
 image:
 	docker buildx build images/keycloak-operator \
-		--tag $(REGISTRY)/keycloak-operator:$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/keycloak-operator:latest \
-		--cache-to   type=inline \
+		$(call image-tags,keycloak-operator,v$(COZYSTACK_VERSION)) \
+		$(call cache-args,keycloak-operator) \
 		--metadata-file images/keycloak-operator.json \
 		$(BUILDX_ARGS)
-	TAG="$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/keycloak-operator.json -r)" \
+	TAG="$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/keycloak-operator.json -r)" \
 		yq -i '.keycloak-operator.image.tag = strenv(TAG)' values.yaml
 	rm -f images/keycloak-operator.json
 

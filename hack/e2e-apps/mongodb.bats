@@ -26,14 +26,17 @@ spec:
   backup:
     enabled: false
 EOF
-  sleep 5
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr mongodb-$name >/dev/null 2>&1; do sleep 2; done"
   # Wait for HelmRelease
-  kubectl -n tenant-test wait hr mongodb-$name --timeout=60s --for=condition=ready
+  kubectl -n tenant-test wait hr mongodb-$name --timeout=5m --for=condition=ready
   # Wait for MongoDB service (port 27017)
   timeout 120 sh -ec "until kubectl -n tenant-test get svc mongodb-$name-rs0 -o jsonpath='{.spec.ports[0].port}' | grep -q '27017'; do sleep 10; done"
   # Wait for endpoints
   timeout 180 sh -ec "until kubectl -n tenant-test get endpoints mongodb-$name-rs0 -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   # Wait for StatefulSet replicas
+  timeout 60 sh -ec "until kubectl -n tenant-test get statefulset.apps/mongodb-$name-rs0 >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait statefulset.apps/mongodb-$name-rs0 --timeout=300s --for=jsonpath='{.status.replicas}'=1
   # Cleanup
   kubectl -n tenant-test delete mongodbs.apps.cozystack.io $name

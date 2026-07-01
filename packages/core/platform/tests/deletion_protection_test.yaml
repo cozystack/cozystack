@@ -1,0 +1,59 @@
+suite: deletion-protection VAP message and self-label coverage
+templates:
+  - templates/deletion-protection.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+tests:
+  - it: ValidatingAdmissionPolicy carries the deletion-protection label on itself
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - equal:
+          path: metadata.labels["platform.cozystack.io/no-delete"]
+          value: "true"
+
+  - it: ValidatingAdmissionPolicyBinding carries the deletion-protection label on itself
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicyBinding
+    asserts:
+      - equal:
+          path: metadata.labels["platform.cozystack.io/no-delete"]
+          value: "true"
+
+  - it: failurePolicy is intentionally unset on the VAP
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - notExists:
+          path: spec.failurePolicy
+
+  - it: the deny message documents the bypass with the --namespace flag
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicy
+    asserts:
+      - matchRegex:
+          path: spec.validations[0].message
+          pattern: 'kubectl label <kind> <name> --namespace <ns> platform\.cozystack\.io/no-delete-'
+      - matchRegex:
+          path: spec.validations[0].message
+          pattern: 'omit --namespace for cluster-scoped resources'
+
+  - it: binding selects on the no-delete label and denies on match
+    documentSelector:
+      path: kind
+      value: ValidatingAdmissionPolicyBinding
+    asserts:
+      - equal:
+          path: spec.matchResources.objectSelector.matchLabels["platform.cozystack.io/no-delete"]
+          value: "true"
+      - equal:
+          path: spec.validationActions[0]
+          value: Deny

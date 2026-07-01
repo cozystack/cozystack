@@ -27,7 +27,9 @@ rules:
   resources: ["pods"]
   verbs: ["get", "list", "watch"]
 # ConfigMaps: controller-runtime cache requires cluster-scoped list/watch;
-# create/update/delete is scoped to cozy-velero via the Role below.
+# create/update/delete is scoped to cozy-velero via a Role shipped by the
+# velero chart (packages/system/velero/templates/backupstrategy-controller-rbac.yaml)
+# so it is only created when velero is installed.
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list", "watch"]
@@ -35,6 +37,11 @@ rules:
 - apiGroups: ["apps.cozystack.io"]
   resources: ["*"]
   verbs: ["get", "list", "watch"]
+# CNPG restore patches the Postgres app spec (.spec.bootstrap, .spec.backup)
+# so the chart re-renders the cnpg.io Cluster with bootstrap.recovery.
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["postgreses"]
+  verbs: ["patch", "update"]
 # KubeVirt: pre-restore halts VMs and checks VMI shutdown
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachines"]
@@ -46,10 +53,10 @@ rules:
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
   verbs: ["delete"]
-# HelmReleases: pre-restore suspends HRs to prevent Flux interference
+# HelmReleases: pre-restore suspends HRs; post-restore rename creates new HR and deletes old
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
-  verbs: ["get", "update"]
+  verbs: ["get", "create", "update", "delete"]
 # PVCs and PVs: pre-restore renames PVCs (delete old, create new) and patches PV reclaim policy
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
@@ -65,6 +72,11 @@ rules:
 - apiGroups: ["velero.io"]
   resources: ["deletebackuprequests"]
   verbs: ["create", "get", "list", "watch"]
+# Namespaces: validate target namespace exists for cross-namespace restore
+# controller-runtime cache requires list/watch for any resource accessed via r.Get()
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch"]
 # Events from Recorder.Event() calls
 - apiGroups: [""]
   resources: ["events"]
@@ -73,14 +85,73 @@ rules:
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "list", "watch", "create", "update", "patch"]
----
-# To create ResourceModifiers in ConfigMaps for Restore in Velero install namespace.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: backups.cozystack.io:strategy-controller:velero-configmaps
-  namespace: cozy-velero
-rules:
+# CNPG strategy: SSA-patch the live Cluster (spec.backup.barmanObjectStore),
+# create one-shot Backup CRs, observe their status, and clean them up on
+# RestoreJob purge.
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["clusters"]
+  verbs: ["get", "list", "watch", "patch", "delete"]
+- apiGroups: ["postgresql.cnpg.io"]
+  resources: ["backups"]
+  verbs: ["get", "list", "watch", "create", "patch", "delete"]
+# Secrets: the BackupJob/RestoreJob reconcilers project the platform-managed
+# S3 credentials Secret from the backupStorage.namespace (tenant-root by
+# default) into each tenant namespace as cozy-backups-creds. The verbs are
+# cluster-scoped because the
+# target namespace varies per BackupJob. Only Get + Create/Update/Patch
+# are needed — the projector does no listing or watching. Trimming list +
+# watch keeps the cluster-wide Secret read blast-radius minimal.
 - apiGroups: [""]
-  resources: ["configmaps"]
-  verbs: ["create", "get", "list", "delete", "deletecollection", "patch", "update"]
+  resources: ["secrets"]
+  verbs: ["get", "create", "update", "patch"]
+# Altinity strategy: drives clickhouse-backup as a one-shot batch/v1.Job
+# per BackupJob / RestoreJob. The controller renders the strategy
+# PodTemplateSpec into a Job in the application namespace and watches the
+# Job's terminal condition (Complete/Failed) to drive Cozystack Backup /
+# RestoreJob status transitions.
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+# MariaDB strategy: read the operator-side MariaDB CR to surface "not yet
+# rendered" preconditions, create one-shot k8s.mariadb.com/Backup CRs on
+# the BackupJob path, and create k8s.mariadb.com/Restore CRs on the
+# RestoreJob path. The driver only ever Creates/Lists/Gets these objects -
+# it does not patch or delete them; their lifecycle is owned by
+# mariadb-operator and (for cleanup) by tenants / explicit teardown flows,
+# never by this controller.
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["mariadbs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["k8s.mariadb.com"]
+  resources: ["backups", "restores"]
+  verbs: ["get", "list", "watch", "create"]
+# FoundationDB strategy: read the operator-side FoundationDBCluster CR to
+# surface "not yet rendered" preconditions, create per-BackupJob
+# FoundationDBBackup CRs and per-RestoreJob FoundationDBRestore CRs.
+# Patch is required so the driver can flip backupState=Stopped on a prior
+# BackupJob's FoundationDBBackup before starting a new one - the operator
+# only permits one running backup directory per cluster.
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbclusters"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbbackups"]
+  verbs: ["get", "list", "watch", "create", "patch"]
+- apiGroups: ["apps.foundationdb.org"]
+  resources: ["foundationdbrestores"]
+  verbs: ["get", "list", "watch", "create"]
+# Etcd strategy: read the operator-side EtcdCluster CR (existence + Ready
+# gate before snapshotting; live spec on the restore path) and create
+# per-BackupJob etcd.aenix.io/EtcdBackup CRs. Restore is in-place only:
+# the driver deletes the chart-rendered EtcdCluster, then creates a new
+# one with spec.bootstrap.restore.source populated from the artifact -
+# so delete + create on etcdclusters are both required. The PVCs the
+# operator generates for member volumes get listed (etcdClusterFullyGone
+# gate) but never directly mutated; cleanup is owned by the operator's
+# finalizers + the EtcdCluster ownerRef cascade.
+- apiGroups: ["etcd.aenix.io"]
+  resources: ["etcdclusters"]
+  verbs: ["get", "list", "watch", "create", "delete"]
+- apiGroups: ["etcd.aenix.io"]
+  resources: ["etcdbackups"]
+  verbs: ["get", "list", "watch", "create"]

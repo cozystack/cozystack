@@ -4,7 +4,9 @@ metadata:
   name: keycloak-db
 spec:
   instances: 2
-  imageName: ghcr.io/cloudnative-pg/postgresql:17.7
+  {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "keycloak-db" }}
+  {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
+  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
   storage:
     size: 20Gi
   {{- if .Values._cluster.scheduling }}

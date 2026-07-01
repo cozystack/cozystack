@@ -19,7 +19,6 @@ spec:
     remediation:
       retries: -1
   upgrade:
-    force: true
     remediation:
       retries: -1
   values:
@@ -37,6 +36,7 @@ spec:
         - service
         {{- if .Values.gatewayAPI }}
         - gateway-httproute
+        - gateway-tlsroute
         {{- end }}
       {{- with .Values.domainFilters }}
       domainFilters:

@@ -14,6 +14,11 @@ spec:
       containers:
       - name: linstor-satellite
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
+        startupProbe:
+          tcpSocket:
+            port: linstor
+          periodSeconds: 10
+          failureThreshold: 30
         securityContext:
           # real-world installations need some debugging from time to time
           readOnlyRootFilesystem: false

@@ -18,12 +18,11 @@ image-controller image-sidecar:
 	$(eval YAML_PATH   := $(if $(filter sidecar,$(TARGET)),.seaweedfs.cosi.sidecar.image,.objectstorage.controller.image))
 	docker buildx build images/objectstorage \
 		--target $(TARGET) \
-		--tag $(REGISTRY)/objectstorage-$(TARGET):$(call settag,$(TAG)) \
-		--cache-from type=registry,ref=$(REGISTRY)/objectstorage-$(TARGET):latest \
-		--cache-to   type=inline \
+		$(call image-tags,objectstorage-$(TARGET),v$(COZYSTACK_VERSION)) \
+		$(call cache-args,objectstorage-$(TARGET)) \
 		--metadata-file images/$(TARGET).json \
 		$(BUILDX_ARGS)
-	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(call settag,$(TAG))@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" \
+	IMAGE="$(REGISTRY)/objectstorage-$(TARGET):$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/$(TARGET).json -r)" \
 		yq -i '$(YAML_PATH) = strenv(IMAGE)' $(VALUES_FILE)
 	rm -f images/$(TARGET).json
 	yq .seaweedfs.cosi.sidecar.image ../seaweedfs/values.yaml > ../../extra/seaweedfs/images/objectstorage-sidecar.tag

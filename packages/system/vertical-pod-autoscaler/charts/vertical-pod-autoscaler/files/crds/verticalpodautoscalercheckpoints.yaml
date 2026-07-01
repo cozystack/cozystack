@@ -3,7 +3,7 @@ kind: CustomResourceDefinition
 metadata:
   name: verticalpodautoscalercheckpoints.autoscaling.k8s.io
   labels:
-    {{- include "vertical-pod-autoscaler.labels" . | nindent 4 }}
+    {{- include "vertical-pod-autoscaler.commonLabels" . | nindent 4 }}
     {{- if .Values.commonLabels }}
     {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
     {{- end }}

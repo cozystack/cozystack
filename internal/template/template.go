@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	tmpl "text/template"
+
+	sprig "github.com/go-task/slim-sprig/v3"
 )
 
 func Template[T any](obj *T, templateContext map[string]any) (*T, error) {
@@ -56,7 +58,11 @@ func mapAtStrings(v any, f func(string) string) any {
 }
 
 func template(in string, templateContext map[string]any) (string, error) {
-	tpl, err := tmpl.New("this").Parse(in)
+	// FuncMap from slim-sprig is text-template-only (no HTML escaping, which
+	// is what we want for Pod spec strings) and excludes network/OS/crypto
+	// helpers - the subset matches what strategy authors actually reach for
+	// (default, required, quote, printf wrappers, dict/list/index helpers).
+	tpl, err := tmpl.New("this").Funcs(sprig.FuncMap()).Parse(in)
 	if err != nil {
 		return "", err
 	}

@@ -1,0 +1,78 @@
+suite: seaweedfs s3 TLS on main port + COSI provisioner SA name
+
+# Pins two regressions introduced by the 4.31 chart bump:
+#
+# 1. S3 TLS. Until 4.05 the `-cert.file`/`-key.file` args were rendered whenever
+#    enableSecurity was on, so `weed s3` served TLS on the main port (8333) and
+#    our HTTPS readiness/liveness probes (and the ingress backend-protocol=HTTPS
+#    and the COSI sidecar's https:// endpoint) worked. 4.31 nested those args
+#    inside `if .Values.s3.httpsPort`, and we ship httpsPort=0, so s3 served
+#    plaintext and every probe failed with "server gave HTTP response to HTTPS
+#    client". The s3-tls-main-port.patch restores the 4.05 behaviour.
+#
+# 2. COSI provisioner ServiceAccount. cosi-service-account.yaml and the
+#    ClusterRoleBinding both name the SA <serviceAccountName>-objectstorage-provisioner,
+#    but the Deployment referenced componentName (<release>-objectstorage-provisioner).
+#    Whenever serviceAccountName != release name the Deployment could not create
+#    pods ("serviceaccount not found"). The cosi-provisioner-sa-name.patch aligns
+#    the Deployment with the SA + binding.
+
+templates:
+  - charts/seaweedfs/templates/s3/s3-deployment.yaml
+  - charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: renders s3 TLS cert/key args under enableSecurity even when httpsPort is 0
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    set:
+      global.seaweedfs.enableSecurity: true
+      seaweedfs.s3.enabled: true
+      seaweedfs.s3.httpsPort: 0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-cert\\.file=/usr/local/share/ca-certificates/client/tls\\.crt"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-key\\.file=/usr/local/share/ca-certificates/client/tls\\.key"
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-port\\.https"
+
+  - it: still gates the cert args on enableSecurity
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    set:
+      global.seaweedfs.enableSecurity: false
+      seaweedfs.s3.enabled: true
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-cert\\.file"
+
+  - it: renders -port.https alongside the cert args when httpsPort is set
+    template: charts/seaweedfs/templates/s3/s3-deployment.yaml
+    set:
+      global.seaweedfs.enableSecurity: true
+      seaweedfs.s3.enabled: true
+      seaweedfs.s3.httpsPort: 8334
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-port\\.https=8334"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "-cert\\.file=/usr/local/share/ca-certificates/client/tls\\.crt"
+
+  - it: COSI provisioner Deployment uses the serviceAccountName-based SA, not componentName
+    template: charts/seaweedfs/templates/cosi/cosi-deployment.yaml
+    set:
+      seaweedfs.cosi.enabled: true
+      global.seaweedfs.serviceAccountName: custom-sa
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: custom-sa-objectstorage-provisioner

@@ -5,9 +5,9 @@ metadata:
   name: cozystack-dashboard-readonly
 rules:
 - apiGroups:
-  - dashboard.cozystack.io
+  - cozystack.io
   resources:
-  - '*'
+  - applicationdefinitions
   verbs:
   - get
   - list

@@ -30,6 +30,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	fluxmeta "github.com/fluxcd/pkg/apis/meta"
 	sourcev1 "github.com/fluxcd/source-controller/api/v1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -54,6 +55,7 @@ import (
 	"github.com/cozystack/cozystack/internal/fluxinstall"
 	"github.com/cozystack/cozystack/internal/operator"
 	"github.com/cozystack/cozystack/internal/telemetry"
+	"github.com/cozystack/cozystack/pkg/config"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -83,12 +85,18 @@ func main() {
 	var disableTelemetry bool
 	var telemetryEndpoint string
 	var telemetryInterval string
+	var helmReleaseInterval string
+	var helmReleaseRetryInterval string
+	var helmReleaseInstallTimeout string
+	var helmReleaseUpgradeTimeout string
+	var helmReleaseMaxHistory int
 	var cozyValuesSecretName string
 	var cozyValuesSecretNamespace string
 	var cozyValuesNamespaceSelector string
 	var platformSourceURL string
 	var platformSourceName string
 	var platformSourceRef string
+	var platformSourceSecret string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -107,9 +115,32 @@ func main() {
 		"Endpoint for sending telemetry data")
 	flag.StringVar(&telemetryInterval, "telemetry-interval", "15m",
 		"Interval between telemetry data collection (e.g. 15m, 1h)")
+	flag.StringVar(&helmReleaseInterval, "helmrelease-interval", "5m",
+		"Reconcile interval applied to HelmReleases created by the Package reconciler. "+
+			"Lower values speed up dependency-blocked retries (e.g. during E2E install) at the cost of "+
+			"controller load. Production default 5m matches existing behaviour.")
+	flag.StringVar(&helmReleaseRetryInterval, "helmrelease-retry-interval", "30s",
+		"Retry interval applied to Install.Strategy and Upgrade.Strategy of HelmReleases created "+
+			"by the Package reconciler. With Strategy.Name=RetryOnFailure, this controls how long the "+
+			"controller waits between failed install/upgrade attempts. Decoupled from --helmrelease-interval "+
+			"(which is the healthy reconcile cadence) so failures recover fast without polling healthy "+
+			"releases at the same fast cadence.")
+	flag.StringVar(&helmReleaseInstallTimeout, "helmrelease-install-timeout", "10m",
+		"Timeout for the Helm install action of HelmReleases created by the Package reconciler "+
+			"(Spec.Install.Timeout). Bounds how long an individual Kubernetes operation (Job/hook/wait) "+
+			"may take during install.")
+	flag.StringVar(&helmReleaseUpgradeTimeout, "helmrelease-upgrade-timeout", "10m",
+		"Timeout for the Helm upgrade action of HelmReleases created by the Package reconciler "+
+			"(Spec.Upgrade.Timeout). Bounds how long an individual Kubernetes operation (Job/hook/wait) "+
+			"may take during upgrade.")
+	flag.IntVar(&helmReleaseMaxHistory, "helmrelease-max-history", 5,
+		"Number of release revisions Helm keeps for HelmReleases created by the Package reconciler "+
+			"(Spec.MaxHistory). 0 means unlimited; 5 matches Helm's default. Lower values reduce "+
+			"per-release Secret accumulation in clusters that bounce HRs frequently (e.g. E2E sandboxes).")
 	flag.StringVar(&platformSourceURL, "platform-source-url", "", "Platform source URL (oci:// or https://). If specified, generates OCIRepository or GitRepository resource.")
 	flag.StringVar(&platformSourceName, "platform-source-name", "cozystack-platform", "Name for the generated platform source resource and PackageSource")
 	flag.StringVar(&platformSourceRef, "platform-source-ref", "", "Reference specification as key=value pairs (e.g., 'branch=main' or 'digest=sha256:...,tag=v1.0'). For OCI: digest, semver, semverFilter, tag. For Git: branch, tag, semver, name, commit.")
+	flag.StringVar(&platformSourceSecret, "platform-source-secret", "", "Name of the Secret in cozy-system namespace containing credentials for the platform source. Sets spec.secretRef on the generated OCIRepository or GitRepository. Secret type depends on the source kind: kubernetes.io/dockerconfigjson for OCI (oci://...); Opaque with username+password (or bearerToken) for Git over HTTPS; Opaque with identity (PEM private key) and known_hosts for Git over SSH.")
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
@@ -121,6 +152,23 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	parseFlag := func(flagName, raw string) time.Duration {
+		d, err := config.ParsePositiveDuration(flagName, raw)
+		if err != nil {
+			setupLog.Error(err, "invalid duration flag")
+			os.Exit(1)
+		}
+		return d
+	}
+	hrIntervalDuration := parseFlag("--helmrelease-interval", helmReleaseInterval)
+	hrRetryIntervalDuration := parseFlag("--helmrelease-retry-interval", helmReleaseRetryInterval)
+	hrInstallTimeoutDuration := parseFlag("--helmrelease-install-timeout", helmReleaseInstallTimeout)
+	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
+	if helmReleaseMaxHistory < 0 {
+		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
+		os.Exit(1)
+	}
 
 	config := ctrl.GetConfigOrDie()
 
@@ -211,12 +259,12 @@ func main() {
 
 	// Generate and install platform source resource if specified
 	if platformSourceURL != "" {
-		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef)
+		setupLog.Info("Generating platform source resource", "url", platformSourceURL, "name", platformSourceName, "ref", platformSourceRef, "secret", platformSourceSecret)
 		installCtx, installCancel := context.WithTimeout(mgrCtx, 2*time.Minute)
 		defer installCancel()
 
 		// Use direct client for pre-start operations (cache is not ready yet)
-		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef); err != nil {
+		if err := installPlatformSourceResource(installCtx, directClient, platformSourceURL, platformSourceName, platformSourceRef, platformSourceSecret); err != nil {
 			setupLog.Error(err, "failed to install platform source resource")
 			os.Exit(1)
 		} else {
@@ -258,8 +306,13 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:                    mgr.GetClient(),
+		Scheme:                    mgr.GetScheme(),
+		HelmReleaseInterval:       hrIntervalDuration,
+		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
+		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
+		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
+		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
@@ -325,7 +378,7 @@ func main() {
 
 // installPlatformSourceResource generates and installs a Flux source resource (OCIRepository or GitRepository)
 // based on the platform source URL
-func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec string) error {
+func installPlatformSourceResource(ctx context.Context, k8sClient client.Client, sourceURL, resourceName, refSpec, secretName string) error {
 	logger := log.FromContext(ctx)
 
 	// Parse the source URL to determine type
@@ -343,12 +396,12 @@ func installPlatformSourceResource(ctx context.Context, k8sClient client.Client,
 	var obj client.Object
 	switch sourceType {
 	case "oci":
-		obj, err = generateOCIRepository(resourceName, repoURL, refMap)
+		obj, err = generateOCIRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate OCIRepository: %w", err)
 		}
 	case "git":
-		obj, err = generateGitRepository(resourceName, repoURL, refMap)
+		obj, err = generateGitRepository(resourceName, repoURL, refMap, secretName)
 		if err != nil {
 			return fmt.Errorf("failed to generate GitRepository: %w", err)
 		}
@@ -508,7 +561,7 @@ func validateGitRef(refMap map[string]string) error {
 }
 
 // generateOCIRepository creates an OCIRepository resource
-func generateOCIRepository(name, repoURL string, refMap map[string]string) (*sourcev1.OCIRepository, error) {
+func generateOCIRepository(name, repoURL string, refMap map[string]string, secretName string) (*sourcev1.OCIRepository, error) {
 	if err := validateOCIRef(refMap); err != nil {
 		return nil, err
 	}
@@ -538,11 +591,18 @@ func generateOCIRepository(name, repoURL string, refMap map[string]string) (*sou
 		}
 	}
 
+	// Set secretRef if secret name is provided
+	if secretName != "" {
+		obj.Spec.SecretRef = &fluxmeta.LocalObjectReference{
+			Name: secretName,
+		}
+	}
+
 	return obj, nil
 }
 
 // generateGitRepository creates a GitRepository resource
-func generateGitRepository(name, repoURL string, refMap map[string]string) (*sourcev1.GitRepository, error) {
+func generateGitRepository(name, repoURL string, refMap map[string]string, secretName string) (*sourcev1.GitRepository, error) {
 	if err := validateGitRef(refMap); err != nil {
 		return nil, err
 	}
@@ -570,6 +630,13 @@ func generateGitRepository(name, repoURL string, refMap map[string]string) (*sou
 			SemVer: refMap["semver"],
 			Name:   refMap["name"],
 			Commit: refMap["commit"],
+		}
+	}
+
+	// Set secretRef if secret name is provided
+	if secretName != "" {
+		obj.Spec.SecretRef = &fluxmeta.LocalObjectReference{
+			Name: secretName,
 		}
 	}
 

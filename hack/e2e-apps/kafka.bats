@@ -3,6 +3,7 @@
 @test "Create Kafka" {
   name='test'
   kubectl -n tenant-test delete kafka.apps.cozystack.io $name --ignore-not-found --timeout=2m || true
+  kubectl -n tenant-test wait kafka.apps.cozystack.io $name --for=delete --timeout=2m 2>/dev/null || true
   kubectl apply -f- <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kafka
@@ -16,13 +17,13 @@ spec:
     replicas: 2
     storageClass: ""
     resources: {}
-    resourcesPreset: "nano"
+    resourcesPreset: "c1.small"
   zookeeper:
     size: 5Gi
     replicas: 2
     storageClass: ""
     resources:
-    resourcesPreset: "nano"
+    resourcesPreset: "c1.small"
   topics:
     - name: testResults
       partitions: 1
@@ -38,15 +39,23 @@ spec:
       partitions: 1
       replicas: 2
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr kafka-$name --timeout=30s --for=condition=ready
-  kubectl wait kafkas -n tenant-test test --timeout=60s --for=condition=ready
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr kafka-$name >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr kafka-$name --timeout=5m --for=condition=ready
+  timeout 60 sh -ec "until kubectl -n tenant-test get kafkas $name >/dev/null 2>&1; do sleep 2; done"
+  kubectl wait kafkas -n tenant-test $name --timeout=300s --for=condition=ready
   timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0; do sleep 10; done"
   kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
+  timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-1 >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait pvc data-kafka-$name-zookeeper-1 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-client -o jsonpath='{.spec.ports[0].port}' | grep -q '2181'; do sleep 10; done"
   timeout 40 sh -ec "until kubectl -n tenant-test get svc kafka-$name-zookeeper-nodes -o jsonpath='{.spec.ports[*].port}' | grep -q '2181 2888 3888'; do sleep 10; done"
   timeout 80 sh -ec "until kubectl -n tenant-test get endpoints kafka-$name-zookeeper-nodes -o jsonpath='{.subsets[*].addresses[0].ip}' | grep -q '[0-9]'; do sleep 10; done"
-  kubectl -n tenant-test delete kafka.apps.cozystack.io $name
-  kubectl -n tenant-test delete pvc data-kafka-$name-zookeeper-0
-  kubectl -n tenant-test delete pvc data-kafka-$name-zookeeper-1
+  kubectl -n tenant-test delete kafka.apps.cozystack.io $name --timeout=2m
+  # Strimzi reclaims ZooKeeper PVCs automatically when deleteClaim is true on
+  # the persistent-claim storage. Verify they disappear instead of issuing a
+  # manual kubectl delete, which would mask a regression in the operator.
+  timeout 60 sh -ec "while kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-0 >/dev/null 2>&1; do sleep 2; done"
+  timeout 60 sh -ec "while kubectl -n tenant-test get pvc data-kafka-$name-zookeeper-1 >/dev/null 2>&1; do sleep 2; done"
 }

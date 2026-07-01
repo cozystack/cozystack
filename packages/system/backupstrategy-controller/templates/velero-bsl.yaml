@@ -1,0 +1,35 @@
+{{- if .Values.velero.bslEnabled }}
+{{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
+{{- if $bucketName -}}
+# cozy-default BackupStorageLocation lives here (not in the velero chart)
+# so endpoint/bucket/region come from the same backupStorage values block
+# the projector and strategy templates use. Drift between the chart-emitted
+# Velero S3 coordinates and the projected cozy-backups-creds Secret would
+# silently break VM backup/restore — keeping them in one Helm values map
+# makes drift impossible.
+apiVersion: velero.io/v1
+kind: BackupStorageLocation
+metadata:
+  name: cozy-default
+  namespace: {{ .Values.velero.namespace }}
+spec:
+  provider: aws
+  # default=false: do not silently displace an admin-provisioned default
+  # BSL. The cozy-default BackupClass strategies reference this name
+  # explicitly via storageLocation: cozy-default.
+  default: false
+  objectStorage:
+    bucket: {{ $bucketName | quote }}
+    prefix: velero
+  credential:
+    # cozy-backups-creds in cozy-velero is refreshed by the
+    # SystemCredentialsProjector runnable on a 1-minute tick. The `cloud`
+    # key is the AWS credentials file Velero consumes.
+    name: cozy-backups-creds
+    key: cloud
+  config:
+    region: {{ .Values.backupStorage.region | quote }}
+    s3ForcePathStyle: {{ .Values.backupStorage.forcePathStyle | quote }}
+    s3Url: {{ .Values.backupStorage.endpoint | quote }}
+{{- end }}
+{{- end }}

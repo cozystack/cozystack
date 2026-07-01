@@ -6,15 +6,15 @@ Tenants can be created recursively and are subject to the following rules:
 
 ### Tenant naming
 
-Tenant names must follow DNS-1035 naming rules:
--   Must start with a lowercase letter (`a-z`)
--   Can only contain lowercase letters, numbers, and hyphens (`a-z`, `0-9`, `-`)
--   Must end with a letter or number (not a hyphen)
+Tenant names must be alphanumeric:
+
+-   Lowercase letters (`a-z`) and digits (`0-9`) only
+-   Must start with a lowercase letter
+-   Dashes (`-`) are **not allowed**, unlike with other services
 -   Maximum length depends on the cluster configuration (Helm release prefix and root domain)
 
-**Note:** Using dashes (`-`) in tenant names is **allowed but discouraged**, unlike with other services.
-This is to keep consistent naming in tenants, nested tenants, and services deployed in them.
-Names with dashes (e.g., `foo-bar`) may lead to ambiguous parsing of internal resource names like `tenant-foo-bar`.
+This restriction exists to keep consistent naming in tenants, nested tenants, and services deployed in them.
+A tenant cannot be named `foo-bar` because parsing internal resource names like `tenant-foo-bar` would be ambiguous.
 
 For example:
 
@@ -74,15 +74,16 @@ tenant-u1
 
 ### Common parameters
 
-| Name              | Description                                                                                                                | Type                  | Value   |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------- |
-| `host`            | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host). | `string`              | `""`    |
-| `etcd`            | Deploy own Etcd cluster.                                                                                                   | `bool`                | `false` |
-| `monitoring`      | Deploy own Monitoring Stack.                                                                                               | `bool`                | `false` |
-| `ingress`         | Deploy own Ingress Controller.                                                                                             | `bool`                | `false` |
-| `seaweedfs`       | Deploy own SeaweedFS.                                                                                                      | `bool`                | `false` |
-| `schedulingClass` | The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.                              | `string`              | `""`    |
-| `resourceQuotas`  | Define resource quotas for the tenant.                                                                                     | `map[string]quantity` | `{}`    |
+| Name              | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Type                  | Value   |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------- | ------- |
+| `host`            | The hostname used to access tenant services (defaults to using the tenant name as a subdomain for its parent tenant host).                                                                                                                                                                                                                                                                                                                                                                                                                     | `string`              | `""`    |
+| `etcd`            | Deploy own Etcd cluster.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | `bool`                | `false` |
+| `monitoring`      | Deploy own Monitoring Stack.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   | `bool`                | `false` |
+| `ingress`         | Deploy own Ingress Controller.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `bool`                | `false` |
+| `gateway`         | Deploy own Gateway API Gateway (backed by Cilium Gateway API controller). When unset (the default), the chart auto-enables the Gateway for tenants whose apex is derived from the parent (i.e. `host` is empty), and leaves it off for tenants with a custom non-derived apex. Set to `true` or `false` explicitly to override that auto-behaviour. Note: leave the key absent (do not write `gateway: null`) — the chart distinguishes "unset" via missing-key, not via null value, to satisfy the JSON schema generated from this comment. | `bool`                | `false` |
+| `seaweedfs`       | Deploy own SeaweedFS.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | `bool`                | `false` |
+| `schedulingClass` | The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.                                                                                                                                                                                                                                                                                                                                                                                                                                                  | `string`              | `""`    |
+| `resourceQuotas`  | Define resource quotas for the tenant.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | `map[string]quantity` | `{}`    |
 
 
 ## Configuration

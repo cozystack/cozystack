@@ -1,4 +1,4 @@
-FROM golang:1.23 AS builder
+FROM golang:1.26 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -10,7 +10,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH go mod download
 COPY . .
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -o webhook .
 
-FROM alpine:3.21.3
+FROM alpine:3.24
 WORKDIR /app
 
 COPY --from=builder /app/webhook /app/webhook

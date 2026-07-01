@@ -287,9 +287,28 @@ vmagent:
 fluent-bit:
   rbac:
     eventsAccess: true
+  # Relax probe timing to survive a loaded install. Fluent-bit's HTTP server on
+  # :2020 (the probe target) does not bind until AFTER the kubernetes filter's
+  # "testing connectivity with API server" step; under concurrent install the
+  # kube-API can be unreachable for ~10s, delaying the :2020 bind, and the
+  # single-threaded HTTP server can miss a 1s timeout while the engine is busy.
+  # The subchart defaults (initialDelaySeconds 0, timeoutSeconds 1,
+  # failureThreshold 3) then liveness-kill fluent-bit into a crash loop. httpGet
+  # stays on path / port http (:2020) — same target as the subchart defaults.
+  livenessProbe:
+    httpGet:
+      path: /
+      port: http
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 6
   readinessProbe:
     httpGet:
       path: /
+      port: http
+    timeoutSeconds: 5
+    failureThreshold: 6
   daemonSetVolumes:
     - name: varlog
       hostPath:

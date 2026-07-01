@@ -1,0 +1,10 @@
+cozy-cozystack-scheduler:
+  extenders:
+    - urlPrefix: http://linstor-scheduler-extender.cozy-linstor.svc:8099
+      filterVerb: filter
+      prioritizeVerb: prioritize
+      weight: 5
+      enableHTTPS: false
+      httpTimeout: 10s
+      nodeCacheCapable: false
+      ignorable: true

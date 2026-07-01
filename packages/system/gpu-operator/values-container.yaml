@@ -1,0 +1,53 @@
+# Container variant: GPU workloads run in regular pods on hosts that
+# already have the NVIDIA driver and nvidia-container-toolkit installed
+# (typical Ubuntu/Debian shape: apt-installed driver + apt-installed
+# nvidia-container-toolkit). The third architectural mode that upstream
+# NVIDIA gpu-operator supports — sandboxWorkloads disabled,
+# devicePlugin enabled — surfaced here as a Cozystack variant.
+gpu-operator:
+  sandboxWorkloads:
+    # Default upstream workload on a node without the per-node
+    # 'nvidia.com/gpu.workload.config' label is 'container' when
+    # sandboxWorkloads is off — which is exactly what this variant
+    # wants. No defaultWorkload override needed; the counterpart
+    # overrides in values-passthrough.yaml / values-vgpu.yaml exist
+    # only because those variants flip sandboxWorkloads to true.
+    enabled: false
+  driver:
+    # Host already runs the NVIDIA driver (apt-installed). The
+    # operator's driver DaemonSet would attempt to load its own
+    # kernel module and clash with the host one.
+    enabled: false
+  devicePlugin:
+    # Publish nvidia.com/gpu to the kubelet so pods can request GPUs.
+    enabled: true
+  vfioManager:
+    # vfioManager unbinds the host driver to bind vfio-pci, which must
+    # not happen when the host driver is in use and devicePlugin is on.
+    # Upstream renders vfioManager.enabled=true into the ClusterPolicy
+    # unconditionally; it only stays at zero pods because the DaemonSet
+    # schedules solely onto nodes labeled
+    # nvidia.com/gpu.workload.config=vm-passthrough, and no node carries
+    # a sandbox assignment when sandboxWorkloads is off. Pin it off so
+    # the rendered policy matches intent regardless of upstream
+    # scheduling changes.
+    enabled: false
+  toolkit:
+    # Host already has nvidia-container-toolkit installed (the typical
+    # apt-installed shape). Running the operator's toolkit DaemonSet
+    # would overwrite /etc/containerd/config.toml that the host package
+    # configured (via `nvidia-ctk runtime configure`), breaking the
+    # host runtime wiring. NVIDIA's documentation recommends disabling
+    # this when the toolkit is preinstalled on the node.
+    enabled: false
+  cdi:
+    # Upstream defaults cdi.enabled=true, but CDI spec generation and
+    # runtime wiring are serviced by the operator-managed toolkit, which
+    # this variant disables. An apt-installed nvidia-container-toolkit
+    # does not generate CDI specs on its own (`nvidia-ctk cdi generate`
+    # is a manual step) and uses the classic nvidia-container-runtime
+    # hook path. Leaving CDI on would point the device plugin at a
+    # CDI-injection mode with no specs on the host and silently break
+    # GPU allocation. Pin off so device allocation matches the host
+    # runtime wiring.
+    enabled: false

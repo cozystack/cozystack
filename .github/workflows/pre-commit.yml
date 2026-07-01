@@ -8,27 +8,52 @@ concurrency:
   group: pre-commit-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
+# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+permissions:
+  contents: read
+
 jobs:
   pre-commit:
     runs-on: ubuntu-22.04
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@f43a0e5ff2bd294095638e18286ca9a3d1956744 # v3
         with:
           fetch-depth: 0
           fetch-tags: true
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@7f4fc3e22c37d6ff65e88745f38bd3157c663f7c # v4
         with:
           python-version: '3.11'
 
       - name: Install pre-commit
         run: pip install pre-commit
 
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Pre-fetch k8s.io/code-generator module
+        # The repo-root pre-commit hook (run-make-generate-root) shells out to
+        # hack/update-codegen.sh, which sources kube_codegen.sh from the Go
+        # module cache. The module is not declared in go.mod, so fetch it
+        # explicitly at the version pinned in the script - mirrors the
+        # equivalent step in codegen-drift.yml.
+        run: |
+          version=$(grep -oP 'code-generator@\Kv[0-9.]+' hack/update-codegen.sh)
+          tmpdir=$(mktemp -d)
+          cd "$tmpdir"
+          go mod init codegen-fetch
+          go get "k8s.io/code-generator@${version}"
+
       - name: Install generate
         run: |
-          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v1.3.0/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
+          curl -sSL https://github.com/cozystack/cozyvalues-gen/releases/download/v1.6.0/cozyvalues-gen-linux-amd64.tar.gz | tar -xzvf- -C /usr/local/bin/ cozyvalues-gen
 
       - name: Run pre-commit hooks
         run: |

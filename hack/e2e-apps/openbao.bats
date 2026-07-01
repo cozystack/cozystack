@@ -18,9 +18,11 @@ spec:
   external: false
   ui: true
 EOF
-  sleep 5
-  kubectl -n tenant-test wait hr openbao-$name --timeout=60s --for=condition=ready
-  kubectl -n tenant-test wait hr openbao-$name-system --timeout=120s --for=condition=ready
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr openbao-$name >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait hr openbao-$name --timeout=5m --for=condition=ready
+  kubectl -n tenant-test wait hr openbao-$name-system --timeout=5m --for=condition=ready
 
   # Wait for container to be started (pod Running does not guarantee container is ready for exec on slow CI)
   if ! timeout 120 sh -ec "until kubectl -n tenant-test get pod openbao-$name-0 --output jsonpath='{.status.containerStatuses[0].started}' 2>/dev/null | grep -q true; do sleep 5; done"; then
@@ -53,7 +55,9 @@ EOF
   kubectl -n tenant-test exec openbao-$name-0 -- bao operator unseal "$unseal_key"
 
   # Now wait for pod to become ready (readiness probe checks seal status)
+  timeout 60 sh -ec "until kubectl -n tenant-test get sts openbao-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait sts openbao-$name --timeout=90s --for=jsonpath='{.status.readyReplicas}'=1
+  timeout 60 sh -ec "until kubectl -n tenant-test get pvc data-openbao-$name-0 >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait pvc data-openbao-$name-0 --timeout=50s --for=jsonpath='{.status.phase}'=Bound
   kubectl -n tenant-test delete openbao.apps.cozystack.io $name
   kubectl -n tenant-test delete pvc data-openbao-$name-0 --ignore-not-found

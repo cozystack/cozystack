@@ -1,0 +1,29 @@
+diff --git a/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml b/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+--- a/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
++++ b/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+@@ -5,7 +5,14 @@
+     control-plane: controller-manager
+   name: {{ include "opensearch-operator.fullname" . }}-controller-manager
+ spec:
+-  replicas: 1
++  replicas: {{ .Values.manager.replicaCount | default 1 }}
++  {{- if le (int (.Values.manager.replicaCount | default 1)) 1 }}
++  # On a single replica a RollingUpdate briefly runs two managers (maxSurge) during
++  # an upgrade; with leader election gated off they would both reconcile without lease
++  # coordination. Recreate closes that window at zero availability cost on one replica.
++  strategy:
++    type: Recreate
++  {{- end }}
+   selector:
+     matchLabels:
+       control-plane: controller-manager
+@@ -49,7 +56,9 @@
+       - args:
+         - --health-probe-bind-address=:8081
+         - --metrics-bind-address=127.0.0.1:8080
++        {{- if gt (int (.Values.manager.replicaCount | default 1)) 1 }}
+         - --leader-elect
++        {{- end }}
+         {{- if .Values.manager.watchNamespace }}
+         - --watch-namespace={{ .Values.manager.watchNamespace }}
+         {{- end }}

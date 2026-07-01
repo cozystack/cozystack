@@ -2,11 +2,13 @@ package backupcontroller
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
@@ -205,4 +207,1007 @@ func TestCreateVeleroBackup_TemplateContext(t *testing.T) {
 	if veleroBackup.Spec.StorageLocation != "default-storage" {
 		t.Errorf("Template context Parameters.backupStorageLocationName not applied correctly. Expected 'default-storage', got '%s'", veleroBackup.Spec.StorageLocation)
 	}
+}
+
+func TestResolveRestoreTarget_NoTargetNamespace_InPlace(t *testing.T) {
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restore-test",
+			Namespace: "tenant-root",
+		},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "my-backup"},
+			TargetApplicationRef: &corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-vm",
+			},
+		},
+	}
+
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-backup",
+			Namespace: "tenant-root",
+		},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-vm",
+			},
+		},
+	}
+
+	// No targetNamespace in options → in-place restore
+	opts := RestoreOptions{}
+	target := resolveRestoreTarget(restoreJob, backup, opts)
+
+	if target.IsCopy {
+		t.Error("expected IsCopy=false when targetNamespace is omitted, got true")
+	}
+	if target.Namespace != "tenant-root" {
+		t.Errorf("expected namespace 'tenant-root', got '%s'", target.Namespace)
+	}
+	if target.AppName != "test-vm" {
+		t.Errorf("expected appName 'test-vm', got '%s'", target.AppName)
+	}
+	if target.AppKind != "VMInstance" {
+		t.Errorf("expected appKind 'VMInstance', got '%s'", target.AppKind)
+	}
+}
+
+func TestResolveRestoreTarget_SameTargetNamespace_InPlace(t *testing.T) {
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restore-test",
+			Namespace: "tenant-root",
+		},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "my-backup"},
+		},
+	}
+
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-backup",
+			Namespace: "tenant-root",
+		},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-vm",
+			},
+		},
+	}
+
+	// targetNamespace equals backup namespace → still in-place
+	opts := RestoreOptions{
+		CommonRestoreOptions: CommonRestoreOptions{
+			TargetNamespace: "tenant-root",
+		},
+	}
+	target := resolveRestoreTarget(restoreJob, backup, opts)
+
+	if target.IsCopy {
+		t.Error("expected IsCopy=false when targetNamespace equals backup namespace, got true")
+	}
+	if target.Namespace != "tenant-root" {
+		t.Errorf("expected namespace 'tenant-root', got '%s'", target.Namespace)
+	}
+}
+
+func TestResolveRestoreTarget_DifferentTargetNamespace_Copy(t *testing.T) {
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restore-test",
+			Namespace: "tenant-root",
+		},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "my-backup"},
+		},
+	}
+
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-backup",
+			Namespace: "tenant-root",
+		},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-vm",
+			},
+		},
+	}
+
+	opts := RestoreOptions{
+		CommonRestoreOptions: CommonRestoreOptions{
+			TargetNamespace: "tenant-copy",
+		},
+	}
+	target := resolveRestoreTarget(restoreJob, backup, opts)
+
+	if !target.IsCopy {
+		t.Error("expected IsCopy=true when targetNamespace differs from backup namespace, got false")
+	}
+	if target.Namespace != "tenant-copy" {
+		t.Errorf("expected namespace 'tenant-copy', got '%s'", target.Namespace)
+	}
+}
+
+// newTestRestoreJobReconcilerWithDynamic builds a RestoreJobReconciler with
+// both static and dynamic fake clients. Use dynamicObjects to pre-populate
+// unstructured resources (e.g. HelmReleases).
+func newTestRestoreJobReconcilerWithDynamic(t *testing.T, dynamicObjects []runtime.Object, objects ...client.Object) *RestoreJobReconciler {
+	t.Helper()
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = velerov1.AddToScheme(testScheme)
+
+	fakeClient := clientfake.NewClientBuilder().
+		WithScheme(testScheme).
+		WithObjects(objects...).
+		Build()
+
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(testScheme, dynamicObjects...)
+
+	mapping := &meta.RESTMapping{
+		Resource:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+		GroupVersionKind: schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+		Scope:            meta.RESTScopeNamespace,
+	}
+
+	return &RestoreJobReconciler{
+		Client:     fakeClient,
+		Interface:  dynamicClient,
+		RESTMapper: &mockRESTMapper{mapping: mapping},
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(100),
+	}
+}
+
+// newTestRestoreJobReconciler builds a RestoreJobReconciler with fake clients for testing.
+func newTestRestoreJobReconciler(t *testing.T, objects ...client.Object) *RestoreJobReconciler {
+	t.Helper()
+	testScheme := runtime.NewScheme()
+	_ = scheme.AddToScheme(testScheme)
+	_ = backupsv1alpha1.AddToScheme(testScheme)
+	_ = velerov1.AddToScheme(testScheme)
+
+	fakeClient := clientfake.NewClientBuilder().
+		WithScheme(testScheme).
+		WithObjects(objects...).
+		Build()
+
+	dynamicClient := dynamicfake.NewSimpleDynamicClient(testScheme)
+
+	mapping := &meta.RESTMapping{
+		Resource:         schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"},
+		GroupVersionKind: schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Pod"},
+		Scope:            meta.RESTScopeNamespace,
+	}
+
+	return &RestoreJobReconciler{
+		Client:     fakeClient,
+		Interface:  dynamicClient,
+		RESTMapper: &mockRESTMapper{mapping: mapping},
+		Scheme:     testScheme,
+		Recorder:   record.NewFakeRecorder(100),
+	}
+}
+
+func TestPrepareForRestore_KeepOriginalPVCFalse_SkipsRename(t *testing.T) {
+	ns := "tenant-root"
+
+	// Create a PVC that would be renamed if keepOriginalPVC were true
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "vm-disk-ubuntu-source",
+			Namespace: ns,
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{},
+	}
+
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "restore-test",
+			Namespace: ns,
+		},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "my-backup"},
+		},
+	}
+
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "my-backup",
+			Namespace: ns,
+		},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-vm",
+			},
+		},
+	}
+
+	// underlyingResources with a DataVolume referencing the PVC
+	urData := vmInstanceResources{
+		DataVolumes: []backupsv1alpha1.DataVolumeResource{
+			{DataVolumeName: "vm-disk-ubuntu-source", ApplicationName: "ubuntu-source"},
+		},
+	}
+	urRaw, _ := json.Marshal(urData)
+	ur := &runtime.RawExtension{Raw: urRaw}
+
+	target := restoreTarget{
+		Namespace: ns,
+		AppName:   "test-vm",
+		AppKind:   "VMInstance",
+		IsCopy:    false,
+	}
+
+	// keepOriginalPVC = false → PVCs should NOT be renamed
+	opts := RestoreOptions{
+		KeepOriginalPVC: boolPtr(false),
+	}
+
+	reconciler := newTestRestoreJobReconciler(t, pvc, restoreJob, backup)
+
+	ctx := context.Background()
+	ready, _, err := reconciler.prepareForRestore(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("prepareForRestore() error = %v", err)
+	}
+	if !ready {
+		t.Fatal("expected ready=true, got false")
+	}
+
+	// Verify the original PVC still exists with its original name (not renamed)
+	origPVC := &corev1.PersistentVolumeClaim{}
+	err = reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source"}, origPVC)
+	if err != nil {
+		t.Errorf("original PVC should still exist with original name when keepOriginalPVC=false, got error: %v", err)
+	}
+
+	// Verify no -orig PVC was created
+	origSuffix := "-orig-" + shortHash(restoreJob.Name)
+	renamedPVC := &corev1.PersistentVolumeClaim{}
+	err = reconciler.Get(ctx, client.ObjectKey{Namespace: ns, Name: "vm-disk-ubuntu-source" + origSuffix}, renamedPVC)
+	if err == nil {
+		t.Error("PVC should NOT have been renamed when keepOriginalPVC=false, but found renamed PVC")
+	}
+}
+
+func TestResolveRestoreTarget_VMDisk_CommonRestoreOptions(t *testing.T) {
+	tests := []struct {
+		name           string
+		targetNS       string
+		wantIsCopy     bool
+		wantNamespace  string
+	}{
+		{
+			name:          "VMDisk in-place restore when targetNamespace is omitted",
+			targetNS:      "",
+			wantIsCopy:    false,
+			wantNamespace: "tenant-root",
+		},
+		{
+			name:          "VMDisk cross-namespace restore when targetNamespace differs",
+			targetNS:      "tenant-copy",
+			wantIsCopy:    true,
+			wantNamespace: "tenant-copy",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restoreJob := &backupsv1alpha1.RestoreJob{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "restore-vmdisk",
+					Namespace: "tenant-root",
+				},
+				Spec: backupsv1alpha1.RestoreJobSpec{
+					BackupRef: corev1.LocalObjectReference{Name: "disk-backup"},
+					TargetApplicationRef: &corev1.TypedLocalObjectReference{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     "VMDisk",
+						Name:     "ubuntu-source",
+					},
+				},
+			}
+
+			backup := &backupsv1alpha1.Backup{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "disk-backup",
+					Namespace: "tenant-root",
+				},
+				Spec: backupsv1alpha1.BackupSpec{
+					ApplicationRef: corev1.TypedLocalObjectReference{
+						APIGroup: stringPtr("apps.cozystack.io"),
+						Kind:     "VMDisk",
+						Name:     "ubuntu-source",
+					},
+				},
+			}
+
+			// VMDisk uses only CommonRestoreOptions (no VMI-specific fields)
+			opts := RestoreOptions{
+				CommonRestoreOptions: CommonRestoreOptions{
+					TargetNamespace: tt.targetNS,
+				},
+			}
+
+			target := resolveRestoreTarget(restoreJob, backup, opts)
+
+			if target.IsCopy != tt.wantIsCopy {
+				t.Errorf("IsCopy = %v, want %v", target.IsCopy, tt.wantIsCopy)
+			}
+			if target.Namespace != tt.wantNamespace {
+				t.Errorf("Namespace = %q, want %q", target.Namespace, tt.wantNamespace)
+			}
+			if target.AppKind != "VMDisk" {
+				t.Errorf("AppKind = %q, want 'VMDisk'", target.AppKind)
+			}
+			if target.AppName != "ubuntu-source" {
+				t.Errorf("AppName = %q, want 'ubuntu-source'", target.AppName)
+			}
+		})
+	}
+}
+
+func TestParseRestoreOptions_VMDiskOnlyCommonFields(t *testing.T) {
+	// Simulate a VMDisk restore where only CommonRestoreOptions fields are set
+	raw, _ := json.Marshal(map[string]interface{}{
+		"targetNamespace":    "tenant-copy",
+		"failIfTargetExists": true,
+	})
+	ext := &runtime.RawExtension{Raw: raw}
+
+	opts, err := parseRestoreOptions(ext)
+	if err != nil {
+		t.Fatalf("parseRestoreOptions() error = %v", err)
+	}
+
+	if opts.TargetNamespace != "tenant-copy" {
+		t.Errorf("TargetNamespace = %q, want 'tenant-copy'", opts.TargetNamespace)
+	}
+	if !opts.GetFailIfTargetExists() {
+		t.Error("GetFailIfTargetExists() = false, want true")
+	}
+	// VMI-specific fields should be nil (not set by VMDisk options)
+	if opts.KeepOriginalPVC != nil {
+		t.Errorf("KeepOriginalPVC should be nil for VMDisk options, got %v", *opts.KeepOriginalPVC)
+	}
+	if opts.KeepOriginalIpAndMac != nil {
+		t.Errorf("KeepOriginalIpAndMac should be nil for VMDisk options, got %v", *opts.KeepOriginalIpAndMac)
+	}
+}
+
+func TestRestoreOptions_Defaults(t *testing.T) {
+	t.Run("nil options default all bools to true", func(t *testing.T) {
+		opts, err := parseRestoreOptions(nil)
+		if err != nil {
+			t.Fatalf("parseRestoreOptions(nil) error = %v", err)
+		}
+
+		if opts.TargetNamespace != "" {
+			t.Errorf("TargetNamespace default should be empty, got %q", opts.TargetNamespace)
+		}
+		if !opts.GetFailIfTargetExists() {
+			t.Error("GetFailIfTargetExists() should default to true")
+		}
+		if !opts.GetKeepOriginalPVC() {
+			t.Error("GetKeepOriginalPVC() should default to true")
+		}
+		if !opts.GetKeepOriginalIpAndMac() {
+			t.Error("GetKeepOriginalIpAndMac() should default to true")
+		}
+	})
+
+	t.Run("empty JSON defaults all bools to true", func(t *testing.T) {
+		raw, _ := json.Marshal(map[string]interface{}{})
+		opts, err := parseRestoreOptions(&runtime.RawExtension{Raw: raw})
+		if err != nil {
+			t.Fatalf("parseRestoreOptions({}) error = %v", err)
+		}
+
+		if !opts.GetFailIfTargetExists() {
+			t.Error("GetFailIfTargetExists() should default to true")
+		}
+		if !opts.GetKeepOriginalPVC() {
+			t.Error("GetKeepOriginalPVC() should default to true")
+		}
+		if !opts.GetKeepOriginalIpAndMac() {
+			t.Error("GetKeepOriginalIpAndMac() should default to true")
+		}
+	})
+
+	t.Run("explicit false overrides defaults", func(t *testing.T) {
+		raw, _ := json.Marshal(map[string]interface{}{
+			"failIfTargetExists":   false,
+			"keepOriginalPVC":      false,
+			"keepOriginalIpAndMac": false,
+		})
+		opts, err := parseRestoreOptions(&runtime.RawExtension{Raw: raw})
+		if err != nil {
+			t.Fatalf("parseRestoreOptions() error = %v", err)
+		}
+
+		if opts.GetFailIfTargetExists() {
+			t.Error("GetFailIfTargetExists() should be false when explicitly set")
+		}
+		if opts.GetKeepOriginalPVC() {
+			t.Error("GetKeepOriginalPVC() should be false when explicitly set")
+		}
+		if opts.GetKeepOriginalIpAndMac() {
+			t.Error("GetKeepOriginalIpAndMac() should be false when explicitly set")
+		}
+	})
+}
+
+func TestResolveRestoreTarget_IsRenamed(t *testing.T) {
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-alpine",
+			},
+		},
+	}
+
+	t.Run("same name is not renamed", func(t *testing.T) {
+		rj := &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+			Spec: backupsv1alpha1.RestoreJobSpec{
+				BackupRef: corev1.LocalObjectReference{Name: "bk"},
+				TargetApplicationRef: &corev1.TypedLocalObjectReference{
+					APIGroup: stringPtr("apps.cozystack.io"),
+					Kind:     "VMInstance",
+					Name:     "test-alpine",
+				},
+			},
+		}
+		target := resolveRestoreTarget(rj, backup, RestoreOptions{
+			CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: "tenant-foo"},
+		})
+		if target.IsRenamed {
+			t.Error("IsRenamed should be false when names match")
+		}
+	})
+
+	t.Run("different name is renamed", func(t *testing.T) {
+		rj := &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+			Spec: backupsv1alpha1.RestoreJobSpec{
+				BackupRef: corev1.LocalObjectReference{Name: "bk"},
+				TargetApplicationRef: &corev1.TypedLocalObjectReference{
+					APIGroup: stringPtr("apps.cozystack.io"),
+					Kind:     "VMInstance",
+					Name:     "test-new",
+				},
+			},
+		}
+		target := resolveRestoreTarget(rj, backup, RestoreOptions{
+			CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: "tenant-foo"},
+		})
+		if !target.IsRenamed {
+			t.Error("IsRenamed should be true when names differ")
+		}
+		if target.AppName != "test-new" {
+			t.Errorf("AppName = %q, want 'test-new'", target.AppName)
+		}
+		if !target.IsCopy {
+			t.Error("IsCopy should be true")
+		}
+	})
+
+	t.Run("no targetApplicationRef is not renamed", func(t *testing.T) {
+		rj := &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+			Spec: backupsv1alpha1.RestoreJobSpec{
+				BackupRef: corev1.LocalObjectReference{Name: "bk"},
+			},
+		}
+		target := resolveRestoreTarget(rj, backup, RestoreOptions{
+			CommonRestoreOptions: CommonRestoreOptions{TargetNamespace: "tenant-foo"},
+		})
+		if target.IsRenamed {
+			t.Error("IsRenamed should be false when targetApplicationRef is nil")
+		}
+		if target.AppName != "test-alpine" {
+			t.Errorf("AppName = %q, want 'test-alpine'", target.AppName)
+		}
+	})
+}
+
+// makeUnstructuredHelmRelease creates an unstructured HelmRelease for dynamic client tests.
+func makeUnstructuredHelmRelease(name, namespace string, labels map[string]string) *unstructured.Unstructured {
+	hr := &unstructured.Unstructured{}
+	hr.SetAPIVersion("helm.toolkit.fluxcd.io/v2")
+	hr.SetKind("HelmRelease")
+	hr.SetName(name)
+	hr.SetNamespace(namespace)
+	hr.SetLabels(labels)
+	return hr
+}
+
+func TestPostRestoreRename_RenamesHelmRelease(t *testing.T) {
+	ns := "tenant-foo"
+	sourceHR := makeUnstructuredHelmRelease("vm-instance-test-alpine", ns, map[string]string{
+		appNameLabel:                 "test-alpine",
+		"app.kubernetes.io/instance": "vm-instance-test-alpine",
+		"helm.toolkit.fluxcd.io/name": "vm-instance-test-alpine",
+	})
+
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj-rename", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-alpine",
+			},
+		},
+	}
+	target := restoreTarget{
+		Namespace: ns,
+		AppName:   "test-new",
+		AppKind:   "VMInstance",
+		IsCopy:    true,
+		IsRenamed: true,
+	}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, []runtime.Object{sourceHR}, restoreJob, backup)
+	ctx := context.Background()
+
+	err := reconciler.postRestoreRename(ctx, restoreJob, backup, target)
+	if err != nil {
+		t.Fatalf("postRestoreRename() error = %v", err)
+	}
+
+	hrClient := reconciler.Resource(helmReleaseGVR).Namespace(ns)
+
+	// New HelmRelease should exist with target name
+	newHR, err := hrClient.Get(ctx, "vm-instance-test-new", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("new HelmRelease vm-instance-test-new not found: %v", err)
+	}
+
+	// Check labels were updated
+	labels := newHR.GetLabels()
+	if labels[appNameLabel] != "test-new" {
+		t.Errorf("label %s = %q, want 'test-new'", appNameLabel, labels[appNameLabel])
+	}
+	if labels["app.kubernetes.io/instance"] != "vm-instance-test-new" {
+		t.Errorf("label app.kubernetes.io/instance = %q, want 'vm-instance-test-new'", labels["app.kubernetes.io/instance"])
+	}
+	if labels["helm.toolkit.fluxcd.io/name"] != "vm-instance-test-new" {
+		t.Errorf("label helm.toolkit.fluxcd.io/name = %q, want 'vm-instance-test-new'", labels["helm.toolkit.fluxcd.io/name"])
+	}
+
+	// Old HelmRelease should be deleted
+	_, err = hrClient.Get(ctx, "vm-instance-test-alpine", metav1.GetOptions{})
+	if err == nil {
+		t.Error("old HelmRelease vm-instance-test-alpine should have been deleted")
+	}
+}
+
+func TestPostRestoreRename_SkipsWhenSourceNotFound(t *testing.T) {
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj-rename", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-alpine",
+			},
+		},
+	}
+	target := restoreTarget{
+		Namespace: "tenant-foo",
+		AppName:   "test-new",
+		AppKind:   "VMInstance",
+		IsCopy:    true,
+		IsRenamed: true,
+	}
+
+	// No HelmRelease in dynamic client — should skip gracefully
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup)
+	ctx := context.Background()
+
+	err := reconciler.postRestoreRename(ctx, restoreJob, backup, target)
+	if err != nil {
+		t.Fatalf("postRestoreRename() should skip gracefully when source HR not found, got error: %v", err)
+	}
+}
+
+func TestPostRestoreRename_IdempotentWhenTargetExists(t *testing.T) {
+	ns := "tenant-foo"
+	sourceHR := makeUnstructuredHelmRelease("vm-instance-test-alpine", ns, map[string]string{
+		appNameLabel: "test-alpine",
+	})
+	// Target already exists (e.g. from a previous reconcile)
+	targetHR := makeUnstructuredHelmRelease("vm-instance-test-new", ns, map[string]string{
+		appNameLabel: "test-new",
+	})
+
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj-rename", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+		},
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     "VMInstance",
+				Name:     "test-alpine",
+			},
+		},
+	}
+	target := restoreTarget{
+		Namespace: ns,
+		AppName:   "test-new",
+		AppKind:   "VMInstance",
+		IsCopy:    true,
+		IsRenamed: true,
+	}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, []runtime.Object{sourceHR, targetHR}, restoreJob, backup)
+	ctx := context.Background()
+
+	err := reconciler.postRestoreRename(ctx, restoreJob, backup, target)
+	if err != nil {
+		t.Fatalf("postRestoreRename() should be idempotent, got error: %v", err)
+	}
+
+	hrClient := reconciler.Resource(helmReleaseGVR).Namespace(ns)
+
+	// Target should still exist
+	_, err = hrClient.Get(ctx, "vm-instance-test-new", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("target HelmRelease should exist: %v", err)
+	}
+
+	// Source should be deleted
+	_, err = hrClient.Get(ctx, "vm-instance-test-alpine", metav1.GetOptions{})
+	if err == nil {
+		t.Error("source HelmRelease should have been deleted")
+	}
+}
+
+// --- failIfTargetExists enforcement tests ---
+
+func TestTargetHelmReleaseExists_ReturnsTrueWhenPresent(t *testing.T) {
+	ns := "tenant-copy"
+	hr := makeUnstructuredHelmRelease("vm-instance-test", ns, nil)
+
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"}}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, []runtime.Object{hr}, restoreJob, backup)
+	ctx := context.Background()
+
+	exists, err := reconciler.targetHelmReleaseExists(ctx, vmInstanceKind, "vm-instance-test", ns)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("expected exists=true when HelmRelease is present")
+	}
+}
+
+func TestTargetHelmReleaseExists_ReturnsFalseWhenAbsent(t *testing.T) {
+	ns := "tenant-copy"
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"}}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup)
+	ctx := context.Background()
+
+	exists, err := reconciler.targetHelmReleaseExists(ctx, vmInstanceKind, "vm-instance-test", ns)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("expected exists=false when HelmRelease is absent")
+	}
+}
+
+func TestTargetHelmReleaseExists_UnsupportedKindViaHelper(t *testing.T) {
+	ns := "tenant-copy"
+	// Even though a HR exists, unsupported kinds produce an empty hrName
+	// from helmReleaseNameForApp, which makes targetHelmReleaseExists return false.
+	hr := makeUnstructuredHelmRelease("vm-instance-test", ns, nil)
+
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"}}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, []runtime.Object{hr}, restoreJob, backup)
+	ctx := context.Background()
+
+	// Unsupported kinds get empty hrName from the helper
+	hrName := helmReleaseNameForApp("MariaDB", "mydb")
+	exists, err := reconciler.targetHelmReleaseExists(ctx, "MariaDB", hrName, ns)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("expected exists=false for unsupported kind (empty hrName)")
+	}
+}
+
+// --- createResourceModifiersConfigMap tests ---
+
+func makeTestBackup(ns, appName, appKind string) *backupsv1alpha1.Backup {
+	return &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: ns},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{
+				APIGroup: stringPtr("apps.cozystack.io"),
+				Kind:     appKind,
+				Name:     appName,
+			},
+		},
+	}
+}
+
+func makeTestRestoreJob(ns, name string) *backupsv1alpha1.RestoreJob {
+	return &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+		},
+	}
+}
+
+func makeVMInstanceUR(ip, mac string, dvs []backupsv1alpha1.DataVolumeResource) *runtime.RawExtension {
+	data := vmInstanceResources{IP: ip, MAC: mac, DataVolumes: dvs}
+	raw, _ := json.Marshal(data)
+	return &runtime.RawExtension{Raw: raw}
+}
+
+func TestCreateResourceModifiersConfigMap_InPlace_WithOVN(t *testing.T) {
+	ns := "tenant-root"
+	restoreJob := makeTestRestoreJob(ns, "rj-inplace")
+	backup := makeTestBackup(ns, "test-vm", "VMInstance")
+
+	ur := makeVMInstanceUR("10.0.0.5", "aa:bb:cc:dd:ee:ff", nil)
+	target := restoreTarget{Namespace: ns, AppName: "test-vm", AppKind: "VMInstance", IsCopy: false}
+	opts := RestoreOptions{} // defaults: keepOriginalIpAndMac=true
+
+	reconciler := newTestRestoreJobReconciler(t, restoreJob, backup)
+	ctx := context.Background()
+
+	cm, err := reconciler.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("createResourceModifiersConfigMap() error = %v", err)
+	}
+	if cm == nil {
+		t.Fatal("expected non-nil ConfigMap")
+	}
+
+	rulesYAML, ok := cm.Data["resource-modifier-rules.yaml"]
+	if !ok {
+		t.Fatal("ConfigMap missing resource-modifier-rules.yaml key")
+	}
+
+	// Should contain PVC adoption annotation
+	if !containsString(rulesYAML, cdiAllowClaimAdoption) {
+		t.Error("expected PVC adoption annotation in rules")
+	}
+	// Should contain OVN IP annotation (keepOriginalIpAndMac defaults to true)
+	if !containsString(rulesYAML, ovnIPAnnotation) {
+		t.Error("expected OVN IP annotation in rules for in-place restore with IP")
+	}
+	// Should NOT contain selector removal (in-place, not copy)
+	if containsString(rulesYAML, "/spec/selector") {
+		t.Error("selector removal rule should not be present for in-place restore")
+	}
+}
+
+func TestCreateResourceModifiersConfigMap_Copy_NoOVN(t *testing.T) {
+	sourceNS := "tenant-root"
+	targetNS := "tenant-copy"
+	restoreJob := makeTestRestoreJob(sourceNS, "rj-copy")
+	backup := makeTestBackup(sourceNS, "test-vm", "VMInstance")
+
+	// Copy restore: keepOriginalIpAndMac=false, no OVN annotations on copy
+	opts := RestoreOptions{
+		KeepOriginalIpAndMac: boolPtr(false),
+	}
+	ur := makeVMInstanceUR("10.0.0.5", "aa:bb:cc:dd:ee:ff", nil)
+	target := restoreTarget{Namespace: targetNS, AppName: "test-vm", AppKind: "VMInstance", IsCopy: true}
+
+	reconciler := newTestRestoreJobReconciler(t, restoreJob, backup)
+	ctx := context.Background()
+
+	cm, err := reconciler.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("createResourceModifiersConfigMap() error = %v", err)
+	}
+
+	rulesYAML := cm.Data["resource-modifier-rules.yaml"]
+
+	// Should contain PVC adoption annotation
+	if !containsString(rulesYAML, cdiAllowClaimAdoption) {
+		t.Error("expected PVC adoption annotation in rules")
+	}
+	// Should contain merge patch nulling out selector and volumeName (copy restore)
+	if !containsString(rulesYAML, "selector: null") {
+		t.Error("expected selector: null merge patch for copy restore")
+	}
+	if !containsString(rulesYAML, "volumeName: null") {
+		t.Error("expected volumeName: null merge patch for copy restore")
+	}
+	// Should NOT contain OVN annotations (keepOriginalIpAndMac=false)
+	if containsString(rulesYAML, ovnIPAnnotation) {
+		t.Error("OVN IP annotation should not be present when keepOriginalIpAndMac=false")
+	}
+}
+
+func TestCreateResourceModifiersConfigMap_AlreadyExists_IsIdempotent(t *testing.T) {
+	ns := "tenant-root"
+	restoreJob := makeTestRestoreJob(ns, "rj-idem")
+	backup := makeTestBackup(ns, "test-vm", "VMInstance")
+
+	target := restoreTarget{Namespace: ns, AppName: "test-vm", AppKind: "VMInstance", IsCopy: false}
+	opts := RestoreOptions{}
+	ur := makeVMInstanceUR("", "", nil)
+
+	reconciler := newTestRestoreJobReconciler(t, restoreJob, backup)
+	ctx := context.Background()
+
+	// First call creates the ConfigMap.
+	cm1, err := reconciler.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("first call error = %v", err)
+	}
+
+	// Second call must not error (AlreadyExists → update path).
+	cm2, err := reconciler.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("second call error = %v", err)
+	}
+	if cm1.Name != cm2.Name {
+		t.Errorf("ConfigMap name changed: %q → %q", cm1.Name, cm2.Name)
+	}
+}
+
+// --- helmReleaseNameForApp tests ---
+
+func TestHelmReleaseNameForApp(t *testing.T) {
+	tests := []struct {
+		kind, name, want string
+	}{
+		{vmInstanceKind, "test-alpine", "vm-instance-test-alpine"},
+		{vmDiskAppKind, "ubuntu-source", "vm-disk-ubuntu-source"},
+		{"MariaDB", "mydb", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.kind+"/"+tt.name, func(t *testing.T) {
+			got := helmReleaseNameForApp(tt.kind, tt.name)
+			if got != tt.want {
+				t.Errorf("helmReleaseNameForApp(%q, %q) = %q, want %q", tt.kind, tt.name, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTargetHelmReleaseExists_VMDisk(t *testing.T) {
+	ns := "tenant-copy"
+	hr := makeUnstructuredHelmRelease("vm-disk-ubuntu-source", ns, nil)
+
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"}}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, []runtime.Object{hr}, restoreJob, backup)
+	ctx := context.Background()
+
+	hrName := helmReleaseNameForApp(vmDiskAppKind, "ubuntu-source")
+	exists, err := reconciler.targetHelmReleaseExists(ctx, vmDiskAppKind, hrName, ns)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !exists {
+		t.Error("expected exists=true for VMDisk HelmRelease")
+	}
+}
+
+func TestTargetHelmReleaseExists_UnsupportedKind_ReturnsFalse(t *testing.T) {
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Name: "rj", Namespace: "tenant-root"},
+	}
+	backup := &backupsv1alpha1.Backup{ObjectMeta: metav1.ObjectMeta{Name: "bk", Namespace: "tenant-root"}}
+
+	reconciler := newTestRestoreJobReconcilerWithDynamic(t, nil, restoreJob, backup)
+	ctx := context.Background()
+
+	// Unsupported kinds produce empty hrName which returns false
+	hrName := helmReleaseNameForApp("MariaDB", "mydb")
+	exists, err := reconciler.targetHelmReleaseExists(ctx, "MariaDB", hrName, "tenant-copy")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if exists {
+		t.Error("expected exists=false for unsupported kind")
+	}
+}
+
+// --- ResourceModifier merge patch test for copy restore ---
+
+func TestCreateResourceModifiersConfigMap_Copy_UsesMergePatchForPVC(t *testing.T) {
+	sourceNS := "tenant-root"
+	targetNS := "tenant-copy"
+	restoreJob := makeTestRestoreJob(sourceNS, "rj-copy-merge")
+	backup := makeTestBackup(sourceNS, "test-vm", "VMInstance")
+
+	opts := RestoreOptions{KeepOriginalIpAndMac: boolPtr(false)}
+	ur := makeVMInstanceUR("", "", nil)
+	target := restoreTarget{Namespace: targetNS, AppName: "test-vm", AppKind: "VMInstance", IsCopy: true}
+
+	reconciler := newTestRestoreJobReconciler(t, restoreJob, backup)
+	ctx := context.Background()
+
+	cm, err := reconciler.createResourceModifiersConfigMap(ctx, restoreJob, backup, ur, target, opts)
+	if err != nil {
+		t.Fatalf("createResourceModifiersConfigMap() error = %v", err)
+	}
+
+	rulesYAML := cm.Data["resource-modifier-rules.yaml"]
+
+	// Should use merge patch (patchData with null), NOT JSON patch (operation: remove)
+	if containsString(rulesYAML, "operation: remove") {
+		t.Error("should use merge patch instead of JSON Patch remove for PVC fields")
+	}
+	// The merge patch should null out selector and volumeName
+	if !containsString(rulesYAML, "selector: null") {
+		t.Error("expected selector: null in merge patch")
+	}
+	if !containsString(rulesYAML, "volumeName: null") {
+		t.Error("expected volumeName: null in merge patch")
+	}
+}
+
+// containsString reports whether substr appears in s.
+func containsString(s, substr string) bool {
+	if len(substr) == 0 || len(s) < len(substr) {
+		return false
+	}
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

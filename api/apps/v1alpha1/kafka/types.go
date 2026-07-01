@@ -21,6 +21,9 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
+	// TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// Topics configuration.
 	// +kubebuilder:default:={}
 	Topics []Topic `json:"topics,omitempty"`
@@ -40,13 +43,14 @@ type Kafka struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="c1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume size for Kafka.
 	// +kubebuilder:default:="10Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the Kafka data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 }
 
@@ -55,6 +59,11 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each replica.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type TLS struct {
+	// Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type Topic struct {
@@ -76,15 +85,16 @@ type ZooKeeper struct {
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources,omitempty"`
 	// Default sizing preset used when `resources` is omitted.
-	// +kubebuilder:default:="small"
+	// +kubebuilder:default:="c1.small"
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 	// Persistent Volume size for ZooKeeper.
 	// +kubebuilder:default:="5Gi"
 	Size resource.Quantity `json:"size"`
 	// StorageClass used to store the ZooKeeper data.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 }
 
-// +kubebuilder:validation:Enum="nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
+// +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

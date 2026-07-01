@@ -25,10 +25,12 @@
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
 {{- if eq .Values.bundles.system.variant "isp-hosted" }}
 {{include "cozystack.platform.package" (list "cozystack.networking" "noop" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozystack-scheduler" $) }}
 {{- end }}
 
 {{- if eq .Values.bundles.system.variant "isp-full-generic" }}
@@ -92,6 +94,7 @@
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
 {{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}
+{{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
 
 # Cozystack Engine
@@ -102,9 +105,6 @@
 {{- /* cozystack-api DaemonSet */ -}}
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
-{{- /* lineage-controller-webhook DaemonSet */ -}}
-{{- $lineageValues := dict "lineageControllerWebhook" (dict "nodeSelector" $genericNodeSelector) -}}
-{{- $_ := set $cozystackEngineComponents "lineage-controller-webhook" (dict "values" $lineageValues) -}}
 {{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
@@ -115,14 +115,81 @@
 {{- end }}
 
 # Common Packages
+{{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
+{{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.8.0)
+       ships a pre-delete Helm hook that sed-strips the BEGIN/END
+       block from kube-system/coredns Corefile when the chart is
+       actually uninstalled — so the cleanup is automatic in the
+       happy path. The danger this guard catches is upstream of that:
+       the cozystack.ouroboros Package CR carries
+       helm.sh/resource-policy: keep, which means flipping
+       publishing.proxyProtocol back to false stops emitting the
+       Package CR but Helm does NOT trigger uninstall on the still-
+       present-on-cluster Package. ouroboros keeps running, the
+       cleanup hook never fires, the rewrite block stays live. The
+       operator must `kubectl delete package.cozystack.io
+       cozystack.ouroboros` (or add the package to
+       bundles.disabledPackages) for the chart to actually uninstall
+       and the hook to actually clean up. This guard fails the render
+       on the dangerous transition path so the operator confirms
+       they understand the asymmetry by setting
+       publishing.proxyProtocolAcknowledgeUnclean: true.
+       Known hole: an operator who manually `kubectl delete package
+       cozystack.ouroboros` before flipping the flag back bypasses the
+       check entirely (lookup returns nil, render proceeds; in that
+       path the chart's pre-delete hook would have done the cleanup
+       on its way out, so silent passage is the right behaviour). The
+       guard is defence-in-depth for the resource-policy: keep
+       asymmetry, not an airtight lock. */ -}}
+{{- if and (not .Values.publishing.proxyProtocol) (not .Values.publishing.proxyProtocolAcknowledgeUnclean) -}}
+{{- $existingOuroboros := lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.ouroboros" -}}
+{{- if $existingOuroboros -}}
+{{- fail "publishing.proxyProtocol was previously enabled (the cozystack.ouroboros Package CR exists on the cluster). Flipping it back to false stops emitting the Package, BUT helm.sh/resource-policy: keep leaves the existing Package on the cluster — ouroboros stays installed and keeps re-applying its rewrite block to kube-system/coredns. Meanwhile the host ingress-nginx config reverts to no-PROXY-protocol while the upstream LB may still be injecting PROXY frames, breaking external traffic. Either: (a) restore publishing.proxyProtocol to true, or (b) flip the upstream LB off PROXY-protocol injection FIRST, then `kubectl delete package.cozystack.io cozystack.ouroboros` (the vendored chart's pre-delete hook then sed-strips the BEGIN/END block from kube-system/coredns automatically — manual sed is not needed in the happy path; the values.yaml comment ships a manual fallback recipe only for the rare case where the hook itself fails to land), then set publishing.proxyProtocolAcknowledgeUnclean: true to confirm." -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.publishing.proxyProtocol }}
+{{- /* Gateway-API watching is left at the upstream chart's default of
+       false on the host. Cozystack does not install Gateway-API CRDs
+       cluster-wide on the host — system/gateway-api-crds is referenced
+       only from packages/core/platform/sources/kubernetes-application.yaml
+       (tenant scope). Forcing --gateway-api on without CRDs would
+       CrashLoop the controller on WaitForCacheSync against missing
+       GVRs. Operators on hosts that do install Gateway-API CRDs out
+       of band can enable it via the standard Package values override. */ -}}
+{{- /* Point the ouroboros proxy at the HOST ingress-nginx Service. The
+       wrapper chart default (cozy-ingress-nginx / ingress-nginx-controller)
+       describes a managed Kubernetes tenant cluster, NOT the host: on the
+       host, extra/ingress deploys ingress-nginx into the root tenant
+       namespace (publishing.ingressName, default tenant-root) with
+       fullnameOverride <short>-ingress, yielding the controller Service
+       <short>-ingress-controller (e.g. root-ingress-controller). Derive
+       namespace + serviceName from publishing.ingressName so a non-default
+       ingress name still resolves; mirror the trimPrefix "tenant-"
+       transform extra/ingress applies to .Release.Namespace. */ -}}
+{{- $ingressNs := .Values.publishing.ingressName | default "tenant-root" -}}
+{{- $ingressSvc := printf "%s-ingress-controller" (trimPrefix "tenant-" $ingressNs) -}}
+{{- $ouroborosTarget := dict "namespace" $ingressNs "serviceName" $ingressSvc -}}
+{{- $ouroborosValues := dict "ouroboros" (dict "proxy" (dict "target" $ouroborosTarget)) -}}
+{{- $ouroborosComponents := dict "ouroboros" (dict "values" $ouroborosValues) -}}
+{{include "cozystack.platform.package" (list "cozystack.ouroboros" "default" $ $ouroborosComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.flux-plunger" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.flux-shard-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.victoria-metrics-operator" $) }}
 {{- $tenantComponents := dict -}}
 {{- $tenantClusterValues := dict "_cluster" (dict "oidc-enabled" (ternary "true" "false" .Values.authentication.oidc.enabled)) -}}
 {{- $_ := set $tenantComponents "tenant" (dict "values" $tenantClusterValues) }}
 {{include "cozystack.platform.package" (list "cozystack.tenant-application" "default" $ $tenantComponents) }}
+{{- /* PROXY-protocol on the host ingress-nginx is delivered via
+       _cluster.proxy-protocol in the cozystack-values Secret (see
+       templates/apps.yaml) and applied by the extra/ingress chart to the
+       external-facing ingress. It does NOT ride on this Package's component
+       values: the ingress-system / ingress components have no install: block,
+       so PackageReconciler never builds a HelmRelease for them and never
+       consumes their values. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.ingress-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
@@ -130,7 +197,11 @@
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozystack-scheduler" $) }}
+{{- /* velero must be a default package: backupstrategy-controller (default)
+hard-depends on cozystack.velero, so an optional velero leaves the
+backupstrategy-controller Package permanently DependenciesNotReady and the
+cozystack-platform HelmRelease never becomes Ready. */}}
+{{include "cozystack.platform.package.default" (list "cozystack.velero" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vertical-pod-autoscaler" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.metrics-server" $) }}
 {{- $monitoringAgentsComponents := dict "monitoring-agents" (dict "values" (dict "global" (dict "target" "tenant-root"))) -}}
@@ -147,8 +218,9 @@
 {{include "cozystack.platform.package.optional.default" (list "cozystack.telepresence" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
-{{include "cozystack.platform.package.optional.default" (list "cozystack.velero" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
