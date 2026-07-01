@@ -595,6 +595,50 @@
           }
         }
       }
+    },
+    "oidc": {
+      "description": "OIDC authentication for the Grafana instance. See docs/oidc-grafana.md for the operator guide.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "mode"
+      ],
+      "properties": {
+        "customConfig": {
+          "description": "Tenant-supplied `[auth.generic_oauth]` payload; consumed only when `mode: CustomConfig`.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "config": {
+              "description": "Inline map of `[auth.generic_oauth]` keys. Written verbatim into the Grafana CR `spec.config`. Mutually exclusive with `secretRef.name`.",
+              "type": "object",
+              "default": {}
+            },
+            "secretRef": {
+              "description": "Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "name": {
+                  "description": "Name of an existing Secret in the release namespace whose `auth.ini` key holds a ready-made `[auth.generic_oauth]` block. Mutually exclusive with `customConfig.config`.",
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            }
+          }
+        },
+        "mode": {
+          "description": "Identity mode. `None`: no OIDC, only the `grafana-admin-password` Secret works. `System`: trust the platform `cozy` realm via a per-instance confidential client and audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
+          "type": "string",
+          "default": "None",
+          "enum": [
+            "None",
+            "System",
+            "CustomConfig"
+          ]
+        }
+      }
     }
   }
 }
