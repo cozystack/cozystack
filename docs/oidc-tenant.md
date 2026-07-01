@@ -143,14 +143,16 @@ maps to the same binding.
 | `view` | `view` |
 
 The CRB `User:` subject is the literal `email` value; it must match the
-`email` claim emitted by the issuer. In the platform `cozy` realm every
-user has an `email` attribute and the standard OIDC `email` scope is a
-default client scope, so the token always carries `email`. For
-`CustomConfig`, ensure your BYO issuer emits the `email` claim in the
-JWT — every conformant OIDC provider does when the `email` scope is
-included in the client's default scopes. The chart-generated OIDC
-kubeconfig requests `--oidc-extra-scope=email` explicitly so this does
-not depend on the client's realm-side default scope configuration.
+`email` claim emitted by the issuer. The chart-generated OIDC
+kubeconfig requests `--oidc-extra-scope=email` in the
+`kubectl oidc-login` exec block, so the token includes `email`
+regardless of whether the per-cluster client lists `email` in its
+default client scopes. The `email` scope itself is a built-in OIDC
+scope available in every conformant issuer (Keycloak included), so no
+extra realm-side configuration is required for `System`. For
+`CustomConfig`, verify your BYO issuer emits the `email` claim when
+the client requests the `email` scope; every conformant OIDC provider
+does.
 
 Toggling a user out of `users[]` revokes their access on the next chart
 reconcile — the bootstrap Job prunes any CRBs labelled by the release
