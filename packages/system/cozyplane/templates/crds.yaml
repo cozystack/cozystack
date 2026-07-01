@@ -1,0 +1,347 @@
+{{- /* CRDs are installed only in CRD mode; the aggregated apiserver serves the
+       group directly (an APIService for the same group/version would conflict
+       with these). See templates/apiserver.yaml. */ -}}
+{{- if not .Values.apiserver.enabled }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: vpcs.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: VPC
+    listKind: VPCList
+    plural: vpcs
+    singular: vpc
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.vni
+      name: VNI
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VPC is a tenant overlay network. It is namespaced: the namespace expresses
+          ownership. A pod's *use* of a VPC is granted separately by a VPCBinding, even
+          within the owner's own namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VPCSpec is the specification of a VPC — a tenant overlay
+              network.
+            properties:
+              cidrs:
+                description: |-
+                  CIDRs are the address ranges (IPv4 and/or IPv6) of the VPC. These may
+                  overlap with other VPCs; isolation is by overlay, not address space.
+                items:
+                  type: string
+                type: array
+              mtu:
+                description: |-
+                  MTU is the MTU advertised to ports in this VPC. Zero selects the
+                  controller default.
+                format: int32
+                type: integer
+            type: object
+          status:
+            description: VPCStatus is the observed state of a VPC.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              phase:
+                description: Phase is the current lifecycle phase of the VPC.
+                enum:
+                - Pending
+                - Ready
+                type: string
+              vni:
+                description: |-
+                  VNI is the overlay network identifier allocated to this VPC by the
+                  controller. Zero means unallocated.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: vpcbindings.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: VPCBinding
+    listKind: VPCBindingList
+    plural: vpcbindings
+    singular: vpcbinding
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.namespace
+      name: VPCNamespace
+      type: string
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VPCBinding grants pods in its own (consumer) namespace permission to attach to
+          the VPC named in spec.vpcRef. It is created by the VPC owner reaching into the
+          consumer namespace (gated by RBAC create here + an export SAR on the VPC), and
+          its existence is the namespace-keyed, datapath-readable authorization the CNI
+          checks at attach time. A VPC's namespace expresses ownership; a VPCBinding
+          expresses use — required even when the pod and VPC share a namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VPCBindingSpec authorizes pods in the binding's (consumer) namespace to attach
+              to the referenced VPC.
+            properties:
+              vpcRef:
+                description: VPCRef is the VPC being made usable, identified by owner
+                  namespace + name.
+                properties:
+                  name:
+                    description: Name is the VPC name within that namespace.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace that owns the VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+            required:
+            - vpcRef
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: ports.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: Port
+    listKind: PortList
+    plural: ports
+    singular: port
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .spec.vpcRef.namespace
+      name: VPCNamespace
+      type: string
+    - jsonPath: .spec.ip
+      name: IP
+      type: string
+    - jsonPath: .spec.node
+      name: Node
+      type: string
+    - jsonPath: .spec.podName
+      name: Pod
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Port is a pod's realized interface on a VPC.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              PortSpec is the realized network interface of a pod on a VPC.
+
+              A Port is cluster-scoped and its name encodes the VPC's VNI and the IP
+              (v<vni>.<ip-with-dashes>), so creating it is an atomic claim on that IP within
+              the VPC — etcd name uniqueness serializes concurrent allocators. The VNI is
+              globally unique, so the name stays unique even though VPCs are namespaced.
+            properties:
+              fabricIP:
+                description: |-
+                  FabricIP is the pod's status.podIP: a unique address from the node pod
+                  CIDR, reachable on the default overlay, that the bridge DNATs to IP.
+                type: string
+              ip:
+                description: |-
+                  IP is the address allocated to the pod within the VPC CIDR (the tenant
+                  address configured inside the pod).
+                type: string
+              mac:
+                description: MAC is the pod interface MAC address.
+                type: string
+              node:
+                description: Node is the name of the node hosting the pod.
+                type: string
+              nodeIP:
+                description: NodeIP is the host IP of that node (the Geneve tunnel
+                  endpoint).
+                type: string
+              podName:
+                type: string
+              podNamespace:
+                description: PodNamespace and PodName identify the owning pod.
+                type: string
+              vpcRef:
+                description: VPCRef identifies the VPC this port belongs to (owner
+                  namespace + name).
+                properties:
+                  name:
+                    description: Name is the VPC name within that namespace.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace that owns the VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+            required:
+            - ip
+            - node
+            - nodeIP
+            - vpcRef
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+{{- end }}

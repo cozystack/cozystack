@@ -4,3 +4,8 @@
 # cozyplane conflist must sort ahead of Cilium's 05-cilium.conflist so kubelet
 # uses cozyplane as the primary CNI.
 cniConfName: "00-cozyplane.conflist"
+
+# Serve sdn.cozystack.io from the aggregated API server (not CRDs); Cozystack
+# ships cert-manager for the serving certificate.
+apiserver:
+  enabled: true

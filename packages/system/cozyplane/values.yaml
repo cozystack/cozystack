@@ -1,6 +1,6 @@
 # Container image for all cozyplane components (agent, CNI plugin, controller),
 # published from github.com/lllamnyp/cozyplane. Digest-pinned (no floating tag).
-image: ghcr.io/lllamnyp/cozyplane@sha256:a9cefbd585283bbdadbeb4efce39720693dc228bf5bb00e6b54996953d3d9f87
+image: ghcr.io/lllamnyp/cozyplane@sha256:8e1e5dceb02f5d936ac21da9de030fd4c27d915c52202494ca7a78022ddd4e5c
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -41,3 +41,27 @@ controller:
 # 'create vpcbindings' RBAC alone, with no cross-VPC export check).
 exportPolicy:
   enabled: true
+
+# Serve the sdn.cozystack.io API group from a real aggregated API server (backed
+# by a dedicated etcd) instead of CRDs — the design target, enabling custom
+# validation and subresources beyond CRD ergonomics. Requires cert-manager
+# (present in Cozystack). Enabled for the Cozystack variant in values-talos.yaml.
+apiserver:
+  enabled: false
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  etcd:
+    image: registry.k8s.io/etcd:3.5.16-0
+    storage:
+      emptyDir: {}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi
