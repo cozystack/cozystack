@@ -1,0 +1,107 @@
+name: API Review Gate
+
+# Requires a review from a designated API owner (see API_OWNERS below) when a
+# pull request makes a "sizeable" change to the Cozystack API surface: a new
+# API group, a new resource, or a breaking change to an existing resource's
+# schema. Detection is deterministic (cmd/api-gate); no LLM or network calls.
+#
+# The job runs on every PR (no path filter) so it can always report a status
+# and therefore be marked as a required check in branch protection without
+# leaving PRs that touch no API stuck in "pending". When nothing sizeable
+# changed it passes immediately.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  # Re-evaluate when a review is submitted or dismissed so an approval by an
+  # API owner flips the check from failing to passing without a new push.
+  pull_request_review:
+    types: [submitted, dismissed]
+
+concurrency:
+  group: api-review-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  api-review-gate:
+    name: Require API owner review for sizeable API changes
+    runs-on: ubuntu-22.04
+    env:
+      # Space-separated GitHub logins allowed to satisfy the gate. Edit here to
+      # change who can approve sizeable API changes.
+      API_OWNERS: "lllamnyp kvaps"
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout head
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Materialize base checkout
+        run: |
+          set -euo pipefail
+          git worktree add --detach "${RUNNER_TEMP}/base" "${BASE_SHA}"
+
+      - name: Build api-gate
+        run: go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate
+
+      - name: Detect sizeable API changes
+        id: detect
+        run: |
+          set -uo pipefail
+          set +e
+          "${RUNNER_TEMP}/api-gate" \
+            --base "${RUNNER_TEMP}/base" \
+            --head "${GITHUB_WORKSPACE}" \
+            --format markdown > "${RUNNER_TEMP}/report.md"
+          code=$?
+          set -e
+          echo "code=${code}" >> "$GITHUB_OUTPUT"
+          cat "${RUNNER_TEMP}/report.md"
+          case "${code}" in
+            0) echo "sizeable=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "sizeable=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::api-gate failed with exit code ${code}"; exit "${code}" ;;
+          esac
+
+      - name: Check for an API owner approval
+        if: steps.detect.outputs.sizeable == 'true'
+        run: |
+          set -euo pipefail
+          {
+            echo "## API Review Gate"
+            echo
+            cat "${RUNNER_TEMP}/report.md"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          # Latest review state per reviewer; an APPROVED review by any API
+          # owner satisfies the gate. GitHub forbids self-approval, so a
+          # sizeable PR authored by an owner still needs the other owner.
+          approvals="$(gh api \
+            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
+            --paginate \
+            --jq '[.[] | select(.state=="APPROVED") | .user.login] | unique | .[]')"
+
+          for owner in ${API_OWNERS}; do
+            if grep -qxi "${owner}" <<<"${approvals}"; then
+              echo "Sizeable API change approved by @${owner}."
+              exit 0
+            fi
+          done
+
+          echo "::error::This PR makes a sizeable API change (new group, new resource, or breaking change) and needs an approving review from one of: ${API_OWNERS}. See the job summary for details."
+          exit 1

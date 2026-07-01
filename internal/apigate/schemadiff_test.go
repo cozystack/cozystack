@@ -1,0 +1,180 @@
+/*
+Copyright 2026 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package apigate
+
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
+
+// mustSchema parses a JSON schema literal, mirroring how cozyrd openAPISchema
+// strings and CRD openAPIV3Schema nodes decode at runtime.
+func mustSchema(t *testing.T, j string) Schema {
+	t.Helper()
+	var s Schema
+	if err := json.Unmarshal([]byte(j), &s); err != nil {
+		t.Fatalf("bad schema literal: %v", err)
+	}
+	return s
+}
+
+func TestDiffSchema(t *testing.T) {
+	tests := []struct {
+		name     string
+		base     string
+		head     string
+		breaking bool // whether at least one breaking change is expected
+		wantSub  string
+	}{
+		{
+			name: "identical is safe",
+			base: `{"type":"object","properties":{"replicas":{"type":"integer"}}}`,
+			head: `{"type":"object","properties":{"replicas":{"type":"integer"}}}`,
+		},
+		{
+			name: "new optional field is additive",
+			base: `{"type":"object","properties":{"a":{"type":"string"}}}`,
+			head: `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"integer"}}}`,
+		},
+		{
+			name: "description-only change is safe",
+			base: `{"type":"object","properties":{"a":{"type":"string","description":"old"}}}`,
+			head: `{"type":"object","properties":{"a":{"type":"string","description":"new"}}}`,
+		},
+		{
+			name: "default change is safe",
+			base: `{"type":"object","properties":{"a":{"type":"integer","default":1}}}`,
+			head: `{"type":"object","properties":{"a":{"type":"integer","default":2}}}`,
+		},
+		{
+			name:     "removed field is breaking",
+			base:     `{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}}}`,
+			head:     `{"type":"object","properties":{"a":{"type":"string"}}}`,
+			breaking: true,
+			wantSub:  `"b" was removed`,
+		},
+		{
+			name:     "new required field is breaking",
+			base:     `{"type":"object","properties":{"a":{"type":"string"}}}`,
+			head:     `{"type":"object","required":["b"],"properties":{"a":{"type":"string"},"b":{"type":"string"}}}`,
+			breaking: true,
+			wantSub:  `"b" is now required`,
+		},
+		{
+			name:     "existing optional field becoming required is breaking",
+			base:     `{"type":"object","properties":{"a":{"type":"string"}}}`,
+			head:     `{"type":"object","required":["a"],"properties":{"a":{"type":"string"}}}`,
+			breaking: true,
+			wantSub:  `"a" is now required`,
+		},
+		{
+			name: "new enum value is additive",
+			base: `{"type":"object","properties":{"v":{"type":"string","enum":["a","b"]}}}`,
+			head: `{"type":"object","properties":{"v":{"type":"string","enum":["a","b","c"]}}}`,
+		},
+		{
+			name:     "removed enum value is breaking",
+			base:     `{"type":"object","properties":{"v":{"type":"string","enum":["a","b","c"]}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"string","enum":["a","b"]}}}`,
+			breaking: true,
+			wantSub:  "enum value(s) removed: c",
+		},
+		{
+			name:     "adding an enum where none existed is breaking",
+			base:     `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"string","enum":["a"]}}}`,
+			breaking: true,
+			wantSub:  "enum constraint added",
+		},
+		{
+			name:     "type narrowing is breaking",
+			base:     `{"type":"object","properties":{"v":{"anyOf":[{"type":"integer"},{"type":"string"}]}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			breaking: true,
+			wantSub:  "type narrowed",
+		},
+		{
+			name: "type widening is safe",
+			base: `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			head: `{"type":"object","properties":{"v":{"anyOf":[{"type":"integer"},{"type":"string"}]}}}`,
+		},
+		{
+			name:     "added pattern is breaking",
+			base:     `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"string","pattern":"^x"}}}`,
+			breaking: true,
+			wantSub:  "pattern constraint added",
+		},
+		{
+			name: "removed pattern is safe",
+			base: `{"type":"object","properties":{"v":{"type":"string","pattern":"^x"}}}`,
+			head: `{"type":"object","properties":{"v":{"type":"string"}}}`,
+		},
+		{
+			name:     "raised minimum is breaking",
+			base:     `{"type":"object","properties":{"n":{"type":"integer","minimum":1}}}`,
+			head:     `{"type":"object","properties":{"n":{"type":"integer","minimum":2}}}`,
+			breaking: true,
+			wantSub:  "minimum raised",
+		},
+		{
+			name: "lowered minimum is safe",
+			base: `{"type":"object","properties":{"n":{"type":"integer","minimum":2}}}`,
+			head: `{"type":"object","properties":{"n":{"type":"integer","minimum":1}}}`,
+		},
+		{
+			name:     "lowered maximum is breaking",
+			base:     `{"type":"object","properties":{"n":{"type":"integer","maximum":10}}}`,
+			head:     `{"type":"object","properties":{"n":{"type":"integer","maximum":5}}}`,
+			breaking: true,
+			wantSub:  "maximum lowered",
+		},
+		{
+			name:     "nested map value break is caught",
+			base:     `{"type":"object","properties":{"users":{"type":"object","additionalProperties":{"type":"object","properties":{"pw":{"type":"string"}}}}}}`,
+			head:     `{"type":"object","properties":{"users":{"type":"object","additionalProperties":{"type":"object","properties":{}}}}}`,
+			breaking: true,
+			wantSub:  `"pw" was removed`,
+		},
+		{
+			name:     "nested array item break is caught",
+			base:     `{"type":"object","properties":{"list":{"type":"array","items":{"type":"object","properties":{"x":{"type":"string"}}}}}}`,
+			head:     `{"type":"object","properties":{"list":{"type":"array","items":{"type":"object","properties":{}}}}}`,
+			breaking: true,
+			wantSub:  `"x" was removed`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := diffSchema("spec", mustSchema(t, tc.base), mustSchema(t, tc.head))
+			if tc.breaking && len(got) == 0 {
+				t.Fatalf("expected a breaking change, got none")
+			}
+			if !tc.breaking && len(got) != 0 {
+				t.Fatalf("expected no breaking change, got: %v", got)
+			}
+			if tc.wantSub != "" {
+				joined := strings.Join(got, "\n")
+				if !strings.Contains(joined, tc.wantSub) {
+					t.Fatalf("expected finding containing %q, got:\n%s", tc.wantSub, joined)
+				}
+			}
+		})
+	}
+}
