@@ -1,0 +1,97 @@
+{{- /*
+  ComputePlane provisioning (tenant module).
+
+  When .Values.computePlane is set to a profile name, provision a single-tenant,
+  Cozystack-managed ComputePlane cluster for this tenant. It reuses the managed
+  `kubernetes` app (Kamaji control plane + KubeVirt-VM worker nodes) as the
+  substrate; the release is named "computeplane" so Kamaji writes its admin
+  kubeconfig to the Secret `computeplane-admin-kubeconfig` (key super-admin.svc),
+  which cozystack-api injects into the HelmReleases of `placement: ComputePlane`
+  applications (see pkg/registry/apps/application/rest.go).
+
+  The cluster's shape (node groups, GPU types, version, autoscaling bounds) comes
+  from a platform-defined profile ConfigMap named computeplane-profile-<name> —
+  the single source of truth, referenced here by name only. The profile catalog
+  is a follow-up (see design-proposals/compute-plane, Open questions).
+
+  Deliberately NOT labelled as an apps.cozystack.io application: the ComputePlane
+  is owned by Cozystack and not surfaced to the tenant as a manageable cluster
+  (visibility is decoupled from the security boundary; the tenant gets no admin
+  kubeconfig for it).
+
+  install/upgrade.disableWait mirrors how the managed `kubernetes` parent chart
+  is reconciled elsewhere: it emits child HelmReleases (cilium/coredns/csi/…) and
+  a talos-reconcile Job that cannot become Ready until worker nodes exist, so the
+  parent must not block on them.
+*/}}
+{{- if .Values.computePlane }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: computeplane
+  namespace: {{ include "tenant.name" . }}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    internal.cozystack.io/tenantmodule: "true"
+    internal.cozystack.io/computeplane: "true"
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-kubernetes-application-kubevirt-kubernetes
+    namespace: cozy-system
+  interval: 5m
+  timeout: 30m
+  install:
+    disableWait: true
+    remediation:
+      retries: -1
+  upgrade:
+    disableWait: true
+    remediation:
+      retries: -1
+  # Cozystack-enablement. A ComputePlane is not a vanilla Kubernetes cluster:
+  # placement: ComputePlane apps (e.g. cozyllm Jupyter/n8n/Langflow) render
+  # child HelmReleases (-> fluxcd), Certificate resources (-> certManager) and
+  # Ingress objects (-> ingressNginx) into the target cluster. Enabling these
+  # addons makes the provisioned cluster a Cozystack-prepared environment so
+  # those resources reconcile on it instead of failing with "no matches for
+  # kind". Set as inline base values (always-on); Flux merges spec.values last,
+  # so the optional profile ConfigMap below cannot disable them, only override
+  # cluster *shape* (node groups / version / GPU) and add further addons.
+  values:
+    addons:
+      fluxcd:
+        enabled: true
+        # The kubernetes-app fluxcd addon (cozy-fluxcd chart) defaults the
+        # FluxInstance spec.distribution.artifact to "", which fails CRD
+        # validation ("must be of type string"). ComputePlane is the first real
+        # consumer of the fluxcd addon, so set the canonical distribution
+        # artifact here so the in-cluster Flux installs and can reconcile the
+        # child HelmReleases that placement: ComputePlane apps render.
+        valuesOverride:
+          flux-instance:
+            instance:
+              distribution:
+                artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest"
+      certManager:
+        enabled: true
+      ingressNginx:
+        enabled: true
+        # Expose the ComputePlane ingress-nginx via the Proxied NodePort Service so a
+        # ComputePlane app's per-app management Ingress can route to it without a
+        # management LoadBalancer. The Service (computeplane-ingress-nginx) is created
+        # whenever exposeMethod is Proxied, independent of any hosts list.
+        exposeMethod: Proxied
+  valuesFrom:
+  # Platform-defined ComputePlane profile: overrides cluster shape (node groups
+  # / GPU types / Kubernetes version / autoscaling). Optional — when absent the
+  # inline defaults above provision a baseline cluster with the required addons.
+  # The profile catalog is a follow-up (see design-proposals/compute-plane).
+  - kind: ConfigMap
+    name: computeplane-profile-{{ .Values.computePlane }}
+    optional: true
+  - kind: Secret
+    name: cozystack-values
+{{- end }}
