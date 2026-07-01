@@ -194,6 +194,14 @@ expires.
 - **`CustomConfig` with an unreachable issuer or wrong claim mappings** —
   the apiserver rejects tokens at request time; the admin kubeconfig
   keeps working as break-glass.
+- **`emailVerified: false` on the Keycloak user** — with
+  `username.claim: email` (the `System`-mode default and the pattern the
+  `CustomConfig` examples above use) the kube-apiserver applies
+  `claims.?email_verified.orValue(true) == true` and returns
+  `oidc: email not verified` to the client. Provision users with
+  `emailVerified: true` on the `KeycloakRealmUser` (or complete the
+  email-verify flow through the Keycloak UI) before granting cluster
+  access. A missing `email_verified` claim is treated as verified.
 - **`kubectl` without the `oidc-login` plugin** — the exec block errors
   out client-side; install the plugin.
 
