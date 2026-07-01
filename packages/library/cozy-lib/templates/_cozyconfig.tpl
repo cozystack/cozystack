@@ -24,7 +24,25 @@ Get the images registry.
 Usage: {{ include "cozy-lib.images-registry" . }}
 */}}
 {{- define "cozy-lib.images-registry" -}}
-{{- (index .Values._cluster "images-registry") | default "" }}
+{{- (index (.Values._cluster | default dict) "images-registry") | default "" }}
+{{- end }}
+
+{{/*
+Build a fully-qualified image reference routed through the cluster images
+registry. Pass the registry-relative image path (repository + tag, ideally
+digest-pinned) and the global context.
+Usage: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:..." $) }}
+When images-registry is set (mirrored / air-gapped installs) it is prefixed as
+"<registry>/<image>"; when empty (the default on a standard install) the image
+is returned unchanged so it resolves from its default registry — importantly
+with no leading "/", which would otherwise be an invalid reference.
+*/}}
+{{- define "cozy-lib.image" -}}
+{{- include "cozy-lib.checkInput" . }}
+{{- $image := index . 0 }}
+{{- $ctx := index . 1 }}
+{{- $registry := include "cozy-lib.images-registry" $ctx }}
+{{- with $registry }}{{ . }}/{{ end }}{{ $image }}
 {{- end }}
 
 {{/*
