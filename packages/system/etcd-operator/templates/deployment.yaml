@@ -1,0 +1,69 @@
+{{- $image := printf "%s:%s" .Values.image.repository (.Values.image.tag | default .Chart.AppVersion) }}
+{{- $clusterDomain := .Values.clusterDomain | default (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etcd-operator-controller-manager
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd-operator
+    control-plane: controller-manager
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd-operator
+      control-plane: controller-manager
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/name: etcd-operator
+        control-plane: controller-manager
+    spec:
+      serviceAccountName: etcd-operator-controller-manager
+      terminationGracePeriodSeconds: 10
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: manager
+        image: {{ $image | quote }}
+        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        command:
+        - /manager
+        args:
+        - --leader-elect
+        - --health-probe-bind-address=:8081
+        - --metrics-bind-address=:8080
+        - --cluster-domain={{ $clusterDomain }}
+        env:
+        # Must equal this container's own image: the snapshot Job and the
+        # restore init container run the operator image as the agent.
+        - name: OPERATOR_IMAGE
+          value: {{ $image | quote }}
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        resources: {{- toYaml .Values.resources | nindent 10 }}

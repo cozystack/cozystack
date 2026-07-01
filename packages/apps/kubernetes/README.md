@@ -58,7 +58,7 @@ Deploying it involves the following components:
     Each control plane pod includes essential components like `kube-apiserver`, `controller-manager`, and `scheduler`,
     allowing for efficient multi-tenancy and resource utilization.
 
--   **Etcd Cluster**: A dedicated etcd cluster is deployed using Ænix's [etcd-operator](https://github.com/aenix-io/etcd-operator).
+-   **Etcd Cluster**: A dedicated etcd cluster is deployed using the cozystack [etcd-operator](https://github.com/cozystack/etcd-operator) (`etcd-operator.cozystack.io/v1alpha2`).
     It provides reliable and scalable key-value storage for the Kubernetes control plane.
 
 -   **Worker Nodes**: Virtual Machines are provisioned to serve as worker nodes using KubeVirt.
@@ -78,7 +78,7 @@ See the reference for components utilized in this service:
 - [github.com/clastix/kamaji](https://github.com/clastix/kamaji)
 - [KubeVirt](https://kubevirt.io/)
 - [github.com/kubevirt/kubevirt](https://github.com/kubevirt/kubevirt)
-- [github.com/aenix-io/etcd-operator](https://github.com/aenix-io/etcd-operator)
+- [github.com/cozystack/etcd-operator](https://github.com/cozystack/etcd-operator)
 - [Kubernetes Cluster API](https://cluster-api.sigs.k8s.io/)
 - [github.com/kubernetes-sigs/cluster-api-provider-kubevirt](https://github.com/kubernetes-sigs/cluster-api-provider-kubevirt)
 - [github.com/kubevirt/csi-driver](https://github.com/kubevirt/csi-driver)

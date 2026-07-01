@@ -1,0 +1,66 @@
+suite: etcd EtcdCluster topologySpreadConstraints rendering
+
+release:
+  name: etcd
+  namespace: tenant-root
+
+templates:
+  - templates/etcd-cluster.yaml
+
+tests:
+  - it: uses a soft per-host spread by default
+    set:
+      _cluster: {}
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.topologySpreadConstraints[0].maxSkew
+          value: 1
+      - equal:
+          path: spec.topologySpreadConstraints[0].topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: ScheduleAnyway
+      - equal:
+          path: spec.topologySpreadConstraints[0].labelSelector.matchLabels["app.kubernetes.io/instance"]
+          value: etcd
+      - lengthEqual:
+          path: spec.topologySpreadConstraints
+          count: 1
+
+  # Regression guard: a cluster-wide globalAppTopologySpreadConstraints is
+  # authored as a full block whose top-level key is `topologySpreadConstraints:`.
+  # The custom branch must NOT re-emit that key (duplicate key => helm aborts)
+  # and must nest labelSelector under the injected list item, mirroring the
+  # postgres/kubernetes charts.
+  - it: injects the cluster-wide spread policy without duplicating the key
+    set:
+      _cluster:
+        scheduling:
+          globalAppTopologySpreadConstraints: |
+            topologySpreadConstraints:
+            - maxSkew: 2
+              topologyKey: topology.kubernetes.io/zone
+              whenUnsatisfiable: DoNotSchedule
+    documentSelector:
+      path: kind
+      value: EtcdCluster
+    asserts:
+      - equal:
+          path: spec.topologySpreadConstraints[0].maxSkew
+          value: 2
+      - equal:
+          path: spec.topologySpreadConstraints[0].topologyKey
+          value: topology.kubernetes.io/zone
+      - equal:
+          path: spec.topologySpreadConstraints[0].whenUnsatisfiable
+          value: DoNotSchedule
+      - equal:
+          path: spec.topologySpreadConstraints[0].labelSelector.matchLabels["app.kubernetes.io/instance"]
+          value: etcd
+      - lengthEqual:
+          path: spec.topologySpreadConstraints
+          count: 1

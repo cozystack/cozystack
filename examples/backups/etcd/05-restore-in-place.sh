@@ -45,8 +45,8 @@ EOF
 wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_INPLACE_NAME" \
     '{.status.phase}' Succeeded "$NAMESPACE" 1800
 
-log_substep "Waiting for etcd-0 to be Ready again after restore..."
-kubectl -n "$NAMESPACE" wait pod etcd-0 --for=condition=ready --timeout=300s
+log_substep "Waiting for etcd member pods to be Ready again after restore..."
+kubectl -n "$NAMESPACE" wait pod -l app.kubernetes.io/instance=etcd --for=condition=ready --timeout=300s
 
 # Helm's next apply re-renders the chart's bootstrap-less EtcdCluster
 # spec, which evicts the bootstrap.restore block the driver stamped on
@@ -58,7 +58,7 @@ kubectl -n "$NAMESPACE" wait pod etcd-0 --for=condition=ready --timeout=300s
 log_substep "Waiting for Helm to evict bootstrap.restore from the live EtcdCluster..."
 elapsed=0
 while true; do
-    BOOTSTRAP=$(kubectl -n "$NAMESPACE" get etcdcluster.etcd.aenix.io etcd \
+    BOOTSTRAP=$(kubectl -n "$NAMESPACE" get etcdcluster.etcd-operator.cozystack.io etcd \
         -o jsonpath='{.spec.bootstrap}' 2>/dev/null || true)
     if [[ -z "$BOOTSTRAP" || "$BOOTSTRAP" == "{}" || "$BOOTSTRAP" == "null" ]]; then
         log_success "bootstrap.restore evicted by Helm reconcile"

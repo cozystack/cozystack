@@ -8,94 +8,72 @@
 {{- printf "%.0f" $result -}}
 {{- end -}}
 ---
-apiVersion: etcd.aenix.io/v1alpha1
+apiVersion: etcd-operator.cozystack.io/v1alpha2
 kind: EtcdCluster
 metadata:
   name: etcd
 spec:
-  options:
-    quota-backend-bytes: {{ include "calculateQuotaBackendBytes" .Values.size | quote }}
-    auto-compaction-mode: "periodic"
-    auto-compaction-retention: "5m"
-    snapshot-count: "10000"
+  version: {{ .Values.version | quote }}
   replicas: {{ .Values.replicas }}
   storage:
-    volumeClaimTemplate:
-      spec:
-        resources:
-          requests:
-            storage: {{ .Values.size }}
-        {{- with .Values.storageClass }}
-        storageClassName: {{ . }}
-        {{- end }}
-  security:
-    tls:
-      peerTrustedCASecret: etcd-peer-ca-tls
-      peerSecret: etcd-peer-tls
-      serverSecret: etcd-server-tls
-      clientTrustedCASecret: etcd-ca-tls
-      clientSecret: etcd-client-tls
-      # Required so etcd-operator v0.4.4+ backup_agent / restore_agent
-      # mount the server CA at /etc/etcd/pki/server/ca/ca.crt and set
-      # ETCD_TLS_CA_PATH (internal/controller/factory/backup_job.go gates
-      # the env+volume on EtcdCluster.IsServerTrustedCADefined()). Without
-      # it the agent's etcdctl client falls back to the system trust
-      # store and fails to verify the etcd server cert with "certificate
-      # signed by unknown authority". Same CA as clientTrustedCASecret -
-      # the chart issues client and server certs from the same etcd-ca.
-      serverTrustedCASecret: etcd-ca-tls
-  podTemplate:
-    metadata:
-      labels:
-        cozystack.io/service: etcd
-    spec:
-      containers:
-      - name: etcd
-        # Override the etcd image strategically merged into the operator's
-        # default pod spec. etcd-operator v0.4.5 hardcodes
-        # quay.io/coreos/etcd:v3.5.12 (DefaultEtcdImage), which the
-        # kube-apiserver rejects for consistent watches: it only enables the
-        # RequestWatchProgress storage feature on etcd >= 3.5.13 / >= 3.4.31.
-        # Kubernetes >= 1.31 enables ConsistentListFromCache (locked-to-true
-        # in 1.35), so on etcd 3.5.12 every consistent watch fails inside the
-        # stream with "the required storage feature RequestWatchProgress is
-        # disabled" (HTTP 500). Pinning a >= 3.5.13 patch release restores it.
-        image: quay.io/coreos/etcd:v3.5.31
-        ports:
-        - name: metrics
-          containerPort: 2381
-          protocol: TCP
-        startupProbe:
-          failureThreshold: 300
-          periodSeconds: 5
-        livenessProbe:
-          failureThreshold: 10
-          periodSeconds: 10
-        readinessProbe:
-          failureThreshold: 3
-          periodSeconds: 5
-        {{- with .Values.resources }}
-        resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 10 }}
-        {{- end }}
-    {{- $rawConstraints := "" }}
-    {{- if .Values._cluster.scheduling }}
-      {{- $rawConstraints = get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
+    size: {{ .Values.size }}
+    {{- with .Values.storageClass }}
+    storageClassName: {{ . }}
     {{- end }}
-    {{- if $rawConstraints }}
-      {{- $rawConstraints | fromYaml | toYaml | nindent 6 }}
-        labelSelector:
-          matchLabels:
-            app.kubernetes.io/instance: etcd
-    {{- else }}
-      topologySpreadConstraints:
-      - maxSkew: 1
-        topologyKey: "kubernetes.io/hostname"
-        whenUnsatisfiable: ScheduleAnyway
-        labelSelector:
-          matchLabels:
-            app.kubernetes.io/instance: etcd
-    {{- end }}
-  podDisruptionBudgetTemplate: {}
+  options:
+    # quotaBackendBytes/snapshotCount are typed integers in v1alpha2 (no quotes).
+    quotaBackendBytes: {{ include "calculateQuotaBackendBytes" .Values.size }}
+    autoCompactionMode: periodic
+    autoCompactionRetention: "5m"
+    snapshotCount: 10000
+  {{- with .Values.resources }}
+  resources: {{- include "cozy-lib.resources.sanitize" (list . $) | nindent 4 }}
+  {{- end }}
+  additionalMetadata:
+    labels:
+      cozystack.io/service: etcd
+  # TLS uses secretRef mode: the chart issues the server, operator-client and
+  # peer certs via the cert-manager Certificates rendered below, and the
+  # EtcdCluster only REFERENCES the resulting Secrets. This is deliberate, not
+  # cosmetic — spec.tls is immutable in v1alpha2 (CRD CEL: self.tls ==
+  # oldSelf.tls), and `etcd-migrate` adopts legacy clusters into exactly this
+  # secretRef shape (serverSecretRef/operatorClientSecretRef/peer.secretRef,
+  # pointing at the legacy etcd-{server,client,peer}-tls Secrets). Rendering
+  # certManager here would diverge from the adopted object and the API server
+  # would reject every post-adoption HelmRelease reconcile, leaving migrated
+  # clusters permanently non-Ready. Providing operatorClientSecretRef keeps etcd
+  # --client-cert-auth on, so external clients (the Kamaji DataStore) still
+  # authenticate with a CN=root client cert. ca.crt lives inside each referenced
+  # Secret (cert-manager writes it), which is what v1alpha2 reads as the trusted
+  # CA. No spec.auth: cozystack stays cert-only (no etcd password auth).
+  tls:
+    client:
+      serverSecretRef:
+        name: etcd-server-tls
+      operatorClientSecretRef:
+        name: etcd-client-tls
+    peer:
+      secretRef:
+        name: etcd-peer-tls
+  {{- $rawConstraints := "" }}
+  {{- if .Values._cluster.scheduling }}
+    {{- $rawConstraints = get .Values._cluster.scheduling "globalAppTopologySpreadConstraints" }}
+  {{- end }}
+  {{- if $rawConstraints }}
+  {{- /* The raw value already carries its own top-level topologySpreadConstraints: key */}}
+  {{- $rawConstraints | fromYaml | toYaml | nindent 2 }}
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: etcd
+  {{- else }}
+  topologySpreadConstraints:
+  - maxSkew: 1
+    topologyKey: "kubernetes.io/hostname"
+    whenUnsatisfiable: ScheduleAnyway
+    labelSelector:
+      matchLabels:
+        app.kubernetes.io/instance: etcd
+  {{- end }}
 ---
 apiVersion: cert-manager.io/v1
 kind: Issuer
@@ -174,6 +152,16 @@ spec:
   ca:
     secretName: etcd-ca-tls
 ---
+# Server certificate, referenced by spec.tls.client.serverSecretRef. The SANs
+# must cover every name the operator and clients dial the cluster by. We use
+# WILDCARDS (not the legacy chart's enumerated etcd-<i>.etcd-headless SANs)
+# because the v1alpha2 operator brings up members — including replacements after
+# a failure — under random names in its native domain (<member>.etcd.<ns>.svc);
+# an enumerated list would leave a replacement member's name out of every SAN
+# and fail TLS verification forever (a silent one-short-cluster). The legacy
+# headless wildcard is kept so adopted members still validate during the
+# transition window. cert-manager writes ca.crt into etcd-server-tls, which
+# v1alpha2 reads as --trusted-ca-file.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -188,18 +176,15 @@ spec:
       - {{ .Release.Name }}
   isCA: false
   usages:
-    - "client auth"
-    - "server auth"
-    - "signing"
-    - "key encipherment"
+  - "client auth"
+  - "server auth"
+  - "signing"
+  - "key encipherment"
   dnsNames:
   - etcd
-  - etcd.{{ $.Release.Namespace }}.svc
-  {{- range $i := until (int $.Values.replicas) }}
-  - etcd-{{ $i }}
-  - etcd-{{ $i }}.etcd-headless
-  - etcd-{{ $i }}.etcd-headless.{{ $.Release.Namespace }}.svc
-  {{- end }}
+  - etcd.{{ .Release.Namespace }}.svc
+  - "*.etcd.{{ .Release.Namespace }}.svc"
+  - "*.etcd-headless.{{ .Release.Namespace }}.svc"
   - localhost
   ipAddresses:
   - "127.0.0.1"
@@ -209,7 +194,10 @@ spec:
     size: 4096
   issuerRef:
     name: etcd-issuer
+    kind: Issuer
 ---
+# Peer certificate, referenced by spec.tls.peer.secretRef. Same wildcard SAN
+# rationale as the server cert above.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
@@ -224,18 +212,15 @@ spec:
       - {{ .Release.Name }}
   isCA: false
   usages:
-    - "server auth"
-    - "client auth"
-    - "signing"
-    - "key encipherment"
+  - "server auth"
+  - "client auth"
+  - "signing"
+  - "key encipherment"
   dnsNames:
   - etcd
-  - etcd.{{ $.Release.Namespace }}.svc
-  {{- range $i := until (int $.Values.replicas) }}
-  - etcd-{{ $i }}
-  - etcd-{{ $i }}.etcd-headless
-  - etcd-{{ $i }}.etcd-headless.{{ $.Release.Namespace }}.svc
-  {{- end }}
+  - etcd.{{ .Release.Namespace }}.svc
+  - "*.etcd.{{ .Release.Namespace }}.svc"
+  - "*.etcd-headless.{{ .Release.Namespace }}.svc"
   - localhost
   ipAddresses:
   - "127.0.0.1"
@@ -245,7 +230,12 @@ spec:
     size: 4096
   issuerRef:
     name: etcd-peer-issuer
+    kind: Issuer
 ---
+# Client certificate, referenced by spec.tls.client.operatorClientSecretRef and
+# reused by external consumers of the cluster (the Kamaji DataStore).
+# commonName=root identifies the caller as the etcd root user under
+# --client-cert-auth.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

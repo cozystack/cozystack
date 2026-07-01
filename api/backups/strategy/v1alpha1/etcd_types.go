@@ -29,16 +29,16 @@ const (
 // +kubebuilder:resource:scope=Cluster
 
 // Etcd defines a backup strategy that delegates execution to the
-// etcd-operator (etcd.aenix.io). The strategy carries a templated backup
-// destination configuration; the driver materialises one
-// etcd.aenix.io/v1alpha1 EtcdBackup per Cozystack BackupJob and surfaces
+// etcd-operator (etcd-operator.cozystack.io). The strategy carries a templated
+// backup destination configuration; the driver materialises one
+// etcd-operator.cozystack.io/v1alpha2 EtcdSnapshot per Cozystack BackupJob and surfaces
 // it as a Cozystack Backup artefact.
 //
 // Restore is in-place only: the driver suspends the source Etcd
 // HelmRelease, snapshots the live EtcdCluster spec, deletes it, and
 // re-creates the EtcdCluster with spec.bootstrap.restore.source
 // pointing at the Backup's S3 coordinates, then resumes the HR after
-// the cluster reaches Ready.
+// the cluster becomes Available.
 //
 // To-copy restore is NOT supported: RestoreJob.spec.targetApplicationRef
 // is a TypedLocalObjectReference (no namespace field), so there is no
@@ -68,7 +68,7 @@ type EtcdList struct {
 
 // EtcdSpec specifies the desired etcd-operator-driven backup strategy.
 type EtcdSpec struct {
-	// Template carries the templated EtcdBackup destination configuration
+	// Template carries the templated EtcdSnapshot destination configuration
 	// applied per BackupJob (and re-rendered against the same
 	// .Application / .Parameters at restore time). String fields support
 	// Helm-style Go templating with two top-level values:
@@ -80,19 +80,19 @@ type EtcdSpec struct {
 	Template EtcdTemplate `json:"template"`
 }
 
-// EtcdTemplate describes the templated EtcdBackup-shaped configuration the
+// EtcdTemplate describes the templated EtcdSnapshot-shaped configuration the
 // driver renders per BackupJob (and on the restore path stamps onto
 // EtcdCluster.spec.bootstrap.restore.source).
 type EtcdTemplate struct {
 	// Destination defines where the etcd snapshot will be stored. Field
-	// semantics mirror etcd.aenix.io/v1alpha1 EtcdBackup.spec.destination.
+	// semantics mirror etcd-operator.cozystack.io/v1alpha2 EtcdSnapshot.spec.destination.
 	Destination EtcdDestinationTemplate `json:"destination"`
 }
 
-// EtcdDestinationTemplate mirrors etcd.aenix.io/v1alpha1
-// EtcdBackup.spec.destination, RESTRICTED to S3.
+// EtcdDestinationTemplate mirrors etcd-operator.cozystack.io/v1alpha2
+// EtcdSnapshot.spec.destination, RESTRICTED to S3.
 //
-// The upstream etcd-operator EtcdBackup.spec.destination accepts either
+// The upstream etcd-operator EtcdSnapshot.spec.destination accepts either
 // S3 or PVC, but the operator's filename convention is asymmetric
 // between backup and restore on the PVC path:
 //
@@ -118,7 +118,7 @@ type EtcdDestinationTemplate struct {
 }
 
 // EtcdS3Template is a typed, kubebuilder-validated mirror of
-// etcd.aenix.io/v1alpha1 EtcdBackup.spec.destination.s3. Restores reuse
+// etcd-operator.cozystack.io/v1alpha2 EtcdSnapshot.spec.destination.s3. Restores reuse
 // the same shape: the driver re-renders the strategy and stamps the
 // resulting block onto EtcdCluster.spec.bootstrap.restore.source.s3 of the
 // target Etcd application.

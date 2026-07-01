@@ -209,9 +209,12 @@ EOF
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
   kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
 
-  # etcd statefulset
-  timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=10m
+  # etcd cluster (etcd-operator v1alpha2 manages members directly via an
+  # EtcdCluster CR, not a StatefulSet). The operator reports Available (not
+  # Ready) once quorum is healthy — same signal asserted in e2e-apps/etcd.bats.
+  timeout 60 sh -ec 'until kubectl get etcdcluster.etcd-operator.cozystack.io/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
+  kubectl wait etcdcluster.etcd-operator.cozystack.io/etcd -n tenant-root \
+    --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True --timeout=5m
 
   # VictoriaMetrics components
   timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
