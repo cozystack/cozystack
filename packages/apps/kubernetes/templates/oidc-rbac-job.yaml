@@ -87,7 +87,14 @@ rules:
       - {{ .Release.Name }}-oidc-authn-config
     verbs: ["delete"]
   - apiGroups: ["v1.edp.epam.com"]
-    resources: ["keycloakclients", "keycloakclientscopes"]
+    resources: ["keycloakclients"]
+    resourceNames:
+      - {{ printf "%s-%s" .Release.Namespace .Release.Name }}
+    verbs: ["delete"]
+  - apiGroups: ["v1.edp.epam.com"]
+    resources: ["keycloakclientscopes"]
+    resourceNames:
+      - {{ printf "%s-%s-audience" .Release.Namespace .Release.Name }}
     verbs: ["delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
