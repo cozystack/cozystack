@@ -69,7 +69,10 @@ spec:
     kind: Deployment
     name: {{ dig "vertical-pod-autoscaler" "nameOverride" "" .Values.AsMap | default "vertical-pod-autoscaler" | trunc 63 | trimSuffix "-" }}-recommender
   updatePolicy:
-    updateMode: Recreate
+    # Initial (not Recreate): size at pod creation without ever evicting.
+    # Recreate here evicts the VPA recommender during install, adding pod churn
+    # on an already busy cluster. Matches the monitoring/etcd VPA->Initial fixes.
+    updateMode: Initial
 ---
 apiVersion: autoscaling.k8s.io/v1
 kind: VerticalPodAutoscaler
@@ -82,5 +85,5 @@ spec:
     kind: Deployment
     name: vpa-for-vpa-recommender
   updatePolicy:
-    updateMode: Recreate
+    updateMode: Initial
 {{- end }}
