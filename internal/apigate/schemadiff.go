@@ -148,21 +148,29 @@ func diffNode(path string, base, head Schema, out *[]string) {
 		diffNode(child, baseProps[name], hp, out)
 	}
 
-	// additionalProperties: restricting it to false rejects previously-allowed
-	// undeclared fields — a breaking change that a boolean value carries and a
-	// schema recursion would miss. Otherwise recurse only when BOTH sides carry
-	// a map schema: a child schema present only in base is a relaxation (its
-	// removal loosens the contract), and diffing it against a nil head would
-	// misreport that relaxation as a break.
-	if base["additionalProperties"] != false && head["additionalProperties"] == false {
+	// additionalProperties governs undeclared fields; its permissiveness runs
+	// false (none) < schema (matching) < true/absent (any).
+	//   - open -> false:        breaking (fields once accepted now rejected)
+	//   - open -> schema:       recurse; adding a schema to a previously-open
+	//                           map is itself a restriction, caught by diffing
+	//                           the new schema against an empty (unconstrained)
+	//                           base.
+	//   - base false -> *:      relaxation (base accepted nothing), so safe.
+	//   - open -> true/absent:  relaxation, safe.
+	baseOpenAP := base["additionalProperties"] != false
+	if baseOpenAP && head["additionalProperties"] == false {
 		*out = append(*out, fmt.Sprintf("%s: additionalProperties restricted to false (undeclared fields no longer accepted)", path))
-	} else if b, h, ok := bothMapSchemas(base, head, "additionalProperties"); ok {
-		diffNode(path+"{}", b, h, out)
+	} else if baseOpenAP {
+		if b, h, ok := childSchemas(base, head, "additionalProperties"); ok {
+			diffNode(path+"{}", b, h, out)
+		}
 	}
 
-	// items: recurse only when both sides define an item schema; removing items
-	// loosens an array's contract and is safe.
-	if b, h, ok := bothMapSchemas(base, head, "items"); ok {
+	// items: recurse whenever head defines an item schema. When base has none,
+	// the head schema is diffed against an empty base so that constraining a
+	// previously-unconstrained array element is caught; a base schema with no
+	// head counterpart is a relaxation and is skipped.
+	if b, h, ok := childSchemas(base, head, "items"); ok {
 		diffNode(path+"[]", b, h, out)
 	}
 }
@@ -267,18 +275,25 @@ func schemaProps(s Schema) map[string]Schema {
 	return out
 }
 
-// bothMapSchemas extracts a named child schema (e.g. items, additionalProperties)
-// from both nodes, reporting ok only when BOTH sides carry a schema object.
-// Requiring both sides is deliberate: a child schema present only in base was
-// removed on head, which loosens the contract (safe), and recursing into it
-// against a nil head would misreport that relaxation as a break. A boolean
-// additionalProperties (true/false) is handled separately by the caller.
-func bothMapSchemas(base, head Schema, key string) (Schema, Schema, bool) {
-	b, bOK := base[key].(map[string]any)
-	h, hOK := head[key].(map[string]any)
-	if !bOK || !hOK {
+// childSchemas extracts a named child schema (items or additionalProperties)
+// for recursion. It reports ok only when HEAD carries a schema object; base's
+// counterpart is returned when present and an empty schema otherwise. The
+// asymmetry is deliberate:
+//   - head schema, base schema   -> diff them (nested changes).
+//   - head schema, base none     -> diff head against an empty base, so that
+//     constraining a previously-unconstrained array element / map value
+//     (base absent or true) surfaces as breaking.
+//   - head none, base schema     -> ok=false: removing a child schema loosens
+//     the contract (relaxation), so it is skipped.
+//
+// A boolean additionalProperties (true/false) is not a schema object and is
+// handled separately by the caller.
+func childSchemas(base, head Schema, key string) (Schema, Schema, bool) {
+	h, ok := head[key].(map[string]any)
+	if !ok {
 		return nil, nil, false
 	}
+	b, _ := base[key].(map[string]any) // nil -> empty (unconstrained) base schema
 	return Schema(b), Schema(h), true
 }
 

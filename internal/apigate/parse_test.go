@@ -194,6 +194,24 @@ func TestLoadSnapshotEmptyErrors(t *testing.T) {
 	}
 }
 
+// TestIsFirstPartyGroup covers the subdomain check: only cozystack.io and its
+// dot-delimited subdomains are first-party; a lookalike suffix is not.
+func TestIsFirstPartyGroup(t *testing.T) {
+	cases := map[string]bool{
+		"cozystack.io":                  true,
+		"apps.cozystack.io":             true,
+		"strategy.backups.cozystack.io": true,
+		"fakecozystack.io":              false,
+		"cozystack.io.evil.com":         false,
+		"cert-manager.io":               false,
+	}
+	for group, want := range cases {
+		if got := isFirstPartyGroup(group); got != want {
+			t.Errorf("isFirstPartyGroup(%q) = %v, want %v", group, got, want)
+		}
+	}
+}
+
 // TestLoadSnapshotEndToEnd builds two minimal checkouts on disk and verifies
 // the loader + classifier wire together across all three sources.
 func TestLoadSnapshotEndToEnd(t *testing.T) {

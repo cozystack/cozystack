@@ -204,6 +204,27 @@ func TestDiffSchema(t *testing.T) {
 			base: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":false}}}`,
 			head: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":true}}}`,
 		},
+		{
+			name: "additionalProperties false to schema is safe (relaxation)",
+			base: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":false}}}`,
+			head: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":{"type":"string"}}}}`,
+		},
+		// Adding a schema where the map/array element was previously
+		// unconstrained is a restriction and must be flagged.
+		{
+			name:     "adding additionalProperties schema to open map is breaking",
+			base:     `{"type":"object","properties":{"m":{"type":"object"}}}`,
+			head:     `{"type":"object","properties":{"m":{"type":"object","additionalProperties":{"type":"string"}}}}`,
+			breaking: true,
+			wantSub:  "type constraint added",
+		},
+		{
+			name:     "adding items schema to unconstrained array is breaking",
+			base:     `{"type":"object","properties":{"list":{"type":"array"}}}`,
+			head:     `{"type":"object","properties":{"list":{"type":"array","items":{"type":"object","properties":{"foo":{"type":"string"}}}}}}`,
+			breaking: true,
+			wantSub:  "type constraint added",
+		},
 		// B7(b): CEL validation rules — additions break, removals are safe.
 		{
 			name:     "added CEL validation rule is breaking",

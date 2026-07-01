@@ -49,10 +49,17 @@ var crdDirNames = map[string]struct{}{
 // apiserverGoFile is the source of the static Go-backed aggregated registrations.
 const apiserverGoFile = "pkg/apiserver/apiserver.go"
 
-// crdGroupSuffix restricts discovered CRDs to first-party API groups, so
-// vendored upstream CRDs (cert-manager, flux, …) that happen to sit in a crds/
-// directory are not gated.
-const crdGroupSuffix = "cozystack.io"
+// crdGroupBase is the first-party API group family. A discovered CRD is gated
+// only when its group is exactly this or a dot-delimited subdomain of it, so
+// vendored upstream CRDs (cert-manager, flux, …) sitting in a crds/ directory
+// are not gated — and a lookalike such as "fakecozystack.io" is not mistaken
+// for first-party.
+const crdGroupBase = "cozystack.io"
+
+// isFirstPartyGroup reports whether group belongs to the cozystack.io family.
+func isFirstPartyGroup(group string) bool {
+	return group == crdGroupBase || strings.HasSuffix(group, "."+crdGroupBase)
+}
 
 // LoadSnapshot walks a repository checkout rooted at dir and builds the full
 // API Snapshot from every source of truth: cozyrds (apps API), CRD manifests
@@ -102,7 +109,7 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 			continue
 		}
 		for _, res := range resources {
-			if strings.HasSuffix(res.Group, crdGroupSuffix) {
+			if isFirstPartyGroup(res.Group) {
 				add(res)
 			}
 		}
