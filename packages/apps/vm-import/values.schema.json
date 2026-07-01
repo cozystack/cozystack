@@ -1,0 +1,128 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "sourceUrl": {
+      "description": "URL of the VMware vCenter server (e.g. `https://vcenter.example.com/sdk`).",
+      "type": "string",
+      "default": ""
+    },
+    "sourceSecretName": {
+      "description": "Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys).",
+      "type": "string",
+      "default": ""
+    },
+    "vddkInitImage": {
+      "description": "VDDK init image (VMware Virtual Disk Development Kit) used by Forklift for efficient vSphere disk transfer. Required when `skipGuestConversion` is enabled (raw-copy mode). Built from the proprietary VMware VDDK SDK and pushed to a registry reachable by the cluster. Note: VDDK connects directly to the ESXi hosts, so the cluster must have network access to them.",
+      "type": "string",
+      "default": ""
+    },
+    "skipGuestConversion": {
+      "description": "Skip virt-v2v guest conversion and copy the disk as-is (raw-copy mode). Faster and avoids the privileged virt-v2v conversion pod, but the guest OS must already contain virtio drivers. Requires `vddkInitImage` to be set.",
+      "type": "boolean",
+      "default": false
+    },
+    "virtV2vImage": {
+      "description": "Override the virt-v2v conversion container image used by Forklift. Leave empty to use the operator default. Provided as an escape hatch for version mismatches in the conversion image.",
+      "type": "string",
+      "default": ""
+    },
+    "xfsCompatibility": {
+      "description": "Use the XFS-capable virt-v2v image and omit the `--no-fstrim` flag. Works around an upstream Forklift inconsistency where the conversion entrypoint passes `--no-fstrim` to a `virt-v2v-inspector` that does not support it, which otherwise fails the migration after a successful disk conversion.",
+      "type": "boolean",
+      "default": false
+    },
+    "vms": {
+      "description": "List of virtual machines to migrate.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "description": "The managed object reference ID of the VM in vSphere (e.g. `vm-123`).",
+            "type": "string"
+          },
+          "name": {
+            "description": "Optional target name for the VM in KubeVirt.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "warm": {
+      "description": "Enable warm migration (incremental replication before cutover).",
+      "type": "boolean",
+      "default": false
+    },
+    "enableAdoption": {
+      "description": "Automatically label imported VMs for Cozystack adoption and dashboard visibility.",
+      "type": "boolean",
+      "default": true
+    },
+    "tenantNamespace": {
+      "description": "Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption).",
+      "type": "string",
+      "default": ""
+    },
+    "networkMap": {
+      "description": "Mapping of source networks to destination networks.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "destinationType",
+          "sourceId"
+        ],
+        "properties": {
+          "destinationName": {
+            "description": "Name of the destination network (required if type is `multus`).",
+            "type": "string"
+          },
+          "destinationNamespace": {
+            "description": "Namespace of the destination network.",
+            "type": "string"
+          },
+          "destinationType": {
+            "description": "Destination type: `pod` for pod network, or `multus` for a Multus network.",
+            "type": "string"
+          },
+          "sourceId": {
+            "description": "The managed object reference ID of the source network in vSphere.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "storageMap": {
+      "description": "Mapping of source datastores to destination StorageClasses.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "sourceId",
+          "storageClass"
+        ],
+        "properties": {
+          "sourceId": {
+            "description": "The managed object reference ID of the source datastore in vSphere.",
+            "type": "string"
+          },
+          "storageClass": {
+            "description": "Name of the destination Kubernetes StorageClass.",
+            "type": "string"
+          }
+        }
+      }
+    }
+  },
+  "required": [
+    "sourceUrl",
+    "sourceSecretName"
+  ]
+}

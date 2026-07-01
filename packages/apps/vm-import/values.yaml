@@ -1,0 +1,65 @@
+##
+## @section VMware Source
+##
+
+## @param {string} sourceUrl - URL of the VMware vCenter server (e.g. `https://vcenter.example.com/sdk`).
+sourceUrl: ""
+
+## @param {string} sourceSecretName - Name of the Kubernetes Secret containing VMware credentials (`user`, `password`, `thumbprint` keys).
+sourceSecretName: ""
+
+## @param {string} vddkInitImage - VDDK init image (VMware Virtual Disk Development Kit) used by Forklift for efficient vSphere disk transfer. Required when `skipGuestConversion` is enabled (raw-copy mode). Built from the proprietary VMware VDDK SDK and pushed to a registry reachable by the cluster. Note: VDDK connects directly to the ESXi hosts, so the cluster must have network access to them.
+vddkInitImage: ""
+
+##
+## @section Migration Plan
+##
+
+## @param {bool} skipGuestConversion - Skip virt-v2v guest conversion and copy the disk as-is (raw-copy mode). Faster and avoids the privileged virt-v2v conversion pod, but the guest OS must already contain virtio drivers. Requires `vddkInitImage` to be set.
+skipGuestConversion: false
+
+## @param {string} virtV2vImage - Override the virt-v2v conversion container image used by Forklift. Leave empty to use the operator default. Provided as an escape hatch for version mismatches in the conversion image.
+virtV2vImage: ""
+
+## @param {bool} xfsCompatibility - Use the XFS-capable virt-v2v image and omit the `--no-fstrim` flag. Works around an upstream Forklift inconsistency where the conversion entrypoint passes `--no-fstrim` to a `virt-v2v-inspector` that does not support it, which otherwise fails the migration after a successful disk conversion.
+xfsCompatibility: false
+
+## @typedef {struct} VM - A virtual machine to migrate.
+## @field {string} id - The managed object reference ID of the VM in vSphere (e.g. `vm-123`).
+## @field {string} [name] - Optional target name for the VM in KubeVirt.
+
+## @param {[]VM} vms - List of virtual machines to migrate.
+vms: []
+
+## @param {bool} warm - Enable warm migration (incremental replication before cutover).
+warm: false
+
+## @param {bool} enableAdoption - Automatically label imported VMs for Cozystack adoption and dashboard visibility.
+enableAdoption: true
+
+## @param {string} tenantNamespace - Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption).
+tenantNamespace: ""
+
+##
+## @section Network Mapping
+##
+
+## @typedef {struct} NetworkMapEntry - Maps a source network to a destination network.
+## @field {string} sourceId - The managed object reference ID of the source network in vSphere.
+## @field {string} destinationType - Destination type: `pod` for pod network, or `multus` for a Multus network.
+## @field {string} [destinationName] - Name of the destination network (required if type is `multus`).
+## @field {string} [destinationNamespace] - Namespace of the destination network.
+
+## @param {[]NetworkMapEntry} networkMap - Mapping of source networks to destination networks.
+networkMap: []
+
+##
+## @section Storage Mapping
+##
+
+## @typedef {struct} StorageMapEntry - Maps a source datastore to a destination StorageClass.
+## @field {string} sourceId - The managed object reference ID of the source datastore in vSphere.
+## @field {string} storageClass - Name of the destination Kubernetes StorageClass.
+
+## @param {[]StorageMapEntry} storageMap - Mapping of source datastores to destination StorageClasses.
+storageMap: []
