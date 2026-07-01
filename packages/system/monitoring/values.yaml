@@ -87,3 +87,41 @@ vmagent:
   ##   - job_name: "custom"
   ##     static_configs:
   ##       - targets: ["my-service:9090"]
+
+## OIDC authentication for the Grafana instance.
+##
+## Identity mode picks the auth source for `[auth.generic_oauth]`:
+##   None         no OIDC; login form + admin_user/admin_password Secret
+##                stay the only auth path (default).
+##   System       trust the platform `cozy` Keycloak realm via a
+##                per-instance confidential client and audience binding.
+##                Requires the platform-level authentication.oidc.enabled
+##                flag; the chart hard-fails the render otherwise.
+##   CustomConfig trust a tenant-supplied issuer directly (BYO IdP).
+##                Exactly one of `customConfig.config` (inline) or
+##                `customConfig.secretRef.name` (existing Secret) must be
+##                set — the chart fails the render otherwise. `cozy` is
+##                not in the path in this mode.
+##
+## The admin_user / admin_password Secret stays a documented break-glass
+## path regardless of mode.
+oidc:
+  mode: "None"
+  ## CustomConfig payload — consumed only when `mode: CustomConfig`.
+  ## Exactly one of `config` or `secretRef.name` MUST be set.
+  customConfig:
+    ## Inline map of grafana.ini `[auth.generic_oauth]` keys. Any key
+    ## accepted by Grafana's generic_oauth provider is valid; typical
+    ## keys are `client_id`, `client_secret`, `auth_url`, `token_url`,
+    ## `api_url`, `scopes`, `role_attribute_path`,
+    ## `allow_assign_grafana_admin`. The chart writes the map verbatim
+    ## into `spec.config.auth.generic_oauth` on the Grafana CR.
+    ## Mutually exclusive with `customConfig.secretRef.name`.
+    config: {}
+    ## Reference to an operator-managed Secret carrying a ready-made
+    ## `[auth.generic_oauth]` ini fragment in the `auth.ini` key. The
+    ## chart mounts it and Grafana loads it via
+    ## `GF_PATHS_CUSTOM_INI`. Mutually exclusive with
+    ## `customConfig.config`.
+    secretRef:
+      name: ""
