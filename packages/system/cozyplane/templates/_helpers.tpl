@@ -3,7 +3,7 @@
 app.kubernetes.io/name: cozyplane
 app.kubernetes.io/part-of: cozyplane
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-helm.sh/chart: cozyplane-{{ .Chart.Version }}
+helm.sh/chart: {{ printf "cozyplane-%s" .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end -}}
 
 {{/* imagePullSecrets block, rendered only when set. Call with the root context. */}}
