@@ -253,11 +253,30 @@ EOF
     false
   }
 
-  # Grafana
+  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
+  # complete the tenant-root monitoring bring-up and contend for the same node
+  # resources as the VictoriaMetrics stack above during install. Under
+  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
+  # and fail the install on a PR that never touched monitoring, so both move from
+  # their 10m budget to the same uniform 15m as the vm-operator waits above and
+  # dump live status on timeout to keep a genuine stuck-not-slow regression
+  # legible instead of surfacing as a bare "timed out" line.
   timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=10m
+  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
+    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
+    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=10m
+  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
+    echo "=== deploy/grafana-deployment did not reach condition=available ==="
+    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
 
   # Verify Grafana via ingress
   ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
