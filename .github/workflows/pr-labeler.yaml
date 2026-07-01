@@ -68,9 +68,16 @@ jobs:
               'etcd':                'area/database',
               'kafka':               'area/database',
               'clickhouse':          'area/database',
+              'mongodb':             'area/database',
 
               // area/extra
               'extra':               'area/extra',
+
+              // area/kamaji
+              'kamaji':              'area/kamaji',
+
+              // area/keycloak
+              'keycloak':            'area/keycloak',
 
               // area/kubernetes
               'kubernetes':          'area/kubernetes',
@@ -120,6 +127,10 @@ jobs:
               'velero':              'area/storage',
               'harbor':              'area/storage',
               'backups':             'area/storage',
+              'csi':                 'area/storage',
+
+              // area/tenant
+              'tenant':              'area/tenant',
 
               // area/testing
               'tests':               'area/testing',
