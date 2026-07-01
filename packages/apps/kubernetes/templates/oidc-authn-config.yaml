@@ -12,8 +12,9 @@
   System mode:
     Single JWT entry built from `_cluster.root-host` (the cozy realm
     issuer URL) and the per-cluster audience (kubernetes.oidc.clientId).
-    Username claim is `preferred_username`, groups claim is `groups` —
-    matching the realm scope provisioned in oidc-keycloak.yaml.
+    Username claim is `email`, groups claim is `groups` — matching
+    the realm scope provisioned in oidc-keycloak.yaml and the detailed
+    rationale in the note below (line 32+).
 
   CustomConfig mode:
     The tenant supplies the entire `AuthenticationConfiguration` body.

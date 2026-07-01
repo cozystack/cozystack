@@ -25,7 +25,7 @@
   - `mode: System | CustomConfig`:
       - Apply one ClusterRoleBinding per `users[]` entry inside the tenant
         cluster (`admin` → `cluster-admin`, `view` → `view`, subject = the
-        literal email matched against `preferred_username`).
+        literal email matched against the `email` claim).
       - Prune stale CRBs labelled by this release.
       - `mode: System`: patch the pre-rendered `<release>-oidc-kubeconfig`
         Secret with a real kubeconfig wired to `kubectl oidc-login`
