@@ -316,7 +316,7 @@ spec:
                   cluster: $RELEASE
                   user: $RELEASE-oidc
               EOF
-                  KUBECONFIG_B64=$(base64 -w 0 < "$KUBECONFIG_FILE")
+                  KUBECONFIG_B64=$(base64 < "$KUBECONFIG_FILE" | tr -d '\n')
                   PATCH=$(printf '{"data":{"kubeconfig":"%s"},"stringData":null}' "$KUBECONFIG_B64")
                   kubectl --namespace "$RELEASE_NAMESPACE" patch secret \
                     "$RELEASE-oidc-kubeconfig" \
