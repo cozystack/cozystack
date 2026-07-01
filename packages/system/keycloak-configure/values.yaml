@@ -1,3 +1,8 @@
+# Keycloak image used by the one-shot admin-API job that enables the
+# UPDATE_EMAIL required action. Only kcadm.sh is used, so it just needs
+# to track the Keycloak server major version (packages/system/keycloak).
+image: quay.io/keycloak/keycloak:26.5.2
+
 # login:
 #   userRegistration: false
 #   verifyEmail: false
