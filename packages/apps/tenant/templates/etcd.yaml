@@ -13,6 +13,15 @@ metadata:
     apps.cozystack.io/application.group: apps.cozystack.io
     apps.cozystack.io/application.name: etcd
 spec:
+  # This release creates a VMPodScrape resource guarded by the
+  # victoria-metrics-operator admission webhook (failurePolicy: Fail). On a cold
+  # install the operator can be briefly unavailable on :9443, so gate on its
+  # HelmRelease becoming Ready to avoid an install failure → rollback. The system
+  # monitoring components gate on the operator the same way, via a variant-level
+  # dependsOn in packages/core/platform/sources/monitoring.yaml.
+  dependsOn:
+    - name: victoria-metrics-operator
+      namespace: cozy-victoria-metrics-operator
   chartRef:
     kind: ExternalArtifact
     name: cozystack-etcd-application-default-etcd
