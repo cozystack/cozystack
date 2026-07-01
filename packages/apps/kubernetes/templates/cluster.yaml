@@ -103,7 +103,18 @@ spec:
             resources:
               requests:
                 storage: {{ .group.diskSize | default "20Gi" | quote }}
-            {{- with .group.storageClass }}
+            {{- /*
+              Worker VMs live-migrate, so their disks need ReadWriteMany. The
+              RWX access mode is supplied by the chosen StorageClass's CDI
+              StorageProfile — it is not set on the DataVolume here. linstor-csi
+              rejects RWX volumes that are not on a DRBD-backed StorageClass, so
+              an empty nodeGroup storageClass falls back to the application-level
+              storageClass (a replicated/DRBD class) instead of the cluster
+              default, which may be a non-DRBD class that the CSI driver would
+              reject. Both empty still omits the field so the cluster default
+              applies.
+            */}}
+            {{- with .group.storageClass | default $.Values.storageClass }}
             storageClassName: {{ . | quote }}
             {{- end }}
       template:
