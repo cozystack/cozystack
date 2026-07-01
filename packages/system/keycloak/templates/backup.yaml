@@ -1,0 +1,20 @@
+{{/*
+  Scheduled S3 backup of the Keycloak CNPG database.
+
+  Rendered only when both backup.enabled and backup.schedule are set. The
+  Cluster's spec.backup.barmanObjectStore (see db.yaml) is what actually
+  configures WAL archiving + the object store; this ScheduledBackup drives
+  the recurring base backups. CNPG rejects an empty schedule, so the gate
+  keeps invalid manifests off the cluster.
+*/}}
+{{- if and .Values.backup.enabled .Values.backup.schedule }}
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: keycloak-db
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  backupOwnerReference: self
+  cluster:
+    name: keycloak-db
+{{- end }}
