@@ -213,20 +213,70 @@ EOF
   timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=10m
 
-  # VictoriaMetrics components
+  # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
+  # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip
+  # updateStatus=operational only once their workloads are scheduled and Ready.
+  # During platform bring-up they contend for node resources with the rest of
+  # the install, so convergence is load-sensitive: on a calm sandbox each reaches
+  # operational in under a second, but under install-time load (concurrent e2e
+  # sandboxes on one runner) monitoring bring-up is slow. vmalert already uses a
+  # 15m budget; vlclusters and vmcluster used 10m, so this block carried a
+  # 10m/15m split even though all three contend for the same node capacity and a
+  # slow VictoriaLogs bring-up can fail the install on a PR that never touched
+  # monitoring. Unify the block on one 15m budget (near-zero cost in the happy
+  # path, comfortably inside the E2E job budget) and dump live status on timeout
+  # so a genuine stuck-not-slow regression stays legible instead of surfacing as
+  # a bare "timed out" line.
   timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
+  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
+    echo "=== vmalert/vmalert-shortterm, vmalertmanager/alertmanager did not reach updateStatus=operational ==="
+    kubectl get vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=10m
+  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
+    echo "=== vlclusters/generic did not reach updateStatus=operational ==="
+    kubectl get vlclusters/generic -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=10m
+  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
+    echo "=== vmcluster/shortterm,longterm did not reach updateStatus=operational ==="
+    kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
 
-  # Grafana
+  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
+  # complete the tenant-root monitoring bring-up and contend for the same node
+  # resources as the VictoriaMetrics stack above during install. Under
+  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
+  # and fail the install on a PR that never touched monitoring, so both move from
+  # their 10m budget to the same uniform 15m as the vm-operator waits above and
+  # dump live status on timeout to keep a genuine stuck-not-slow regression
+  # legible instead of surfacing as a bare "timed out" line.
   timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=10m
+  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
+    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
+    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=10m
+  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
+    echo "=== deploy/grafana-deployment did not reach condition=available ==="
+    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
 
   # Verify Grafana via ingress
   ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
