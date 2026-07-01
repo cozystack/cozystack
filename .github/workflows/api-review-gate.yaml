@@ -67,7 +67,23 @@ jobs:
           git worktree add --detach "${RUNNER_TEMP}/base" "${merge_base}"
 
       - name: Build api-gate
-        run: go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate
+        run: |
+          set -euo pipefail
+          # Prefer building the detector from the trusted base checkout so a PR
+          # cannot neuter the gate by editing its own detector code — the tool
+          # analyzes the head as *data*, not as code. Fall back to the head
+          # checkout only while the tool has not yet landed on the base branch
+          # (bootstrap); in that window CODEOWNERS on cmd/api-gate,
+          # internal/apigate, and this workflow keeps tampering behind an
+          # API-owner review.
+          if [ -d "${RUNNER_TEMP}/base/cmd/api-gate" ]; then
+            build_dir="${RUNNER_TEMP}/base"
+            echo "Building api-gate from the trusted base checkout."
+          else
+            build_dir="${GITHUB_WORKSPACE}"
+            echo "::warning::api-gate not present on the base branch yet; building from head (bootstrap). CODEOWNERS enforces API-owner review on the gate's own files."
+          fi
+          ( cd "${build_dir}" && go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate )
 
       - name: Detect sizeable API changes
         id: detect

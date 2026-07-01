@@ -1,1 +1,11 @@
 * @kvaps @lllamnyp @lexfrei @androndo @IvanHunters @sircthulhu @myasnikovdaniil
+
+# The API review gate must not be editable without an API-owner review, or a
+# PR could neuter the detector (it is compiled from the head checkout during
+# bootstrap) and slip a sizeable API change through unreviewed. Scoping these
+# paths to the API owners overrides the catch-all above (last match wins), so
+# changes here require @kvaps or @lllamnyp specifically. Enable "Require review
+# from Code Owners" in branch protection for this to bind.
+/cmd/api-gate/                          @kvaps @lllamnyp
+/internal/apigate/                      @kvaps @lllamnyp
+/.github/workflows/api-review-gate.yaml @kvaps @lllamnyp

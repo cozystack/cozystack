@@ -217,6 +217,32 @@ func TestDiffSchema(t *testing.T) {
 			base: `{"type":"object","properties":{"v":{"type":"integer","x-kubernetes-validations":[{"rule":"self > 0"}]}}}`,
 			head: `{"type":"object","properties":{"v":{"type":"integer"}}}`,
 		},
+		// nullable removal is breaking; adding nullable is a widening.
+		{
+			name:     "removing nullable is breaking",
+			base:     `{"type":"object","properties":{"v":{"type":"string","nullable":true}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			breaking: true,
+			wantSub:  "no longer nullable",
+		},
+		{
+			name: "adding nullable is safe (widening)",
+			base: `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			head: `{"type":"object","properties":{"v":{"type":"string","nullable":true}}}`,
+		},
+		// oneOf/allOf/not composition added is breaking; removed is safe.
+		{
+			name:     "adding oneOf composition is breaking",
+			base:     `{"type":"object","properties":{"v":{"type":"object"}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"object","oneOf":[{"required":["a"]},{"required":["b"]}]}}}`,
+			breaking: true,
+			wantSub:  "oneOf composition constraint added",
+		},
+		{
+			name: "removing allOf composition is safe",
+			base: `{"type":"object","properties":{"v":{"type":"object","allOf":[{"required":["a"]}]}}}`,
+			head: `{"type":"object","properties":{"v":{"type":"object"}}}`,
+		},
 	}
 
 	for _, tc := range tests {

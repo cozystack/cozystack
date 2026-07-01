@@ -115,6 +115,26 @@ func diffNode(path string, base, head Schema, out *[]string) {
 		*out = append(*out, fmt.Sprintf("%s: validation rule added (%q)", path, rule))
 	}
 
+	// nullable: Kubernetes expresses "may be null" via nullable:true rather than
+	// a "null" entry in the type set. Dropping it rejects previously-valid null
+	// values, so a true -> false/absent transition is breaking.
+	if schemaBool(base, "nullable") && !schemaBool(head, "nullable") {
+		*out = append(*out, fmt.Sprintf("%s: no longer nullable (null values rejected)", path))
+	}
+
+	// Composition keywords (oneOf/allOf/not): introducing one where base had
+	// none can reject previously-valid objects. Conservative like the rest of
+	// the file — flag an addition; removing a composition constraint is a
+	// relaxation and is safe.
+	for _, kw := range []string{"oneOf", "allOf", "not"} {
+		if _, inBase := base[kw]; inBase {
+			continue
+		}
+		if _, inHead := head[kw]; inHead {
+			*out = append(*out, fmt.Sprintf("%s: %s composition constraint added", path, kw))
+		}
+	}
+
 	// Properties: recurse into shared properties; flag removals. A brand-new
 	// property is additive unless it is required (handled above).
 	baseProps, headProps := schemaProps(base), schemaProps(head)
@@ -286,6 +306,13 @@ func schemaString(s Schema, key string) string {
 		return v
 	}
 	return ""
+}
+
+// schemaBool reads a boolean keyword (e.g. nullable), defaulting to false when
+// absent or non-boolean.
+func schemaBool(s Schema, key string) bool {
+	b, _ := s[key].(bool)
+	return b
 }
 
 // schemaNumber reads a numeric keyword. JSON numbers decode as float64 through
