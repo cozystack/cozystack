@@ -66,11 +66,13 @@ metadata:
     {{- include "kubernetes.labels" . | nindent 4 }}
 rules:
   # Patch chart-owned OIDC kubeconfig Secret with runtime tenant CA + kubeconfig.
+  # `get` is needed too — `kubectl patch --type=merge` reads the current object
+  # before computing the merge (SMP does a fetch under the hood).
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
       - {{ .Release.Name }}-oidc-kubeconfig
-    verbs: ["patch"]
+    verbs: ["get", "patch"]
   # KCP normalize — chart-owned array field is SSA-owned by Kamaji after write-back.
   - apiGroups: ["controlplane.cluster.x-k8s.io"]
     resources: ["kamajicontrolplanes"]
