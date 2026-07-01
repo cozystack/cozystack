@@ -182,3 +182,34 @@ vmagent:
   ##   - job_name: "custom"
   ##     static_configs:
   ##       - targets: ["my-service:9090"]
+
+##
+## @section OIDC authentication
+##
+
+## @enum {string} OIDCMode - Identity mode for the Grafana instance.
+## @value None
+## @value System
+## @value CustomConfig
+
+## @typedef {struct} OIDCSecretRef - Reference to a Secret carrying an `[auth.generic_oauth]` ini fragment.
+## @field {string} [name] - Name of an existing Secret in the release namespace whose `auth.ini` key holds a ready-made `[auth.generic_oauth]` block. Mutually exclusive with `customConfig.config`.
+
+## @typedef {struct} OIDCCustomConfigInline - Inline map of grafana.ini `[auth.generic_oauth]` keys.
+## @field {string} [<key>] - Value for the generic_oauth key (e.g. `client_id`, `client_secret`, `auth_url`, `token_url`, `api_url`, `scopes`, `role_attribute_path`).
+
+## @typedef {struct} OIDCCustomConfig - Tenant-supplied AuthN payload; consumed only when `mode: CustomConfig`. Exactly one of `config` or `secretRef.name` must be set.
+## @field {OIDCCustomConfigInline} [config] - Inline map of `[auth.generic_oauth]` keys. Written verbatim into the Grafana CR `spec.config`. Mutually exclusive with `secretRef.name`.
+## @field {OIDCSecretRef} [secretRef] - Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`.
+
+## @typedef {struct} OIDC - OIDC selector for the Grafana instance (Phase 1 — per-instance audience binding; no per-tenant Keycloak realm).
+## @field {OIDCMode} mode - Identity mode. `None`: no OIDC, only the `grafana-admin-password` Secret works. `System`: trust the platform `cozy` realm via a per-instance confidential client and audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+## @field {OIDCCustomConfig} [customConfig] - Tenant-supplied `[auth.generic_oauth]` payload; consumed only when `mode: CustomConfig`.
+
+## @param {OIDC} oidc - OIDC authentication for the Grafana instance. See docs/oidc-grafana.md for the operator guide.
+oidc:
+  mode: "None"
+  customConfig:
+    config: {}
+    secretRef:
+      name: ""
