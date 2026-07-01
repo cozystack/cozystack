@@ -27,7 +27,13 @@ spec:
           type: RuntimeDefault
       containers:
         - name: cleanup
-          image: docker.io/clastix/kubectl:v1.32
+          # Digest-pinned (immutable) and routed through the cluster images
+          # registry via cozy-lib.image, so mirrored / air-gapped installs
+          # resolve it and an upstream retag cannot change what runs at
+          # uninstall. The tag+digest is refreshed by the "clastix/kubectl"
+          # custom Renovate manager in .github/renovate.json (the helm-values
+          # manager is disabled repo-wide), so this pin does not silently age.
+          image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

@@ -24,6 +24,14 @@
       "managerFilePatterns": ["/^packages/extra/etcd/templates/etcd-cluster\\.yaml$/"],
       "matchStrings": ["image:\\s+(?<depName>quay\\.io/coreos/etcd):(?<currentValue>v[0-9]+\\.[0-9]+\\.[0-9]+)"],
       "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "Track and keep fresh the clastix/kubectl image digest-pinned in the post-delete cleanup hooks. The ref is assembled at render time by the cozy-lib.image helper (routed through cozy-lib.images-registry so mirrored / air-gapped installs resolve it), so it is neither a Dockerfile nor a go.mod dependency and the built-in managers cannot see it. The helm-values manager is disabled repo-wide (see enabledManagers above), so without this regex manager the digest — a supply-chain pin — would silently age.",
+      "managerFilePatterns": ["/^packages/.+/templates/hooks/.+\\.yaml$/"],
+      "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker",
+      "depNameTemplate": "docker.io/clastix/kubectl"
     }
   ],
   "packageRules": [

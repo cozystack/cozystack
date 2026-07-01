@@ -74,6 +74,60 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: kubectl delete[^\n]*-l acme.cert-manager.io/http01-solver=true
 
+  - it: pins the cleanup image by digest and routes it through the images registry
+    documentIndex: 0
+    asserts:
+      # The image must be digest-pinned (immutable) rather than a moving tag,
+      # and must NOT hardcode docker.io so a mirrored/air-gapped registry can be
+      # prefixed via cozy-lib.image. Asserted by pattern (not an exact digest)
+      # so a Renovate tag/digest bump does not break the test.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: docker\.io
+
+  - it: prefixes the cleanup image with the cluster images registry when set
+    documentIndex: 0
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      # A mirrored / air-gapped install resolves the image from the internal
+      # registry; the digest pin is preserved.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+
+  - it: leaves no leading slash when the images registry is empty (default)
+    documentIndex: 0
+    asserts:
+      # With images-registry defaulting to "", the rendered ref must still be a
+      # valid image reference (no leading "/") so a standard install resolves it.
+      # The "^clastix" anchor proves there is no leading slash and no registry.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^/
+
+  - it: does not emit a double slash when the images registry has a trailing slash
+    documentIndex: 0
+    set:
+      _cluster:
+        images-registry: registry.example.com/
+    asserts:
+      # A misconfigured registry with a trailing "/" must not yield
+      # "registry.example.com//clastix/..." — the helper trims it.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: //
+
   - it: sets resource requests and limits on the cleanup container
     documentIndex: 0
     asserts:
