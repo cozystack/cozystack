@@ -344,6 +344,45 @@ tests:
       - failedTemplate:
           errorMessage: "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer."
 
+  - it: fails when legacy --oidc-* flag collides with spec.oidc.mode
+    # Regression guard: kube-apiserver refuses to boot when both
+    # `--authentication-config` (chart-injected) and legacy `--oidc-*` flags
+    # are set. Existing customers who configured OIDC by hand through the
+    # `controlPlane.apiServer.extraArgs` passthrough would BOOT-FAIL on
+    # upgrade the moment they toggle spec.oidc.mode. Fail render instead.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      controlPlane.apiServer.extraArgs:
+        - "--oidc-issuer-url=https://legacy.example/realms/x"
+        - "--oidc-client-id=legacy"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--oidc-issuer-url=https://legacy.example/realms/x" while spec.oidc.mode is "System" — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default.'
+
+  - it: allows legacy --oidc-* flags to remain when spec.oidc.mode is None
+    # No collision when the chart is NOT injecting --authentication-config —
+    # existing customers who manage OIDC by hand keep working until they
+    # explicitly opt in to the new selector.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      oidc.mode: None
+      controlPlane.apiServer.extraArgs:
+        - "--oidc-issuer-url=https://legacy.example/realms/x"
+    asserts:
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: "--oidc-issuer-url=https://legacy.example/realms/x"
+        documentIndex: 1
+
   ###############################################
   # mode: System — bootstrap Job + users[]      #
   ###############################################
