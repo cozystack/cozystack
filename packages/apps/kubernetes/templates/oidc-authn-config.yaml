@@ -29,7 +29,24 @@
 {{- if eq .Values.oidc.mode "System" }}
 {{-   $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
 {{-   $audience := include "kubernetes.oidc.clientId" . | trim }}
-{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimMappings:\n    username:\n      claim: preferred_username\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience }}
+{{- /*
+User identity claim: `email`, not `preferred_username`.
+
+The design doc example used `claim: preferred_username`, but in the
+cozystack `cozy` realm `preferred_username` is the Keycloak *username*
+(`kvaps`, `i.okhotnikov`), NOT the email — and the operator-facing
+`users[].email` field asks for the email address. Matching the `User:`
+subject in the ClusterRoleBinding to `preferred_username` would
+silently misidentify every user whose Keycloak username differs from
+their email — verified on dev3 where token auth succeeded but the CRB
+match failed with 403.
+
+Switching the claim to `email` aligns the apiserver-visible identity
+with the operator's declared `users[].email` value. Requires the
+issuer to emit `email` — cozy realm (verified) and every conformant
+OIDC provider do.
+*/ -}}
+{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience }}
 ---
 apiVersion: v1
 kind: Secret

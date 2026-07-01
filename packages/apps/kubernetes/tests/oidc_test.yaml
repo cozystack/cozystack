@@ -253,6 +253,12 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "url: https://keycloak.example.org/realms/cozy"
+      # Verified end-to-end on dev3: cozy realm's preferred_username is the
+      # Keycloak *username* (not the email), so a CRB subject sourced from
+      # users[].email would silently mis-authenticate. Lock the claim name.
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "claim: email"
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "- tenant-foo-kubernetes-app"
