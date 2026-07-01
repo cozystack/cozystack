@@ -324,6 +324,9 @@ metadata:
 {{-     if hasPrefix "--oidc-" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
 {{-     end }}
+{{-     if hasPrefix "--authentication-config" $arg }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
 {{-   end }}
 {{- end }}
 spec:
