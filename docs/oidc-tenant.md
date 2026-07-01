@@ -96,7 +96,7 @@ spec:
             - cozystack-prod
           claimMappings:
             username:
-              claim: preferred_username
+              claim: email
               prefix: ""
             groups:
               claim: groups
@@ -143,10 +143,14 @@ maps to the same binding.
 | `view` | `view` |
 
 The CRB `User:` subject is the literal `email` value; it must match the
-`preferred_username` claim emitted by the issuer. In the platform `cozy`
-realm `preferred_username` defaults to the user's email, so the typical
-case "just works". For `CustomConfig`, ensure your issuer's
-`preferred_username` claim matches the value you list here.
+`email` claim emitted by the issuer. In the platform `cozy` realm every
+user has an `email` attribute and the standard OIDC `email` scope is a
+default client scope, so the token always carries `email`. For
+`CustomConfig`, ensure your BYO issuer emits the `email` claim in the
+JWT — every conformant OIDC provider does when the `email` scope is
+included in the client's default scopes. The chart-generated OIDC
+kubeconfig requests `--oidc-extra-scope=email` explicitly so this does
+not depend on the client's realm-side default scope configuration.
 
 Toggling a user out of `users[]` revokes their access on the next chart
 reconcile — the bootstrap Job prunes any CRBs labelled by the release
