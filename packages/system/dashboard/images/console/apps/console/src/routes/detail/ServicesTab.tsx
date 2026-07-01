@@ -10,6 +10,12 @@ interface ServiceSpec {
   ports?: { port: number; protocol?: string; name?: string }[]
 }
 
+interface ServiceStatus {
+  loadBalancer?: {
+    ingress?: { ip?: string; hostname?: string }[]
+  }
+}
+
 export function ServicesTab({
   ad,
   instance,
@@ -18,7 +24,7 @@ export function ServicesTab({
   instance: ApplicationInstance
 }) {
   const ns = instance.metadata.namespace ?? ""
-  const { data, isLoading } = useK8sList<K8sResource<ServiceSpec>>(
+  const { data, isLoading } = useK8sList<K8sResource<ServiceSpec, ServiceStatus>>(
     { apiGroup: "", apiVersion: "v1", plural: "services", namespace: ns },
     { labelSelector: appInstanceLabel(ad, instance) },
   )
@@ -40,32 +46,43 @@ export function ServicesTab({
                 <th className="px-4 py-3">Name</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Cluster IP</th>
+                <th className="px-4 py-3">External IP</th>
                 <th className="px-4 py-3">Ports</th>
                 <th className="px-4 py-3">Age</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {items.map((svc) => (
-                <tr key={svc.metadata.name} className="hover:bg-slate-50">
-                  <td className="px-4 py-3 font-mono text-xs text-slate-800">
-                    {svc.metadata.name}
-                  </td>
-                  <td className="px-4 py-3 text-slate-700">
-                    {svc.spec?.type ?? "ClusterIP"}
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-600">
-                    {svc.spec?.clusterIP ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 text-slate-700">
-                    {svc.spec?.ports
-                      ?.map((p) => `${p.port}/${p.protocol ?? "TCP"}`)
-                      .join(", ") ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 tabular-nums text-slate-500">
-                    {formatAge(svc.metadata.creationTimestamp)}
-                  </td>
-                </tr>
-              ))}
+              {items.map((svc) => {
+                const lb = svc.status?.loadBalancer?.ingress?.[0]
+                const external =
+                  svc.spec?.type === "LoadBalancer"
+                    ? (lb?.ip ?? lb?.hostname ?? "Pending")
+                    : "—"
+                return (
+                  <tr key={svc.metadata.name} className="hover:bg-slate-50">
+                    <td className="px-4 py-3 font-mono text-xs text-slate-800">
+                      {svc.metadata.name}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {svc.spec?.type ?? "ClusterIP"}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-600">
+                      {svc.spec?.clusterIP ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-slate-700">
+                      {external}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {svc.spec?.ports
+                        ?.map((p) => `${p.port}/${p.protocol ?? "TCP"}`)
+                        .join(", ") ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 tabular-nums text-slate-500">
+                      {formatAge(svc.metadata.creationTimestamp)}
+                    </td>
+                  </tr>
+                )
+              })}
             </tbody>
           </table>
         )}
