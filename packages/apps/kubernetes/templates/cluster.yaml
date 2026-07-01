@@ -311,8 +311,9 @@ metadata:
 */}}
 {{- $oidcEnabled := ne .Values.oidc.mode "None" }}
 {{- $oidcAuthnSecret := printf "%s-oidc-authn-config" .Release.Name }}
-{{- if and (eq .Values.oidc.mode "CustomConfig") (ne .Values.oidc.customConfig.secretRef.name "") }}
-{{-   $oidcAuthnSecret = .Values.oidc.customConfig.secretRef.name }}
+{{- $customSecretRefName := dig "customConfig" "secretRef" "name" "" .Values.oidc }}
+{{- if and (eq .Values.oidc.mode "CustomConfig") (ne $customSecretRefName "") }}
+{{-   $oidcAuthnSecret = $customSecretRefName }}
 {{- end }}
 {{- if and $oidcEnabled (has "authentication-config" $userVolumeNames) }}
 {{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
@@ -331,7 +332,7 @@ metadata:
   preserved for backward compatibility.
 */}}
 {{- if $oidcEnabled }}
-{{-   range $arg := .Values.controlPlane.apiServer.extraArgs }}
+{{-   range $arg := (.Values.controlPlane.apiServer.extraArgs | default list) }}
 {{-     if hasPrefix "--oidc-" $arg }}
 {{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
 {{-     end }}
