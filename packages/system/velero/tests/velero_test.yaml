@@ -36,3 +36,73 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # Velero binds :8085 (http-monitoring) late under a heavy parallel install, so
+  # the upstream liveness probe (initialDelaySeconds 10, ~130s total budget) would
+  # kill it mid-startup and crashloop it out of the install-gate window. A
+  # startupProbe (patched into the upstream chart, which omits one) holds liveness
+  # and readiness off until the server is up, granting 30 * 10s = 300s of startup
+  # grace while leaving steady-state liveness at the tight upstream default. Pin
+  # the startupProbe budget AND that liveness was NOT loosened, so neither
+  # silently regresses.
+  - it: gates startup with a startupProbe and keeps liveness tight
+    template: charts/velero/templates/deployment.yaml
+    documentSelector:
+      path: metadata.name
+      value: velero
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.timeoutSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.successThreshold
+          value: 1
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /metrics
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: http-monitoring
+      # No initialDelaySeconds: the first startup check fires immediately, so the
+      # full 300s budget is spent probing. Pin its absence so a future change
+      # cannot silently re-introduce a delay that eats into the grace window.
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe.initialDelaySeconds
+      # Liveness stays at the tight upstream default — the startupProbe owns the
+      # grace, so loosening liveness would only weaken steady-state crash
+      # detection. Pin the full budget (initialDelay/period/failureThreshold) so a
+      # future change cannot silently re-delay or loosen liveness.
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.initialDelaySeconds
+          value: 10
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.periodSeconds
+          value: 30
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.failureThreshold
+          value: 5
+
+  # All three probes live behind {{- if .Values.metrics.enabled }} — :8085 only
+  # exists when metrics are on. Pin that the startupProbe follows the same gate as
+  # liveness/readiness, so disabling metrics drops all probes together and never
+  # leaves a startupProbe pointed at an unbound port.
+  - it: omits all probes (including the startupProbe) when metrics are disabled
+    template: charts/velero/templates/deployment.yaml
+    documentSelector:
+      path: metadata.name
+      value: velero
+    set:
+      velero.metrics.enabled: false
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].startupProbe
+      - notExists:
+          path: spec.template.spec.containers[0].livenessProbe
+      - notExists:
+          path: spec.template.spec.containers[0].readinessProbe

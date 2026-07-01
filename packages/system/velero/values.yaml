@@ -32,3 +32,27 @@ velero:
     # Increase timeout for item operations to 24 hours to prevent timeouts
     # during backups of very large volumes. The Velero default is 4 hours.
     defaultItemOperationTimeout: 24h
+
+  # Velero binds its metrics/health endpoint (:8085, http-monitoring) only after
+  # the server finishes loading plugins and connecting to the API server. Under a
+  # heavy parallel platform install that can take minutes, but the upstream
+  # liveness probe starts checking /metrics at initialDelaySeconds=10 and kills
+  # the container after failureThreshold=5 (~130s total) before :8085 is bound.
+  # The kubelet SIGTERMs velero (exitCode 0/Completed), it BackOff-restarts, and
+  # never escapes the loop inside the install-gate window, blocking the gate.
+  #
+  # Give the server an explicit startup budget. While the startupProbe is failing
+  # the kubelet holds off the liveness and readiness probes entirely, so steady-
+  # state liveness stays at the tight upstream default (10s / 30s / 5 failures)
+  # once startup completes. failureThreshold * periodSeconds = 30 * 10s = 300s of
+  # grace. The upstream chart does not render a startupProbe, so the velero
+  # package patches it in (patches/add-startup-probe.patch, re-applied on update).
+  startupProbe:
+    httpGet:
+      path: /metrics
+      port: http-monitoring
+      scheme: HTTP
+    periodSeconds: 10
+    timeoutSeconds: 5
+    successThreshold: 1
+    failureThreshold: 30
