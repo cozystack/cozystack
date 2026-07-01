@@ -65,16 +65,30 @@ metadata:
   labels:
     {{- include "kubernetes.labels" . | nindent 4 }}
 rules:
+  # Patch chart-owned OIDC kubeconfig Secret with runtime tenant CA + kubeconfig.
   - apiGroups: [""]
     resources: ["secrets"]
     resourceNames:
       - {{ .Release.Name }}-oidc-kubeconfig
     verbs: ["patch"]
+  # KCP normalize — chart-owned array field is SSA-owned by Kamaji after write-back.
   - apiGroups: ["controlplane.cluster.x-k8s.io"]
     resources: ["kamajicontrolplanes"]
     resourceNames:
       - {{ .Release.Name }}
     verbs: ["get", "patch"]
+  # mode=None cleanup — force-delete chart-owned OIDC objects that Helm's
+  # SSA-based apply cannot reap (helm-controller relinquishes ownership on
+  # missing fields but doesn't cascade-delete namespaced resources).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ .Release.Name }}-oidc-kubeconfig
+      - {{ .Release.Name }}-oidc-authn-config
+    verbs: ["delete"]
+  - apiGroups: ["v1.edp.epam.com"]
+    resources: ["keycloakclients", "keycloakclientscopes"]
+    verbs: ["delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -159,15 +173,39 @@ spec:
               set -euo pipefail
 
               if [ "$OIDC_MODE" = "None" ]; then
-                echo "mode=None: normalizing KamajiControlPlane extraVolumes (remove stale OIDC volume left by SSA-owned field)..."
-                # Idempotent: `kubectl patch --type=merge` on the array REPLACES it
-                # (verified against real Kamaji controllers — the earlier
-                # `helm upgrade`-generated patch was not applied because
-                # Kamaji's field-manager takes SSA ownership on write-back).
+                echo "mode=None: force-cleaning chart-owned OIDC resources Helm's SSA apply cannot reap..."
+
+                # 1. Normalize KCP: kubectl patch --type=merge REPLACES the array,
+                #    which Helm's SSA apply does not do here — Kamaji's field
+                #    manager takes ownership of spec.deployment.extraVolumes on
+                #    write-back to the TenantControlPlane. Verified end-to-end
+                #    against a real Kamaji controller.
+                echo "  patching KamajiControlPlane $RELEASE — remove authentication-config volume"
                 kubectl --namespace "$RELEASE_NAMESPACE" patch kamajicontrolplane "$RELEASE" \
                   --type=merge \
                   --patch '{"spec":{"deployment":{"extraVolumes":[{"name":"talos-ca","secret":{"secretName":"'"$RELEASE"'-talos-ca"}},{"name":"talos-tls-cert","secret":{"secretName":"'"$RELEASE"'-talos-tls-cert"}}]}}}'
-                echo "KCP normalized. Nothing else to do for mode=None."
+
+                # 2. Chart-owned OIDC Secrets — Helm's SSA-based delete-on-absence
+                #    also fails here (same field-ownership pattern). Explicit
+                #    delete is safe: the templates only render these for
+                #    mode=System/CustomConfig, so at mode=None they are stale.
+                echo "  deleting chart-owned OIDC Secrets"
+                kubectl --namespace "$RELEASE_NAMESPACE" delete secret \
+                  "$RELEASE-oidc-kubeconfig" "$RELEASE-oidc-authn-config" \
+                  --ignore-not-found
+
+                # 3. Chart-owned KeycloakClient + audience KeycloakClientScope in
+                #    the cozy realm. These are created by oidc-keycloak.yaml only
+                #    for mode=System; at mode=None they must not linger.
+                if kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
+                  echo "  deleting chart-owned Keycloak objects"
+                  kubectl --namespace "$RELEASE_NAMESPACE" delete keycloakclient.v1.edp.epam.com \
+                    "$RELEASE_NAMESPACE-$RELEASE" --ignore-not-found
+                  kubectl --namespace "$RELEASE_NAMESPACE" delete keycloakclientscope.v1.edp.epam.com \
+                    "$RELEASE_NAMESPACE-$RELEASE-audience" --ignore-not-found
+                fi
+
+                echo "mode=None cleanup complete."
                 exit 0
               fi
 
