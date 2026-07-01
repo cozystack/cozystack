@@ -104,3 +104,36 @@ tests:
           path: roleRef.apiGroup
           value: rbac.authorization.k8s.io
         documentIndex: 1
+
+  # TLS secrets are always exposed within the tenant: operator-managed TLS is
+  # always on, so the leaf (-ssl) and CA (-ca-cert) secrets always exist.
+
+  - it: Role always grants access to TLS secrets (ca-cert + ssl)
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ca-cert
+        documentIndex: 0
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ssl
+        documentIndex: 0
+
+  - it: Role still grants access to TLS secrets when external is enabled
+    release:
+      name: test-mongodb
+      namespace: tenant-test
+    set:
+      external: true
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ca-cert
+        documentIndex: 0
+      - contains:
+          path: rules[1].resourceNames
+          content: test-mongodb-ssl
+        documentIndex: 0

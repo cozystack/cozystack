@@ -31,6 +31,14 @@ spec:
     include:
       - resourceNames:
           - mongodb-{{ .name }}-credentials
+      # NOTE: This file is plain YAML included verbatim by .Files.Get and is NOT
+      # processed by the Helm template engine, so conditionals are not available
+      # here. That is fine: operator-managed TLS is always on, so the TLS secrets
+      # mongodb-{{ .name }}-ca-cert and mongodb-{{ .name }}-ssl always exist and
+      # are listed unconditionally.
+      - resourceNames:
+          - mongodb-{{ .name }}-ca-cert
+          - mongodb-{{ .name }}-ssl
   services:
     exclude: []
     include:

@@ -1,0 +1,150 @@
+suite: mongodb TLS CR integration
+
+# TLS is always on in operator-managed mode: the chart unconditionally sets
+# spec.secrets.ssl and spec.tls.mode: preferTLS. The PSMDB operator manages the
+# full cert-manager chain (it does NOT render Issuer/Certificate resources) —
+# see templates/mongodb.yaml for the detailed explanation.
+#
+# splitHorizons (per-pod external hostnames → leaf cert SANs) is injected only
+# when external: true and the per-tenant host (_namespace.host) is present.
+
+release:
+  name: mg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+templates:
+  - templates/mongodb.yaml
+
+tests:
+  ############################################################
+  # TLS is always enabled (operator-managed), regardless of external
+  ############################################################
+
+  - it: spec.tls.mode is preferTLS by default (internal instance, external false)
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+
+  - it: spec.secrets.ssl references the operator-managed leaf secret by default
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.secrets.ssl
+          value: mg-test-ssl
+
+  - it: TLS stays on when external is true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+      - equal:
+          path: spec.secrets.ssl
+          value: mg-test-ssl
+
+  - it: spec.tls has no issuerConf (the operator-managed secret is passed directly)
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.tls.issuerConf
+
+  ############################################################
+  # crVersion gates the operator's splitHorizons → SAN injection
+  # (cr.CompareVersion("1.22.0") >= 0 in pkg/psmdb/tls/tls.go)
+  ############################################################
+
+  - it: crVersion is hardcoded to 1.22.0
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.crVersion
+          value: 1.22.0
+
+  ############################################################
+  # splitHorizons: per-pod external hostnames for external TLS
+  ############################################################
+
+  - it: splitHorizons advertises per-pod external hostnames when external + host present
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.replsets[0].splitHorizons
+          value:
+            mg-test-rs0-0:
+              external: mg-test-rs0-0.example.cozy.local
+            mg-test-rs0-1:
+              external: mg-test-rs0-1.example.cozy.local
+            mg-test-rs0-2:
+              external: mg-test-rs0-2.example.cozy.local
+
+  - it: splitHorizons honours the replica count
+    set:
+      external: true
+      replicas: 2
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.replsets[0].splitHorizons
+          value:
+            mg-test-rs0-0:
+              external: mg-test-rs0-0.example.cozy.local
+            mg-test-rs0-1:
+              external: mg-test-rs0-1.example.cozy.local
+
+  - it: TLS stays active but splitHorizons is omitted when external true and _namespace.host absent
+    set:
+      external: true
+      # _namespace intentionally absent — controller has not populated host yet
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  - it: no splitHorizons for internal instances (external false)
+    documentIndex: 0
+    asserts:
+      - notExists:
+          path: spec.replsets[0].splitHorizons
+
+  ############################################################
+  # sharding + TLS combination
+  ############################################################
+
+  - it: spec.tls.mode is preferTLS and secrets.ssl is set when sharding enabled
+    set:
+      sharding: true
+      shardingConfig:
+        configServers: 3
+        configServerSize: 3Gi
+        mongos: 2
+        shards:
+          - name: rs0
+            replicas: 3
+            size: 10Gi
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.tls.mode
+          value: preferTLS
+      - equal:
+          path: spec.secrets.ssl
+          value: mg-test-ssl

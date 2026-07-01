@@ -18,6 +18,8 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-credentials
+  - {{ .Release.Name }}-ca-cert
+  - {{ .Release.Name }}-ssl
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
