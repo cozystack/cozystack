@@ -1,7 +1,7 @@
 ---
 name: Feature request
 about: Propose a concrete, scoped improvement to Cozystack
-labels: 'kind/feature'
+labels: 'kind/feature, triage/needs-triage'
 assignees: ''
 
 ---
