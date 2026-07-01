@@ -11,8 +11,16 @@ spec:
     path: /
   variants:
   - name: default
+    # kubevirt-cdi ships the cdi-clone-dv RoleBinding INTO the cozy-public
+    # namespace, which is provisioned by cozystack-basics. Without the
+    # cozystack-basics edge the RoleBinding can race namespace creation on a
+    # fresh install and fail with `namespaces "cozy-public" not found`.
+    # Normally masked by Flux retries; becomes a hard UpgradeFailed under slow
+    # reconcile. Depend on cozystack-basics so the target namespace exists
+    # first. No cycle: cozystack-basics' deps do not depend on kubevirt-cdi.
     dependsOn:
     - cozystack.networking
+    - cozystack.cozystack-basics
     components:
     - name: kubevirt-cdi-operator
       path: system/kubevirt-cdi-operator

@@ -1,0 +1,24 @@
+suite: kubevirt-cdi waits for the cozy-public namespace it binds into
+# Regression guard for a fresh-install ordering race: kubevirt-cdi ships the
+# cdi-clone-dv RoleBinding INTO the cozy-public namespace, which is provisioned
+# by cozystack-basics. Without the cozystack-basics edge the RoleBinding races
+# namespace creation and fails with `namespaces "cozy-public" not found`,
+# normally masked by Flux retries but a hard UpgradeFailed under slow reconcile.
+# The dependsOn edges below must stay.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: kubevirt-cdi dependsOn networking and cozystack-basics
+    documentSelector:
+      path: metadata.name
+      value: cozystack.kubevirt-cdi
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cozystack-basics
