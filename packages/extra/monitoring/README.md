@@ -101,3 +101,15 @@
 | `vmagent.externalLabels` | External labels applied to all metrics.  | `object` | `{}`  |
 | `vmagent.remoteWrite`    | Remote write configuration.              | `object` | `{}`  |
 
+
+### OIDC authentication
+
+| Name                               | Description                                                                                                                                                                                                                                                                                           | Type     | Value  |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `oidc`                             | OIDC authentication for the Grafana instance. See docs/oidc-grafana.md for the operator guide.                                                                                                                                                                                                        | `object` | `{}`   |
+| `oidc.mode`                        | Identity mode. `None`: no OIDC, only the `grafana-admin-password` Secret works. `System`: trust the platform `cozy` realm via a per-instance confidential client and audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path. | `string` | `None` |
+| `oidc.customConfig`                | Tenant-supplied `[auth.generic_oauth]` payload; consumed only when `mode: CustomConfig`.                                                                                                                                                                                                              | `object` | `{}`   |
+| `oidc.customConfig.config`         | Inline map of `[auth.generic_oauth]` keys. Written verbatim into the Grafana CR `spec.config`. Mutually exclusive with `secretRef.name`.                                                                                                                                                              | `object` | `{}`   |
+| `oidc.customConfig.secretRef`      | Reference to a Secret holding an `auth.ini` fragment; mounted under `/etc/grafana/oidc` and loaded via `GF_PATHS_CUSTOM_INI`.                                                                                                                                                                         | `object` | `{}`   |
+| `oidc.customConfig.secretRef.name` | Name of an existing Secret in the release namespace whose `auth.ini` key holds a ready-made `[auth.generic_oauth]` block. Mutually exclusive with `customConfig.config`.                                                                                                                              | `string` | `""`   |
+

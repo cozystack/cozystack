@@ -4,6 +4,28 @@
 {{- $host := .Values._namespace.host }}
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
+
+{{- /*
+  OIDC (see values.yaml — oidc.mode).
+  System        → chart-owned Keycloak client + client-secret + role
+                  mapping via role_attribute_path.
+  CustomConfig  → operator-supplied auth.generic_oauth payload — either
+                  inline as a map (customConfig.config), or as a Secret
+                  with a ready-made ini fragment
+                  (customConfig.secretRef.name). XOR-guarded via the
+                  assertCustomConfigXor helper.
+  None          → no auth.generic_oauth section, no OIDC env — the
+                  admin_user/admin_password Secret remains the only auth
+                  path.
+*/}}
+{{- $oidcMode := .Values.oidc.mode | default "None" }}
+{{- if eq $oidcMode "CustomConfig" }}
+{{-   include "monitoring.oidc.assertCustomConfigXor" . }}
+{{- end }}
+{{- $customInline := (.Values.oidc.customConfig.config | default dict) }}
+{{- $customSecretRefName := dig "secretRef" "name" "" (.Values.oidc.customConfig | default dict) }}
+{{- $useCustomInline := and (eq $oidcMode "CustomConfig") (gt (len $customInline) 0) }}
+{{- $useCustomSecretRef := and (eq $oidcMode "CustomConfig") (ne $customSecretRefName "") }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
 kind: Grafana
@@ -31,6 +53,24 @@ spec:
       admin_password: ${GF_PASSWORD}
     plugins:
       allow_loading_unsigned_plugins: "victoriametrics-logs-datasource"
+    {{- if eq $oidcMode "System" }}
+    auth.generic_oauth:
+      enabled: "true"
+      name: "Keycloak"
+      client_id: {{ include "monitoring.oidc.clientId" . | quote }}
+      client_secret: "${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}"
+      auth_url: "{{ include "monitoring.oidc.systemIssuerURL" . }}/protocol/openid-connect/auth"
+      token_url: "{{ include "monitoring.oidc.systemIssuerURL" . }}/protocol/openid-connect/token"
+      api_url: "{{ include "monitoring.oidc.systemIssuerURL" . }}/protocol/openid-connect/userinfo"
+      scopes: "openid email profile groups {{ include "monitoring.oidc.audienceScopeName" . }}"
+      role_attribute_path: {{ include "monitoring.oidc.roleAttributePath" . | quote }}
+      allow_assign_grafana_admin: {{ include "monitoring.oidc.allowAssignGrafanaAdmin" . | quote }}
+      email_attribute_path: "email"
+      auto_login: "false"
+    {{- else if $useCustomInline }}
+    auth.generic_oauth:
+      {{- toYaml $customInline | nindent 6 }}
+    {{- end }}
   deployment:
     spec:
       replicas: 2
@@ -72,6 +112,29 @@ spec:
                   secretKeyRef:
                     key: password
                     name: grafana-admin-password
+              {{- if eq $oidcMode "System" }}
+              - name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+                valueFrom:
+                  secretKeyRef:
+                    name: {{ include "monitoring.oidc.clientSecretName" . }}
+                    key: client-secret
+              {{- end }}
+              {{- if $useCustomSecretRef }}
+              - name: GF_PATHS_CUSTOM_INI
+                value: /etc/grafana/oidc/auth.ini
+              {{- end }}
+              {{- if $useCustomSecretRef }}
+              volumeMounts:
+                - name: oidc-custom-ini
+                  mountPath: /etc/grafana/oidc
+                  readOnly: true
+              {{- end }}
+          {{- if $useCustomSecretRef }}
+          volumes:
+            - name: oidc-custom-ini
+              secret:
+                secretName: {{ $customSecretRefName }}
+          {{- end }}
   {{- if ne $gatewayEnabled "true" }}
   ingress:
     {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}

@@ -1,0 +1,334 @@
+suite: OIDC selector on the Grafana instance (Phase 1)
+templates:
+  - templates/grafana/oidc-keycloak.yaml
+  - templates/grafana/oidc-client-secret.yaml
+  - templates/grafana/grafana.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# Baseline `_cluster` / `_namespace` values wired by cozystack-basics
+# at install time. Individual tests override `oidc.*` and re-set the
+# oidc-enabled gate as needed.
+set:
+  _cluster:
+    root-host: example.org
+  _namespace:
+    host: tenant-root.example.org
+    ingress: tenant-root
+
+capabilities:
+  apiVersions:
+    - v1.edp.epam.com/v1
+
+tests:
+  ##########################################################
+  # mode: None — nothing OIDC-related is emitted
+  ##########################################################
+
+  - it: mode=None emits no KeycloakClient / KeycloakClientScope / KeycloakRealmGroup
+    template: templates/grafana/oidc-keycloak.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: mode=None emits no client-secret Secret
+    template: templates/grafana/oidc-client-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: mode=None grafana.yaml carries no auth.generic_oauth and no OIDC env
+    template: templates/grafana/grafana.yaml
+    asserts:
+      - notExists:
+          path: spec.config["auth.generic_oauth"]
+      - notContains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+      - notContains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_PATHS_CUSTOM_INI
+
+  ##########################################################
+  # mode: System — happy path
+  ##########################################################
+
+  - it: mode=System renders KeycloakClient + KeycloakClientScope + 3 KeycloakRealmGroups
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: kind
+          value: KeycloakClientScope
+        documentIndex: 0
+      - equal:
+          path: kind
+          value: KeycloakClient
+        documentIndex: 1
+      - equal:
+          path: kind
+          value: KeycloakRealmGroup
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: tenant-root-monitoring-admin
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: tenant-root-monitoring-editor
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: tenant-root-monitoring-viewer
+        documentIndex: 4
+
+  - it: mode=System KeycloakClient is confidential and points to the persistent Secret
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.public
+          value: false
+        documentIndex: 1
+      - equal:
+          path: spec.secret
+          value: "$monitoring-oidc-client:client-secret"
+        documentIndex: 1
+      - equal:
+          path: spec.redirectUris[0]
+          value: "https://grafana.tenant-root.example.org/login/generic_oauth"
+        documentIndex: 1
+      - contains:
+          path: spec.defaultClientScopes
+          content: tenant-root-monitoring-audience
+        documentIndex: 1
+
+  - it: mode=System audience scope pins id_token.aud to the per-instance clientId
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-root-monitoring-audience
+        documentIndex: 0
+      - equal:
+          path: spec.protocolMappers[0].config["included.client.audience"]
+          value: tenant-root-monitoring
+        documentIndex: 0
+
+  - it: mode=System persists a random 32-char client-secret at install
+    template: templates/grafana/oidc-client-secret.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Secret
+      - equal:
+          path: metadata.name
+          value: monitoring-oidc-client
+      - matchRegex:
+          path: data["client-secret"]
+          pattern: "^[A-Za-z0-9]+={0,2}$"
+
+  - it: mode=System grafana.yaml emits auth.generic_oauth pointing at the cozy realm
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].enabled
+          value: "true"
+      - equal:
+          path: spec.config["auth.generic_oauth"].client_id
+          value: tenant-root-monitoring
+      - equal:
+          path: spec.config["auth.generic_oauth"].client_secret
+          value: "${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}"
+      - equal:
+          path: spec.config["auth.generic_oauth"].auth_url
+          value: "https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth"
+      - matchRegex:
+          path: spec.config["auth.generic_oauth"].role_attribute_path
+          pattern: "tenant-root-monitoring-admin.*tenant-root-monitoring-editor.*tenant-root-monitoring-viewer"
+      # tenant Grafana stays at org-level Admin, no server-level upgrade.
+      - equal:
+          path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
+          value: "false"
+
+  - it: mode=System grafana.yaml wires GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET from the Secret
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
+            valueFrom:
+              secretKeyRef:
+                name: monitoring-oidc-client
+                key: client-secret
+
+  - it: mode=System keeps disable_login_form false so admin creds stay a break-glass path
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.config.auth.disable_login_form
+          value: "false"
+
+  ##########################################################
+  # mode: System — fail-close guard
+  ##########################################################
+
+  - it: mode=System hard-fails the render when the platform OIDC feature is off
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: System
+      # _cluster.oidc-enabled deliberately unset
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer."
+
+  ##########################################################
+  # mode: CustomConfig — inline
+  ##########################################################
+
+  - it: mode=CustomConfig with inline config emits no cozy realm objects
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: my-client
+        client_secret: xyz
+        auth_url: https://idp.example/auth
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: mode=CustomConfig inline emits no client-secret Secret (operator brings their own)
+    template: templates/grafana/oidc-client-secret.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: my-client
+        client_secret: xyz
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: mode=CustomConfig inline writes the operator's map verbatim into spec.config
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: my-client
+        client_secret: xyz
+        auth_url: https://idp.example/auth
+        role_attribute_path: "'Viewer'"
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].client_id
+          value: my-client
+      - equal:
+          path: spec.config["auth.generic_oauth"].client_secret
+          value: xyz
+      - equal:
+          path: spec.config["auth.generic_oauth"].auth_url
+          value: https://idp.example/auth
+      - equal:
+          path: spec.config["auth.generic_oauth"].role_attribute_path
+          value: "'Viewer'"
+
+  ##########################################################
+  # mode: CustomConfig — secretRef
+  ##########################################################
+
+  - it: mode=CustomConfig with secretRef mounts the operator Secret + GF_PATHS_CUSTOM_INI
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.secretRef.name: my-oauth-secret
+    asserts:
+      # spec.config carries no auth.generic_oauth — the ini fragment is
+      # authoritative in this branch.
+      - notExists:
+          path: spec.config["auth.generic_oauth"]
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].env
+          content:
+            name: GF_PATHS_CUSTOM_INI
+            value: /etc/grafana/oidc/auth.ini
+      - contains:
+          path: spec.deployment.spec.template.spec.containers[0].volumeMounts
+          content:
+            name: oidc-custom-ini
+            mountPath: /etc/grafana/oidc
+            readOnly: true
+      - contains:
+          path: spec.deployment.spec.template.spec.volumes
+          content:
+            name: oidc-custom-ini
+            secret:
+              secretName: my-oauth-secret
+
+  ##########################################################
+  # mode: CustomConfig — XOR guards
+  ##########################################################
+
+  - it: mode=CustomConfig with BOTH inline and secretRef fails the render
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: a
+      oidc.customConfig.secretRef.name: b
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.customConfig: set exactly one of `config` (inline) or `secretRef.name` — they are mutually exclusive."
+
+  - it: mode=CustomConfig with NEITHER inline nor secretRef fails the render
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline generic_oauth map) or spec.oidc.customConfig.secretRef.name (Secret with an `auth.ini` key)."
+
+  ##########################################################
+  # Platform release — allow_assign_grafana_admin gets flipped
+  ##########################################################
+
+  - it: platform release (Release.Name == monitoring-system) upgrades Admin to GrafanaAdmin
+    template: templates/grafana/grafana.yaml
+    release:
+      name: monitoring-system
+      namespace: cozy-monitoring
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+      _namespace.host: cozy-monitoring.example.org
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
+          value: "true"
