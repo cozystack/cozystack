@@ -37,6 +37,13 @@ rules:
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
+  # read CiliumNode.spec.ingress.ipv4 to recognise the per-node reserved:ingress
+  # IP. When the disputed IP is exactly that, the Tier-2 agent restart is futile
+  # (the agent re-derives the same ingress IP on boot) and harmful (it can
+  # re-trigger the host-scope IPAM restore-window race), so the healer skips it.
+  - apiGroups: ["cilium.io"]
+    resources: ["ciliumnodes"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
