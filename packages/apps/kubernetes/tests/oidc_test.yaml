@@ -14,13 +14,17 @@ tests:
   ###############################################
 
   - it: emits no OIDC apiserver flag when oidc.mode is None
+    # extraArgs is always rendered (see apiserver_authentication_test — the
+    # explicit `[]` is required so a mode=System → mode=None upgrade REPLACES
+    # the previously-set `--authentication-config` flag on the CRD).
     release:
       name: test
       namespace: tenant-test
     template: templates/cluster.yaml
     asserts:
-      - notExists:
+      - equal:
           path: spec.apiServer.extraArgs
+          value: []
         documentIndex: 1
 
   - it: emits no chart-managed OIDC volume on the KamajiControlPlane when oidc.mode is None
@@ -66,6 +70,54 @@ tests:
       name: test
       namespace: tenant-test
     template: templates/oidc-kubeconfig-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###############################################
+  # existing customer upgrade — vestigial fields #
+  ###############################################
+
+  - it: mode=None emits empty extraArgs so a System→None downgrade replaces the live array
+    # Guards against the Helm+CRD JSON-merge-patch pitfall — see cluster.yaml.
+    # If a customer previously set oidc.mode=System, the KCP got
+    # `--authentication-config` in extraArgs. Toggling mode=None must emit an
+    # empty `extraArgs: []` so the patch REPLACES the stale value. Silently
+    # omitting extraArgs would leave the live CRD unchanged and the tenant
+    # apiserver would keep the dangling flag.
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/cluster.yaml
+    set:
+      oidc.mode: None
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value: []
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraVolumeMounts
+          value: []
+        documentIndex: 1
+      # deployment.extraVolumes always has the two chart-owned Talos volumes;
+      # the OIDC volume must NOT be there in mode=None.
+      - lengthEqual:
+          path: spec.deployment.extraVolumes
+          count: 2
+        documentIndex: 1
+
+  - it: unknown fields under oidc are silently ignored (existing customer upgrade path)
+    release:
+      name: test-legacy
+      namespace: tenant-test
+    template: templates/oidc-rbac-job.yaml
+    set:
+      # An existing CR carried over from an earlier OIDC API surface may still
+      # have the old `oidc.enabled: bool` field. The Phase-1 chart only reads
+      # `oidc.mode`; the vestigial field is silently ignored and no OIDC
+      # objects render (mode defaults to None).
+      oidc.enabled: true
     asserts:
       - hasDocuments:
           count: 0
