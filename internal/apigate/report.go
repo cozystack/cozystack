@@ -23,10 +23,15 @@ import (
 
 // categoryTitles gives each category a stable, human-readable heading.
 var categoryTitles = map[Category]string{
-	NewGroup:    "New API group",
-	NewResource: "New resource",
-	Breaking:    "Breaking change to existing API",
+	NewGroup:        "New API group",
+	NewResource:     "New resource",
+	RemovedGroup:    "Removed API group",
+	RemovedResource: "Removed resource",
+	Breaking:        "Breaking change to existing API",
 }
+
+// categoryOrder is the stable order categories are rendered in.
+var categoryOrder = []Category{NewGroup, NewResource, RemovedGroup, RemovedResource, Breaking}
 
 // Report renders findings for CI consumption. format "markdown" (default)
 // produces a PR-comment-friendly summary; any other value produces plain text.
@@ -44,7 +49,7 @@ func Report(findings []Finding, format string) string {
 		b.WriteString("Sizeable API change detected:\n\n")
 	}
 
-	for _, cat := range []Category{NewGroup, NewResource, Breaking} {
+	for _, cat := range categoryOrder {
 		group := findingsOf(findings, cat)
 		if len(group) == 0 {
 			continue
@@ -55,9 +60,8 @@ func Report(findings []Finding, format string) string {
 			fmt.Fprintf(&b, "%s:\n", categoryTitles[cat])
 		}
 		for _, f := range group {
-			bullet := md
-			line := fmt.Sprintf("%s %s — %s (%s)", identity(f), f.Detail, f.Origin, f.Source)
-			if bullet {
+			line := fmt.Sprintf("%s %s — %s (%s)", identity(f, md), f.Detail, f.Origin, f.Source)
+			if md {
 				fmt.Fprintf(&b, "- %s\n", line)
 			} else {
 				fmt.Fprintf(&b, "  - %s\n", line)
@@ -68,12 +72,18 @@ func Report(findings []Finding, format string) string {
 	return b.String()
 }
 
-func identity(f Finding) string {
+// identity renders the resource identity, emphasized only in Markdown mode so
+// text output stays free of markup.
+func identity(f Finding, markdown bool) string {
 	kind := f.Kind
 	if kind == "" {
 		kind = f.Plural
 	}
-	return fmt.Sprintf("**%s/%s**", f.Group, kind)
+	id := fmt.Sprintf("%s/%s", f.Group, kind)
+	if markdown {
+		return "**" + id + "**"
+	}
+	return id
 }
 
 func findingsOf(findings []Finding, cat Category) []Finding {

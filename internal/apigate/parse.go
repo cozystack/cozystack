@@ -90,6 +90,7 @@ func ParseCRDs(origin string, data []byte) ([]Resource, error) {
 				} `json:"names"`
 				Versions []struct {
 					Name   string `json:"name"`
+					Served bool   `json:"served"`
 					Schema struct {
 						OpenAPIV3Schema Schema `json:"openAPIV3Schema"`
 					} `json:"schema"`
@@ -114,7 +115,11 @@ func ParseCRDs(origin string, data []byte) ([]Resource, error) {
 			Versions: map[string]Schema{},
 		}
 		for _, v := range doc.Spec.Versions {
-			if v.Name == "" {
+			// Only served versions are live API surface. Skipping unserved
+			// versions keeps the classifier from diffing schemas no client can
+			// call, and makes the standard CRD deprecation step (flip
+			// served:true -> false) surface as a removed served version.
+			if v.Name == "" || !v.Served {
 				continue
 			}
 			res.Versions[v.Name] = v.Schema.OpenAPIV3Schema
@@ -137,22 +142,38 @@ var storageVarGroups = map[string]string{
 // apiserverStorageRe matches `<var>["<plural>"]` storage registrations, e.g.
 //
 //	coreV1alpha1Storage["tenantsecrets"] = ...
-var apiserverStorageRe = regexp.MustCompile(`(\w+Storage)\["([a-z0-9]+)"\]`)
+//
+// The plural class allows hyphens so a future hyphenated resource name is not
+// silently dropped. The apps storage map is indexed by a variable
+// (appsV1alpha1Storage[resConfig.Application.Plural]), not a string literal, so
+// it never matches here — the apps API is covered by the cozyrds instead.
+var apiserverStorageRe = regexp.MustCompile(`(\w+Storage)\["([a-z0-9-]+)"\]`)
+
+// unmappedStoragePrefix labels resources whose storage variable prefix is not
+// in storageVarGroups. Rather than silently dropping them — which would let a
+// contributor add a brand-new aggregated group under a new variable and bypass
+// the gate — they are surfaced under this synthetic group so the classifier
+// reports them as a new group/resource, prompting the reviewer to map the
+// prefix in storageVarGroups.
+const unmappedStoragePrefix = "unmapped-apiserver-storage:"
 
 // ParseAPIServerStorages extracts the static Go-backed aggregated resources
-// registered in pkg/apiserver/apiserver.go for the groups in storageVarGroups.
-// These resources carry no checked-in schema, so they populate only the
-// new-group / new-resource detection. Kind is left empty (not recoverable from
-// the registration line alone); reporting falls back to the plural.
+// registered in pkg/apiserver/apiserver.go. Known variable prefixes map to
+// their real group (storageVarGroups); an unknown prefix is surfaced under a
+// synthetic group (unmappedStoragePrefix) so drift cannot silently defeat the
+// gate. These resources carry no checked-in schema, so they populate only the
+// new-group / new-resource / removal detection. Kind is left empty (not
+// recoverable from the registration line alone); reporting falls back to the
+// plural.
 func ParseAPIServerStorages(origin string, data []byte) []Resource {
 	var out []Resource
 	seen := map[resourceKey]struct{}{}
 	for _, m := range apiserverStorageRe.FindAllStringSubmatch(string(data), -1) {
-		group, ok := storageVarGroups[m[1]]
+		prefix, plural := m[1], m[2]
+		group, ok := storageVarGroups[prefix]
 		if !ok {
-			continue
+			group = unmappedStoragePrefix + prefix
 		}
-		plural := m[2]
 		k := resourceKey{Group: group, Plural: plural}
 		if _, dup := seen[k]; dup {
 			continue

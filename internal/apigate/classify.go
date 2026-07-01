@@ -72,6 +72,49 @@ func Classify(base, head Snapshot) []Finding {
 		})
 	}
 
+	// Removed API groups: present in base, absent in head. Reported once per
+	// group against the first (sorted) base resource that carried it.
+	headGroups := head.groups()
+	removedGroups := map[string]struct{}{}
+	for _, res := range sortedResources(base) {
+		if _, ok := headGroups[res.Group]; ok {
+			continue
+		}
+		if _, done := removedGroups[res.Group]; done {
+			continue
+		}
+		removedGroups[res.Group] = struct{}{}
+		findings = append(findings, Finding{
+			Category: RemovedGroup,
+			Group:    res.Group,
+			Kind:     res.Kind,
+			Plural:   res.Plural,
+			Source:   res.Source,
+			Origin:   res.Origin,
+			Detail:   fmt.Sprintf("API group %q is removed by this change", res.Group),
+		})
+	}
+
+	// Removed resources: present in base, absent in head. A resource whose
+	// whole group was removed is already covered above, so skip it here.
+	for _, res := range sortedResources(base) {
+		if _, ok := head[res.key()]; ok {
+			continue
+		}
+		if _, groupGone := removedGroups[res.Group]; groupGone {
+			continue
+		}
+		findings = append(findings, Finding{
+			Category: RemovedResource,
+			Group:    res.Group,
+			Kind:     res.Kind,
+			Plural:   res.Plural,
+			Source:   res.Source,
+			Origin:   res.Origin,
+			Detail:   fmt.Sprintf("resource %s (%s) is removed from group %q", res.Plural, displayKind(res), res.Group),
+		})
+	}
+
 	// Breaking changes: resources present in both, whose schema regresses.
 	for _, res := range sortedResources(head) {
 		prev, ok := base[res.key()]

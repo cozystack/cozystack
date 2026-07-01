@@ -34,16 +34,20 @@ jobs:
       # Space-separated GitHub logins allowed to satisfy the gate. Edit here to
       # change who can approve sizeable API changes.
       API_OWNERS: "lllamnyp kvaps"
-      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
       HEAD_SHA: ${{ github.event.pull_request.head.sha }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
-      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Checkout head
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
+          # Do not leave a usable token in the repo's git config: the PR-authored
+          # build and api-gate steps below must not have access to it. The token
+          # is scoped to the approval step alone, which is the only step that
+          # calls the GitHub API.
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -51,10 +55,16 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Materialize base checkout
+      - name: Materialize base checkout at the merge base
         run: |
           set -euo pipefail
-          git worktree add --detach "${RUNNER_TEMP}/base" "${BASE_SHA}"
+          # Diff against the PR's actual merge base, not the base branch tip:
+          # otherwise unrelated commits landing on the base branch while the PR
+          # is open would invent or hide API findings.
+          git fetch --no-tags origin "${BASE_REF}"
+          merge_base="$(git merge-base "${HEAD_SHA}" "origin/${BASE_REF}")"
+          echo "Merge base: ${merge_base}"
+          git worktree add --detach "${RUNNER_TEMP}/base" "${merge_base}"
 
       - name: Build api-gate
         run: go build -o "${RUNNER_TEMP}/api-gate" ./cmd/api-gate
@@ -80,6 +90,8 @@ jobs:
 
       - name: Check for an API owner approval
         if: steps.detect.outputs.sizeable == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           {
@@ -88,13 +100,25 @@ jobs:
             cat "${RUNNER_TEMP}/report.md"
           } >> "$GITHUB_STEP_SUMMARY"
 
-          # Latest review state per reviewer; an APPROVED review by any API
-          # owner satisfies the gate. GitHub forbids self-approval, so a
-          # sizeable PR authored by an owner still needs the other owner.
-          approvals="$(gh api \
-            "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" \
-            --paginate \
-            --jq '[.[] | select(.state=="APPROVED") | .user.login] | unique | .[]')"
+          # An APPROVED review by any API owner satisfies the gate, but only
+          # each reviewer's *latest* review *on the current head commit* counts:
+          # this drops approvals that a later commit invalidated, and approvals
+          # an owner subsequently superseded with CHANGES_REQUESTED. GitHub
+          # forbids self-approval, so a sizeable PR authored by an owner still
+          # needs the other owner.
+          approvals="$(
+            gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/reviews" --paginate |
+            jq -rs --arg head "${HEAD_SHA}" '
+              add
+              | map(select(.commit_id == $head))
+              | sort_by(.submitted_at // "")
+              | group_by(.user.login)
+              | map(last)
+              | .[]
+              | select(.state == "APPROVED")
+              | .user.login
+            '
+          )"
 
           for owner in ${API_OWNERS}; do
             if grep -qxi "${owner}" <<<"${approvals}"; then

@@ -88,13 +88,29 @@ func TestClassify(t *testing.T) {
 		}
 	})
 
-	t.Run("removed resource is not sizeable by these rules", func(t *testing.T) {
-		// Removing a resource is a different (also serious) event, but it is
-		// not one of the three gated categories; ensure we do not misreport it
-		// as any of them.
-		got := Classify(snap(pgBase), snap())
-		if len(got) != 0 {
-			t.Fatalf("expected no findings for a pure removal, got %v", got)
+	t.Run("removed resource is gated", func(t *testing.T) {
+		// Deleting a resource is the most disruptive single-resource change and
+		// must require owner review. The resource's group still has another
+		// member here, so this is a resource removal, not a group removal.
+		other := res("apps.cozystack.io", "Redis", "redises", SourceCozyRD, Schema{"type": "object"})
+		got := Classify(snap(pgBase, other), snap(other))
+		if n := countCategory(got, RemovedResource); n != 1 {
+			t.Fatalf("expected 1 removed-resource finding, got %d (%v)", n, got)
+		}
+		if countCategory(got, RemovedGroup) != 0 {
+			t.Fatalf("group still has a member; must not be flagged as removed group: %v", got)
+		}
+	})
+
+	t.Run("removed group flags group once and does not double-count its resources", func(t *testing.T) {
+		g1 := res("gone.cozystack.io", "Widget", "widgets", SourceCRD, Schema{"type": "object"})
+		g2 := res("gone.cozystack.io", "Gadget", "gadgets", SourceCRD, Schema{"type": "object"})
+		got := Classify(snap(pgBase, g1, g2), snap(pgBase))
+		if n := countCategory(got, RemovedGroup); n != 1 {
+			t.Fatalf("expected exactly 1 removed-group finding, got %d (%v)", n, got)
+		}
+		if n := countCategory(got, RemovedResource); n != 0 {
+			t.Fatalf("resources of a fully-removed group must not also be flagged as removed resources, got %d (%v)", n, got)
 		}
 	})
 

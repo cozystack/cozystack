@@ -40,10 +40,24 @@ func diffSchema(path string, base, head Schema) []string {
 }
 
 func diffNode(path string, base, head Schema, out *[]string) {
-	// Type narrowing: any type the base accepted that head no longer accepts
-	// is breaking. Widening (head adds types) is safe.
+	// A nil head means the schema at this path was removed entirely. Dropping a
+	// constraint is a widening, never a break, so there is nothing to report.
+	// Callers avoid handing us a nil head for genuine field/version removals
+	// (those are reported by the parent), so this only guards the defensive
+	// case of a child schema that vanished.
+	if head == nil {
+		return
+	}
+
+	// Type constraint changes:
+	//   base unconstrained, head constrained  -> breaking (rejects other types)
+	//   both constrained, head drops a type   -> breaking (narrowing)
+	//   head unconstrained                     -> safe (widening)
 	bt, ht := schemaTypes(base), schemaTypes(head)
-	if len(bt) > 0 { // base constrained the type at all
+	switch {
+	case len(bt) == 0 && len(ht) > 0:
+		*out = append(*out, fmt.Sprintf("%s: type constraint added, now only accepts %s", path, strings.Join(sortedKeys(ht), "/")))
+	case len(bt) > 0 && len(ht) > 0:
 		if removed := setDiff(bt, ht); len(removed) > 0 {
 			*out = append(*out, fmt.Sprintf("%s: type narrowed, no longer accepts %s", path, strings.Join(removed, "/")))
 		}
@@ -93,6 +107,14 @@ func diffNode(path string, base, head Schema, out *[]string) {
 		}
 	}
 
+	// CEL validation rules (x-kubernetes-validations): a rule present in head
+	// but not in base can reject previously-valid values or updates. Removing a
+	// rule is a relaxation and is safe, mirroring how pattern/enum are treated.
+	baseRules, headRules := schemaValidationRules(base), schemaValidationRules(head)
+	for _, rule := range setDiff(headRules, baseRules) {
+		*out = append(*out, fmt.Sprintf("%s: validation rule added (%q)", path, rule))
+	}
+
 	// Properties: recurse into shared properties; flag removals. A brand-new
 	// property is additive unless it is required (handled above).
 	baseProps, headProps := schemaProps(base), schemaProps(head)
@@ -106,12 +128,21 @@ func diffNode(path string, base, head Schema, out *[]string) {
 		diffNode(child, baseProps[name], hp, out)
 	}
 
-	// Map values (additionalProperties as a schema) and array items: recurse so
-	// nested breaks in maps/lists are caught.
-	if b, h, ok := schemaChild(base, head, "additionalProperties"); ok {
+	// additionalProperties: restricting it to false rejects previously-allowed
+	// undeclared fields — a breaking change that a boolean value carries and a
+	// schema recursion would miss. Otherwise recurse only when BOTH sides carry
+	// a map schema: a child schema present only in base is a relaxation (its
+	// removal loosens the contract), and diffing it against a nil head would
+	// misreport that relaxation as a break.
+	if base["additionalProperties"] != false && head["additionalProperties"] == false {
+		*out = append(*out, fmt.Sprintf("%s: additionalProperties restricted to false (undeclared fields no longer accepted)", path))
+	} else if b, h, ok := bothMapSchemas(base, head, "additionalProperties"); ok {
 		diffNode(path+"{}", b, h, out)
 	}
-	if b, h, ok := schemaChild(base, head, "items"); ok {
+
+	// items: recurse only when both sides define an item schema; removing items
+	// loosens an array's contract and is safe.
+	if b, h, ok := bothMapSchemas(base, head, "items"); ok {
 		diffNode(path+"[]", b, h, out)
 	}
 }
@@ -216,17 +247,38 @@ func schemaProps(s Schema) map[string]Schema {
 	return out
 }
 
-// schemaChild extracts a named child schema (e.g. items, additionalProperties)
-// from both nodes, reporting ok only when at least one side carries a schema
-// object worth recursing into. A boolean additionalProperties (true/false) is
-// not a recursable schema and yields ok=false.
-func schemaChild(base, head Schema, key string) (Schema, Schema, bool) {
+// bothMapSchemas extracts a named child schema (e.g. items, additionalProperties)
+// from both nodes, reporting ok only when BOTH sides carry a schema object.
+// Requiring both sides is deliberate: a child schema present only in base was
+// removed on head, which loosens the contract (safe), and recursing into it
+// against a nil head would misreport that relaxation as a break. A boolean
+// additionalProperties (true/false) is handled separately by the caller.
+func bothMapSchemas(base, head Schema, key string) (Schema, Schema, bool) {
 	b, bOK := base[key].(map[string]any)
 	h, hOK := head[key].(map[string]any)
-	if !bOK && !hOK {
+	if !bOK || !hOK {
 		return nil, nil, false
 	}
 	return Schema(b), Schema(h), true
+}
+
+// schemaValidationRules returns the set of CEL rule expressions declared in a
+// node's x-kubernetes-validations, keyed by the rule string so that a reworded
+// or tightened rule reads as a new rule.
+func schemaValidationRules(s Schema) map[string]struct{} {
+	out := map[string]struct{}{}
+	raw, ok := s["x-kubernetes-validations"].([]any)
+	if !ok {
+		return out
+	}
+	for _, v := range raw {
+		if entry, ok := v.(map[string]any); ok {
+			if rule, ok := entry["rule"].(string); ok && rule != "" {
+				out[rule] = struct{}{}
+			}
+		}
+	}
+	return out
 }
 
 func schemaString(s Schema, key string) string {

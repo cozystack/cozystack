@@ -37,6 +37,13 @@ const (
 	// (removed field, narrowed type/enum, newly-required field, tightened
 	// constraint, removed served version).
 	Breaking Category = "breaking-change"
+	// RemovedGroup is emitted when an entire API group present in base is gone
+	// from head. Deleting a group withdraws its whole API surface.
+	RemovedGroup Category = "removed-api-group"
+	// RemovedResource is emitted when a (group, resource) present in base is
+	// gone from head — the most disruptive single-resource change, since every
+	// stored object and client of that resource breaks.
+	RemovedResource Category = "removed-resource"
 )
 
 // Source identifies which checked-in artifact a resource was parsed from.

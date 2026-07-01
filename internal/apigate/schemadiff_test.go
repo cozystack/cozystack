@@ -158,6 +158,65 @@ func TestDiffSchema(t *testing.T) {
 			breaking: true,
 			wantSub:  `"x" was removed`,
 		},
+
+		// B1(a): removing a nested constraint entirely is a widening, not a break.
+		{
+			name: "removing items schema is safe (widening)",
+			base: `{"type":"object","properties":{"list":{"type":"array","items":{"type":"string"}}}}`,
+			head: `{"type":"object","properties":{"list":{"type":"array"}}}`,
+		},
+		{
+			name: "removing additionalProperties schema is safe (widening)",
+			base: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":{"type":"string"}}}}`,
+			head: `{"type":"object","properties":{"m":{"type":"object"}}}`,
+		},
+		// B1(b): adding a type to a previously-unconstrained field is breaking.
+		{
+			name:     "adding a type to an unconstrained field is breaking",
+			base:     `{"type":"object","properties":{"v":{}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			breaking: true,
+			wantSub:  "type constraint added",
+		},
+		// B1(c): a field becoming unconstrained is a widening, not a break.
+		{
+			name: "field becoming unconstrained is safe (widening)",
+			base: `{"type":"object","properties":{"v":{"type":"string"}}}`,
+			head: `{"type":"object","properties":{"v":{}}}`,
+		},
+		// B2: restricting additionalProperties to false rejects undeclared fields.
+		{
+			name:     "additionalProperties true to false is breaking",
+			base:     `{"type":"object","properties":{"m":{"type":"object","additionalProperties":true}}}`,
+			head:     `{"type":"object","properties":{"m":{"type":"object","additionalProperties":false}}}`,
+			breaking: true,
+			wantSub:  "additionalProperties restricted to false",
+		},
+		{
+			name:     "additionalProperties absent to false is breaking",
+			base:     `{"type":"object","properties":{"m":{"type":"object"}}}`,
+			head:     `{"type":"object","properties":{"m":{"type":"object","additionalProperties":false}}}`,
+			breaking: true,
+			wantSub:  "additionalProperties restricted to false",
+		},
+		{
+			name: "additionalProperties false to true is safe (widening)",
+			base: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":false}}}`,
+			head: `{"type":"object","properties":{"m":{"type":"object","additionalProperties":true}}}`,
+		},
+		// B7(b): CEL validation rules — additions break, removals are safe.
+		{
+			name:     "added CEL validation rule is breaking",
+			base:     `{"type":"object","properties":{"v":{"type":"integer"}}}`,
+			head:     `{"type":"object","properties":{"v":{"type":"integer","x-kubernetes-validations":[{"rule":"self > 0","message":"must be positive"}]}}}`,
+			breaking: true,
+			wantSub:  "validation rule added",
+		},
+		{
+			name: "removed CEL validation rule is safe",
+			base: `{"type":"object","properties":{"v":{"type":"integer","x-kubernetes-validations":[{"rule":"self > 0"}]}}}`,
+			head: `{"type":"object","properties":{"v":{"type":"integer"}}}`,
+		},
 	}
 
 	for _, tc := range tests {
