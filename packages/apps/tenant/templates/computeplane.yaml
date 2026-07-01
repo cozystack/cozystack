@@ -79,6 +79,11 @@ spec:
         enabled: true
       ingressNginx:
         enabled: true
+        # Expose the ComputePlane ingress-nginx via the Proxied NodePort Service so a
+        # ComputePlane app's per-app management Ingress can route to it without a
+        # management LoadBalancer. The Service (computeplane-ingress-nginx) is created
+        # whenever exposeMethod is Proxied, independent of any hosts list.
+        exposeMethod: Proxied
   valuesFrom:
   # Platform-defined ComputePlane profile: overrides cluster shape (node groups
   # / GPU types / Kubernetes version / autoscaling). Optional — when absent the
