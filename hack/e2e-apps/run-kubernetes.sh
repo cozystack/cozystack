@@ -301,9 +301,54 @@ EOF
       sleep 5
     done
   '; then
-    # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
-    kubectl -n tenant-test get hr
+    # Node-join failed: fewer than 2 tenant nodes became Ready inside the 12m
+    # deadline. Dump scoped diagnostics that split the failure sub-modes, then
+    # fail fast — no point running LB/NFS tests without Ready nodes.
+    #
+    # The tenant's cilium-operator HR reports "InProgress" here purely because
+    # zero worker Nodes joined, so the HelmRelease condition alone cannot tell
+    # apart (2a) the worker VM never booted (virt-launcher Pending/OOMKilled)
+    # from (2b) the VM booted fine but its kubelet never registered a Node
+    # (Talos/CSR/DNS/routing). The captures below make that distinction legible;
+    # (2b) is the failure mode a follow-up fix has to target, and it cannot be
+    # designed without this artifact. Every capture is guarded with `|| true`
+    # so a capture failure never masks the real `exit 1`.
+    echo "=== node-join failed: fewer than 2 tenant nodes Ready within 12m — diagnostics follow ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
+    kubectl -n tenant-test get hr || true
+
+    # (a) Worker VM / VMI / virt-launcher state on the MANAGEMENT cluster. A VMI
+    # stuck Pending or a virt-launcher pod OOMKilled/Pending is mode 2a; a
+    # Running+Ready VMI with a healthy virt-launcher is mode 2b. This is the key
+    # split. Full resource names (not the `vm` alias) to avoid short-name
+    # ambiguity, matching cozy_wait_tenant_drained above.
+    echo "=== (a) tenant worker VM/VMI/virt-launcher state (management cluster, ns tenant-test) ==="
+    kubectl -n tenant-test get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io -o wide || true
+    kubectl -n tenant-test describe virtualmachineinstances.kubevirt.io || true
+    kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
+    kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
+
+    # (c) Tenant kubelet CSRs + the talos-csr-signer sidecar log. A mode-2b node
+    # boots but blocks on a kubelet-serving/-client CSR that is never submitted
+    # or never approved; the pending CSR list (tenant cluster) plus the signer
+    # sidecar log (in the Kamaji apiserver pod on the management cluster) show
+    # which side stalled.
+    echo "=== (c) tenant CSRs + talos-csr-signer sidecar log ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get csr || true
+    kubectl -n tenant-test logs -l kamaji.clastix.io/name="kubernetes-${test_name}" \
+      -c talos-csr-signer --tail=200 --prefix || true
+
+    # (b) In-guest Talos/kubelet state from the worker VMs is intentionally NOT
+    # captured here. talosctl needs a client talosconfig for the TENANT cluster,
+    # and the runner has none: the tenant workers are provisioned with their own
+    # Talos PKI whose CA differs from the sandbox's /workspace/talosconfig (which
+    # cozyreport.sh uses to reach the MANAGEMENT nodes only), and the chart
+    # materialises no tenant client talosconfig Secret. Pointing talosctl at the
+    # worker IPs with the management talosconfig would just fail mTLS and capture
+    # nothing, so it is skipped rather than shipped as a misleading no-op. (a) +
+    # (c) carry the 2a-vs-2b split; adding real in-guest capture later requires
+    # wiring a tenant talosconfig into the runner first.
+    echo "=== (b) in-guest Talos/kubelet capture skipped: no tenant talosconfig on the runner (a/c cover the 2a-vs-2b split) ==="
     exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
