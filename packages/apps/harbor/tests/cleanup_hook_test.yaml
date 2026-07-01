@@ -74,6 +74,40 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: kubectl delete[^\n]*-l acme.cert-manager.io/http01-solver=true
 
+  - it: pins the cleanup image by digest and routes it through the images registry
+    documentIndex: 0
+    asserts:
+      # The image must be digest-pinned (immutable) rather than a moving tag,
+      # and must NOT hardcode docker.io so a mirrored/air-gapped registry can be
+      # prefixed via cozy-lib.image.
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^clastix/kubectl:v1\.32@sha256:[0-9a-f]{64}$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: docker\.io
+
+  - it: prefixes the cleanup image with the cluster images registry when set
+    documentIndex: 0
+    set:
+      _cluster:
+        images-registry: registry.example.com
+    asserts:
+      # A mirrored / air-gapped install resolves the image from the internal
+      # registry; the digest pin is preserved.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: registry.example.com/clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+
+  - it: leaves no leading slash when the images registry is empty (default)
+    documentIndex: 0
+    asserts:
+      # With images-registry defaulting to "", the rendered ref must still be a
+      # valid image reference (no leading "/") so a standard install resolves it.
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+
   - it: sets resource requests and limits on the cleanup container
     documentIndex: 0
     asserts:
