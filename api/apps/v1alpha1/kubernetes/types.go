@@ -324,7 +324,7 @@ type OIDCSecretRef struct {
 }
 
 type OIDCUser struct {
-	// Username matched against the `preferred_username` claim from the issuer. In the platform `cozy` realm this is the user's email. Used verbatim as the `User:` subject in the ClusterRoleBinding.
+	// Email address matched against the `email` claim from the issuer. Used verbatim as the `User:` subject in the ClusterRoleBinding inside the tenant cluster. The `email` claim is a built-in OIDC scope requested explicitly by the chart-generated `kubectl oidc-login` kubeconfig; every conformant OIDC provider (cozy realm included) emits it.
 	Email string `json:"email"`
 	// Role to bind: `admin` maps to `ClusterRole/cluster-admin`, `view` maps to `ClusterRole/view`.
 	Role OIDCRole `json:"role"`
