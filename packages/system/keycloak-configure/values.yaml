@@ -1,3 +1,9 @@
+# Enable the Keycloak Organizations feature for the `cozy` realm.
+# Mapped to ClusterKeycloakRealm.spec.organizationsEnabled. Defaults to
+# false to preserve the current behaviour; set to true to manage
+# organizations (and KeycloakOrganization resources) in the realm.
+organizationsEnabled: false
+
 # login:
 #   userRegistration: false
 #   verifyEmail: false
