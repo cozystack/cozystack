@@ -156,24 +156,27 @@ spec:
                   key: password
             - name: KC_DB
               value: "postgres"
+            {{- if .Values.encryption.enabled }}
+            # Encryption on: route through the keycloak-kms-proxy, which dials
+            # the real CNPG cluster. Auth (username/password/dbname) still comes
+            # from the CNPG-managed keycloak-db-app secret below and passes
+            # through the proxy unchanged.
             - name: KC_DB_URL_HOST
-              {{- if .Values.db.host }}
-              value: {{ .Values.db.host | quote }}
-              {{- else }}
+              value: keycloak-kms-proxy.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+            - name: KC_DB_URL_PORT
+              value: "5432"
+            {{- else }}
+            - name: KC_DB_URL_HOST
               valueFrom:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "host"
-              {{- end }}
             - name: KC_DB_URL_PORT
-              {{- if .Values.db.port }}
-              value: {{ .Values.db.port | quote }}
-              {{- else }}
               valueFrom:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "port"
-              {{- end }}
+            {{- end }}
             - name: KC_DB_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -189,10 +192,6 @@ spec:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "dbname"
-            {{- with .Values.db.urlProperties }}
-            - name: KC_DB_URL_PROPERTIES
-              value: {{ . | quote }}
-            {{- end }}
             - name: KC_FEATURES
               value: "docker"
             - name: KC_HOSTNAME
@@ -206,15 +205,10 @@ spec:
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if or $themes .Values.extraVolumeMounts }}
+          {{- if $themes }}
           volumeMounts:
-            {{- if $themes }}
             - name: themes
               mountPath: /opt/keycloak/themes
-            {{- end }}
-            {{- with .Values.extraVolumeMounts }}
-            {{- toYaml . | nindent 12 }}
-            {{- end }}
           {{- end }}
           ports:
             - name: http
@@ -243,15 +237,10 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-      {{- if or $themes .Values.extraVolumes }}
+      {{- if $themes }}
       volumes:
-        {{- if $themes }}
         - name: themes
           emptyDir:
             sizeLimit: 256Mi
-        {{- end }}
-        {{- with .Values.extraVolumes }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
       {{- end }}
       terminationGracePeriodSeconds: 60
