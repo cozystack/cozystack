@@ -374,12 +374,18 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	// Find Ready condition in ArtifactGenerator
 	readyCondition := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 
-	// Workaround for a race in fluxcd/source-watcher (bug tracked upstream in
-	// TODO(remove once https://github.com/fluxcd/source-watcher/issues/TBD is
-	// fixed and cozystack has bumped past the fix). Verified against
-	// v2.1.0 sources — the same code paths ship in v2.2.x (flux-aio latest
-	// as of this writing), so a simple version bump does not remove the
-	// need for this synthesis.
+	// Workaround for a race in fluxcd's patch.Helper — tracked upstream at
+	// https://github.com/fluxcd/pkg/issues/934 ("patch.Helper creates race
+	// conditions in downstream controllers"). The helper writes .status
+	// and .status.conditions as separate apiserver requests, and an etcd
+	// timeout can land between the two so that the artifact/inventory
+	// fields land while the Ready condition write does not.
+	// TODO(remove): drop this synthesis once fluxcd/pkg#934 is fixed and
+	// cozystack has bumped past the fix. Verified against source-watcher
+	// v2.1.0 sources; the same code paths ship in v2.2.x (flux-aio latest
+	// as of this writing) because both consume the same fluxcd/pkg
+	// runtime, so a source-watcher version bump alone does not remove
+	// the need for this synthesis.
 	//
 	// Kvaps' review on #3182 confirmed the diagnosis by tracing the
 	// upstream reconciler:
