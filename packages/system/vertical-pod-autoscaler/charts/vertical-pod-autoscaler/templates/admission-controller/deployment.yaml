@@ -46,6 +46,44 @@ spec:
         {{- if and (not .Values.admissionController.tls.existingSecret) (not .Values.admissionController.tls.certManagerEnabled) }}
         checksum/tls-secret: {{ include (print $.Template.BasePath "/admission-controller/tls-secret.yaml") . | sha256sum }}
         {{- end }}
+        {{- /*
+          Under cert-manager we need pod rotation ONLY when the Secret content
+          actually changes — never on unrelated reconciles. `checksum/tls-cert`
+          hashes the runtime Secret's `tls.crt` (via `lookup`), so:
+
+            * fresh install:       Secret does not exist yet at first render;
+                                   this annotation is absent, pod comes up on
+                                   whichever Secret cert-manager writes next.
+            * steady state:        Secret content stable → sha stable → no
+                                   rotation on any Flux reconcile.
+            * cert-manager adopt:  cert-manager rewrites Secret once
+                                   (issuer changed on upgrade) → sha flips →
+                                   pod restarts ONCE and picks up the new
+                                   CA + cert.
+            * renewal (~350d):     cert-manager rotates Secret → sha flips →
+                                   pod restarts ONCE.
+
+          `lookup` returns nil during `helm template --dry-run=client`
+          (offline CI renders) — that's fine, the annotation just doesn't
+          appear until a live-cluster reconcile fetches the Secret. Flux
+          HelmController runs via the Helm SDK against the live apiserver,
+          so `lookup` resolves at every reconcile there.
+
+          Crucially, this replaces the earlier `kubectl rollout restart`
+          post-upgrade hook. That hook itself was the amplifier this
+          iteration: every Flux reconcile stamped a fresh
+          `kubectl.kubernetes.io/restartedAt` timestamp, which mutated the
+          Deployment podTemplate, which spawned a new ReplicaSet — the
+          same ReplicaSet-churn pattern in a different disguise. Runtime-
+          content-based checksum only mutates when the runtime content
+          actually mutates, so the loop cannot form.
+        */}}
+        {{- if and .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
+        {{- $secret := lookup "v1" "Secret" (include "common.names.namespace" .) (include "vertical-pod-autoscaler.admissionController.tls.secretName" .) }}
+        {{- if and $secret $secret.data (index $secret.data "tls.crt") }}
+        checksum/tls-cert: {{ index $secret.data "tls.crt" | sha256sum }}
+        {{- end }}
+        {{- end }}
         {{- if .Values.admissionController.podAnnotations }}
         {{- include "common.tplvalues.render" ( dict "value" .Values.admissionController.podAnnotations "context" $ ) | nindent 8 }}
         {{- end }}

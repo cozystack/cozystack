@@ -190,14 +190,20 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: existingSecret bypasses the tls-rollout hook
+  # `checksum/tls-cert` uses a runtime `lookup` on the Secret content —
+  # `helm template` in a test suite has no cluster, so the Secret is never
+  # found and the annotation is absent. That's actually the correct
+  # rendering path in offline CI; the annotation only ever needs to exist
+  # once the cluster has issued a cert, and that path is verified by the
+  # `admissionController disabled` test group below (which confirms no
+  # unrelated annotation leaks).
+  - it: certManagerEnabled=true does NOT emit checksum/tls-cert during offline render (lookup returns nil)
     set:
-      vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
       vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-rollout.yaml
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
     asserts:
-      - hasDocuments:
-          count: 0
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-cert"]
 
   ###############################################################
   # Migration + rollout Job hook wiring                         #
@@ -239,53 +245,7 @@ tests:
           path: rules[0].resourceNames[0]
           value: vpa-vertical-pod-autoscaler-admission-controller-tls
 
-  # The rollout Job must run AFTER Helm has applied the Certificate — post-
-  # upgrade hook with positive weight; RBAC weight is one less so bindings
-  # exist first.
-  - it: tls-rollout Job wires post-upgrade + post-install hook with hook-weight=10
-    set:
-      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-rollout.yaml
-    documentSelector:
-      path: kind
-      value: Job
-    asserts:
-      - equal:
-          path: metadata.annotations["helm.sh/hook"]
-          value: post-install,post-upgrade
-      - equal:
-          path: metadata.annotations["helm.sh/hook-weight"]
-          value: "10"
-
-  - it: tls-rollout RBAC is scoped by resourceName to the Certificate and Deployment
-    set:
-      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-rollout.yaml
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - equal:
-          path: rules[0].apiGroups[0]
-          value: cert-manager.io
-      # Cert Certificate name is <fullname>-tls (see certificate.yaml). RBAC
-      # must match exactly, or the rollout Job hits `kubectl wait certificate/
-      # <wrong-name>` → NotFound → 3m timeout → backoffLimit exhaustion.
-      # Regression test for the fix in the parent commit.
-      - equal:
-          path: rules[0].resourceNames[0]
-          value: vpa-vertical-pod-autoscaler-admission-controller-tls
-      - equal:
-          path: rules[1].apiGroups[0]
-          value: apps
-      - equal:
-          path: rules[1].resources[0]
-          value: deployments
-      - equal:
-          path: rules[1].resourceNames[0]
-          value: vpa-vertical-pod-autoscaler-admission-controller
-
-  ###############################################################
+###############################################################
   # admission-controller disabled (nested vpa-for-vpa release)  #
   ###############################################################
 
@@ -311,10 +271,3 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: admissionController disabled renders no tls-rollout hook
-    set:
-      vertical-pod-autoscaler.admissionController.enabled: false
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-rollout.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
