@@ -181,15 +181,6 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: existingSecret bypasses the tls-migrator hook
-    set:
-      vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
-      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-migrator.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
-
   # `checksum/tls-cert` uses a runtime `lookup` on the Secret content —
   # `helm template` in a test suite has no cluster, so the Secret is never
   # found and the annotation is absent. That's actually the correct
@@ -206,46 +197,6 @@ tests:
           path: spec.template.metadata.annotations["checksum/tls-cert"]
 
   ###############################################################
-  # Migration + rollout Job hook wiring                         #
-  ###############################################################
-
-  # The migrator must run BEFORE Helm computes the release diff — negative
-  # hook-weight ensures Job runs first, and RBAC gets a slightly lower weight
-  # so ServiceAccount+Role+RoleBinding exist by the time the Job pod starts.
-  - it: tls-migrator Job wires pre-upgrade hook with hook-weight=-10
-    set:
-      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-migrator.yaml
-    documentSelector:
-      path: kind
-      value: Job
-    asserts:
-      - equal:
-          path: metadata.annotations["helm.sh/hook"]
-          value: pre-upgrade
-      - equal:
-          path: metadata.annotations["helm.sh/hook-weight"]
-          value: "-10"
-
-  # RBAC for the migrator must be scoped by resourceName to the single Secret
-  # — a broad get/patch on any Secret in the namespace would violate the
-  # least-privilege principle and give the migrator more power than it needs.
-  - it: tls-migrator RBAC is scoped by resourceName to the admission-controller Secret
-    set:
-      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-migrator.yaml
-    documentSelector:
-      path: kind
-      value: Role
-    asserts:
-      - equal:
-          path: rules[0].resources[0]
-          value: secrets
-      - equal:
-          path: rules[0].resourceNames[0]
-          value: vpa-vertical-pod-autoscaler-admission-controller-tls
-
-###############################################################
   # admission-controller disabled (nested vpa-for-vpa release)  #
   ###############################################################
 
@@ -263,11 +214,4 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: admissionController disabled renders no tls-migrator hook
-    set:
-      vertical-pod-autoscaler.admissionController.enabled: false
-    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-migrator.yaml
-    asserts:
-      - hasDocuments:
-          count: 0
 
