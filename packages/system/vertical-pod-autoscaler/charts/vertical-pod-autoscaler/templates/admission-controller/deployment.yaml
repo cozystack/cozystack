@@ -47,36 +47,64 @@ spec:
         checksum/tls-secret: {{ include (print $.Template.BasePath "/admission-controller/tls-secret.yaml") . | sha256sum }}
         {{- end }}
         {{- /*
-          Under cert-manager we need pod rotation ONLY when the Secret content
-          actually changes — never on unrelated reconciles. `checksum/tls-cert`
-          hashes the runtime Secret's `tls.crt` (via `lookup`), so:
+          Under cert-manager we need pod rotation ONLY when the Secret
+          content actually changes. `checksum/tls-cert` hashes the runtime
+          Secret's `tls.crt` (via `lookup`), so:
 
-            * fresh install:       Secret does not exist yet at first render;
-                                   this annotation is absent, pod comes up on
-                                   whichever Secret cert-manager writes next.
-            * steady state:        Secret content stable → sha stable → no
-                                   rotation on any Flux reconcile.
-            * cert-manager adopt:  cert-manager rewrites Secret once
-                                   (issuer changed on upgrade) → sha flips →
-                                   pod restarts ONCE and picks up the new
-                                   CA + cert.
-            * renewal (~350d):     cert-manager rotates Secret → sha flips →
-                                   pod restarts ONCE.
+            * fresh install:       Secret does not exist yet at first
+                                   render; the annotation is absent, pod
+                                   comes up on whichever Secret cert-
+                                   manager writes next.
+            * cert-manager adopt:  cert-manager rewrites the Secret once
+                                   (issuer changed on upgrade) → sha
+                                   flips → pod restarts ONCE and picks up
+                                   the new CA + cert.
+            * steady state:        Secret content stable → sha stable
+                                   → no rotation.
+            * renewal (~350d):     cert-manager rotates Secret → sha
+                                   flips → pod restarts ONCE **only if a
+                                   Helm action fires**; see the trade-off
+                                   below.
+
+          `lookup` runs ONLY on Helm actions (install / upgrade /
+          rollback) — helm-controller does not re-render a deployed
+          release on interval ticks, so `lookup` does not fire on every
+          reconcile. Concrete trade-off:
+
+            - Any Helm action (chart bump, values change, dependency
+              re-apply, manual `flux reconcile hr`) re-templates the
+              chart, `lookup` sees the current Secret content, the
+              annotation is re-computed, and — if the Secret has been
+              rotated since the last render — Kubernetes rolls the pod
+              on the resulting podTemplate change.
+            - Between Helm actions the pod holds the certificate it
+              loaded at startup. If cert-manager renews at day ~350 and
+              NO Helm action happens in the following ~15 days, the pod
+              keeps serving with an expired in-memory cert (--reload-
+              cert alone would make this worse — the mounted cert would
+              rotate while the pod's self-registered
+              MutatingWebhookConfiguration caBundle went stale). Given
+              cozystack's release cadence a Helm action realistically
+              lands well before day 365, so we accept this. If ever it
+              stops holding, a small post-renewal Job that annotates
+              the Deployment podTemplate would close the gap without
+              re-introducing the ReplicaSet-churn amplifier.
 
           `lookup` returns nil during `helm template --dry-run=client`
-          (offline CI renders) — that's fine, the annotation just doesn't
-          appear until a live-cluster reconcile fetches the Secret. Flux
-          HelmController runs via the Helm SDK against the live apiserver,
-          so `lookup` resolves at every reconcile there.
+          (offline CI renders / this chart's helm-unittest suite) — that
+          is intentional; the annotation is only meaningful against a
+          live cluster where cert-manager has actually written the
+          Secret. Tests assert the annotation is ABSENT under offline
+          render, exactly for that reason.
 
           Crucially, this replaces the earlier `kubectl rollout restart`
-          post-upgrade hook. That hook itself was the amplifier this
-          iteration: every Flux reconcile stamped a fresh
-          `kubectl.kubernetes.io/restartedAt` timestamp, which mutated the
-          Deployment podTemplate, which spawned a new ReplicaSet — the
-          same ReplicaSet-churn pattern in a different disguise. Runtime-
-          content-based checksum only mutates when the runtime content
-          actually mutates, so the loop cannot form.
+          post-upgrade hook. That hook itself was the amplifier of the
+          previous iteration: every Flux reconcile stamped a fresh
+          `kubectl.kubernetes.io/restartedAt` timestamp, which mutated
+          the Deployment podTemplate, which spawned a new ReplicaSet —
+          the same ReplicaSet-churn pattern in a different disguise.
+          Runtime-content-based checksum only mutates when the runtime
+          content actually mutates, so the loop cannot form.
         */}}
         {{- if and .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
         {{- $secret := lookup "v1" "Secret" (include "common.names.namespace" .) (include "vertical-pod-autoscaler.admissionController.tls.secretName" .) }}

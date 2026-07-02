@@ -323,7 +323,7 @@ admissionController:
       relabelings: []
 
   tls:
-    ## @param admissionController.tls.certManagerEnabled Provision the admission-controller webhook TLS via cert-manager Issuer + Certificate. When true, `caCert` / `cert` / `key` below are ignored, no in-chart `genCA` Secret is rendered, and the `checksum/tls-secret` podAnnotation that used to rotate the ReplicaSet on every reconcile is dropped. Requires cert-manager installed in the cluster. See `certificate.yaml` header for rationale.
+    ## @param admissionController.tls.certManagerEnabled Provision the admission-controller webhook TLS via cert-manager Issuer + Certificate. When true, `caCert` / `cert` / `key` below are ignored, no in-chart `genCA` Secret is rendered, and the `checksum/tls-secret` podAnnotation that used to rotate the ReplicaSet on every reconcile is dropped. Requires cert-manager installed in the cluster. See `certificate.yaml` header for rationale. Note: switching this back to `false` after a cluster has migrated to cert-manager is effectively one-way — cert-manager writes the Secret with `type: kubernetes.io/tls`, and `Secret.type` is immutable, so the legacy Opaque Secret template cannot overwrite it in place. To roll back the operator must first `kubectl delete` the cert-manager-owned Secret.
     certManagerEnabled: true
 
     ## @param admissionController.tls.caCert TLS CA certificate (Generated using the `genCA` function if not set)

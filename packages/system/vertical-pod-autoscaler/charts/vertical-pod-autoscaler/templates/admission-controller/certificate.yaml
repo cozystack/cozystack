@@ -90,7 +90,12 @@ spec:
   issuerRef:
     name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls-issuer
     kind: Issuer
-  secretTemplate:
-    labels:
-      {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 6 }}
+{{- /*
+  Intentionally NO secretTemplate. Copying the chart's shared labels onto
+  the generated Secret (which includes `app.kubernetes.io/managed-by: Helm`
+  from the labels include) would mislead operators — Helm does not own
+  this Secret, cert-manager does. Let cert-manager own the metadata it
+  writes (`cert-manager.io/*`, `controller.cert-manager.io/*`) and leave
+  it at that.
+*/}}
 {{- end }}
