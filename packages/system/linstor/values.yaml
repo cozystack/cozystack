@@ -2,9 +2,10 @@
 # mode (no in-cluster Java linstor-controller) and only drives linstor-csi,
 # which talks to the blockstor apiserver. piraeusServer below is kept for the
 # operator's image reference but is unused in external mode (the LinstorCluster
-# CR points the CSI at blockstor). The blockstor apiserver/satellite images are
-# ttl.sh builds carrying the in-flight fixes (RD-404 apiserver cache-miss
-# fallback + satellite zvol-device-wait) for e2e validation.
+# CR points the CSI at blockstor). The blockstor images are the published
+# ghcr.io release (v0.1.16), which carries the fixes validated by this PR's
+# e2e (satellite zvol-device-wait, RD/VD GET cache-miss consistency,
+# auto-snapshot bookkeeping RetryOnConflict).
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
@@ -12,15 +13,15 @@ piraeusServer:
 blockstorController:
   image:
     repository: ghcr.io/cozystack/blockstor-controller
-    tag: 0.1.14@sha256:22a2d0ccd504b653eeac272626d04df521d99bb9fb072d842b45995c6a6e0fe6
+    tag: 0.1.16@sha256:fdb37367cf8e494d63168442e1f4792aab727977efc6e1a62165ce4d81ab16ce
 blockstorApiserver:
   image:
-    repository: ttl.sh/blockstor-apiserver-rd404-a087222dd
-    tag: 24h@sha256:f42dde146acdb7bc69dc98df396528be9b834058ba91db067aacab51b413a96c
+    repository: ghcr.io/cozystack/blockstor-apiserver
+    tag: 0.1.16@sha256:2e5e8385c2bc25779df60b75b717446aeb85d1ddc92ed25c3c04c56d5fce1b74
 blockstorSatellite:
   image:
-    repository: ttl.sh/blockstor-satellite-zvolwait-8a6cac5ab
-    tag: 24h@sha256:e7d91b6c4b49b29208c76e8e90939cccf618edfd1064362386bbe9e58888b0ba
+    repository: ghcr.io/cozystack/blockstor-satellite
+    tag: 0.1.16@sha256:9fa55f641fa240ce7d787072cde90464ff476303a7af0e8c9258b2fc25d41431
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
