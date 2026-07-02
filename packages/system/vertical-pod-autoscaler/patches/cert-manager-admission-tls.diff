@@ -1,0 +1,208 @@
+diff --git a/charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml b/charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+new file mode 100644
+index 000000000..5eace3dfb
+--- /dev/null
++++ b/charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+@@ -0,0 +1,96 @@
++{{- /*
++  cert-manager-managed TLS for the VPA admission-controller webhook.
++
++  Replaces the legacy `tls-secret.yaml` genCA/genSignedCert Secret. That
++  approach re-generates a fresh CA on every `helm template` invocation and
++  therefore on every Flux HelmRelease reconcile — the reconcile-driven cert
++  churn cascades into a fresh Secret content, a new `checksum/tls-secret`
++  podAnnotation, a new ReplicaSet, and a rolling admission-controller pod
++  every retry. Under load (e.g. the E2E sandbox first-install phase where
++  cert-manager / CDI / LINSTOR races repeatedly re-fire the VPA
++  HelmRelease), the churn produces 10+ ReplicaSets in minutes and the
++  admission-controller pod livelocks in startup: it waits on its own
++  election lease which its previous replicaset is still holding, hits
++  livenessProbe timeout (periodSeconds=10, failureThreshold=3, no
++  initialDelaySeconds), and CrashLoopBackOffs — blocking the whole
++  cozystack-platform HR reconcile.
++
++  cert-manager only rotates when the certificate is close to expiring
++  (renewBefore), so the reconcile-driven churn stops.
++
++  The webhook itself (`vpa-webhook-config` MutatingWebhookConfiguration)
++  is registered by the admission-controller pod itself via
++  `--register-webhook=true`, so no `cert-manager.io/inject-ca-from`
++  annotation is needed on webhooks; each pod restart picks up the current
++  CA from the mounted Secret and re-registers.
++
++  Gated on `admissionController.tls.certManagerEnabled`, defaulting to
++  `true` in this chart. Existing users who supply an external cert via
++  `admissionController.tls.existingSecret` continue to bypass both this
++  and the legacy Secret template unchanged.
++*/}}
++{{- if and .Values.admissionController.enabled .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
++apiVersion: cert-manager.io/v1
++kind: Issuer
++metadata:
++  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls-issuer
++  namespace: {{ include "common.names.namespace" . | quote }}
++  labels:
++    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
++    {{- if .Values.commonLabels }}
++    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
++    {{- end }}
++  {{- if .Values.commonAnnotations }}
++  annotations: {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
++  {{- end }}
++spec:
++  selfSigned: {}
++---
++apiVersion: cert-manager.io/v1
++kind: Certificate
++metadata:
++  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls
++  namespace: {{ include "common.names.namespace" . | quote }}
++  labels:
++    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
++    {{- if .Values.commonLabels }}
++    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
++    {{- end }}
++  {{- if .Values.commonAnnotations }}
++  annotations: {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
++  {{- end }}
++spec:
++  {{- /*
++    secretName MUST match the volume mount name in
++    admission-controller/deployment.yaml, which is driven by
++    `vertical-pod-autoscaler.admissionController.tls.secretName`. In the
++    default path this resolves to
++    `<release>-admission-controller-tls`, which is the exact same name the
++    legacy genCA Secret uses — so on an upgrade from a pre-cert-manager
++    chart version cert-manager adopts the existing Secret (see the
++    pre-upgrade tls-migrator hook that strips Helm/Flux ownership) and
++    the Deployment volume mount picks up the refreshed content on next
++    rollout.
++  */}}
++  secretName: {{ include "vertical-pod-autoscaler.admissionController.tls.secretName" . }}
++  {{- /*
++    Match the legacy genSignedCert shape exactly:
++      $cn := printf "%s.%s.svc" "vpa-webhook" (include "common.names.namespace" .)
++      $cert := genSignedCert $cn nil (list $cn) 365 $ca
++    That is: CN and single DNS SAN both `vpa-webhook.<ns>.svc`, validity
++    365 days. Keeping identical spec means an in-place upgrade rotates
++    the cert content once (issuer changes from ephemeral in-chart CA to
++    cert-manager selfSigned Issuer) and thereafter stays stable.
++  */}}
++  commonName: {{ printf "vpa-webhook.%s.svc" (include "common.names.namespace" .) }}
++  dnsNames:
++    - {{ printf "vpa-webhook.%s.svc" (include "common.names.namespace" .) }}
++  duration: 8760h
++  renewBefore: 360h
++  issuerRef:
++    name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls-issuer
++    kind: Issuer
++  secretTemplate:
++    labels:
++      {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 6 }}
++{{- end }}
+diff --git a/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml b/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+index b7a923721..076e59d9b 100644
+--- a/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
++++ b/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+@@ -30,9 +30,60 @@ spec:
+         {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 8 }}
+         {{- end }}
+       annotations:
+-        {{- if not .Values.admissionController.tls.existingSecret }}
++        {{- /*
++          checksum/tls-secret trips pod rotation whenever tls-secret.yaml
++          renders a different sha. Under the legacy path that Secret's
++          content depends on `genCA`/`genSignedCert` which produce a
++          fresh CA on every render — so this annotation was the amplifier
++          that turned a single-chart-race into a rolling-ReplicaSet
++          storm. When cert-manager owns the TLS Secret it's stable
++          across renders (only rotates near `renewBefore`), and the
++          `checksum` would either be misleading (secret content isn't
++          driven by this template anymore) or trigger a needless rollout
++          on every unrelated chart change. Gate on the same flag as the
++          legacy template so exactly one code path emits it.
++        */}}
++        {{- if and (not .Values.admissionController.tls.existingSecret) (not .Values.admissionController.tls.certManagerEnabled) }}
+         checksum/tls-secret: {{ include (print $.Template.BasePath "/admission-controller/tls-secret.yaml") . | sha256sum }}
+         {{- end }}
++        {{- /*
++          Under cert-manager we need pod rotation ONLY when the Secret content
++          actually changes — never on unrelated reconciles. `checksum/tls-cert`
++          hashes the runtime Secret's `tls.crt` (via `lookup`), so:
++
++            * fresh install:       Secret does not exist yet at first render;
++                                   this annotation is absent, pod comes up on
++                                   whichever Secret cert-manager writes next.
++            * steady state:        Secret content stable → sha stable → no
++                                   rotation on any Flux reconcile.
++            * cert-manager adopt:  cert-manager rewrites Secret once
++                                   (issuer changed on upgrade) → sha flips →
++                                   pod restarts ONCE and picks up the new
++                                   CA + cert.
++            * renewal (~350d):     cert-manager rotates Secret → sha flips →
++                                   pod restarts ONCE.
++
++          `lookup` returns nil during `helm template --dry-run=client`
++          (offline CI renders) — that's fine, the annotation just doesn't
++          appear until a live-cluster reconcile fetches the Secret. Flux
++          HelmController runs via the Helm SDK against the live apiserver,
++          so `lookup` resolves at every reconcile there.
++
++          Crucially, this replaces the earlier `kubectl rollout restart`
++          post-upgrade hook. That hook itself was the amplifier this
++          iteration: every Flux reconcile stamped a fresh
++          `kubectl.kubernetes.io/restartedAt` timestamp, which mutated the
++          Deployment podTemplate, which spawned a new ReplicaSet — the
++          same ReplicaSet-churn pattern in a different disguise. Runtime-
++          content-based checksum only mutates when the runtime content
++          actually mutates, so the loop cannot form.
++        */}}
++        {{- if and .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
++        {{- $secret := lookup "v1" "Secret" (include "common.names.namespace" .) (include "vertical-pod-autoscaler.admissionController.tls.secretName" .) }}
++        {{- if and $secret $secret.data (index $secret.data "tls.crt") }}
++        checksum/tls-cert: {{ index $secret.data "tls.crt" | sha256sum }}
++        {{- end }}
++        {{- end }}
+         {{- if .Values.admissionController.podAnnotations }}
+         {{- include "common.tplvalues.render" ( dict "value" .Values.admissionController.podAnnotations "context" $ ) | nindent 8 }}
+         {{- end }}
+diff --git a/charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml b/charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml
+index f36b4d833..0bab86ed9 100644
+--- a/charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml
++++ b/charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml
+@@ -1,5 +1,16 @@
++{{- /*
++  Legacy in-chart genCA/genSignedCert path — kept for the escape hatch
++  `admissionController.tls.certManagerEnabled=false`. Superseded by
++  `certificate.yaml` (cert-manager Certificate + Issuer). See the
++  header comment in that file for the reconcile-driven cert churn this
++  path used to cause. The check on `.certManagerEnabled` intentionally
++  wraps the ENTIRE template rather than being folded into the earlier
++  `if`s so a single Helm render only emits ONE Secret owner (either
++  cert-manager via Certificate, or this chart directly).
++*/ -}}
+ {{- if .Values.admissionController.enabled }}
+ {{- if not .Values.admissionController.tls.existingSecret }}
++{{- if not .Values.admissionController.tls.certManagerEnabled }}
+ {{- $ca := genCA (include "vertical-pod-autoscaler.admissionController.fullname" .) 365 }}
+ {{- $cn := printf "%s.%s.svc" "vpa-webhook" (include "common.names.namespace" .) }}
+ {{- $cert := genSignedCert $cn nil (list $cn) 365 $ca }}
+@@ -23,3 +34,4 @@ data:
+   tls.key: {{ default $cert.Key .Values.admissionController.tls.key | b64enc | quote }}
+ {{- end }}
+ {{- end }}
++{{- end }}
+diff --git a/charts/vertical-pod-autoscaler/values.yaml b/charts/vertical-pod-autoscaler/values.yaml
+index 7d9ac33be..ba202b4c8 100644
+--- a/charts/vertical-pod-autoscaler/values.yaml
++++ b/charts/vertical-pod-autoscaler/values.yaml
+@@ -323,6 +323,9 @@ admissionController:
+       relabelings: []
+ 
+   tls:
++    ## @param admissionController.tls.certManagerEnabled Provision the admission-controller webhook TLS via cert-manager Issuer + Certificate. When true, `caCert` / `cert` / `key` below are ignored, no in-chart `genCA` Secret is rendered, and the `checksum/tls-secret` podAnnotation that used to rotate the ReplicaSet on every reconcile is dropped. Requires cert-manager installed in the cluster. See `certificate.yaml` header for rationale.
++    certManagerEnabled: true
++
+     ## @param admissionController.tls.caCert TLS CA certificate (Generated using the `genCA` function if not set)
+     caCert: ""
+ 
