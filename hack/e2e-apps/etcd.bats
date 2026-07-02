@@ -125,8 +125,16 @@ spec:
     memory: 128Mi
 EOF
   wait_etcd_hr_ready || { dump_diagnostics; false; }
-  # The v1alpha2 operator reports Available (not Ready) once quorum is healthy.
-  kubectl -n tenant-test wait etcdcluster.etcd-operator.cozystack.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True || { dump_diagnostics; false; }
+  # Gate on FULL rollout, not mere discovery. The v1alpha2 operator flips
+  # Available=True early (reason ClusterDiscovered) the instant the single seed
+  # member forms the cluster, then scales the remaining members up one at a time
+  # ("waiting for existing members to become Ready before next scale-up step").
+  # Gating on Available=True therefore races the count assertion below and sees
+  # only 1/3 Pods. status.readyMembers is the count of members whose EtcdMember
+  # Ready condition is True (and the /scale subresource's current replicas), so
+  # it only reaches 3 once every member Pod is Running and serving — the correct
+  # precondition for every replica-count contract asserted below.
+  kubectl -n tenant-test wait etcdcluster.etcd-operator.cozystack.io etcd --timeout=300s --for=jsonpath='{.status.readyMembers}'=3 || { dump_diagnostics; false; }
 
   # --- Runtime contracts the chart depends on but the operator owns. Each is a
   # silent failure if a future operator bump changes it, so assert against the
