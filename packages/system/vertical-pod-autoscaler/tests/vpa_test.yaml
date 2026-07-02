@@ -268,9 +268,13 @@ tests:
       - equal:
           path: rules[0].apiGroups[0]
           value: cert-manager.io
+      # Cert Certificate name is <fullname>-tls (see certificate.yaml). RBAC
+      # must match exactly, or the rollout Job hits `kubectl wait certificate/
+      # <wrong-name>` → NotFound → 3m timeout → backoffLimit exhaustion.
+      # Regression test for the fix in the parent commit.
       - equal:
           path: rules[0].resourceNames[0]
-          value: vpa-vertical-pod-autoscaler-admission-controller
+          value: vpa-vertical-pod-autoscaler-admission-controller-tls
       - equal:
           path: rules[1].apiGroups[0]
           value: apps

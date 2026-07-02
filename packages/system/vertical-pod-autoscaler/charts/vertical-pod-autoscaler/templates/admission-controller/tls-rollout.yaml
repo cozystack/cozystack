@@ -108,7 +108,7 @@ metadata:
 rules:
   - apiGroups: ["cert-manager.io"]
     resources: ["certificates"]
-    resourceNames: [{{ include "vertical-pod-autoscaler.admissionController.fullname" . | quote }}]
+    resourceNames: [{{ printf "%s-tls" (include "vertical-pod-autoscaler.admissionController.fullname" .) | quote }}]
     verbs: ["get", "watch", "list"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
@@ -199,7 +199,11 @@ spec:
             - -euc
             - |
               ns={{ include "common.names.namespace" . | quote }}
-              cert={{ include "vertical-pod-autoscaler.admissionController.fullname" . | quote }}
+              # Certificate name is <fullname>-tls (see certificate.yaml).
+              # Do NOT drop the -tls suffix — the previous iteration did that
+              # and hit a 3m NotFound timeout every rollout, exhausting
+              # backoffLimit and failing the post-upgrade hook.
+              cert={{ printf "%s-tls" (include "vertical-pod-autoscaler.admissionController.fullname" .) | quote }}
               deploy={{ include "vertical-pod-autoscaler.admissionController.fullname" . | quote }}
 
               # Wait until cert-manager has issued the certificate. On the first
