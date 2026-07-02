@@ -57,18 +57,28 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
-  - it: deletes the vm-operator storage PVCs by label without blocking teardown
+  - it: deletes the vm-operator storage PVCs scoped to this release without blocking teardown
     documentSelector:
       path: kind
       value: Job
     asserts:
+      # The selector must be scoped to this monitoring release, not just
+      # managed-by=vm-operator: the bare label matches every VMCluster/VLCluster
+      # in the namespace, so tearing one release down could delete another's
+      # storage. apps.cozystack.io/application.name is stamped on the VM CRs'
+      # managedMetadata and propagated by vm-operator onto the PVCs.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: kubectl delete pvc -n tenant-root -l managed-by=vm-operator --ignore-not-found --wait=false
+          pattern: 'kubectl delete pvc -n tenant-root -l managed-by=vm-operator,apps\.cozystack\.io/application\.name=monitoring-system --ignore-not-found --wait=false'
       # Never widen the PVC sweep beyond the vm-operator label scope.
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: kubectl delete pvc[^\n]*--all
+      # Regression guard: the PVC delete must not fall back to the release-agnostic
+      # managed-by=vm-operator selector (i.e. without the application.name scope).
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc[^\n]*-l managed-by=vm-operator --ignore-not-found'
 
   - it: deletes the cert-manager TLS secrets by name without blocking teardown
     documentSelector:

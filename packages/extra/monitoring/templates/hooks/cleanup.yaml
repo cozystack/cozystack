@@ -50,7 +50,7 @@ spec:
             - /bin/sh
             - -c
             - |
-              kubectl delete pvc -n {{ .Release.Namespace }} -l managed-by=vm-operator --ignore-not-found --wait=false \
+              kubectl delete pvc -n {{ .Release.Namespace }} -l managed-by=vm-operator,apps.cozystack.io/application.name={{ .Release.Name }}-system --ignore-not-found --wait=false \
                 || echo "WARNING: VM storage PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
               kubectl delete secret -n {{ .Release.Namespace }} alerta-tls grafana-ingress-tls --ignore-not-found --wait=false \
                 || echo "WARNING: TLS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
