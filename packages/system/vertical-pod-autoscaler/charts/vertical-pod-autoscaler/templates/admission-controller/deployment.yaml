@@ -30,7 +30,20 @@ spec:
         {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 8 }}
         {{- end }}
       annotations:
-        {{- if not .Values.admissionController.tls.existingSecret }}
+        {{- /*
+          checksum/tls-secret trips pod rotation whenever tls-secret.yaml
+          renders a different sha. Under the legacy path that Secret's
+          content depends on `genCA`/`genSignedCert` which produce a
+          fresh CA on every render — so this annotation was the amplifier
+          that turned a single-chart-race into a rolling-ReplicaSet
+          storm. When cert-manager owns the TLS Secret it's stable
+          across renders (only rotates near `renewBefore`), and the
+          `checksum` would either be misleading (secret content isn't
+          driven by this template anymore) or trigger a needless rollout
+          on every unrelated chart change. Gate on the same flag as the
+          legacy template so exactly one code path emits it.
+        */}}
+        {{- if and (not .Values.admissionController.tls.existingSecret) (not .Values.admissionController.tls.certManagerEnabled) }}
         checksum/tls-secret: {{ include (print $.Template.BasePath "/admission-controller/tls-secret.yaml") . | sha256sum }}
         {{- end }}
         {{- if .Values.admissionController.podAnnotations }}

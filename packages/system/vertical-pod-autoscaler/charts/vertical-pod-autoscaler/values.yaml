@@ -323,6 +323,9 @@ admissionController:
       relabelings: []
 
   tls:
+    ## @param admissionController.tls.certManagerEnabled Provision the admission-controller webhook TLS via cert-manager Issuer + Certificate. When true, `caCert` / `cert` / `key` below are ignored, no in-chart `genCA` Secret is rendered, and the `checksum/tls-secret` podAnnotation that used to rotate the ReplicaSet on every reconcile is dropped. Requires cert-manager installed in the cluster. See `certificate.yaml` header for rationale.
+    certManagerEnabled: true
+
     ## @param admissionController.tls.caCert TLS CA certificate (Generated using the `genCA` function if not set)
     caCert: ""
 

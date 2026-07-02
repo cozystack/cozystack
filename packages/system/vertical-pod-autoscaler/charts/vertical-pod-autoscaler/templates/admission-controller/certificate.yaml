@@ -1,0 +1,96 @@
+{{- /*
+  cert-manager-managed TLS for the VPA admission-controller webhook.
+
+  Replaces the legacy `tls-secret.yaml` genCA/genSignedCert Secret. That
+  approach re-generates a fresh CA on every `helm template` invocation and
+  therefore on every Flux HelmRelease reconcile — the reconcile-driven cert
+  churn cascades into a fresh Secret content, a new `checksum/tls-secret`
+  podAnnotation, a new ReplicaSet, and a rolling admission-controller pod
+  every retry. Under load (e.g. the E2E sandbox first-install phase where
+  cert-manager / CDI / LINSTOR races repeatedly re-fire the VPA
+  HelmRelease), the churn produces 10+ ReplicaSets in minutes and the
+  admission-controller pod livelocks in startup: it waits on its own
+  election lease which its previous replicaset is still holding, hits
+  livenessProbe timeout (periodSeconds=10, failureThreshold=3, no
+  initialDelaySeconds), and CrashLoopBackOffs — blocking the whole
+  cozystack-platform HR reconcile.
+
+  cert-manager only rotates when the certificate is close to expiring
+  (renewBefore), so the reconcile-driven churn stops.
+
+  The webhook itself (`vpa-webhook-config` MutatingWebhookConfiguration)
+  is registered by the admission-controller pod itself via
+  `--register-webhook=true`, so no `cert-manager.io/inject-ca-from`
+  annotation is needed on webhooks; each pod restart picks up the current
+  CA from the mounted Secret and re-registers.
+
+  Gated on `admissionController.tls.certManagerEnabled`, defaulting to
+  `true` in this chart. Existing users who supply an external cert via
+  `admissionController.tls.existingSecret` continue to bypass both this
+  and the legacy Secret template unchanged.
+*/}}
+{{- if and .Values.admissionController.enabled .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls-issuer
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls
+  namespace: {{ include "common.names.namespace" . | quote }}
+  labels:
+    {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 4 }}
+    {{- if .Values.commonLabels }}
+    {{- include "common.tplvalues.render" ( dict "value" .Values.commonLabels "context" $ ) | nindent 4 }}
+    {{- end }}
+  {{- if .Values.commonAnnotations }}
+  annotations: {{- include "common.tplvalues.render" ( dict "value" .Values.commonAnnotations "context" $ ) | nindent 4 }}
+  {{- end }}
+spec:
+  {{- /*
+    secretName MUST match the volume mount name in
+    admission-controller/deployment.yaml, which is driven by
+    `vertical-pod-autoscaler.admissionController.tls.secretName`. In the
+    default path this resolves to
+    `<release>-admission-controller-tls`, which is the exact same name the
+    legacy genCA Secret uses — so on an upgrade from a pre-cert-manager
+    chart version cert-manager adopts the existing Secret (see the
+    pre-upgrade tls-migrator hook that strips Helm/Flux ownership) and
+    the Deployment volume mount picks up the refreshed content on next
+    rollout.
+  */}}
+  secretName: {{ include "vertical-pod-autoscaler.admissionController.tls.secretName" . }}
+  {{- /*
+    Match the legacy genSignedCert shape exactly:
+      $cn := printf "%s.%s.svc" "vpa-webhook" (include "common.names.namespace" .)
+      $cert := genSignedCert $cn nil (list $cn) 365 $ca
+    That is: CN and single DNS SAN both `vpa-webhook.<ns>.svc`, validity
+    365 days. Keeping identical spec means an in-place upgrade rotates
+    the cert content once (issuer changes from ephemeral in-chart CA to
+    cert-manager selfSigned Issuer) and thereafter stays stable.
+  */}}
+  commonName: {{ printf "vpa-webhook.%s.svc" (include "common.names.namespace" .) }}
+  dnsNames:
+    - {{ printf "vpa-webhook.%s.svc" (include "common.names.namespace" .) }}
+  duration: 8760h
+  renewBefore: 360h
+  issuerRef:
+    name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls-issuer
+    kind: Issuer
+  secretTemplate:
+    labels:
+      {{- include "vertical-pod-autoscaler.admissionController.labels" . | nindent 6 }}
+{{- end }}
