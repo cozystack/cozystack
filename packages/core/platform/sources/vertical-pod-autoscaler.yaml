@@ -12,7 +12,19 @@ spec:
   variants:
   - name: default
     dependsOn:
+    # cozystack.cert-manager is required because the VPA admission-controller
+    # webhook TLS is now provisioned by a cert-manager Certificate + Issuer
+    # (see packages/system/vertical-pod-autoscaler/charts/vertical-pod-autoscaler/
+    # templates/admission-controller/certificate.yaml). Without cert-manager
+    # already Ready when the VPA package reconciles, the Certificate stays
+    # pending, the Secret never gets written, and the admission-controller pod
+    # CrashLoops on missing TLS mount — the same failure mode that used to
+    # cascade the whole cozystack-platform HR under the legacy genCA path,
+    # now with a clean dependency instead of racing readiness. Verified
+    # non-circular: cozystack.cert-manager depends on cozystack.networking
+    # and cozystack.gateway-api-crds, neither of which touches VPA.
     - cozystack.networking
+    - cozystack.cert-manager
     components:
     - name: vertical-pod-autoscaler-crds
       path: system/vertical-pod-autoscaler-crds
