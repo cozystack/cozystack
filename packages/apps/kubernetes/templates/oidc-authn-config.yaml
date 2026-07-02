@@ -1,0 +1,88 @@
+{{- /*
+  Structured AuthenticationConfiguration for the tenant kube-apiserver
+  (apiserver.config.k8s.io/v1beta1, stable since 1.30).
+
+  Mounted via the KamajiControlPlane in cluster.yaml as a file at
+  /etc/kubernetes/authentication-config/config.yaml and consumed via
+  --authentication-config=. Compared to the legacy `--oidc-*` flags,
+  the file form supports multiple issuers (the `jwt` block is a list)
+  and inline private-CA PEM, so future BYO and Phase-2 issuers extend
+  the same Secret instead of fighting the chart shape.
+
+  System mode:
+    Single JWT entry built from `_cluster.root-host` (the cozy realm
+    issuer URL) and the per-cluster audience (kubernetes.oidc.clientId).
+    Username claim is `email`, groups claim is `groups` — matching
+    the realm scope provisioned in oidc-keycloak.yaml and the detailed
+    rationale in the note below (line 32+).
+
+  CustomConfig mode:
+    The tenant supplies the entire `AuthenticationConfiguration` body.
+    Either inline (oidc.customConfig.config — a string) or via a Secret
+    they have already created in the tenant namespace
+    (oidc.customConfig.secretRef.name). The chart writes the inline path
+    verbatim; for secretRef nothing is emitted here (cluster.yaml mounts
+    the user's Secret directly). Exactly one of the two MUST be set;
+    the chart fails the render otherwise.
+
+  None mode renders nothing.
+*/}}
+{{- if eq .Values.oidc.mode "System" }}
+{{-   $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
+{{-   $audience := include "kubernetes.oidc.clientId" . | trim }}
+{{- /*
+User identity claim: `email`, not `preferred_username`.
+
+The design doc example used `claim: preferred_username`, but in the
+cozystack `cozy` realm `preferred_username` is the Keycloak *username*
+(`kvaps`, `i.okhotnikov`), NOT the email — and the operator-facing
+`users[].email` field asks for the email address. Matching the `User:`
+subject in the ClusterRoleBinding to `preferred_username` would
+silently misidentify every user whose Keycloak username differs from
+their email — verified on dev3 where token auth succeeded but the CRB
+match failed with 403.
+
+Switching the claim to `email` aligns the apiserver-visible identity
+with the operator's declared `users[].email` value. Requires the
+issuer to emit `email` — cozy realm (verified) and every conformant
+OIDC provider do.
+*/ -}}
+{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-oidc-authn-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  config.yaml: |
+{{ $authnConfig | indent 4 }}
+{{- else if eq .Values.oidc.mode "CustomConfig" }}
+{{-   $inlineCfg := dig "customConfig" "config" "" .Values.oidc }}
+{{-   $customSecretRefName := dig "customConfig" "secretRef" "name" "" .Values.oidc }}
+{{-   $hasInline := ne $inlineCfg "" }}
+{{-   $hasSecretRef := ne $customSecretRefName "" }}
+{{-   if and $hasInline $hasSecretRef }}
+{{-     fail "spec.oidc.customConfig: set exactly one of `config` (inline) or `secretRef.name` — they are mutually exclusive." }}
+{{-   end }}
+{{-   if not (or $hasInline $hasSecretRef) }}
+{{-     fail "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline AuthenticationConfiguration) or spec.oidc.customConfig.secretRef.name (Secret with config.yaml key)." }}
+{{-   end }}
+{{-   if $hasInline }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-oidc-authn-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  config.yaml: |
+{{ $inlineCfg | indent 4 }}
+{{-   end }}
+{{- end }}

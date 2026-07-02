@@ -219,7 +219,7 @@ addons:
 ## @typedef {struct} APIServer - API Server configuration.
 ## @field {Resources} resources - CPU and memory resources for API Server.
 ## @field {ResourcesPreset} resourcesPreset="c1.medium" - Preset if `resources` omitted.
-## @field {[]string} extraArgs - Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. Use for OIDC SSO (`--oidc-issuer-url`, `--oidc-client-id`) or structured authentication (`--authentication-config=/etc/kubernetes/authentication/config.yaml`, `--requestheader-uid-headers=X-Remote-Uid`). Empty by default (no change to current behavior).
+## @field {[]string} extraArgs - Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
 ## @field {[]object} extraVolumes - Extra volumes added to the control-plane Deployment, passed through to KamajiControlPlane `spec.deployment.extraVolumes`. Use to mount a ConfigMap or Secret holding an AuthenticationConfiguration file referenced by `extraArgs`. Each item is a core/v1 Volume, but because the control-plane pod runs on the management cluster only `configMap` and `secret` sources are allowed (host-reaching sources like `hostPath`/`csi` and token-projection via `projected` are rejected); each volume must have a unique, non-empty name and exactly one source. The names `talos-ca` and `talos-tls-cert` are reserved by the chart. Empty by default.
 ## @field {[]object} extraVolumeMounts - Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
 
@@ -301,3 +301,41 @@ talos:
 nodeHealthCheck:
   maxUnhealthy: "50%"
   nodeStartupTimeout: "10m"
+
+##
+## @section OIDC
+##
+
+## @enum {string} OIDCMode - Identity mode for the tenant kube-apiserver.
+## @value None
+## @value System
+## @value CustomConfig
+
+## @enum {string} OIDCRole - RBAC role bound to a listed user inside the tenant cluster.
+## @value admin
+## @value view
+
+## @typedef {struct} OIDCUser - One user entry; produces one ClusterRoleBinding inside the tenant cluster.
+## @field {string} email - Email address matched against the `email` claim from the issuer. Used verbatim as the `User:` subject in the ClusterRoleBinding inside the tenant cluster. The `email` claim is a built-in OIDC scope requested explicitly by the chart-generated `kubectl oidc-login` kubeconfig; every conformant OIDC provider (cozy realm included) emits it.
+## @field {OIDCRole} role - Role to bind: `admin` maps to `ClusterRole/cluster-admin`, `view` maps to `ClusterRole/view`.
+
+## @typedef {struct} OIDCSecretRef - Reference to a Secret carrying an inline AuthenticationConfiguration.
+## @field {string} [name] - Name of an existing Secret in the tenant (release) namespace whose `config.yaml` key holds an `apiserver.config.k8s.io/v1beta1` `AuthenticationConfiguration`. Mutually exclusive with `customConfig.config`.
+
+## @typedef {struct} OIDCCustomConfig - Tenant-provided AuthenticationConfiguration; consumed only when `mode: CustomConfig`. Exactly one of `config` or `secretRef.name` must be set.
+## @field {string} [config] - Inline AuthenticationConfiguration YAML (`apiserver.config.k8s.io/v1beta1`). The chart writes the value verbatim into a Secret mounted at `/etc/kubernetes/authentication-config/config.yaml` on the kube-apiserver. Mutually exclusive with `secretRef.name`.
+## @field {OIDCSecretRef} [secretRef] - Reference to an existing Secret in the tenant namespace carrying the `AuthenticationConfiguration`.
+
+## @typedef {struct} OIDC - OIDC selector for the tenant cluster (Phase 1 — per-cluster audience binding; no per-tenant Keycloak realm).
+## @field {OIDCMode} mode - Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+## @field {OIDCCustomConfig} [customConfig] - Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
+## @field {[]OIDCUser} [users] - Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.
+
+## @param {OIDC} oidc - OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
+oidc:
+  mode: "None"
+  customConfig:
+    config: ""
+    secretRef:
+      name: ""
+  users: []
