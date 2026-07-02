@@ -374,38 +374,77 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	// Find Ready condition in ArtifactGenerator
 	readyCondition := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 
-	// Workaround: fluxcd/source-watcher can leave the Ready condition Unknown
-	// even after the reconcile has completed successfully, because of an
-	// upstream bug in its status-patch path. The sequence observed in
-	// cozystack e2e install-cozystack runs is:
-	//   1. source-watcher reconciles the ArtifactGenerator and writes the
-	//      generated ExternalArtifacts. `Status.Inventory` is populated and
-	//      `Status.ObservedSourcesDigest` is set — the artifacts are usable
-	//      by downstream Flux HelmReleases at this point.
-	//   2. On the same reconcile the controller tries to patchStatus with
-	//      Ready=True but the apiserver returns `etcdserver: request timed
-	//      out` (etcd under first-install load).
-	//   3. The reconciler returns the etcd error, controller-runtime prints
-	//      the "returned both a result and non-nil error, RequeueAfter
-	//      ignored" warning, and requeues via the workqueue rate limiter.
-	//   4. The next reconcile hits the "No drift detected" branch (artifacts
-	//      already up to date) and early-exits before touching status again.
+	// Workaround for a race in fluxcd/source-watcher (bug tracked upstream in
+	// TODO(remove once https://github.com/fluxcd/source-watcher/issues/TBD is
+	// fixed and cozystack has bumped past the fix). Verified against
+	// v2.1.0 sources — the same code paths ship in v2.2.x (flux-aio latest
+	// as of this writing), so a simple version bump does not remove the
+	// need for this synthesis.
+	//
+	// Kvaps' review on #3182 confirmed the diagnosis by tracing the
+	// upstream reconciler:
+	//   1. source-watcher writes new Inventory + ObservedSourcesDigest and
+	//      then tries to patch conditions with Ready=True. fluxcd uses a
+	//      `patch.Helper` that patches `.status` and `.status.conditions`
+	//      as SEPARATE apiserver requests — the etcd load window during
+	//      first-install can land a timeout between the two so that the
+	//      "artifacts done" fields land while the Ready condition write
+	//      never does.
+	//   2. On the next reconcile the "!hasDrifted" branch returns before
+	//      touching conditions again. The deferred `summarizeStatus` still
+	//      runs and adjusts the Reconciling condition, but it never
+	//      promotes a stuck Unknown Ready to True — that promotion is only
+	//      done on the successful `hasDrifted` path.
 	// Result: the ArtifactGenerator is functionally Ready — downstream Flux
 	// consumes its ExternalArtifacts, HelmReleases install and become Ready
-	// on their own — but its Ready condition stays Unknown forever, this
-	// reconciler faithfully copies Unknown onto the PackageSource, and any
-	// Package/HR that waits on `PackageSource.status.conditions[Ready]=True`
-	// (in particular `cozystack-platform`) times out at 15m and fails the
-	// whole install.
+	// — but its Ready condition stays Unknown, this reconciler faithfully
+	// copies Unknown onto the PackageSource, and any Package/HR that waits
+	// on `PackageSource.status.conditions[Ready]=True` (in particular
+	// `cozystack-platform`) times out at 15m and fails the install.
 	//
-	// The fix: when the ArtifactGenerator has observably finished its work
-	// (`Inventory` non-empty AND `ObservedSourcesDigest` set) but Ready is
-	// missing or Unknown, synthesise Ready=True from that observable state
-	// with an explicit reason so operators can grep this specific workaround
-	// out of the audit log. If the upstream status catches up later the
-	// Owns() watch below re-fires this reconciler and the real Ready
-	// condition is copied over, replacing the synthetic one.
-	if artifactGeneratorObservablyReady(ag) {
+	// The workaround synthesises Ready=True from observable state when
+	// artifacts are present. Note that this is an INTENTIONAL contract
+	// change on PackageSource.status.conditions[Ready]:
+	//
+	//   BEFORE: Ready=True means "source-watcher has processed the current
+	//           revision of the sources referenced by this PackageSource".
+	//   AFTER:  Ready=True means "valid consumable artifacts for THIS
+	//           PackageSource exist in the cluster" — a slightly weaker
+	//           but strictly more useful signal for the downstream Package
+	//           / HelmRelease reconcile ordering that actually cares about
+	//           artifact availability rather than reconcile progress.
+	//
+	// The reason for the weaker contract: source-watcher writes the same
+	// `condition.ObservedGeneration = ag.Generation` on EVERY condition
+	// mutation, including the Progressing/Unknown mark at the very start of
+	// a rebuild (see `fluxcd/pkg/runtime/conditions.Set`). And
+	// ArtifactGeneratorStatus exposes no object-level ObservedGeneration
+	// (only ReconcileRequestStatus is inlined). So a condition-level
+	// Generation match cannot distinguish "current revision fully
+	// processed" from "rebuild in progress, previous Inventory/digest still
+	// persisted" — meaning the predicate can (and does) fire during a
+	// legitimate content-only regeneration where the OCI revision changed
+	// but `.metadata.generation` did not.
+	//
+	// Consequence in practice — accepted, and arguably better:
+	//   * install/upgrade ordering no longer flaps: PackageSource Ready
+	//     does not dip through Unknown while a new artifact revision is
+	//     being processed and previous artifacts are still on disk.
+	//   * a genuine regeneration FAILURE still surfaces — the upstream
+	//     writes Ready=False on the same reconcile, and this predicate
+	//     returns false for Ready=False so the caller passes it through.
+	//   * a spec-edit (which does bump ag.Generation) is still detected by
+	//     the ObservedGeneration matching in
+	//     `artifactGeneratorObservablyReady`, so we do not synthesise
+	//     Ready=True on artifacts that are known-stale by generation.
+	//
+	// If the upstream Ready condition eventually resolves, the
+	// Owns(&ArtifactGenerator{}) watch below re-fires this reconciler and
+	// the real Ready condition is copied over, replacing the synthetic
+	// one. The synthesis reason `ArtifactsGeneratedAwaitingUpstreamStatus`
+	// is greppable so operators can audit which PackageSources are
+	// currently on the workaround path.
+	if artifactGeneratorObservablyReady(ag, readyCondition) {
 		syntheticReason := "ArtifactsGeneratedAwaitingUpstreamStatus"
 		syntheticMessage := "ArtifactGenerator Inventory populated and ObservedSourcesDigest set; " +
 			"upstream Ready condition has not been finalised. Synthesising Ready=True " +
@@ -458,56 +497,59 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 }
 
 // artifactGeneratorObservablyReady returns true iff the ArtifactGenerator has
-// finished producing artifacts for its CURRENT spec (Inventory populated,
-// ObservedSourcesDigest set, and Ready condition observed at the current
-// Generation) AND its own Ready condition has stalled in Unknown. That is
-// exactly the stuck-status window the fluxcd/source-watcher patch-status
-// early-exit bug produces; treating it as Ready lets downstream Package /
-// HelmRelease reconciles proceed without waiting on an upstream fix.
+// observable consumable artifacts (Inventory populated, ObservedSourcesDigest
+// set, Ready condition present and observed at the current Generation) AND
+// its Ready condition has stalled in Unknown. That is exactly the window the
+// fluxcd/source-watcher status-patch race produces; treating it as Ready lets
+// downstream Package / HelmRelease reconciles proceed without waiting on
+// an upstream fix.
 //
-// The Generation check is load-bearing. Consider a user updating
-// PackageSource.spec.variants on a running cluster:
-//   1. Cozystack reconciler bumps the derived ArtifactGenerator to
-//      Generation=2 with the new spec.
-//   2. Source-watcher begins reconciling. Between "started" and "wrote
-//      new Inventory + ObservedSourcesDigest" it sits in a state where
-//      Inventory / ObservedSourcesDigest still reflect Generation=1 AND
-//      Ready is Unknown (Progressing).
-//   3. Without a Generation check, this reconciler would synthesise
-//      Ready=True — but the inventory it's ready on is STALE. Downstream
-//      Flux would consume the old ExternalArtifacts and quietly serve a
-//      spec-behind revision until source-watcher catches up.
-// Requiring readyCondition.ObservedGeneration == ag.Generation guarantees
-// source-watcher processed the current spec (so Inventory / Digest match
-// current spec), and only the patchStatus write to Ready itself failed —
-// which is the exact upstream bug we're papering over.
+// The caller MUST pass in the pre-resolved Ready condition (or nil) — the
+// caller already did the FindStatusCondition lookup in order to copy it
+// through on the non-workaround path, and re-doing the lookup here (kvaps'
+// nit) is wasted work when both call sites want the same result.
 //
-// If Ready is missing entirely we return false: without an ObservedGeneration
-// we cannot distinguish "artifacts are stale, current spec is still being
-// processed" from "current-spec artifacts are done but status has not been
-// stamped yet". The latter case will show up on the next reconcile once
-// source-watcher writes any Ready condition (even Unknown), and the workaround
-// will kick in then.
+// The Generation check is load-bearing for SPEC edits: if the user edits
+// PackageSource.spec.variants the derived ArtifactGenerator gets a new
+// Generation. Between "source-watcher started rebuilding gen=N+1" and
+// "source-watcher persisted the new Inventory/digest", Inventory / digest
+// still reflect gen=N. Without the Generation match, we would synthesise
+// Ready=True on artifacts that are known-stale by generation. See the block
+// comment at the call site for why this predicate can — and does —
+// intentionally still fire during a content-only regeneration (same
+// Generation, new OCI revision), which is what makes the resulting
+// PackageSource Ready contract "valid consumable artifacts exist" rather
+// than "current revision processed".
 //
-// If Ready is already True (upstream caught up) we return false so the caller
-// passes the real condition through unchanged. If Ready is False we also
-// return false: a real failure must not be masked as Ready.
-func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator) bool {
+// Ready is required to be present because condition.ObservedGeneration is
+// the only Generation signal source-watcher exposes on
+// ArtifactGeneratorStatus (only ReconcileRequestStatus is inlined at the
+// object level, and it carries no Generation). Without a condition to read
+// the Generation from we cannot verify the artifacts are for the current
+// spec.
+//
+// Ready=True is passed through by the caller unchanged (we return false so
+// the caller copies the real True across, preserving upstream reason/message
+// for audit). Ready=False is passed through unchanged (we return false so
+// the caller surfaces the real failure — this workaround must NEVER mask a
+// genuine regeneration failure).
+func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition) bool {
 	if len(ag.Status.Inventory) == 0 {
 		return false
 	}
 	if ag.Status.ObservedSourcesDigest == "" {
 		return false
 	}
-	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 	if ready == nil {
 		return false
 	}
 	if ready.Status != metav1.ConditionUnknown {
 		return false
 	}
-	// Ready condition must observe the current spec — otherwise Inventory
-	// and ObservedSourcesDigest may still reflect a previous Generation.
+	// Ready condition must observe the current spec Generation — otherwise
+	// Inventory and ObservedSourcesDigest may still reflect a previous
+	// spec-edit generation. (This does not distinguish content-only
+	// regenerations on the same Generation; see call-site comment.)
 	return ready.ObservedGeneration == ag.Generation
 }
 

@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -118,6 +119,35 @@ func TestArtifactGeneratorObservablyReady(t *testing.T) {
 			want: false,
 		},
 		{
+			// Locks in the intentional contract change flagged by kvaps'
+			// review: source-watcher writes the condition's
+			// ObservedGeneration on every mutation including the
+			// Progressing/Unknown mark at the start of a REBUILD, and it
+			// only bumps ag.Generation on spec edits — not on content-only
+			// regenerations (new OCI revision, same .metadata.generation).
+			// So a mid-rebuild AG that still exposes the previous
+			// Inventory / Digest but has been re-marked Ready=Unknown will
+			// match on Generation and the predicate returns true. That is
+			// the accepted contract: `PackageSource Ready` becomes
+			// "valid consumable artifacts exist" rather than "the current
+			// revision has been processed", trading InProgress flapping
+			// on regenerations for a slightly weaker but downstream-
+			// friendlier signal.
+			name: "content-only regeneration (same Generation, previous Inventory/digest still persisted) — predicate fires; documented contract change",
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory:             nonEmptyInventory,
+				ObservedSourcesDigest: observedDigest,
+				Conditions: []metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionUnknown,
+					Reason:             "Progressing",
+					Message:            "Reconciliation in progress",
+					ObservedGeneration: 1,
+				}},
+			}),
+			want: true,
+		},
+		{
 			name: "upstream Ready=True — pass through the real condition, do NOT synthesise",
 			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
 				Inventory:             nonEmptyInventory,
@@ -150,7 +180,9 @@ func TestArtifactGeneratorObservablyReady(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := artifactGeneratorObservablyReady(tt.ag)
+			// Match the caller's usage: FindStatusCondition once, pass through.
+			ready := meta.FindStatusCondition(tt.ag.Status.Conditions, "Ready")
+			got := artifactGeneratorObservablyReady(tt.ag, ready)
 			if got != tt.want {
 				t.Errorf("artifactGeneratorObservablyReady() = %v, want %v", got, tt.want)
 			}
