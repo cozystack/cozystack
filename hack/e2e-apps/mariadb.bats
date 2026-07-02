@@ -49,3 +49,62 @@ EOF
   kubectl -n tenant-test wait deployment.apps/mariadb-$name-metrics --timeout=90s --for=jsonpath='{.status.replicas}'=1
   kubectl -n tenant-test delete mariadbs.apps.cozystack.io $name
 }
+
+@test "Create single-replica MariaDB" {
+  name='single'
+  kubectl -n tenant-test delete mariadbs.apps.cozystack.io $name --ignore-not-found --timeout=2m
+  kubectl apply -f- <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: MariaDB
+metadata:
+  name: $name
+  namespace: tenant-test
+spec:
+  external: false
+  size: 10Gi
+  replicas: 1
+  storageClass: ""
+  users:
+    testuser:
+      maxUserConnections: 1000
+      password: xai7Wepo
+  databases:
+    testdb:
+      roles:
+        admin:
+        - testuser
+  backup:
+    enabled: false
+    s3Region: us-east-1
+    s3Bucket: s3.example.org/mariadb-backups
+    schedule: "0 2 * * *"
+    cleanupStrategy: "--keep-last=3 --keep-daily=3 --keep-within-weekly=1m"
+    s3AccessKey: oobaiRus9pah8PhohL1ThaeTa4UVa7gu
+    s3SecretKey: ju3eum4dekeich9ahM1te8waeGai0oog
+    resticPassword: ChaXoveekoh6eigh4siesheeda2quai0
+  resources: {}
+  resourcesPreset: "nano"
+EOF
+  # Wait for the operator to materialise the HelmRelease before kubectl wait
+  # kicks in (kubectl wait errors immediately if the object does not exist yet).
+  timeout 60 sh -ec "until kubectl -n tenant-test get hr mariadb-$name >/dev/null 2>&1; do sleep 2; done"
+  # A single-replica MariaDB must be accepted by the operator's validating
+  # webhook: replication is guarded on replicas>1, so replicas=1 renders a CR
+  # the webhook admits. Dump the HR + rendered CR on failure so a webhook
+  # rejection (the regression this guards against) is legible in the log.
+  kubectl -n tenant-test wait hr mariadb-$name --timeout=5m --for=condition=ready \
+    || { echo "HR mariadb-$name not ready — dumping state:"; \
+         kubectl -n tenant-test describe hr mariadb-$name; \
+         kubectl -n tenant-test get mariadbs.k8s.mariadb.com $name -o yaml; false; }
+  # With replicas=1 the operator provisions the bare <name> service (no
+  # -primary/-secondary): assert it exists and has an endpoint.
+  timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
+  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 60 sh -ec "until kubectl -n tenant-test get statefulset.apps/mariadb-$name >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=110s --for=jsonpath='{.status.replicas}'=1
+  timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name-metrics -o jsonpath='{.spec.ports[0].port}' | grep -q '9104'; do sleep 10; done"
+  timeout 40 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name-metrics -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  timeout 60 sh -ec "until kubectl -n tenant-test get deployment.apps/mariadb-$name-metrics >/dev/null 2>&1; do sleep 2; done"
+  kubectl -n tenant-test wait deployment.apps/mariadb-$name-metrics --timeout=90s --for=jsonpath='{.status.replicas}'=1
+  kubectl -n tenant-test delete mariadbs.apps.cozystack.io $name --ignore-not-found
+}
