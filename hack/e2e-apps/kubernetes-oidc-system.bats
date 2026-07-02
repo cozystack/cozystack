@@ -116,7 +116,7 @@ EOF
   kubectl -n tenant-test wait secret "${SEC}" --for=jsonpath='{.metadata.name}'="${SEC}" --timeout=60s
   body=$(kubectl -n tenant-test get secret "${SEC}" -o jsonpath='{.data.config\.yaml}' | base64 -d)
   echo "${body}" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'
-  echo "${body}" | grep -qF "- tenant-test-kubernetes-${TEST_NAME}"
+  echo "${body}" | grep -qF -- "- tenant-test-kubernetes-${TEST_NAME}"
 }
 
 @test "Per-cluster KeycloakClient + KeycloakClientScope land in the cozy realm" {
