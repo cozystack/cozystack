@@ -95,7 +95,7 @@ EOF
   kubectl -n tenant-test wait hr mariadb-$name --timeout=5m --for=condition=ready \
     || { echo "HR mariadb-$name not ready — dumping state:"; \
          kubectl -n tenant-test describe hr mariadb-$name; \
-         kubectl -n tenant-test get mariadbs.k8s.mariadb.com $name -o yaml; false; }
+         kubectl -n tenant-test get mariadbs.k8s.mariadb.com mariadb-$name -o yaml; false; }
   # With replicas=1 the operator provisions the bare <name> service (no
   # -primary/-secondary): assert it exists and has an endpoint.
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
