@@ -44,14 +44,26 @@ tests:
       value: Role
     asserts:
       - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "5"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      # PVC deletes are scoped to the deterministic per-replica names, not a
+      # namespace-wide delete, so a regression cannot reach a sibling's PVC.
       - contains:
           path: rules
           content:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
-            verbs: ["get", "list", "delete"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - data-etcd-0
+              - data-etcd-1
+              - data-etcd-2
       - contains:
           path: rules
           content:
@@ -71,8 +83,14 @@ tests:
       value: RoleBinding
     asserts:
       - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "5"
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
       - equal:
           path: roleRef.name
           value: etcd-cleanup

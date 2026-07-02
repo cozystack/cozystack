@@ -21,9 +21,16 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+  # The Job deletes the data PVCs by their deterministic per-replica names
+  # (data-etcd-<ordinal>), so we grant delete by explicit resourceNames rather
+  # than a namespace-wide PVC delete that could hit a sibling workload's PVC.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
-    verbs: ["get", "list", "delete"]
+    verbs: ["get", "delete"]
+    resourceNames:
+{{- range $i := until (int .Values.replicas) }}
+      - data-etcd-{{ $i }}
+{{- end }}
   # cert-manager TLS secrets carry only the cluster-wide
   # controller.cert-manager.io/fao label, and the two pre-install "keep"
   # secrets carry none, so we grant delete by explicit resourceNames rather
