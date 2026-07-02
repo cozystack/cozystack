@@ -349,6 +349,36 @@ EOF
     # (c) carry the 2a-vs-2b split; adding real in-guest capture later requires
     # wiring a tenant talosconfig into the runner first.
     echo "=== (b) in-guest Talos/kubelet capture skipped: no tenant talosconfig on the runner (a/c cover the 2a-vs-2b split) ==="
+
+    # (d) CAPI / CAPK / Kamaji-CP / CABPT / Kamaji / CDI / LINSTOR-CSI
+    # controller-manager logs (management cluster). Sections (a) and (c)
+    # answer WHERE the worker stalled (VMI provisioning vs kubelet CSR);
+    # (d) answers WHY the reconcile fired that late, which the object dumps
+    # alone cannot show. The primary suspect is a 5-to-10-minute gap
+    # between "Machine №1 Ready" and "MachineSet.ScalingUp to 2" on the
+    # first tenant-cluster rollout — the CAPI controllers are the only
+    # place that gap is legible. MachineDeployment.status.conditions plus
+    # capi-controller-manager reconcile events pin it down.
+    #
+    # Scoped to --since=15m: the test budget is 12m plus the pre-timeout
+    # ramp, and unbounded logs from busy reconcilers would blow past the
+    # GitHub Actions per-step log size cap. --all-containers is required
+    # because CAPI providers ship metrics / kube-rbac-proxy sidecars whose
+    # errors sometimes carry the actual reason (RBAC denial, admission
+    # webhook timeout) the primary container swallows.
+    #
+    # Guarded with `|| true` end-to-end so a controller pod that died
+    # (thereby giving us no logs to fetch) never masks the real `exit 1`.
+    echo "=== (d) CAPI / CAPK / Kamaji-CP / CABPT / CDI / LINSTOR-CSI controller logs (management cluster, last 15m) ==="
+    for ns in cozy-cluster-api cozy-kamaji cozy-kubevirt-cdi cozy-linstor; do
+      echo "--- namespace/${ns}: pod inventory ---"
+      kubectl -n "${ns}" get pods -o wide 2>&1 || true
+      for pod in $(kubectl -n "${ns}" get pods -o name 2>/dev/null); do
+        echo "--- ${pod} @ ${ns} ---"
+        kubectl -n "${ns}" logs "${pod}" --all-containers=true --prefix --timestamps --since=15m 2>&1 || true
+      done
+    done
+
     exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
