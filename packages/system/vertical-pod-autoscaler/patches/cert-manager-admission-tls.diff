@@ -1,9 +1,9 @@
 diff --git a/charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml b/charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
 new file mode 100644
-index 000000000..b8c0d3a4a
+index 000000000..763bd62b7
 --- /dev/null
 +++ b/charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
-@@ -0,0 +1,107 @@
+@@ -0,0 +1,122 @@
 +{{- /*
 +  cert-manager-managed TLS for the VPA admission-controller webhook.
 +
@@ -77,12 +77,27 @@ index 000000000..b8c0d3a4a
 +    immediately writes a fresh Secret of the same name via this
 +    Certificate but with `type: kubernetes.io/tls`. In-place adoption is
 +    NOT possible — `Secret.type` is immutable — so the delete/create
-+    pass is the correct path. The seconds-long window it produces is
-+    benign because the `vpa-webhook-config` MutatingWebhookConfiguration
-+    ships with `failurePolicy: Ignore`, and the Deployment rolls in the
-+    same upgrade (its `checksum/tls-cert` annotation flips as soon as
-+    cert-manager writes the new Secret) — the fresh pod re-registers
-+    the webhook with the new caBundle before the mismatch matters.
++    pass is the correct path.
++
++    The Deployment rolls in the SAME upgrade because the pod-template
++    itself carries a structural change: the pre-migration chart did not
++    render a `checksum/tls-cert` annotation at all, and the new chart
++    does. That new-annotation-present is what Helm sees as a
++    podTemplate diff and rolls the ReplicaSet. Note the annotation's
++    VALUE at first-upgrade render time is the sha of the LEGACY Opaque
++    Secret content (lookup fires before Helm deletes it), not the sha
++    of the yet-to-be-written cert-manager Secret; the value only
++    catches up on the next Helm action. The rollout is still correct
++    on first upgrade because the pod-template structural change alone
++    forces the ReplicaSet turnover, and the fresh pod re-registers
++    `vpa-webhook-config` with the new caBundle after cert-manager has
++    written the new Secret.
++
++    The seconds-long window between "old Opaque Secret deleted" and
++    "new tls Secret written" is benign because the
++    MutatingWebhookConfiguration ships with `failurePolicy: Ignore` —
++    webhook calls that hit the mismatch window are skipped, not
++    rejected.
 +  */}}
 +  secretName: {{ include "vertical-pod-autoscaler.admissionController.tls.secretName" . }}
 +  {{- /*
