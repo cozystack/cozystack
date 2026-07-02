@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/nginx-cache:0.0.0@sha256:039dddb536d71a12003caf50ced6cfe0dc32e5585d1e47534eb13c6687e7846b
+ghcr.io/cozystack/cozystack/nginx-cache:0.0.0@sha256:6d7d5eae0c4285ac1e1ea4f27e1ac5883f99860b9a03928f82f0fa2aa208d800
