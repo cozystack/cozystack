@@ -35,5 +35,6 @@ spec:
     exclude: []
     include:
       - resourceNames:
+          - mariadb-{{ .name }}
           - mariadb-{{ .name }}-primary
           - mariadb-{{ .name }}-secondary
