@@ -1,13 +1,16 @@
 {{/*
   Scheduled S3 backup of the Keycloak CNPG database.
 
-  Rendered only when both backup.enabled and backup.schedule are set. The
-  Cluster's spec.backup.barmanObjectStore (see db.yaml) is what actually
-  configures WAL archiving + the object store; this ScheduledBackup drives
-  the recurring base backups. CNPG rejects an empty schedule, so the gate
-  keeps invalid manifests off the cluster.
+  Rendered only when backup.enabled, backup.destinationPath and
+  backup.schedule are all set. The destinationPath gate must match db.yaml /
+  backup-secret.yaml: without it the Cluster gets no spec.backup.barmanObjectStore,
+  so a ScheduledBackup would target a Cluster with no object store and CNPG
+  would perpetually fail it. CNPG also rejects an empty schedule.
+
+  NOTE: schedule is a 6-field cron (leading seconds field), not the 5-field
+  Kubernetes CronJob format.
 */}}
-{{- if and .Values.backup.enabled .Values.backup.schedule }}
+{{- if and .Values.backup.enabled .Values.backup.destinationPath .Values.backup.schedule }}
 apiVersion: postgresql.cnpg.io/v1
 kind: ScheduledBackup
 metadata:

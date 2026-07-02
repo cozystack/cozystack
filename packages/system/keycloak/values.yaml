@@ -123,8 +123,9 @@ encryption:
 backup:
   # Enable S3 backups for keycloak-db.
   enabled: false
-  # Cron schedule for recurring base backups (CNPG rejects an empty schedule).
-  schedule: "0 2 * * *"
+  # Cron schedule for recurring base backups. NOTE: CNPG ScheduledBackup uses a
+  # 6-field cron (leading seconds field), not the 5-field Kubernetes format.
+  schedule: "0 0 2 * * *"
   # Barman retention policy for stored backups.
   retentionPolicy: "30d"
   # Destination prefix, e.g. s3://bucket/keycloak-db/.
