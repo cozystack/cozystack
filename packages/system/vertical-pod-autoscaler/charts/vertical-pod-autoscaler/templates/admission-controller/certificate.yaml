@@ -64,13 +64,19 @@ spec:
     secretName MUST match the volume mount name in
     admission-controller/deployment.yaml, which is driven by
     `vertical-pod-autoscaler.admissionController.tls.secretName`. In the
-    default path this resolves to
-    `<release>-admission-controller-tls`, which is the exact same name the
-    legacy genCA Secret uses — so on an upgrade from a pre-cert-manager
-    chart version cert-manager adopts the existing Secret (see the
-    pre-upgrade tls-migrator hook that strips Helm/Flux ownership) and
-    the Deployment volume mount picks up the refreshed content on next
-    rollout.
+    default path this resolves to `<release>-admission-controller-tls`
+    — the exact same name the legacy genCA Secret used. On upgrade from
+    a pre-cert-manager chart version the legacy Opaque Secret disappears
+    from the release manifest, Helm garbage-collects it, and cert-manager
+    immediately writes a fresh Secret of the same name via this
+    Certificate but with `type: kubernetes.io/tls`. In-place adoption is
+    NOT possible — `Secret.type` is immutable — so the delete/create
+    pass is the correct path. The seconds-long window it produces is
+    benign because the `vpa-webhook-config` MutatingWebhookConfiguration
+    ships with `failurePolicy: Ignore`, and the Deployment rolls in the
+    same upgrade (its `checksum/tls-cert` annotation flips as soon as
+    cert-manager writes the new Secret) — the fresh pod re-registers
+    the webhook with the new caBundle before the mismatch matters.
   */}}
   secretName: {{ include "vertical-pod-autoscaler.admissionController.tls.secretName" . }}
   {{- /*
