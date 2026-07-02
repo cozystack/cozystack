@@ -373,6 +373,61 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 
 	// Find Ready condition in ArtifactGenerator
 	readyCondition := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+
+	// Workaround: fluxcd/source-watcher can leave the Ready condition Unknown
+	// even after the reconcile has completed successfully, because of an
+	// upstream bug in its status-patch path. The sequence observed in
+	// cozystack e2e install-cozystack runs is:
+	//   1. source-watcher reconciles the ArtifactGenerator and writes the
+	//      generated ExternalArtifacts. `Status.Inventory` is populated and
+	//      `Status.ObservedSourcesDigest` is set — the artifacts are usable
+	//      by downstream Flux HelmReleases at this point.
+	//   2. On the same reconcile the controller tries to patchStatus with
+	//      Ready=True but the apiserver returns `etcdserver: request timed
+	//      out` (etcd under first-install load).
+	//   3. The reconciler returns the etcd error, controller-runtime prints
+	//      the "returned both a result and non-nil error, RequeueAfter
+	//      ignored" warning, and requeues via the workqueue rate limiter.
+	//   4. The next reconcile hits the "No drift detected" branch (artifacts
+	//      already up to date) and early-exits before touching status again.
+	// Result: the ArtifactGenerator is functionally Ready — downstream Flux
+	// consumes its ExternalArtifacts, HelmReleases install and become Ready
+	// on their own — but its Ready condition stays Unknown forever, this
+	// reconciler faithfully copies Unknown onto the PackageSource, and any
+	// Package/HR that waits on `PackageSource.status.conditions[Ready]=True`
+	// (in particular `cozystack-platform`) times out at 15m and fails the
+	// whole install.
+	//
+	// The fix: when the ArtifactGenerator has observably finished its work
+	// (`Inventory` non-empty AND `ObservedSourcesDigest` set) but Ready is
+	// missing or Unknown, synthesise Ready=True from that observable state
+	// with an explicit reason so operators can grep this specific workaround
+	// out of the audit log. If the upstream status catches up later the
+	// Owns() watch below re-fires this reconciler and the real Ready
+	// condition is copied over, replacing the synthetic one.
+	if artifactGeneratorObservablyReady(ag) {
+		syntheticReason := "ArtifactsGeneratedAwaitingUpstreamStatus"
+		syntheticMessage := "ArtifactGenerator Inventory populated and ObservedSourcesDigest set; " +
+			"upstream Ready condition has not been finalised. Synthesising Ready=True " +
+			"from observable artifact state so downstream Package/HR reconciles do not " +
+			"block on the fluxcd/source-watcher status-patch early-exit bug."
+		// Preserve LastTransitionTime if we've already stamped this same synthetic
+		// condition — controller-runtime meta.SetStatusCondition rewrites only
+		// on Status/Reason change, so identical calls are cheap.
+		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             syntheticReason,
+			Message:            syntheticMessage,
+			ObservedGeneration: packageSource.Generation,
+		})
+		logger.V(1).Info("synthesised PackageSource Ready=True from ArtifactGenerator observable state",
+			"packageSource", packageSource.Name,
+			"reason", syntheticReason,
+			"inventoryLen", len(ag.Status.Inventory))
+		return r.Status().Update(ctx, packageSource)
+	}
+
 	if readyCondition == nil {
 		// No Ready condition in ArtifactGenerator, set status to unknown
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
@@ -400,6 +455,33 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 		"reason", readyCondition.Reason)
 
 	return r.Status().Update(ctx, packageSource)
+}
+
+// artifactGeneratorObservablyReady returns true iff the ArtifactGenerator has
+// finished producing artifacts (Inventory populated + ObservedSourcesDigest
+// set) AND its own Ready condition has not yet reached True or False. That is
+// exactly the stuck-status window the fluxcd/source-watcher patch-status
+// early-exit bug produces; treating it as Ready lets downstream Package /
+// HelmRelease reconciles proceed without waiting on an upstream fix.
+//
+// If Ready is already True (upstream caught up) we return false so the caller
+// copies the real condition through unchanged. If Ready is False we also
+// return false: a real failure must not be masked as Ready.
+func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator) bool {
+	if len(ag.Status.Inventory) == 0 {
+		return false
+	}
+	if ag.Status.ObservedSourcesDigest == "" {
+		return false
+	}
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	if ready == nil {
+		return true
+	}
+	// Only synthesise while the upstream condition is genuinely unresolved.
+	// True → let the caller pass through the real Ready. False → surface the
+	// real failure; do not paper over it.
+	return ready.Status == metav1.ConditionUnknown
 }
 
 // SetupWithManager sets up the controller with the Manager.
