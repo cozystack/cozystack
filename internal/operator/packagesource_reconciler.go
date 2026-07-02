@@ -457,8 +457,10 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 			"from observable artifact state so downstream Package/HR reconciles do not " +
 			"block on the fluxcd/source-watcher status-patch early-exit bug."
 		// Preserve LastTransitionTime if we've already stamped this same synthetic
-		// condition — controller-runtime meta.SetStatusCondition rewrites only
-		// on Status/Reason change, so identical calls are cheap.
+		// condition — apimachinery meta.SetStatusCondition only rewrites
+		// LastTransitionTime when Status changes (Reason/Message updates in
+		// place); repeated calls with the same Status/Reason/Message are
+		// therefore no-ops on the persisted object.
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
 			Status:             metav1.ConditionTrue,
