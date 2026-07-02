@@ -458,14 +458,39 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 }
 
 // artifactGeneratorObservablyReady returns true iff the ArtifactGenerator has
-// finished producing artifacts (Inventory populated + ObservedSourcesDigest
-// set) AND its own Ready condition has not yet reached True or False. That is
+// finished producing artifacts for its CURRENT spec (Inventory populated,
+// ObservedSourcesDigest set, and Ready condition observed at the current
+// Generation) AND its own Ready condition has stalled in Unknown. That is
 // exactly the stuck-status window the fluxcd/source-watcher patch-status
 // early-exit bug produces; treating it as Ready lets downstream Package /
 // HelmRelease reconciles proceed without waiting on an upstream fix.
 //
+// The Generation check is load-bearing. Consider a user updating
+// PackageSource.spec.variants on a running cluster:
+//   1. Cozystack reconciler bumps the derived ArtifactGenerator to
+//      Generation=2 with the new spec.
+//   2. Source-watcher begins reconciling. Between "started" and "wrote
+//      new Inventory + ObservedSourcesDigest" it sits in a state where
+//      Inventory / ObservedSourcesDigest still reflect Generation=1 AND
+//      Ready is Unknown (Progressing).
+//   3. Without a Generation check, this reconciler would synthesise
+//      Ready=True — but the inventory it's ready on is STALE. Downstream
+//      Flux would consume the old ExternalArtifacts and quietly serve a
+//      spec-behind revision until source-watcher catches up.
+// Requiring readyCondition.ObservedGeneration == ag.Generation guarantees
+// source-watcher processed the current spec (so Inventory / Digest match
+// current spec), and only the patchStatus write to Ready itself failed —
+// which is the exact upstream bug we're papering over.
+//
+// If Ready is missing entirely we return false: without an ObservedGeneration
+// we cannot distinguish "artifacts are stale, current spec is still being
+// processed" from "current-spec artifacts are done but status has not been
+// stamped yet". The latter case will show up on the next reconcile once
+// source-watcher writes any Ready condition (even Unknown), and the workaround
+// will kick in then.
+//
 // If Ready is already True (upstream caught up) we return false so the caller
-// copies the real condition through unchanged. If Ready is False we also
+// passes the real condition through unchanged. If Ready is False we also
 // return false: a real failure must not be masked as Ready.
 func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator) bool {
 	if len(ag.Status.Inventory) == 0 {
@@ -476,12 +501,14 @@ func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator
 	}
 	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 	if ready == nil {
-		return true
+		return false
 	}
-	// Only synthesise while the upstream condition is genuinely unresolved.
-	// True → let the caller pass through the real Ready. False → surface the
-	// real failure; do not paper over it.
-	return ready.Status == metav1.ConditionUnknown
+	if ready.Status != metav1.ConditionUnknown {
+		return false
+	}
+	// Ready condition must observe the current spec — otherwise Inventory
+	// and ObservedSourcesDigest may still reflect a previous Generation.
+	return ready.ObservedGeneration == ag.Generation
 }
 
 // SetupWithManager sets up the controller with the Manager.

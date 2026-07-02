@@ -23,6 +23,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// agWithGen builds an ArtifactGenerator with a fixed .metadata.generation so
+// tests can exercise the Generation-matching branch of
+// artifactGeneratorObservablyReady without dragging in a full apiserver
+// round-trip.
+func agWithGen(gen int64, status sourcewatcherv1beta1.ArtifactGeneratorStatus) *sourcewatcherv1beta1.ArtifactGenerator {
+	return &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{Generation: gen},
+		Status:     status,
+	}
+}
+
 // TestArtifactGeneratorObservablyReady locks in the workaround for the
 // fluxcd/source-watcher status-patch early-exit bug. The predicate must be
 // selective enough that:
@@ -51,82 +62,88 @@ func TestArtifactGeneratorObservablyReady(t *testing.T) {
 	}{
 		{
 			name: "fresh ArtifactGenerator with nothing observed yet",
-			ag:   &sourcewatcherv1beta1.ArtifactGenerator{},
+			ag:   agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{}),
 			want: false,
 		},
 		{
 			name: "inventory present but sources not yet observed",
-			ag: &sourcewatcherv1beta1.ArtifactGenerator{
-				Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
-					Inventory: nonEmptyInventory,
-				},
-			},
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory: nonEmptyInventory,
+			}),
 			want: false,
 		},
 		{
 			name: "sources observed but inventory empty",
-			ag: &sourcewatcherv1beta1.ArtifactGenerator{
-				Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
-					ObservedSourcesDigest: observedDigest,
-				},
-			},
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				ObservedSourcesDigest: observedDigest,
+			}),
 			want: false,
 		},
 		{
-			name: "artifacts fully produced but Ready condition still Unknown — the actual stuck-status case",
-			ag: &sourcewatcherv1beta1.ArtifactGenerator{
-				Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
-					Inventory:             nonEmptyInventory,
-					ObservedSourcesDigest: observedDigest,
-					Conditions: []metav1.Condition{{
-						Type:    "Ready",
-						Status:  metav1.ConditionUnknown,
-						Reason:  "Progressing",
-						Message: "Reconciliation in progress",
-					}},
-				},
-			},
+			name: "artifacts fully produced but Ready condition absent — cannot synthesise without an ObservedGeneration to verify",
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory:             nonEmptyInventory,
+				ObservedSourcesDigest: observedDigest,
+			}),
+			want: false,
+		},
+		{
+			name: "artifacts fully produced AND Ready=Unknown observed on current Generation — the actual stuck-status case",
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory:             nonEmptyInventory,
+				ObservedSourcesDigest: observedDigest,
+				Conditions: []metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionUnknown,
+					Reason:             "Progressing",
+					Message:            "Reconciliation in progress",
+					ObservedGeneration: 1,
+				}},
+			}),
 			want: true,
 		},
 		{
-			name: "artifacts fully produced and no Ready condition at all — same stuck window before source-watcher stamps anything",
-			ag: &sourcewatcherv1beta1.ArtifactGenerator{
-				Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
-					Inventory:             nonEmptyInventory,
-					ObservedSourcesDigest: observedDigest,
-				},
-			},
-			want: true,
+			name: "artifacts observed AND Ready=Unknown but on a PRIOR Generation — spec was updated, artifacts are stale, do NOT synthesise",
+			ag: agWithGen(2, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory:             nonEmptyInventory,
+				ObservedSourcesDigest: observedDigest,
+				Conditions: []metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionUnknown,
+					Reason:             "Progressing",
+					Message:            "Reconciliation in progress",
+					ObservedGeneration: 1,
+				}},
+			}),
+			want: false,
 		},
 		{
 			name: "upstream Ready=True — pass through the real condition, do NOT synthesise",
-			ag: &sourcewatcherv1beta1.ArtifactGenerator{
-				Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
-					Inventory:             nonEmptyInventory,
-					ObservedSourcesDigest: observedDigest,
-					Conditions: []metav1.Condition{{
-						Type:   "Ready",
-						Status: metav1.ConditionTrue,
-						Reason: "Succeeded",
-					}},
-				},
-			},
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory:             nonEmptyInventory,
+				ObservedSourcesDigest: observedDigest,
+				Conditions: []metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionTrue,
+					Reason:             "Succeeded",
+					ObservedGeneration: 1,
+				}},
+			}),
 			want: false,
 		},
 		{
 			name: "upstream Ready=False — real failure, must NOT be masked as Ready",
-			ag: &sourcewatcherv1beta1.ArtifactGenerator{
-				Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
-					Inventory:             nonEmptyInventory,
-					ObservedSourcesDigest: observedDigest,
-					Conditions: []metav1.Condition{{
-						Type:    "Ready",
-						Status:  metav1.ConditionFalse,
-						Reason:  "SourceRefFailed",
-						Message: "cannot fetch source",
-					}},
-				},
-			},
+			ag: agWithGen(1, sourcewatcherv1beta1.ArtifactGeneratorStatus{
+				Inventory:             nonEmptyInventory,
+				ObservedSourcesDigest: observedDigest,
+				Conditions: []metav1.Condition{{
+					Type:               "Ready",
+					Status:             metav1.ConditionFalse,
+					Reason:             "SourceRefFailed",
+					Message:            "cannot fetch source",
+					ObservedGeneration: 1,
+				}},
+			}),
 			want: false,
 		},
 	}
