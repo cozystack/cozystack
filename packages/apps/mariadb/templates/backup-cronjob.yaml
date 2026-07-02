@@ -41,7 +41,9 @@ spec:
                   name: {{ .Release.Name }}
                   key: root-password
             - name: MYSQL_HOST
-              value: "{{ .Release.Name }}-{{ if eq (int .Values.replicas) 1 }}primary{{ else }}secondary{{ end }}"
+              # replicas>1 enables replication (offload dumps to a secondary);
+              # replicas=1 has no replication and only the bare service exists.
+              value: "{{ .Release.Name }}{{- if gt (int .Values.replicas) 1 }}-secondary{{- end }}"
             - name: AWS_ACCESS_KEY_ID
               valueFrom:
                 secretKeyRef:

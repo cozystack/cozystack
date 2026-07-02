@@ -29,11 +29,13 @@ spec:
             - {{ .Release.Name }}
         topologyKey: "kubernetes.io/hostname"
 
+  {{- if gt (int .Values.replicas) 1 }}
   replication:
     enabled: true
     #primary:
     #  podIndex: 0
     #  automaticFailover: true
+  {{- end }}
 
   podMetadata:
     labels:
@@ -71,6 +73,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/instance: {{ $.Release.Name }}
+    {{- if and .Values.external (eq (int .Values.replicas) 1) }}
+    type: LoadBalancer
+    {{- end }}
   storage:
     size: {{ .Values.size }}
     resizeInUseVolumes: true
@@ -79,7 +84,7 @@ spec:
     storageClassName: {{ . }}
     {{- end }}
 
-  {{- if .Values.external }}
+  {{- if and .Values.external (gt (int .Values.replicas) 1) }}
   primaryService:
     type: LoadBalancer
   {{- end }}
