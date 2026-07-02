@@ -183,3 +183,29 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubectl delete pvc -n tenant-root data-etcd-0 data-etcd-1 data-etcd-2 data-etcd-3 data-etcd-4 --ignore-not-found --wait=false'
+
+  # An explicit replicas: 0 must NOT render an empty resourceNames list — an
+  # empty resourceNames in an RBAC rule matches every PVC in the namespace
+  # (a wildcard), which would silently undo the least-privilege scoping. The
+  # $replicaCount clamp keeps at least data-etcd-0 in both the Role and command.
+  - it: clamps to one PVC name when replicas is 0 so RBAC never becomes a wildcard
+    set:
+      replicas: 0
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["persistentvolumeclaims"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - data-etcd-0
+        documentSelector:
+          path: kind
+          value: Role
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root data-etcd-0 --ignore-not-found --wait=false'
+        documentSelector:
+          path: kind
+          value: Job
