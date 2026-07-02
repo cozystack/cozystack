@@ -1,5 +1,6 @@
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- /* PROXY-protocol is enabled either explicitly per-app (.Values.proxyProtocol)
        or, for the host control plane, via the platform-level publishing.proxyProtocol
        switch carried in _cluster.proxy-protocol and applied only to the external-facing
@@ -47,6 +48,19 @@ spec:
       controller:
         replicaCount: {{ .Values.replicas }}
         ingressClass: {{ .Release.Namespace }}
+        {{- /*
+          Operator-supplied wildcard mode. Serve the pre-existing
+          wildcard Secret as the default SSL certificate so per-host
+          ACME certs are unnecessary. Only the publishing controller
+          (Release.Namespace == expose-ingress) gets the flag: the
+          Secret lives in that namespace and ingress-nginx must read it
+          from its own namespace, so child-tenant controllers cannot
+          point at it. The reference is therefore always same-namespace.
+        */}}
+        {{- if and $wildcardSecret (eq .Release.Namespace $exposeIngress) }}
+        extraArgs:
+          default-ssl-certificate: "{{ $exposeIngress }}/{{ $wildcardSecret }}"
+        {{- end }}
         resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 10 }}
         ingressClassResource:
           name: {{ .Release.Namespace }}

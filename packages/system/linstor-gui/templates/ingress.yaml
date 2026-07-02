@@ -1,5 +1,6 @@
 {{- $solver := (index .Values._cluster "solver") | default "http01" }}
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- $host := index .Values._cluster "root-host" }}
 {{- $oidcEnabled := index .Values._cluster "oidc-enabled" }}
 {{- $exposeServices := splitList "," ((index .Values._cluster "expose-services") | default "") }}
@@ -20,9 +21,12 @@ metadata:
   labels:
     {{- include "linstor-gui.labels" . | nindent 4 }}
   annotations:
+    {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. */}}
+    {{- if not $wildcardSecret }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
     {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-ingressclassname: {{ $exposeIngress }}
+    {{- end }}
     {{- end }}
     nginx.ingress.kubernetes.io/proxy-body-size: 100m
     # Keycloak access+refresh+id tokens make the oauth2-proxy session
@@ -50,5 +54,10 @@ spec:
   tls:
     - hosts:
         - linstor-gui.{{ $host }}
+      {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+             back to the default SSL certificate while the tls section keeps
+             the HTTP-to-HTTPS redirect enforced. */}}
+      {{- if not $wildcardSecret }}
       secretName: linstor-gui-ingress-tls
+      {{- end }}
 {{- end }}

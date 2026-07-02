@@ -1,0 +1,47 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: flux-shard-operator-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flux-shard-operator-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: flux-shard-operator-ca
+  duration: 43800h  # 5 years
+  commonName: flux-shard-operator-ca
+  issuerRef:
+    name: flux-shard-operator-selfsigned
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: flux-shard-operator-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: flux-shard-operator-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: flux-shard-operator
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: flux-shard-operator-cert
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: flux-shard-operator-ca
+  commonName: flux-shard-operator
+  dnsNames:
+    - flux-shard-operator
+    - flux-shard-operator.{{ .Release.Namespace }}.svc

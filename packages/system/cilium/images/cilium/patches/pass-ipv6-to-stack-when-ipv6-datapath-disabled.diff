@@ -1,0 +1,70 @@
+Pass IPv6 to the kernel stack when the IPv6 datapath is disabled.
+
+Generated against cilium v1.19.3 bpf/bpf_host.c. With ENABLE_HOST_FIREWALL
+defined but ENABLE_IPV6 not compiled in, the protocol-switch default case
+drops all IPv6 as DROP_UNKNOWN_L3 ("Unsupported L3 protocol") before any
+policy evaluation, in both directions. That breaks ICMPv6 Neighbor Discovery
+and BGP unnumbered over link-local addresses on IPv6/L3 fabrics, and no
+CiliumClusterwideNetworkPolicy can allow the traffic back. Upstream report:
+https://github.com/cilium/cilium/issues/33155 (closed stale, not fixed).
+
+Three of the four DROP_UNKNOWN_L3 sites are covered: do_netdev (ingress and
+from-host), cil_to_netdev (egress), and host_ingress_policy (cil_to_host).
+The fourth site, from_host_to_lxc (host to local pod), is intentionally not
+covered: with the IPv6 datapath disabled bpf_lxc drops IPv6 regardless of the
+host firewall, so a passthrough there would restore nothing.
+
+Regenerate for a new cilium version by re-applying the same three cases and
+running `make update`, which dry-runs this patch against the new tag.
+
+--- a/bpf_host.c
++++ b/bpf_host.c
+@@ -1132,6 +1132,18 @@
+ 		return send_drop_notify_error_with_exitcode_ext(ctx, identity, ret, ext_err,
+ 								CTX_ACT_OK, METRIC_INGRESS);
+ #endif /* ENABLE_IPV4 */
++#ifndef ENABLE_IPV6
++	/* cozystack-ipv6-passthrough: the IPv6 datapath is not compiled in, but
++	 * the node may still rely on IPv6 (ICMPv6 ND, BGP unnumbered over
++	 * link-local). Mirror the !ENABLE_HOST_FIREWALL behaviour and pass IPv6
++	 * to the kernel stack instead of dropping it as unknown L3.
++	 */
++	case bpf_htons(ETH_P_IPV6):
++		send_trace_notify(ctx, obs_point, identity, UNKNOWN_ID, TRACE_EP_ID_UNKNOWN,
++				  ctx->ingress_ifindex, trace.reason, trace.monitor, proto);
++		ret = CTX_ACT_OK;
++		break;
++#endif /* !ENABLE_IPV6 */
+ 	case bpf_htons(ETH_P_ARP):
+ 		if (is_defined(ENABLE_ARP_PASSTHROUGH) ||
+ 		    is_defined(ENABLE_ARP_RESPONDER) ||
+@@ -1411,6 +1423,14 @@
+ 					    &trace, &ext_err);
+ 		break;
+ # endif
++# ifndef ENABLE_IPV6
++	/* cozystack-ipv6-passthrough: IPv6 datapath disabled; let the kernel
++	 * stack handle host IPv6 instead of dropping it as unknown L3.
++	 */
++	case bpf_htons(ETH_P_IPV6):
++		ret = CTX_ACT_OK;
++		break;
++# endif /* !ENABLE_IPV6 */
+ # ifdef ENABLE_IPV4
+ 	case bpf_htons(ETH_P_IP): {
+ 		ret = handle_to_netdev_ipv4(ctx, src_sec_identity,
+@@ -1634,6 +1654,14 @@
+ 
+ 		break;
+ # endif
++# ifndef ENABLE_IPV6
++	/* cozystack-ipv6-passthrough: IPv6 datapath disabled; pass IPv6
++	 * destined to the host to the kernel stack instead of dropping it.
++	 */
++	case bpf_htons(ETH_P_IPV6):
++		ret = CTX_ACT_OK;
++		break;
++# endif /* !ENABLE_IPV6 */
+ # ifdef ENABLE_IPV4
+ 	case bpf_htons(ETH_P_IP):
+ 		if (use_tailcall) {

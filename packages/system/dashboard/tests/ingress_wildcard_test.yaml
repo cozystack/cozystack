@@ -1,0 +1,48 @@
+suite: dashboard ingress wildcard mode drops per-host ACME
+templates:
+  - templates/ingress.yaml
+
+release:
+  name: dashboard
+  namespace: cozy-dashboard
+
+# In operator-supplied wildcard mode (_cluster.wildcard-secret-name set)
+# the ingress controller serves the wildcard as its default SSL cert, so
+# the dashboard Ingress must not request its own cert-manager cert: the
+# cert-manager annotation and the per-host tls secretName are dropped
+# (the tls section stays so the HTTPS redirect keeps working against
+# the default SSL certificate). Without wildcard mode the per-host ACME
+# path is unchanged.
+
+tests:
+  - it: drops cert-manager annotation and tls secretName when wildcard secret is set
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard"
+        gateway-enabled: "false"
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: kind
+          value: Ingress
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - exists:
+          path: spec.tls
+      - notExists:
+          path: spec.tls[0].secretName
+
+  - it: keeps cert-manager annotation and tls secretName without wildcard secret
+    set:
+      _cluster:
+        root-host: example.org
+        expose-services: "dashboard"
+        gateway-enabled: "false"
+    asserts:
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+      - equal:
+          path: spec.tls[0].secretName
+          value: dashboard-web-tls

@@ -21,6 +21,7 @@ metadata:
     helm.sh/hook-weight: "0"
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 spec:
+  backoffLimit: 1
   template:
     metadata:
       labels:
@@ -28,10 +29,18 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-volume-resize-hook
       restartPolicy: Never
-      backoffLimit: 1
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: resize
-          image: docker.io/alpine/k8s:1.33.4
+          image: docker.io/alpine/k8s:1.36.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command: ["sh", "-xec"]
           args:
             - |

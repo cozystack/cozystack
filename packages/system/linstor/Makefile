@@ -4,24 +4,18 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
-LINSTOR_VERSION ?= 1.33.2
 LINSTOR_CSI_VERSION ?= v1.10.6
 
+# PoC: LINSTOR is replaced by Blockstor. The blockstor
+# controller/apiserver/satellite images are the published
+# ghcr.io/cozystack/blockstor-* images (pinned by digest in values.yaml),
+# NOT built in-tree — so image-piraeus-server is a no-op stub kept only
+# so the root `make build` target (which calls `image`) does not fail.
+# linstor-csi is still built here because it is reused unchanged.
 image: image-piraeus-server image-linstor-csi
 
 image-piraeus-server:
-	docker buildx build images/piraeus-server \
-		--build-arg LINSTOR_VERSION=$(LINSTOR_VERSION) \
-		--build-arg K8S_AWAIT_ELECTION_VERSION=v0.4.2 \
-		$(call image-tags,piraeus-server,$(LINSTOR_VERSION)) \
-		$(call cache-args,piraeus-server) \
-		--metadata-file images/piraeus-server.json \
-		$(BUILDX_ARGS)
-	REPOSITORY="$(REGISTRY)/piraeus-server" \
-		yq -i '.piraeusServer.image.repository = strenv(REPOSITORY)' values.yaml
-	TAG="$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/piraeus-server.json -o json -r)" \
-		yq -i '.piraeusServer.image.tag = strenv(TAG)' values.yaml
-	rm -f images/piraeus-server.json
+	@echo "[linstor] image-piraeus-server: no-op (PoC uses published ghcr.io/cozystack/blockstor-* images)"
 
 image-linstor-csi:
 	docker buildx build images/linstor-csi \

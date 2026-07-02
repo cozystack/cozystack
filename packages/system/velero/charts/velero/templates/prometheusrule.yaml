@@ -10,6 +10,8 @@ metadata:
     app.kubernetes.io/name: {{ include "velero.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+    app.kubernetes.io/version: {{ .Chart.AppVersion }}
+    helm.sh/chart: {{ include "velero.chart" . }}
     {{- if .Values.metrics.prometheusRule.additionalLabels }}
     {{- toYaml .Values.metrics.prometheusRule.additionalLabels | nindent 4 }}
     {{- end }}

@@ -7,63 +7,26 @@ metadata:
 spec:
   #nodeSelector:
   #  node-role.kubernetes.io/linstor: ""
-  internalTLS:
-    certManager:
-      name: linstor-internal-ca
-      kind: Issuer
+  #
+  # External mode: piraeus-operator does NOT run its own in-cluster Java
+  # linstor-controller. Instead linstor-csi talks to the blockstor
+  # apiserver, which serves the LINSTOR-compatible REST API. The
+  # apiserver Service lives in this namespace and exposes ONLY the mTLS
+  # port :3371 (RequireAndVerifyClientCert). The externalController.url
+  # below MUST match the blockstor-apiserver Service DNS and one of the
+  # serving-cert SANs (see blockstor-apiserver-tls.yaml).
+  externalController:
+    url: https://blockstor-apiserver.cozy-linstor.svc:3371
+  # apiTLS.certManager makes the operator issue linstor-csi-{controller,node}-tls
+  # client-cert Secrets from the blockstor-api-ca Issuer (created in
+  # blockstor-apiserver-tls.yaml). The operator then wires
+  # LS_USER_CERTIFICATE / LS_USER_KEY / LS_ROOT_CA onto the CSI pods so
+  # they present a client cert chained to blockstor-api-ca to the
+  # apiserver's RequireAndVerifyClientCert :3371 listener.
   apiTLS:
     certManager:
-      name: linstor-api-ca
+      name: blockstor-api-ca
       kind: Issuer
-  properties:
-  {{- if .Values.linstor.autoDiskful.enabled }}
-  - name: DrbdOptions/auto-diskful
-    value: {{ .Values.linstor.autoDiskful.minutes | quote }}
-  - name: DrbdOptions/auto-diskful-allow-cleanup
-    value: {{ .Values.linstor.autoDiskful.allowCleanup | quote }}
-  {{- end }}
-  - name: DrbdOptions/Net/verify-alg
-    value: "crc32c"
-  - name: DrbdOptions/Net/connect-int
-    value: "15"
-  - name: DrbdOptions/Net/ping-int
-    value: "15"
-  - name: DrbdOptions/Net/ping-timeout
-    value: "20"
-  - name: DrbdOptions/Net/timeout
-    value: "100"
-  controller:
-    enabled: true
-    podTemplate:
-      spec:
-        containers:
-        - name: linstor-controller
-          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
-        - name: plunger
-          image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
-          command:
-          - "/scripts/plunger-controller.sh"
-          securityContext:
-            capabilities:
-              drop:
-              - ALL
-            # make some room for live debugging
-            readOnlyRootFilesystem: false
-          volumeMounts:
-          - mountPath: /etc/linstor/client
-            name: client-tls
-            readOnly: true
-          - mountPath: /etc/linstor
-            name: etc-linstor
-            readOnly: true
-          - mountPath: /scripts
-            name: script-volume
-            readOnly: true
-        volumes:
-        - name: script-volume
-          configMap:
-            name: linstor-plunger
-            defaultMode: 0755
   csiController:
     podTemplate:
       spec:
@@ -83,13 +46,6 @@ spec:
         - name: linstor-csi
           image: {{ .Values.linstorCSI.image.repository }}:{{ .Values.linstorCSI.image.tag }}
   patches:
-    - target:
-        kind: Deployment
-        name: linstor-controller
-      patch: |-
-        - op: add
-          path: /metadata/annotations/reloader.stakater.com~1auto
-          value: "true"
     - target:
         kind: Deployment
         name: linstor-csi-controller

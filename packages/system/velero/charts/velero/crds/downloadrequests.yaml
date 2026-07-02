@@ -41,8 +41,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: DownloadRequestSpec is the specification for a download
-              request.
+            description: DownloadRequestSpec is the specification for a download request.
             properties:
               target:
                 description: Target is what to download (e.g. logs for a backup).
@@ -84,8 +83,8 @@ spec:
                   file.
                 type: string
               expiration:
-                description: Expiration is when this DownloadRequest expires and
-                  can be deleted by the system.
+                description: Expiration is when this DownloadRequest expires and can
+                  be deleted by the system.
                 format: date-time
                 nullable: true
                 type: string

@@ -3326,3 +3326,377 @@ func TestReconcile_MultiParentRefRouteWritesPerRefStatus(t *testing.T) {
 		t.Errorf("expected status entries for both sectionNames, got %+v", sections)
 	}
 }
+
+// TestReconcile_ExistingSecretModeRendersWildcardListenerWithSecretRef
+// pins the existingSecret path: the Gateway gets the same wildcard +
+// apex HTTPS listeners as DNS-01 mode, but their CertificateRefs point
+// at the operator-supplied Secret named in Spec.WildcardSecretRef
+// instead of a controller-minted cert.
+func TestReconcile_ExistingSecretModeRendersWildcardListenerWithSecretRef(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:              "foo.example.com",
+			CertMode:          gatewayv1alpha1.CertModeExistingSecret,
+			GatewayClassName:  "cilium",
+			WildcardSecretRef: &corev1.LocalObjectReference{Name: "wildcard-tls"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawWildcard, sawApex bool
+	for _, l := range got.Spec.Listeners {
+		if l.Protocol != gatewayv1.HTTPSProtocolType || l.Hostname == nil {
+			continue
+		}
+		switch string(*l.Hostname) {
+		case "*.foo.example.com":
+			sawWildcard = true
+		case "foo.example.com":
+			sawApex = true
+		default:
+			continue
+		}
+		if l.TLS == nil || len(l.TLS.CertificateRefs) != 1 ||
+			string(l.TLS.CertificateRefs[0].Name) != "wildcard-tls" {
+			t.Errorf("listener %s must reference the operator Secret wildcard-tls, got %+v", *l.Hostname, l.TLS)
+		}
+	}
+	if !sawWildcard {
+		t.Errorf("expected wildcard *.foo.example.com HTTPS listener in existingSecret mode, got %+v", got.Spec.Listeners)
+	}
+	if !sawApex {
+		t.Errorf("expected apex foo.example.com HTTPS listener in existingSecret mode, got %+v", got.Spec.Listeners)
+	}
+}
+
+// TestReconcile_ExistingSecretModeCreatesNoIssuerOrCertificate pins the
+// "no minting" contract: existingSecret mode references a pre-existing
+// Secret, so the controller must not create a cert-manager Issuer or
+// any Certificate.
+func TestReconcile_ExistingSecretModeCreatesNoIssuerOrCertificate(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:              "foo.example.com",
+			CertMode:          gatewayv1alpha1.CertModeExistingSecret,
+			GatewayClassName:  "cilium",
+			WildcardSecretRef: &corev1.LocalObjectReference{Name: "wildcard-tls"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, &cmv1.Issuer{}); err == nil {
+		t.Errorf("existingSecret mode must not create an Issuer")
+	}
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list certs: %v", err)
+	}
+	if len(certs.Items) != 0 {
+		t.Errorf("existingSecret mode must not create any Certificate, got %d", len(certs.Items))
+	}
+}
+
+// TestReconcile_ExistingSecretModeMissingSecretRefFails pins the
+// fail-fast: CertMode=existingSecret without a WildcardSecretRef is a
+// misconfiguration. Reconcile must return an error and the
+// TenantGateway must carry Ready=False.
+func TestReconcile_ExistingSecretModeMissingSecretRefFails(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeExistingSecret,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err == nil {
+		t.Fatalf("expected error when WildcardSecretRef is missing in existingSecret mode")
+	}
+
+	got := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	var readyFalse bool
+	for _, cond := range got.Status.Conditions {
+		if cond.Type == "Ready" && cond.Status == metav1.ConditionFalse {
+			readyFalse = true
+		}
+	}
+	if !readyFalse {
+		t.Errorf("expected Ready=False condition after failed reconcile, got %+v", got.Status.Conditions)
+	}
+}
+
+// TestReconcile_CertModeTransitionHTTP01ToExistingSecretCleansCertsAndIssuer
+// pins the mode-switch cleanup: flipping from HTTP-01 to existingSecret
+// must reclaim the per-tenant ACME Issuer and any per-listener
+// Certificate left behind, so no orphaned ACME machinery lingers.
+func TestReconcile_CertModeTransitionHTTP01ToExistingSecretCleansCertsAndIssuer(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-harbor"},
+		},
+	}
+	route := httpRouteAttached("harbor", "cozy-harbor", "harbor.foo.example.com")
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, route).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	// Phase 1: HTTP-01 reconcile creates an Issuer + per-listener cert.
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, &cmv1.Issuer{}); err != nil {
+		t.Fatalf("expected Issuer after HTTP-01 phase: %v", err)
+	}
+	preCerts := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), preCerts); err != nil {
+		t.Fatalf("phase 1 list certs: %v", err)
+	}
+	if len(preCerts.Items) == 0 {
+		t.Fatalf("expected a per-listener cert after HTTP-01 phase")
+	}
+
+	// Phase 2: flip to existingSecret. Issuer + per-listener certs gone.
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, updated); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	updated.Spec.CertMode = gatewayv1alpha1.CertModeExistingSecret
+	updated.Spec.WildcardSecretRef = &corev1.LocalObjectReference{Name: "wildcard-tls"}
+	if err := c.Update(context.TODO(), updated); err != nil {
+		t.Fatalf("flip certMode: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway", Namespace: "tenant-foo"}, &cmv1.Issuer{}); err == nil {
+		t.Errorf("Issuer leaked after switch to existingSecret")
+	}
+	postCerts := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), postCerts); err != nil {
+		t.Fatalf("phase 2 list certs: %v", err)
+	}
+	if len(postCerts.Items) != 0 {
+		t.Errorf("per-listener certs leaked after switch to existingSecret: %d remain", len(postCerts.Items))
+	}
+}
+
+// TestReconcile_CertModeTransitionDNS01ToExistingSecretCleansWildcardCert
+// pins the symmetric DNS-01 cleanup: the controller-minted wildcard
+// Certificate from a prior DNS-01 phase must be deleted when switching
+// to existingSecret (the operator now owns the cert material).
+func TestReconcile_CertModeTransitionDNS01ToExistingSecretCleansWildcardCert(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			DNS01: &gatewayv1alpha1.DNS01Config{
+				Provider: "cloudflare",
+				Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+					APITokenSecretRef: corev1.SecretKeySelector{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+						Key:                  "api-token",
+					},
+				},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+	r := &Reconciler{Client: c, Scheme: s}
+
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 1 reconcile: %v", err)
+	}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-foo"}, &cmv1.Certificate{}); err != nil {
+		t.Fatalf("expected wildcard cert in DNS-01 phase: %v", err)
+	}
+
+	updated := &gatewayv1alpha1.TenantGateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, updated); err != nil {
+		t.Fatalf("get tgw: %v", err)
+	}
+	updated.Spec.CertMode = gatewayv1alpha1.CertModeExistingSecret
+	updated.Spec.DNS01 = nil
+	updated.Spec.WildcardSecretRef = &corev1.LocalObjectReference{Name: "wildcard-tls"}
+	if err := c.Update(context.TODO(), updated); err != nil {
+		t.Fatalf("flip certMode: %v", err)
+	}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("phase 2 reconcile: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-gateway-tls", Namespace: "tenant-foo"}, &cmv1.Certificate{}); err == nil {
+		t.Errorf("wildcard cert leaked after switch to existingSecret")
+	}
+}
+
+// TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough pins
+// that switching off ACME does not regress the non-cert listeners: the
+// http→https redirect HTTPRoute and TLS-passthrough listeners must
+// still render in existingSecret mode.
+func TestReconcile_ExistingSecretModeKeepsHTTPRedirectAndPassthrough(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeExistingSecret,
+			GatewayClassName:       "cilium",
+			WildcardSecretRef:      &corev1.LocalObjectReference{Name: "wildcard-tls"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, &gatewayv1.HTTPRoute{}); err != nil {
+		t.Errorf("expected http→https redirect HTTPRoute in existingSecret mode: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawPassthrough bool
+	for _, l := range gw.Spec.Listeners {
+		if string(l.Name) == "tls-api" && l.Protocol == gatewayv1.TLSProtocolType &&
+			l.TLS != nil && l.TLS.Mode != nil && *l.TLS.Mode == gatewayv1.TLSModePassthrough {
+			sawPassthrough = true
+		}
+	}
+	if !sawPassthrough {
+		t.Errorf("expected tls-api passthrough listener in existingSecret mode, got %+v", gw.Spec.Listeners)
+	}
+}
+
+// TestReconcile_ExistingSecretModeRendersChildApexListenerWithOperatorSecret
+// pins the inheritance shape in existingSecret mode: like DNS-01, the
+// controller renders a `*.<child-apex>` listener for every inheriting
+// child tenant, all referencing the single operator-supplied Secret.
+//
+// This is a deliberately-degraded behavior worth pinning: unlike DNS-01
+// (where the controller mints a wildcard cert with child-apex SANs), in
+// existingSecret mode nothing extends the operator's static Secret, so a
+// `*.<apex>` cert does NOT cover `*.<child-apex>` and child subdomains
+// will present the parent cert. The MVP scopes operator-wildcard to the
+// root tenant for exactly this reason (see packages/extra/gateway
+// README). Pinning what gets rendered here means a future change to
+// child-apex handling cannot silently regress it.
+func TestReconcile_ExistingSecretModeRendersChildApexListenerWithOperatorSecret(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-root"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:              "example.org",
+			CertMode:          gatewayv1alpha1.CertModeExistingSecret,
+			GatewayClassName:  "cilium",
+			WildcardSecretRef: &corev1.LocalObjectReference{Name: "wildcard-tls"},
+		},
+	}
+	nsRoot := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	nsAlice := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "tenant-root-alice",
+			Labels: map[string]string{
+				"namespace.cozystack.io/host":    "alice.example.org",
+				"namespace.cozystack.io/gateway": "tenant-root",
+			},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, nsRoot, nsAlice).
+		WithStatusSubresource(tgw).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-root"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	var sawChild bool
+	for i := range gw.Spec.Listeners {
+		l := &gw.Spec.Listeners[i]
+		if l.Hostname == nil || string(*l.Hostname) != "*.alice.example.org" {
+			continue
+		}
+		sawChild = true
+		if l.Protocol != gatewayv1.HTTPSProtocolType {
+			t.Errorf("child listener: expected HTTPS protocol, got %s", l.Protocol)
+		}
+		if l.TLS == nil || len(l.TLS.CertificateRefs) != 1 ||
+			string(l.TLS.CertificateRefs[0].Name) != "wildcard-tls" {
+			t.Errorf("child listener must reference the operator Secret wildcard-tls, got %+v", l.TLS)
+		}
+	}
+	if !sawChild {
+		t.Errorf("expected per-child-apex listener *.alice.example.org in existingSecret mode, got %+v", gw.Spec.Listeners)
+	}
+}

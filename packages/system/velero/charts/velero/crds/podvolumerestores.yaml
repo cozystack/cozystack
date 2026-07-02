@@ -35,8 +35,7 @@ spec:
       jsonPath: .status.progress.totalBytes
       name: Total Bytes
       type: integer
-    - description: Name of the Backup Storage Location where the backup data is
-        stored
+    - description: Name of the Backup Storage Location where the backup data is stored
       jsonPath: .spec.backupStorageLocation
       name: Storage Location
       type: string
@@ -87,8 +86,8 @@ spec:
                   when the PodVolumeRestore is in InProgress phase
                 type: boolean
               pod:
-                description: Pod is a reference to the pod containing the volume
-                  to be restored.
+                description: Pod is a reference to the pod containing the volume to
+                  be restored.
                 properties:
                   apiVersion:
                     description: API version of the referent.
@@ -136,6 +135,10 @@ spec:
               snapshotID:
                 description: SnapshotID is the ID of the volume snapshot to be restored.
                 type: string
+              snapshotSize:
+                description: SnapshotSize is the logical size in Bytes of the snapshot.
+                format: int64
+                type: integer
               sourceNamespace:
                 description: SourceNamespace is the original namespace for namaspace
                   mapping.
@@ -149,16 +152,16 @@ spec:
                 nullable: true
                 type: object
               uploaderType:
-                description: UploaderType is the type of the uploader to handle
-                  the data transfer.
+                description: UploaderType is the type of the uploader to handle the
+                  data transfer.
                 enum:
                 - kopia
                 - restic
                 - ""
                 type: string
               volume:
-                description: Volume is the name of the volume within the Pod to
-                  be restored.
+                description: Volume is the name of the volume within the Pod to be
+                  restored.
                 type: string
             required:
             - backupStorageLocation
@@ -187,8 +190,7 @@ spec:
                 nullable: true
                 type: string
               message:
-                description: Message is a message about the pod volume restore's
-                  status.
+                description: Message is a message about the pod volume restore's status.
                 type: string
               node:
                 description: Node is name of the node where the pod volume restore

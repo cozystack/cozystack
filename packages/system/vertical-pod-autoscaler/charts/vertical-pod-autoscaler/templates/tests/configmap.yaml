@@ -2,6 +2,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ include "vertical-pod-autoscaler.tests.fullname" . }}
+  namespace: {{ include "common.names.namespace" . | quote }}
   labels:
     {{- include "vertical-pod-autoscaler.tests.labels" . | nindent 4 }}
     {{- if .Values.commonLabels }}
@@ -18,7 +19,7 @@ data:
 
 
     def test_admission_controller_service_connection():
-        url = "https://vpa-webhook.{{ .Release.Namespace }}.svc:{{ .Values.admissionController.service.ports.https }}/"
+        url = "https://vpa-webhook.{{ include "common.names.namespace" . }}.svc:{{ .Values.admissionController.service.ports.https }}/"
         verify = "/admission-controller-tls-secret/ca.crt"
 
         response = requests.get(url, verify=verify)

@@ -16,5 +16,7 @@ update:
 	patch --no-backup-if-mismatch -p4 < patches/disable-ca-key-rotation.patch
 	patch --no-backup-if-mismatch -p4 < patches/s3-tls-main-port.patch
 	patch --no-backup-if-mismatch -p4 < patches/cosi-provisioner-sa-name.patch
+	patch --no-backup-if-mismatch -p4 < patches/cosi-bucket-class-lock-readonly.patch
+	patch --no-backup-if-mismatch -p4 < patches/s3-service-name.patch
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 

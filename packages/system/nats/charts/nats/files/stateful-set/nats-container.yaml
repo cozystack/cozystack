@@ -104,3 +104,6 @@ volumeMounts:
 - name: {{ .name | quote }}
   mountPath: {{ .dir | quote }}
 {{- end }}
+
+resources:
+  {{- toYaml .Values.container.resources | nindent 2 }}

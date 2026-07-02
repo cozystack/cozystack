@@ -38,7 +38,5 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: {{ include "fdb-operator.serviceAccountName" . }}
-  {{- if .Values.globalMode.enabled }}
   namespace: {{ .Release.Namespace }}
-  {{- end }}
 {{- end }}

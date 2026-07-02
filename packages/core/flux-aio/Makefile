@@ -21,5 +21,3 @@ update:
 		-e '/timoni/d' \
 		-e 's|\.cluster\.local\.,||g' -e 's|\.cluster\.local\,||g' -e 's|\.cluster\.local\.||g' \
 		-e 's|--storage-adv-addr=source-watcher.$$(RUNTIME_NAMESPACE).svc|--storage-adv-addr=flux.$$(RUNTIME_NAMESPACE).svc|'
-	yq eval '.spec.template.spec.containers[0].image = "'"$$(yq eval 'select(.kind == "Deployment" and .metadata.name == "flux") | .spec.template.spec.containers[] | select(.name == "helm-controller").image' $(MANIFESTS_DIR)/fluxcd.yaml)"'"' -i $(MANIFESTS_DIR)/fluxcd-tenants.yaml
-	yq eval '.metadata.labels."app.kubernetes.io/version" = "'"$$(yq eval 'select(.kind == "Deployment" and .metadata.name == "flux") | .metadata.labels."app.kubernetes.io/version"' $(MANIFESTS_DIR)/fluxcd.yaml)"'"' -i $(MANIFESTS_DIR)/fluxcd-tenants.yaml

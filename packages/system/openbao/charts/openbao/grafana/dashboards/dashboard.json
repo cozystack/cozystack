@@ -133,7 +133,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "up{job=\"openbao-internal\"}",
+          "expr": "up{job=\"${job}\"}",
           "format": "time_series",
           "interval": "",
           "legendFormat": "{{ instance }}",
@@ -203,7 +203,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "sum by (exported_namespace,mount_point) (${metrics_prefix}_secret_kv_count)",
+          "expr": "sum by (exported_namespace,mount_point) (${metrics_prefix}_secret_kv_count{job=\"${job}\"})",
           "format": "table",
           "instant": true,
           "interval": "",
@@ -284,7 +284,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_identity_num_entities)",
+          "expr": "avg(${metrics_prefix}_identity_num_entities{job=\"${job}\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -353,7 +353,7 @@
       "strokeWidth": "3",
       "targets": [
         {
-          "expr": "avg without(instance) (${metrics_prefix}_identity_entity_alias_count)",
+          "expr": "avg without(instance) (${metrics_prefix}_identity_entity_alias_count{job=\"${job}\"})",
           "format": "time_series",
           "interval": "",
           "legendFormat": "{{ auth_method }}",
@@ -433,7 +433,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "max(1 + ${metrics_prefix}_core_unsealed{})",
+          "expr": "max(1 + ${metrics_prefix}_core_unsealed{job=\"${job}\"})",
           "format": "time_series",
           "interval": "",
           "legendFormat": "{{ instance }}",
@@ -496,7 +496,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_expire_num_leases)",
+          "expr": "avg(${metrics_prefix}_expire_num_leases{job=\"${job}\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -580,7 +580,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(increase(${metrics_prefix}_route_create_${mountpoint}__count[5m]))",
+              "expr": "avg(increase(${metrics_prefix}_route_create_${mountpoint}__count{job=\"${job}\"}[5m]))",
               "format": "time_series",
               "hide": false,
               "interval": "5m",
@@ -588,14 +588,14 @@
               "refId": "A"
             },
             {
-              "expr": "avg(increase(${metrics_prefix}_route_delete_${mountpoint}__count[5m]))",
+              "expr": "avg(increase(${metrics_prefix}_route_delete_${mountpoint}__count{job=\"${job}\"}[5m]))",
               "hide": false,
               "interval": "5m",
               "legendFormat": "Delete",
               "refId": "B"
             },
             {
-              "expr": "avg(increase(${metrics_prefix}_route_read_${mountpoint}__count[5m]))",
+              "expr": "avg(increase(${metrics_prefix}_route_read_${mountpoint}__count{job=\"${job}\"}[5m]))",
               "format": "time_series",
               "hide": false,
               "instant": false,
@@ -605,7 +605,7 @@
               "refId": "C"
             },
             {
-              "expr": "avg(increase(${metrics_prefix}_route_list_${mountpoint}__count[5m]))",
+              "expr": "avg(increase(${metrics_prefix}_route_list_${mountpoint}__count{job=\"${job}\"}[5m]))",
               "format": "time_series",
               "hide": false,
               "interval": "5m",
@@ -613,7 +613,7 @@
               "refId": "D"
             },
             {
-              "expr": "avg(increase(${metrics_prefix}_route_rollback_${mountpoint}__count[5m]))",
+              "expr": "avg(increase(${metrics_prefix}_route_rollback_${mountpoint}__count{job=\"${job}\"}[5m]))",
               "hide": true,
               "interval": "5m",
               "legendFormat": "Rollback",
@@ -726,7 +726,7 @@
           "steppedLine": false,
           "targets": [
             {
-              "expr": "avg(rate(${metrics_prefix}_route_create_${mountpoint}__sum[1m]) / rate(${metrics_prefix}_route_create_${mountpoint}__count[1m]) * 1000)",
+              "expr": "avg(rate(${metrics_prefix}_route_create_${mountpoint}__sum{job=\"${job}\"}[1m]) / rate(${metrics_prefix}_route_create_${mountpoint}__count{job=\"${job}\"}[1m]) * 1000)",
               "format": "time_series",
               "interval": "",
               "intervalFactor": 1,
@@ -734,27 +734,27 @@
               "refId": "A"
             },
             {
-              "expr": "avg(rate(${metrics_prefix}_route_delete_${mountpoint}__sum[1m]) / rate(${metrics_prefix}_route_delete_${mountpoint}__count[1m]) * 1000)",
+              "expr": "avg(rate(${metrics_prefix}_route_delete_${mountpoint}__sum{job=\"${job}\"}[1m]) / rate(${metrics_prefix}_route_delete_${mountpoint}__count{job=\"${job}\"}[1m]) * 1000)",
               "interval": "",
               "legendFormat": "Delete",
               "refId": "B"
             },
             {
-              "expr": "avg(rate(${metrics_prefix}_route_read_${mountpoint}__sum[1m]) / rate(${metrics_prefix}_route_read_${mountpoint}__count[1m]) * 1000)",
+              "expr": "avg(rate(${metrics_prefix}_route_read_${mountpoint}__sum{job=\"${job}\"}[1m]) / rate(${metrics_prefix}_route_read_${mountpoint}__count{job=\"${job}\"}[1m]) * 1000)",
               "hide": false,
               "interval": "",
               "legendFormat": "Read",
               "refId": "C"
             },
             {
-              "expr": "avg(rate(${metrics_prefix}_route_list_${mountpoint}__sum[1m]) / rate(${metrics_prefix}_route_list_${mountpoint}__count[1m]) * 1000)",
+              "expr": "avg(rate(${metrics_prefix}_route_list_${mountpoint}__sum{job=\"${job}\"}[1m]) / rate(${metrics_prefix}_route_list_${mountpoint}__count{job=\"${job}\"}[1m]) * 1000)",
               "hide": false,
               "interval": "",
               "legendFormat": "List",
               "refId": "D"
             },
             {
-              "expr": "avg(rate(${metrics_prefix}_route_rollback_${mountpoint}__sum[1m]) / rate(${metrics_prefix}_route_rollback_${mountpoint}__count[1m]) * 1000)",
+              "expr": "avg(rate(${metrics_prefix}_route_rollback_${mountpoint}__sum{job=\"${job}\"}[1m]) / rate(${metrics_prefix}_route_rollback_${mountpoint}__count{job=\"${job}\"}[1m]) * 1000)",
               "hide": true,
               "interval": "",
               "legendFormat": "Rollback",
@@ -870,7 +870,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_runtime_heap_objects{} / ${metrics_prefix}_runtime_malloc_count{})",
+          "expr": "avg(${metrics_prefix}_runtime_heap_objects{job=\"${job}\"} / ${metrics_prefix}_runtime_malloc_count{job=\"${job}\"})",
           "interval": "",
           "intervalFactor": 10,
           "legendFormat": "",
@@ -934,7 +934,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_runtime_num_goroutines{})",
+          "expr": "avg(${metrics_prefix}_runtime_num_goroutines{job=\"${job}\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -1012,7 +1012,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_runtime_alloc_bytes{})",
+          "expr": "avg(${metrics_prefix}_runtime_alloc_bytes{job=\"${job}\"})",
           "interval": "",
           "intervalFactor": 5,
           "legendFormat": "$node",
@@ -1116,7 +1116,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_token_count)",
+          "expr": "avg(${metrics_prefix}_token_count{job=\"${job}\"})",
           "interval": "",
           "legendFormat": "",
           "refId": "A"
@@ -1177,7 +1177,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg without(instance) (${metrics_prefix}_token_count_by_policy)",
+          "expr": "avg without(instance) (${metrics_prefix}_token_count_by_policy{job=\"${job}\"})",
           "interval": "",
           "legendFormat": "{{ policy }}",
           "refId": "A"
@@ -1283,7 +1283,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "avg(${metrics_prefix}_token_create_count - ${metrics_prefix}_token_store_count)",
+          "expr": "avg(${metrics_prefix}_token_create_count{job=\"${job}\"} - ${metrics_prefix}_token_store_count{job=\"${job}\"})",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 1,
@@ -1346,7 +1346,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg without(instance) (${metrics_prefix}_token_count_by_ttl)",
+          "expr": "avg without(instance) (${metrics_prefix}_token_count_by_ttl{job=\"${job}\"})",
           "format": "time_series",
           "interval": "",
           "legendFormat": "{{ creation_ttl }}",
@@ -1446,7 +1446,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg without(instance) (${metrics_prefix}_token_count_by_auth)",
+          "expr": "avg without(instance) (${metrics_prefix}_token_count_by_auth{job=\"${job}\"})",
           "interval": "",
           "legendFormat": "{{ auth_method }}",
           "refId": "A"
@@ -1563,7 +1563,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg by(auth_method, creation_ttl) (${metrics_prefix}_token_creation)",
+          "expr": "avg by(auth_method, creation_ttl) (${metrics_prefix}_token_creation{job=\"${job}\"})",
           "format": "time_series",
           "instant": false,
           "interval": "",
@@ -1667,7 +1667,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg without(instance) (${metrics_prefix}_token_create_count)",
+          "expr": "avg without(instance) (${metrics_prefix}_token_create_count{job=\"${job}\"})",
           "format": "time_series",
           "instant": false,
           "interval": "",
@@ -1676,7 +1676,7 @@
           "refId": "A"
         },
         {
-          "expr": "avg without(instance) (${metrics_prefix}_token_store_count)",
+          "expr": "avg without(instance) (${metrics_prefix}_token_store_count{job=\"${job}\"})",
           "format": "time_series",
           "hide": false,
           "instant": false,
@@ -1784,7 +1784,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(irate(${metrics_prefix}_token_lookup_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_token_lookup_count{job=\"${job}\"}[1m]))",
           "hide": false,
           "interval": "",
           "legendFormat": "Lookups",
@@ -1894,7 +1894,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "max(idelta(${metrics_prefix}_audit_log_request_failure[1m]))",
+          "expr": "max(idelta(${metrics_prefix}_audit_log_request_failure{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "interval": "",
           "legendFormat": "Request",
@@ -1959,7 +1959,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(irate(${metrics_prefix}_audit_log_request_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_audit_log_request_count{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "instant": false,
           "interval": "",
@@ -1968,7 +1968,7 @@
           "refId": "A"
         },
         {
-          "expr": "avg(irate(${metrics_prefix}_audit_log_response_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_audit_log_response_count{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "instant": false,
@@ -1978,7 +1978,7 @@
           "refId": "B"
         },
         {
-          "expr": "avg(irate(${metrics_prefix}_core_handle_request_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_core_handle_request_count{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "hide": false,
           "interval": "",
@@ -2079,26 +2079,26 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(irate(${metrics_prefix}_consul_get_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_consul_get_count{job=\"${job}\"}[1m]))",
           "interval": "",
           "intervalFactor": 1,
           "legendFormat": "GET",
           "refId": "A"
         },
         {
-          "expr": "avg(irate(${metrics_prefix}_consul_put_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_consul_put_count{job=\"${job}\"}[1m]))",
           "interval": "",
           "legendFormat": "PUT",
           "refId": "B"
         },
         {
-          "expr": "avg(irate(${metrics_prefix}_consul_delete_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_consul_delete_count{job=\"${job}\"}[1m]))",
           "interval": "",
           "legendFormat": "DELETE",
           "refId": "C"
         },
         {
-          "expr": "irate(${metrics_prefix}_consul_list_count{instance=\"$node:$port\"}[1m])",
+          "expr": "irate(${metrics_prefix}_consul_list_count{instance=\"$node:$port\", job=\"${job}\"}[1m])",
           "interval": "",
           "legendFormat": "LIST",
           "refId": "D"
@@ -2192,7 +2192,7 @@
       "pluginVersion": "7.0.3",
       "targets": [
         {
-          "expr": "max(idelta(${metrics_prefix}_audit_log_response_failure[1m]))",
+          "expr": "max(idelta(${metrics_prefix}_audit_log_response_failure{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "interval": "",
           "legendFormat": "Request",
@@ -2269,7 +2269,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(irate(${metrics_prefix}_policy_set_policy_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_policy_set_policy_count{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 1,
@@ -2370,7 +2370,7 @@
       "steppedLine": false,
       "targets": [
         {
-          "expr": "avg(irate(${metrics_prefix}_policy_get_policy_count[1m]))",
+          "expr": "avg(irate(${metrics_prefix}_policy_get_policy_count{job=\"${job}\"}[1m]))",
           "format": "time_series",
           "interval": "",
           "intervalFactor": 1,
@@ -2445,16 +2445,39 @@
       },
       {
         "allValue": null,
+        "allowCustomValue": false,
         "current": {},
         "datasource": "${DS_PROMXY}",
-        "definition": "label_values(up{job=\"openbao-internal\"}, instance)",
+        "definition": "label_values(${metrics_prefix}_core_active,job)",
+        "hide": 0,
+        "includeAll": false,
+        "label": "Job:",
+        "name": "job",
+        "multi": false,
+        "options": [],
+        "query": "label_values(${metrics_prefix}_core_active,job)",
+        "refresh": 1,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 0,
+        "tagValuesQuery": "",
+        "tags": [],
+        "tagsQuery": "",
+        "type": "query",
+        "useTags": false
+      },
+      {
+        "allValue": null,
+        "current": {},
+        "datasource": "${DS_PROMXY}",
+        "definition": "label_values(up{job=\"$job\"}, instance)",
         "hide": 2,
         "includeAll": false,
         "label": "Host:",
         "multi": false,
         "name": "node",
         "options": [],
-        "query": "label_values(up{job=\"openbao-internal\"}, instance)",
+        "query": "label_values(up{job=\"$job\"}, instance)",
         "refresh": 1,
         "regex": "/([^:]+):.*/",
         "skipUrlSync": false,
@@ -2469,14 +2492,14 @@
         "allValue": null,
         "current": {},
         "datasource": "${DS_PROMXY}",
-        "definition": "label_values(up{job=\"openbao-internal\",instance=~\"$node:(.*)\"}, instance)",
+        "definition": "label_values(up{job=\"$job\",instance=~\"$node:(.*)\"}, instance)",
         "hide": 2,
         "includeAll": false,
         "label": null,
         "multi": false,
         "name": "port",
         "options": [],
-        "query": "label_values(up{job=\"openbao-internal\",instance=~\"$node:(.*)\"}, instance)",
+        "query": "label_values(up{job=\"$job\",instance=~\"$node:(.*)\"}, instance)",
         "refresh": 1,
         "regex": "/[^:]+:(.*)/",
         "skipUrlSync": false,
@@ -2491,14 +2514,14 @@
         "allValue": "",
         "current": {},
         "datasource": "${DS_PROMXY}",
-        "definition": "label_values(${metrics_prefix}_secret_kv_count, mount_point)",
+        "definition": "label_values(${metrics_prefix}_secret_kv_count{job=\"$job\"}, mount_point)",
         "hide": 0,
         "includeAll": true,
         "label": "Mount Point:",
         "multi": true,
         "name": "mountpoint",
         "options": [],
-        "query": "label_values(${metrics_prefix}_secret_kv_count, mount_point)",
+        "query": "label_values(${metrics_prefix}_secret_kv_count{job=\"$job\"}, mount_point)",
         "refresh": 2,
         "regex": "/(.*)//",
         "skipUrlSync": false,

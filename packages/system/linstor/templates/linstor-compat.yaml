@@ -1,0 +1,57 @@
+---
+# Backwards-compat shim for the linstor-scheduler and linstor-gui
+# packages, which are written against the classic in-cluster LINSTOR
+# controller. In this PoC piraeus-operator runs in EXTERNAL mode: there
+# is NO in-cluster linstor-controller Deployment/Service — the
+# LINSTOR-compatible REST API is served by the blockstor apiserver
+# (Service blockstor-apiserver, mTLS :3371). The scheduler/gui still
+# dial https://linstor-controller.cozy-linstor.svc:3371 and mount a
+# client cert from Secret `linstor-client-tls`, so we provide both here.
+#
+# 1. linstor-client-tls — mTLS client cert chained to blockstor-api-ca
+#    (the same CA the apiserver trusts as its client-CA via
+#    --tls-client-ca-file). cert-manager writes tls.crt/tls.key AND the
+#    issuing ca.crt into the Secret, which is exactly the
+#    tls.crt/tls.key/ca.crt shape the scheduler/gui expect.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: linstor-client-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: linstor-client-tls
+  commonName: linstor-client
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - client auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: blockstor-api-ca
+    kind: Issuer
+---
+# 2. linstor-controller — Service alias that selects the blockstor
+#    apiserver pods (same selector as the blockstor-apiserver Service)
+#    and exposes the mTLS REST port :3371. So
+#    https://linstor-controller.cozy-linstor.svc:3371 resolves to the
+#    blockstor apiserver. Mirrors the blockstor stand's
+#    blockstor-controller Service that fronts the apiserver pods. The
+#    apiserver serving cert carries linstor-controller.* SANs (see
+#    blockstor-apiserver-tls.yaml) so the scheduler/gui TLS verification
+#    of this endpoint passes.
+apiVersion: v1
+kind: Service
+metadata:
+  name: linstor-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: blockstor-apiserver
+spec:
+  selector: {app: blockstor-apiserver}
+  ports:
+    - {name: rest-tls, port: 3371, targetPort: 3371}

@@ -293,8 +293,6 @@
             },
             "required": [
                 "enabled",
-                "scrapeInterval",
-                "scrapeTimeout",
                 "service",
                 "podAnnotations",
                 "serviceMonitor",
@@ -382,6 +380,9 @@
                                 "type": ["boolean", "null"]
                             },
                             "validationFrequency": {
+                                "type": ["string", "null"]
+                            },
+                            "backupSyncPeriod": {
                                 "type": ["string", "null"]
                             },
                             "accessMode": {

@@ -15,9 +15,9 @@ sources:
 type: application
 # This is the chart version. This version number should be incremented each time you make changes
 # to the chart and its templates, including the app version.
-version: 0.2.0
+version: 0.3.0
 # This is the version number of the application being deployed. This version number should be
 # incremented each time you make changes to the application.
-appVersion: v2.13.0
+appVersion: v2.30.0
 maintainers:
   - name: "foundationdb-ci"

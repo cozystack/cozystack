@@ -41,9 +41,11 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/apiserver/pkg/registry/rest"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/klog/v2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	fluxshard "github.com/cozystack/cozystack/internal/fluxshardoperator"
 	"github.com/cozystack/cozystack/pkg/apis/apps/presets"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/apps/validation"
@@ -541,13 +543,14 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		return nil, false, fmt.Errorf("conversion error: %v", err)
 	}
 
-	// Ensure ResourceVersion
+	// Fetch the live HelmRelease: it backs the ResourceVersion when the
+	// converted object carries none, and runtime-managed labels are carried
+	// over from it below.
+	cur := &helmv2.HelmRelease{}
+	if err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); err != nil {
+		return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
+	}
 	if helmRelease.ResourceVersion == "" {
-		cur := &helmv2.HelmRelease{}
-		err := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}})
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to fetch current HelmRelease: %w", err)
-		}
 		helmRelease.SetResourceVersion(cur.GetResourceVersion())
 	}
 
@@ -564,10 +567,38 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	helmRelease.Labels[ApplicationNameLabel] = app.Name
 	// Note: Annotations from config are not handled as r.releaseConfig.Annotations is undefined
 
+	// The flux-shard-operator assigns each tenant HelmRelease to a
+	// helm-controller shard by rewriting this label at runtime. Rebuilding
+	// the object from the Application reverts it to the ApplicationDefinition
+	// default, which would bounce the HelmRelease off its shard on every
+	// update, so the live value wins.
+	if shard, ok := cur.Labels[fluxshard.ShardKeyLabel]; ok {
+		helmRelease.Labels[fluxshard.ShardKeyLabel] = shard
+	}
+
 	klog.V(6).Infof("Updating HelmRelease %s in namespace %s", helmRelease.Name, helmRelease.Namespace)
 
-	// Update the HelmRelease in Kubernetes
-	err = r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+	// Update the HelmRelease in Kubernetes.
+	//
+	// Flux's helm-controller (and other controllers) continuously write the
+	// HelmRelease's status, which shares the object's resourceVersion. When a
+	// caller updates an app CR while a prior reconcile is still in flight, the
+	// resourceVersion read above goes stale and the Update is rejected with a
+	// 409 Conflict. The HelmRelease spec is fully derived from the Application
+	// the caller just applied, so a stale-resourceVersion conflict is never a
+	// real spec conflict here: refresh the resourceVersion from the live object
+	// and retry.
+	err = retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		updateErr := r.c.Update(ctx, helmRelease, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+		if apierrors.IsConflict(updateErr) {
+			cur := &helmv2.HelmRelease{}
+			if getErr := r.c.Get(ctx, client.ObjectKey{Namespace: helmRelease.Namespace, Name: helmRelease.Name}, cur, &client.GetOptions{Raw: &metav1.GetOptions{}}); getErr != nil {
+				return getErr
+			}
+			helmRelease.SetResourceVersion(cur.GetResourceVersion())
+		}
+		return updateErr
+	})
 	if err != nil {
 		klog.Errorf("Failed to update HelmRelease %s: %v", helmRelease.Name, err)
 		return nil, false, fmt.Errorf("failed to update HelmRelease: %v", err)
@@ -1489,8 +1520,47 @@ func latestMonitorTime(m *cozyv1alpha1.WorkloadMonitor) metav1.Time {
 	return m.CreationTimestamp
 }
 
-// convertApplicationToHelmRelease implements the actual conversion logic
+// convertApplicationToHelmRelease implements the actual conversion logic.
+//
+// Spec.Interval, Install/Upgrade.Strategy{Name=RetryOnFailure,RetryInterval},
+// Install/Upgrade.Timeout, and Spec.MaxHistory are populated from
+// ReleaseConfig fields fed by the cozystack-api server flags
+// (--helmrelease-{interval,retry-interval,install-timeout,upgrade-timeout,
+// max-history}). This mirrors cozystack-operator's
+// PackageReconciler.buildHelmReleaseSpec so both HelmRelease-generating paths
+// share the same retry strategy, history retention, and reconcile cadence.
+//
+// Strategy.Name=RetryOnFailure with an explicit RetryInterval (rather than
+// Remediation{Retries:-1}) decouples failed install/upgrade retry timing
+// from Spec.Interval — the previous coupling caused failed installs to
+// retry only every 5m, exceeding E2E budgets.
 func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*helmv2.HelmRelease, error) {
+	// Per-Application annotation overrides win over the global defaults
+	// (HelmReleaseInstallTimeout / HelmReleaseUpgradeTimeout):
+	//   - HelmInstallTimeout (release.cozystack.io/helm-install-timeout)
+	//     sets both Install.Timeout and Upgrade.Timeout;
+	//   - HelmUpgradeTimeout (release.cozystack.io/helm-upgrade-timeout)
+	//     then overrides only Upgrade.Timeout, so a kind can carry an
+	//     asymmetric budget (short install, long upgrade or vice versa).
+	// kubernetes-rd and tenant-rd carry helm-install-timeout today: the
+	// Kubernetes Application's parent chart contains CAPI/Kamaji
+	// resources whose admin-kubeconfig Secret is provisioned
+	// asynchronously and Kamaji cold-start routinely exceeds flux's
+	// default wait budget, and the Tenant parent chart bootstraps the
+	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
+	// Any future kind with the same shape can opt in by setting the
+	// same annotation.
+	installTimeout := r.releaseConfig.HelmReleaseInstallTimeout
+	upgradeTimeout := r.releaseConfig.HelmReleaseUpgradeTimeout
+	if r.releaseConfig.HelmInstallTimeout > 0 {
+		installTimeout = r.releaseConfig.HelmInstallTimeout
+		upgradeTimeout = r.releaseConfig.HelmInstallTimeout
+	}
+	if r.releaseConfig.HelmUpgradeTimeout > 0 {
+		upgradeTimeout = r.releaseConfig.HelmUpgradeTimeout
+	}
+
+	maxHistory := r.releaseConfig.HelmReleaseMaxHistory
 	helmRelease := &helmv2.HelmRelease{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: "helm.toolkit.fluxcd.io/v2",
@@ -1510,15 +1580,20 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 				Name:      r.releaseConfig.ChartRef.Name,
 				Namespace: r.releaseConfig.ChartRef.Namespace,
 			},
-			Interval: metav1.Duration{Duration: 5 * time.Minute},
+			Interval:   metav1.Duration{Duration: r.releaseConfig.HelmReleaseInterval},
+			MaxHistory: &maxHistory,
 			Install: &helmv2.Install{
-				Remediation: &helmv2.InstallRemediation{
-					Retries: -1,
+				Timeout: &metav1.Duration{Duration: installTimeout},
+				Strategy: &helmv2.InstallStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			Upgrade: &helmv2.Upgrade{
-				Remediation: &helmv2.UpgradeRemediation{
-					Retries: -1,
+				Timeout: &metav1.Duration{Duration: upgradeTimeout},
+				Strategy: &helmv2.UpgradeStrategy{
+					Name:          string(helmv2.ActionStrategyRetryOnFailure),
+					RetryInterval: &metav1.Duration{Duration: r.releaseConfig.HelmReleaseRetryInterval},
 				},
 			},
 			ValuesFrom: []helmv2.ValuesReference{
@@ -1529,26 +1604,6 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Values: app.Spec,
 		},
-	}
-
-	// Per-Application HelmRelease wait budget. The mechanism is generic:
-	// an ApplicationDefinition that sets
-	// release.cozystack.io/helm-install-timeout gets Install.Timeout and
-	// Upgrade.Timeout populated from ReleaseConfig.HelmInstallTimeout
-	// (parsed at startup). Applications that leave it unset keep flux
-	// defaults so their failed installs remediate on the normal cadence.
-	// kubernetes-rd and tenant-rd carry the annotation today: the
-	// Kubernetes Application's parent chart contains CAPI/Kamaji
-	// resources whose admin-kubeconfig Secret is provisioned
-	// asynchronously and Kamaji cold-start routinely exceeds flux's
-	// default wait budget, and the Tenant parent chart bootstraps the
-	// seaweedfs-db CNPG cluster whose first reconcile exceeds it too.
-	// Any future kind with the same shape can opt in by setting the
-	// same annotation.
-	if r.releaseConfig.HelmInstallTimeout > 0 {
-		timeout := metav1.Duration{Duration: r.releaseConfig.HelmInstallTimeout}
-		helmRelease.Spec.Install.Timeout = &timeout
-		helmRelease.Spec.Upgrade.Timeout = &timeout
 	}
 
 	return helmRelease, nil

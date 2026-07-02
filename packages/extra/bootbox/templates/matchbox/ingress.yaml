@@ -2,26 +2,37 @@
 {{- $clusterIssuer := (index .Values._cluster "issuer-name") | default "letsencrypt-prod" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
+{{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: bootbox
   labels:
     app: bootbox
+  {{- /* Operator wildcard mode: nginx serves the default SSL cert, so skip per-host ACME. Render annotations only when something remains. */}}
+  {{- if or (not $wildcardSecret) .Values.whitelistHTTP }}
   annotations:
+    {{- if not $wildcardSecret }}
     {{- if eq $solver "http01" }}
     acme.cert-manager.io/http01-ingress-ingressclassname: {{ $ingress }}
     {{- end }}
     cert-manager.io/cluster-issuer: {{ $clusterIssuer }}
+    {{- end }}
     {{- if .Values.whitelistHTTP }}
     nginx.ingress.kubernetes.io/whitelist-source-range: "{{ join "," (.Values.whitelist | default "0.0.0.0/32") }}"
     {{- end }}
+  {{- end }}
 spec:
   ingressClassName: {{ $ingress }}
   tls:
     - hosts:
         - "{{ printf "bootbox.%s" (.Values.host | default $host) }}"
+      {{- /* Operator wildcard mode: no per-host secret — ingress-nginx falls
+             back to the default SSL certificate while the tls section keeps
+             the HTTP-to-HTTPS redirect enforced. */}}
+      {{- if not $wildcardSecret }}
       secretName: bootbox-tls
+      {{- end }}
   rules:
     - host: "{{ printf "bootbox.%s" (.Values.host | default $host) }}"
       http:

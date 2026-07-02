@@ -23,6 +23,18 @@ update:
 		{ echo 'ERROR: perl patch did not remove the upstream AppArmor block from cilium-agent/daemonset.yaml (upstream template format may have changed)' >&2; exit 1; }
 	version=$$(awk '$$1 == "version:" {print $$2}' charts/cilium/Chart.yaml) && \
 	$(SED_INPLACE) "s/ARG VERSION=.*/ARG VERSION=v$${version}/" images/cilium/Dockerfile
+	# Verify the IPv6-passthrough BPF patch still applies to the new upstream tag,
+	# so the bump author learns about drift immediately instead of at image build.
+	version=$$(awk '$$1 == "version:" {print $$2}' charts/cilium/Chart.yaml) && \
+	tmpdir=$$(mktemp -d) && \
+	{ curl --fail --silent --show-error --location \
+		"https://raw.githubusercontent.com/cilium/cilium/v$${version}/bpf/bpf_host.c" \
+		-o "$$tmpdir/bpf_host.c" || { rm -rf "$$tmpdir"; exit 1; }; } && \
+	{ patch --dry-run --batch --forward --fuzz=0 -p1 -d "$$tmpdir" \
+		< images/cilium/patches/pass-ipv6-to-stack-when-ipv6-datapath-disabled.diff || \
+		{ echo "ERROR: images/cilium/patches/pass-ipv6-to-stack-when-ipv6-datapath-disabled.diff no longer applies to upstream bpf/bpf_host.c v$${version}; regenerate it for the new cilium version" >&2; \
+		rm -rf "$$tmpdir"; exit 1; }; } && \
+	rm -rf "$$tmpdir"
 
 image:
 	docker buildx build images/cilium \

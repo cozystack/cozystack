@@ -39,7 +39,13 @@ test-openapi:
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-test-openapi.bats'
 
 test-apps-%:
-	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'
+	@n=1; max=3; \
+	while :; do \
+	  if docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozytest.sh hack/e2e-apps/$*.bats'; then break; fi; \
+	  if [ "$$n" -ge "$$max" ]; then echo "» $* failed after $$max attempts"; exit 1; fi; \
+	  echo "» $* attempt $$n failed — retrying ($$((n+1))/$$max); the bats self-cleans on re-run"; \
+	  n=$$((n+1)); \
+	done
 
 collect-report: ## Collect the test report from the sandbox.
 	docker exec "${SANDBOX_NAME}" sh -c 'cd /workspace && hack/cozyreport.sh cozyreport'

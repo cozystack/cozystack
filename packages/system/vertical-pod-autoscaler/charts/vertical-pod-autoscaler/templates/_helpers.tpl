@@ -34,9 +34,9 @@ Create chart name and version as used by the chart label.
 {{/*
 Common labels
 */}}
-{{- define "vertical-pod-autoscaler.labels" -}}
+{{- define "vertical-pod-autoscaler.commonLabels" -}}
 helm.sh/chart: {{ include "vertical-pod-autoscaler.chart" . }}
-{{ include "vertical-pod-autoscaler.selectorLabels" . }}
+{{ include "vertical-pod-autoscaler.commonSelectorLabels" . }}
 {{- if .Chart.AppVersion }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 {{- end }}
@@ -44,9 +44,9 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{/*
-Selector labels
+Common selector labels
 */}}
-{{- define "vertical-pod-autoscaler.selectorLabels" -}}
+{{- define "vertical-pod-autoscaler.commonSelectorLabels" -}}
 app.kubernetes.io/name: {{ include "vertical-pod-autoscaler.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}

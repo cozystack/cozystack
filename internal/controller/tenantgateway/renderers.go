@@ -360,6 +360,13 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 			return nil, fmt.Errorf("unsupported dns01.provider=%q (supported: cloudflare, route53, digitalocean, rfc2136)", tgw.Spec.DNS01.Provider)
 		}
 
+	case gatewayv1alpha1.CertModeExistingSecret:
+		// existingSecret mode mints no Issuer, so reconcileIssuer never
+		// calls buildSolver in this mode. Guard defensively so a future
+		// caller gets a clear contract error instead of silently
+		// falling through to the unknown-certMode default below.
+		return nil, fmt.Errorf("certMode=existingSecret does not use an ACME solver")
+
 	default:
 		return nil, fmt.Errorf("unknown certMode=%q", tgw.Spec.CertMode)
 	}

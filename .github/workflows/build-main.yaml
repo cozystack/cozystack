@@ -46,6 +46,10 @@ jobs:
         with:
           fetch-depth: 0
           fetch-tags: true
+          # This privileged workflow has packages:write and an OCIR push token;
+          # it never pushes git, so don't leave the checkout's GITHUB_TOKEN in
+          # .git/config where a later build step could read it.
+          persist-credentials: false
 
       - name: Set up Docker config
         run: |
@@ -70,6 +74,13 @@ jobs:
         uses: docker/setup-buildx-action@v3
         with:
           driver: docker-container
+        env:
+          # buildx stores builder instances under $DOCKER_CONFIG/buildx/instances/.
+          # Create the builder in the SAME config the build step reads
+          # (runner.temp/.docker, seeded above and holding the OCIR auth); without
+          # this the builder lands in the default ~/.docker and the build step fails
+          # with `no builder "<name>" found`.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
 
       - name: Build all images and write mode=max cache
         run: make build

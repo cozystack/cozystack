@@ -211,6 +211,11 @@ func (in *TenantGatewaySpec) DeepCopyInto(out *TenantGatewaySpec) {
 		*out = new(DNS01Config)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.WildcardSecretRef != nil {
+		in, out := &in.WildcardSecretRef, &out.WildcardSecretRef
+		*out = new(v1.LocalObjectReference)
+		**out = **in
+	}
 	if in.AttachedNamespaces != nil {
 		in, out := &in.AttachedNamespaces, &out.AttachedNamespaces
 		*out = make([]string, len(*in))

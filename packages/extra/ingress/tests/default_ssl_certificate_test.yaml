@@ -1,0 +1,46 @@
+suite: ingress-nginx default-ssl-certificate wiring
+templates:
+  - templates/nginx-ingress.yaml
+
+release:
+  name: ingress
+  namespace: tenant-root
+
+# When the operator supplies a wildcard Secret
+# (_cluster.wildcard-secret-name), the publishing tenant's ingress
+# controller must serve it as the default SSL certificate so per-host
+# ACME certs are no longer needed. The reference is same-namespace
+# (publishing namespace == controller namespace), and the flag is set
+# only on the publishing controller — child-tenant controllers cannot
+# read a Secret from another namespace, so they must NOT get the flag.
+
+tests:
+  - it: sets default-ssl-certificate on the publishing controller when wildcard is set
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.extraArgs.default-ssl-certificate
+          value: tenant-root/wildcard-tls
+
+  - it: does not set default-ssl-certificate when no wildcard secret
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+    asserts:
+      - notExists:
+          path: spec.values.ingress-nginx.controller.extraArgs.default-ssl-certificate
+
+  - it: does not set default-ssl-certificate on a non-publishing tenant controller
+    release:
+      name: ingress
+      namespace: tenant-foo
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        wildcard-secret-name: wildcard-tls
+    asserts:
+      - notExists:
+          path: spec.values.ingress-nginx.controller.extraArgs.default-ssl-certificate

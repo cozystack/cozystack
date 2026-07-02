@@ -111,7 +111,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: kubectl
-        image: docker.io/alpine/k8s:1.33.4@sha256:b0523f0a244ddc4c8e055aa335c040d3d78b3ead5528f4544395f7f9f69c7b68
+        image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false

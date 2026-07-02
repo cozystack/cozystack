@@ -1,7 +1,27 @@
+# PoC: LINSTOR replaced by Blockstor. piraeus-operator runs in EXTERNAL
+# mode (no in-cluster Java linstor-controller) and only drives linstor-csi,
+# which talks to the blockstor apiserver. piraeusServer below is kept for the
+# operator's image reference but is unused in external mode (the LinstorCluster
+# CR points the CSI at blockstor). The blockstor images are the published
+# ghcr.io release (v0.1.16), which carries the fixes validated by this PR's
+# e2e (satellite zvol-device-wait, RD/VD GET cache-miss consistency,
+# auto-snapshot bookkeeping RetryOnConflict).
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: 1.33.2@sha256:7962188dd7485b997f3ea9a0ee51f9e41f1edf656201435f98eadfe7846007de
+    tag: v1.5.0@sha256:1a00af3642c4814c3552d1964daf2831a430bc451c55e786e5eee278fa50e9e1
+blockstorController:
+  image:
+    repository: ghcr.io/cozystack/blockstor-controller
+    tag: 0.1.16@sha256:fdb37367cf8e494d63168442e1f4792aab727977efc6e1a62165ce4d81ab16ce
+blockstorApiserver:
+  image:
+    repository: ghcr.io/cozystack/blockstor-apiserver
+    tag: 0.1.16@sha256:2e5e8385c2bc25779df60b75b717446aeb85d1ddc92ed25c3c04c56d5fce1b74
+blockstorSatellite:
+  image:
+    repository: ghcr.io/cozystack/blockstor-satellite
+    tag: 0.1.16@sha256:9fa55f641fa240ce7d787072cde90464ff476303a7af0e8c9258b2fc25d41431
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -10,7 +30,10 @@ linstor:
     enabled: true
     minutes: 30
     allowCleanup: true
+# linstor-csi is REUSED unchanged — blockstor serves the same CSI
+# wire-shape, so the existing StorageClasses (provisioner
+# linstor.csi.linbit.com) keep working.
 linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
-    tag: v1.10.6@sha256:5d3a649074559e7ca5bd0bc66b2abc0c96e14de0db3c88acf4b88d989b7d1d32
+    tag: v1.5.0@sha256:c60519d12aa8d078e4891d6e436c709ff53f2cc96457994390ca9424b6505903

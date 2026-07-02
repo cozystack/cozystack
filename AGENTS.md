@@ -23,6 +23,10 @@ working with the **Cozystack** project.
   - Read: [`overview.md`](./docs/agents/overview.md)
   - Action: Read relevant sections to understand project structure and conventions
 
+- **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
+  - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
+  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no `EXIT`/`RETURN` traps, fail-fast on HelmRelease readiness
+
 - **General questions about contributing**
   - Read: [`contributing.md`](./docs/agents/contributing.md)
   - Action: Read the file to understand git workflow, commit format, PR process

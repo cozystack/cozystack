@@ -79,14 +79,19 @@ TMP_SH=$(mktemp) || { echo "Failed to create temp file" >&2; exit 1; }
 
 # Per-file lifecycle hook. cozytest.sh runs each .bats as a single invocation
 # and exit()s on the first failing @test, so this EXIT trap is the one place to:
-#   1. on failure, snapshot the cluster(s) with crust-gather BEFORE any cleanup,
-#      so each failed test keeps its own inspectable state (host + every nested
-#      tenant cluster via tenantkubeconfig-*) instead of one end-of-suite dump;
+#   1. on failure, snapshot the HOST cluster with crust-gather BEFORE any cleanup,
+#      so each failed test keeps its own inspectable state instead of one
+#      end-of-suite dump;
 #   2. ALWAYS run the file's cozy_cleanup() if it defines one, so a test never
 #      leaks resources into the shared tenant-test namespace (left-behind PVCs
 #      otherwise exhaust the tenant quota and cascade-fail every later app).
 # cozy_cleanup is a plain shell function a .bats file may define — there are no
 # bats setup/teardown directives here, this runner only knows @test + bash.
+# NOTE: nested tenant clusters are NOT captured here. This trap runs in the
+# parent shell after the failing test subshell has exited and reaped its
+# port-forward, and crust-gather can only reach a tenant via that localhost
+# forward — so a test that creates tenant clusters (run-kubernetes.sh) captures
+# them from its OWN in-subshell EXIT trap, while the forward is still alive.
 COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 _cozy_on_exit() {
   _rc=$?
@@ -94,11 +99,13 @@ _cozy_on_exit() {
     _snap="$COZY_REPORT_DIR/snapshots/$(basename "$TEST_FILE" .bats)"
     mkdir -p "$_snap" 2>/dev/null || true
     echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
-    crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
-    for _kc in tenantkubeconfig-*; do
-      [ -f "$_kc" ] || continue
-      crust-gather collect -k "$_kc" --exclude-kind Secret -f "$_snap/$_kc" >/dev/null 2>&1 || true
-    done
+    # Bound with a timeout: crust-gather collect has hung indefinitely on a
+    # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
+    # wedging the whole test step for hours until the job-level cancel. 5 min is
+    # ample for a host snapshot; a partial capture (timeout exits 124, swallowed
+    # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills if a blocked
+    # collect ignores the SIGTERM.
+    timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
   fi
   if command -v cozy_cleanup >/dev/null 2>&1; then
     echo "» cozy_cleanup $(basename "$TEST_FILE" .bats)"

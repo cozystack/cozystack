@@ -22,7 +22,7 @@ import (
 )
 
 // CertMode selects how the per-tenant Gateway sources TLS certificates.
-// +kubebuilder:validation:Enum=http01;dns01
+// +kubebuilder:validation:Enum=http01;dns01;existingSecret
 type CertMode string
 
 const (
@@ -35,6 +35,15 @@ const (
 	// (apex + *.apex) via DNS-01 ACME. Operator must configure a DNS
 	// provider in Spec.DNS01.
 	CertModeDNS01 CertMode = "dns01"
+
+	// CertModeExistingSecret references a pre-existing wildcard TLS
+	// Secret instead of issuing anything. No Issuer and no Certificate
+	// are minted; the wildcard/apex listeners reference the operator-
+	// supplied Secret named in Spec.WildcardSecretRef directly. Used
+	// when the operator already holds a wildcard cert (purchased, or
+	// issued by a corporate CA). The Secret must live in the
+	// TenantGateway's own namespace.
+	CertModeExistingSecret CertMode = "existingSecret"
 )
 
 // IssuerName selects the Let's Encrypt environment the per-tenant
@@ -157,6 +166,15 @@ type TenantGatewaySpec struct {
 	// CertMode=dns01.
 	// +optional
 	DNS01 *DNS01Config `json:"dns01,omitempty"`
+
+	// WildcardSecretRef names a pre-existing TLS Secret in the
+	// TenantGateway's own namespace used for the wildcard and apex
+	// listeners when CertMode=existingSecret. Required in that mode;
+	// ignored otherwise. The Secret must be of type kubernetes.io/tls
+	// and cover the tenant apex (and *.apex). Cross-namespace refs are
+	// intentionally unsupported to avoid requiring a ReferenceGrant.
+	// +optional
+	WildcardSecretRef *corev1.LocalObjectReference `json:"wildcardSecretRef,omitempty"`
 
 	// AttachedNamespaces lists namespace names that are allowed to
 	// attach HTTPRoute or TLSRoute to this tenant's Gateway. The
