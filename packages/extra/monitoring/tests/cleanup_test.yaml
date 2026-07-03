@@ -22,13 +22,19 @@ tests:
       - equal:
           path: metadata.annotations["helm.sh/hook-weight"]
           value: "10"
+      # The Job keeps only before-hook-creation so a Failed cleanup survives for
+      # post-mortem; hook-succeeded stays on the SA/Role/RoleBinding (see #3072).
       - equal:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
-          value: before-hook-creation,hook-succeeded
+          value: before-hook-creation
       # Backstop so a stuck delete can never stall the HelmRelease teardown.
       - equal:
           path: spec.activeDeadlineSeconds
           value: 120
+      # Best-effort, never retry.
+      - equal:
+          path: spec.backoffLimit
+          value: 0
       - equal:
           path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
           value: "true"
@@ -62,25 +68,28 @@ tests:
       path: kind
       value: Job
     asserts:
-      # The selector must be scoped to this monitoring release, not just
-      # managed-by=vm-operator: the bare label matches every VMCluster/VLCluster
-      # in the namespace, so tearing one release down could delete another's
-      # storage. apps.cozystack.io/application.name is stamped on the VM CRs'
-      # storage.volumeClaimTemplate.metadata.labels (packages/system/monitoring),
-      # which vm-operator copies onto the PVCs via IntoSTSVolume even on v0.68.4
-      # (managedMetadata itself reaches PVCs only from v0.71.0).
+      # The selector is scoped to this release by apps.cozystack.io/application.name
+      # alone. That label is stamped on the VM/VL CRs'
+      # storage.volumeClaimTemplate.metadata.labels (packages/system/monitoring) and
+      # is copied onto the PVCs by vm-operator (IntoSTSVolume) even on v0.68.4.
+      # managed-by=vm-operator is deliberately NOT in the selector: on v0.68.4 it
+      # lives only on the StatefulSet selector/pod labels, so relying on it is
+      # fragile; application.name=<release>-system is already release-scoped and
+      # provably present on the PVC, and the CNPG db PVCs (grafana-db/alerta-db)
+      # do not carry it, so they stay untouched.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl delete pvc -n tenant-root -l managed-by=vm-operator,apps\.cozystack\.io/application\.name=monitoring-system --ignore-not-found --wait=false'
-      # Never widen the PVC sweep beyond the vm-operator label scope.
+          pattern: 'kubectl delete pvc -n tenant-root -l apps\.cozystack\.io/application\.name=monitoring-system --ignore-not-found --wait=false'
+      # Never widen the PVC sweep beyond the release-scoped label.
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: kubectl delete pvc[^\n]*--all
-      # Regression guard: the PVC delete must not fall back to the release-agnostic
-      # managed-by=vm-operator selector (i.e. without the application.name scope).
+      # Regression guard: never re-introduce managed-by=vm-operator into the PVC
+      # selector — on the shipped v0.68.4 it is not stamped on the storage PVCs,
+      # so an AND with it silently matches nothing (see #3094 review).
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl delete pvc[^\n]*-l managed-by=vm-operator --ignore-not-found'
+          pattern: 'kubectl delete pvc[^\n]*managed-by=vm-operator'
 
   - it: deletes the cert-manager TLS secrets by name without blocking teardown
     documentSelector:

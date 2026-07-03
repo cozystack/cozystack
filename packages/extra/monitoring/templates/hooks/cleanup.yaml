@@ -8,11 +8,15 @@ metadata:
   annotations:
     "helm.sh/hook": post-delete
     "helm.sh/hook-weight": "10"
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+    # Keep only before-hook-creation on the Job so a Failed cleanup survives for
+    # post-mortem; the SA/Role/RoleBinding keep hook-succeeded (cozystack #3072).
+    "helm.sh/hook-delete-policy": before-hook-creation
 spec:
   # Backstop: the deletes are best-effort and non-blocking (--wait=false), but
   # cap the Job so it can never stall the HelmRelease teardown.
   activeDeadlineSeconds: 120
+  # Best-effort cleanup: never retry.
+  backoffLimit: 0
   template:
     metadata:
       labels:
@@ -50,7 +54,7 @@ spec:
             - /bin/sh
             - -c
             - |
-              kubectl delete pvc -n {{ .Release.Namespace }} -l managed-by=vm-operator,apps.cozystack.io/application.name={{ .Release.Name }}-system --ignore-not-found --wait=false \
+              kubectl delete pvc -n {{ .Release.Namespace }} -l apps.cozystack.io/application.name={{ .Release.Name }}-system --ignore-not-found --wait=false \
                 || echo "WARNING: VM storage PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
               kubectl delete secret -n {{ .Release.Namespace }} alerta-tls grafana-ingress-tls --ignore-not-found --wait=false \
                 || echo "WARNING: TLS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
