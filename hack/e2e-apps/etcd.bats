@@ -159,7 +159,12 @@ EOF
 
   # vpa.yaml pins containerPolicies[].containerName=etcd; if the operator names
   # the member container anything else the VPA min/max bounds silently no-op.
-  cname=$(kubectl -n tenant-test get pods -l app.kubernetes.io/name=etcd -o jsonpath='{.items[0].spec.containers[0].name}')
+  # Reuse the strict member selector + running-phase filter (as above) so the
+  # reads below never dereference .items[0] on a non-member or not-yet-running
+  # Pod.
+  member_selector='app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator'
+  cname=$(kubectl -n tenant-test get pods -l "$member_selector" \
+    --field-selector=status.phase=Running -o jsonpath='{.items[0].spec.containers[0].name}')
   [ "$cname" = "etcd" ] || { echo "# member container is '$cname' (want 'etcd' to match vpa.yaml containerName)"; dump_diagnostics; false; }
 
   # podscrape.yaml (VMPodScrape) scrapes the port named 'metrics' over http on
@@ -168,9 +173,12 @@ EOF
   # the TLS client port, which would silently yield empty dashboards). Probe the
   # Pod IP directly - the scrape targets Pods, and the client Service is headless
   # and does not publish the metrics port.
-  mport=$(kubectl -n tenant-test get pods -l app.kubernetes.io/name=etcd -o jsonpath='{.items[0].spec.containers[0].ports[?(@.name=="metrics")].containerPort}')
+  mport=$(kubectl -n tenant-test get pods -l "$member_selector" \
+    --field-selector=status.phase=Running -o jsonpath='{.items[0].spec.containers[0].ports[?(@.name=="metrics")].containerPort}')
   [ -n "$mport" ] || { echo "# no container port named 'metrics' on member Pod (VMPodScrape would scrape nothing)"; dump_diagnostics; false; }
-  pod_ip=$(kubectl -n tenant-test get pods -l app.kubernetes.io/name=etcd -o jsonpath='{.items[0].status.podIP}')
+  pod_ip=$(kubectl -n tenant-test get pods -l "$member_selector" \
+    --field-selector=status.phase=Running -o jsonpath='{.items[0].status.podIP}')
+  [ -n "$pod_ip" ] || { echo "# no running member Pod IP found for metrics probe"; dump_diagnostics; false; }
   kubectl -n tenant-test delete pod etcd-metrics-probe --ignore-not-found >/dev/null 2>&1
   probe_out=$(kubectl -n tenant-test run etcd-metrics-probe --rm --restart=Never --attach \
     --image=curlimages/curl:8.10.1 \
