@@ -96,6 +96,31 @@ dump_diagnostics() {
   kubectl -n tenant-test get etcdcluster.etcd-operator.cozystack.io,etcdmember.etcd-operator.cozystack.io,etcdsnapshot.etcd-operator.cozystack.io -o wide 2>&1 || true
   kubectl -n tenant-test describe etcdcluster.etcd-operator.cozystack.io etcd 2>&1 || true
   kubectl -n cozy-etcd-operator logs -l app.kubernetes.io/name=etcd-operator --tail=100 2>&1 || true
+
+  # Backup round-trip chain. The snapshot agent runs in its OWN Job Pod (not the
+  # operator), so a snapshot that wedges on the etcd read or the S3 upload leaves
+  # its error ONLY in that Pod's log and in the BackupJob/EtcdSnapshot status —
+  # none of which the operator log above captures. Dump the whole chain so a
+  # failure is diagnosable from the CI log alone instead of a bare phase=Started.
+  # The operator labels every snapshot Job (and its Pods) with
+  # LabelCluster=etcd-operator.cozystack.io/cluster=<cluster>; chart-created
+  # objects (members, the defrag Job) don't carry it, so the selector isolates
+  # the snapshot Jobs. All best-effort — the contracts test creates none of
+  # these resources, so the gets simply come back empty there.
+  kubectl -n tenant-test get backupjobs.backups.cozystack.io,backups.backups.cozystack.io -o wide 2>&1 || true
+  kubectl -n tenant-test describe backupjobs.backups.cozystack.io 2>&1 || true
+  kubectl -n tenant-test describe etcdsnapshot.etcd-operator.cozystack.io 2>&1 || true
+  for j in $(kubectl -n tenant-test get jobs -l etcd-operator.cozystack.io/cluster=etcd -o name 2>/dev/null); do
+    kubectl -n tenant-test describe "$j" 2>&1 || true
+    # --prefix tags each line with its Pod, so retried Job attempts (backoffLimit)
+    # are distinguishable; a hung upload logs nothing, but describe + events show
+    # the Pod still Running, and a fast failure prints the x509/dial error here.
+    kubectl -n tenant-test logs "$j" --all-containers --prefix --tail=200 2>&1 || true
+  done
+  # Namespace events are the primary signal when a snapshot Pod hangs with an
+  # empty log: they surface Pod scheduling/pull/network failures and the
+  # BackupJob controller's own events that describe-job doesn't show.
+  kubectl -n tenant-test get events --sort-by=.lastTimestamp 2>&1 | tail -40 || true
 }
 
 # Wait until the etcd HelmRelease is reconciled by Flux and its

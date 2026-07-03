@@ -43,7 +43,7 @@ spec:
 EOF
 
 wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_INPLACE_NAME" \
-    '{.status.phase}' Succeeded "$NAMESPACE" 1800
+    '{.status.phase}' Succeeded "$NAMESPACE" 1800 Failed
 
 log_substep "Waiting for etcd member pods to be Ready again after restore..."
 kubectl -n "$NAMESPACE" wait pod -l app.kubernetes.io/instance=etcd --for=condition=ready --timeout=300s

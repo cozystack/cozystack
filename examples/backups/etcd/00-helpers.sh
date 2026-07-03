@@ -44,6 +44,12 @@ print_header() {
 }
 
 # Wait until a JSONPath value on a resource matches the desired string.
+# Optional 7th arg is a TERMINAL failure value: once the field reaches it the
+# wait returns 1 immediately instead of polling to the timeout. BackupJob and
+# RestoreJob settle on a terminal phase=Failed that never becomes Succeeded, so
+# waiting the full timeout only wastes wall-clock AND risks the snapshot Job's
+# Pod being TTL-reaped (TTLSecondsAfterFinished=600s) before diagnostics can read
+# its log. Failing fast on the terminal phase keeps that log in reach.
 wait_for_field() {
     local resource_type="$1"
     local resource_name="$2"
@@ -51,6 +57,7 @@ wait_for_field() {
     local desired="$4"
     local namespace="${5:-}"
     local timeout="${6:-300}"
+    local fail_value="${7:-}"
 
     log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
     local elapsed=0
@@ -63,6 +70,10 @@ wait_for_field() {
         if [[ "$current" == "$desired" ]]; then
             log_success "$resource_type/$resource_name reached '$desired'"
             return 0
+        fi
+        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
+            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
+            return 1
         fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
