@@ -442,43 +442,45 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	// Find Ready condition in ArtifactGenerator
 	readyCondition := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 
-	// Owns(&ArtifactGenerator{}) re-fires this reconciler on our own writes
-	// from forceArtifactGeneratorDrift — both the status patch (Ready=False,
-	// reason=SourceWatcherRecoveryForced) and the metadata patch that follows
-	// it enqueue a PackageSource reconcile. If we blindly took the
-	// not-stuck path here, we would (a) clear the tracking annotations we
-	// just wrote, so the attempt counter never accumulates and the
-	// SourceWatcherStalled give-up is unreachable, and (b) copy the
-	// synthetic Ready=False / SourceWatcherRecoveryForced onto the
-	// PackageSource, leaking an operator-internal marker onto the
-	// user-facing status. Detect our own reflection here and route it into
-	// a "wait for source-watcher" path instead.
+	// Route to the recovery state machine if any of the following holds:
 	//
-	// The signal is exact: reasonRecoveryForced is only ever written by
-	// forceArtifactGeneratorDrift, so any Ready condition carrying it is
-	// necessarily our own most-recent write reflecting back.
-	if readyCondition != nil && readyCondition.Reason == reasonRecoveryForced {
-		return r.awaitSourceWatcherResponse(ctx, packageSource, readyCondition, now)
-	}
-
-	// Recovery-in-progress: source-watcher has moved the AG off our
-	// SourceWatcherRecoveryForced marker but has not yet resolved the
-	// rebuild (Ready=Unknown / Progressing). If we cleared tracking on this
-	// transition, the attempts counter would never accumulate — we would
-	// force again, source-watcher would move to Progressing, we would
-	// clear again, and so on. Hold the tracking until source-watcher
-	// definitively resolves Ready (True on success, or False with a real
-	// upstream reason on failure).
+	//   (a) the AG's Ready condition carries our own reasonRecoveryForced
+	//       marker (Owns(&ArtifactGenerator{}) re-firing on the writes
+	//       from forceArtifactGeneratorDrift, or a still-un-reacted force
+	//       from a previous reconcile);
+	//   (b) recovery is already in progress (attempts > 0) and source-
+	//       watcher has moved off our marker into Progressing
+	//       (Ready=Unknown on the current generation) — the rebuild write
+	//       cycle after taking the drifted branch;
+	//   (c) the AG has been sitting in the fluxcd/pkg#934 stall signature
+	//       (Inventory populated + digest set + Ready=Unknown / absent past
+	//       grace) — the classic first-time stuck-detection path.
+	//
+	// All three funnel into maybeRecoverArtifactGenerator so its
+	// decideRecovery state machine is the single arbiter of "wait vs
+	// re-force vs give up". Splitting (a) and (b) into a separate
+	// wait-forever helper would trap us in a tight requeue loop if
+	// source-watcher never responds — the state machine's Wait branch is
+	// bounded by the same backoff schedule that drives Force, so
+	// exhaustion always surfaces SourceWatcherStalled honestly.
+	//
+	// Signals for (a) and (b) are exact: reasonRecoveryForced is only ever
+	// written by forceArtifactGeneratorDrift, so any Ready condition
+	// carrying it is necessarily our own reflection; the attempts counter
+	// is only ever set by that same function. Neither is observable from
+	// outside this reconciler.
 	attempts, _ := readRecoveryTracking(ag)
-	if attempts > 0 && readyCondition != nil && readyCondition.Status == metav1.ConditionUnknown {
-		return r.awaitSourceWatcherResponse(ctx, packageSource, readyCondition, now)
-	}
-
-	// Detect the source-watcher status-patch stall (fluxcd/pkg#934) and, if
-	// stuck, drive source-watcher through a bounded recovery schedule instead
-	// of blindly copying the stuck Unknown across. See
-	// maybeRecoverArtifactGenerator for the mechanism.
-	if artifactGeneratorStuck(ag, readyCondition, now) {
+	isOwnMarker := readyCondition != nil && readyCondition.Reason == reasonRecoveryForced
+	isProgressingInRecovery := attempts > 0 && readyCondition != nil &&
+		readyCondition.Status == metav1.ConditionUnknown &&
+		readyCondition.ObservedGeneration == ag.Generation
+	if isOwnMarker || isProgressingInRecovery || artifactGeneratorStuck(ag, readyCondition, now) {
+		logger.V(1).Info("routing to recovery state machine",
+			"packageSource", packageSource.Name,
+			"artifactGenerator", ag.Name,
+			"attempts", attempts,
+			"ownMarker", isOwnMarker,
+			"progressingInRecovery", isProgressingInRecovery)
 		return r.maybeRecoverArtifactGenerator(ctx, packageSource, ag, readyCondition, now)
 	}
 
@@ -538,33 +540,6 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	return result, r.Status().Update(ctx, packageSource)
 }
 
-// awaitSourceWatcherResponse handles the two Owns()-re-entrancy paths that
-// must NOT be treated as either "stuck" or "not-stuck / clear tracking":
-//
-//   - Our own SourceWatcherRecoveryForced write reflecting back (before
-//     source-watcher has been enqueued or has reacted).
-//   - source-watcher's Progressing / Ready=Unknown write during rebuild
-//     (after it took the drifted branch, before it finalises Ready=True
-//     or Ready=False from upstream).
-//
-// In both cases we hold the recovery-tracking annotations intact, keep the
-// PackageSource in Unknown/AwaitingSourceWatcherRecovery, and schedule a
-// follow-up reconcile at grace-period expiry so the stuck-detection path
-// takes over if source-watcher never lands a real resolution.
-func (r *PackageSourceReconciler) awaitSourceWatcherResponse(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ready *metav1.Condition, now time.Time) (ctrl.Result, error) {
-	meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
-		Type:               "Ready",
-		Status:             metav1.ConditionUnknown,
-		Reason:             reasonAwaitingRecovery,
-		Message:            "Force-drift issued, waiting for source-watcher to react to the AG status change and requeue trigger.",
-		ObservedGeneration: packageSource.Generation,
-	})
-	if err := r.Status().Update(ctx, packageSource); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{RequeueAfter: agFollowUpDelay(ready.LastTransitionTime.Time, now)}, nil
-}
-
 // agFollowUpDelay returns how long to wait before re-reconciling an AG whose
 // Ready=Unknown state is still within the grace period. Anchor is the last
 // state transition (or AG creation, when no Ready condition exists yet). The
@@ -587,23 +562,38 @@ func agFollowUpDelay(transitionOrCreation time.Time, now time.Time) time.Duratio
 // fruitless attempts — surfaces the failure as PackageSource.Ready=False with
 // reason SourceWatcherStalled so an operator can intervene.
 //
-// Why writing Ready=False works: source-watcher v2.1.0's detectDrift
-// (internal/controller/artifactgenerator_drift.go:52) treats IsFalse(Ready) as
-// drift = "NotReady", promoting the reconcile past the no-drift early-return
-// at controller.go:164 that traps a lost-Ready-condition state. On successful
-// rebuild source-watcher writes Ready=True at controller.go:254; on a genuine
-// rebuild failure it writes Ready=False with a real reason. Either way an
-// honest condition from upstream replaces our synthetic False, and our
-// Owns(&ArtifactGenerator{}) watch fires this reconciler to copy the resolved
-// condition onto the PackageSource. Bumping `reconcile.fluxcd.io/requestedAt`
-// (the previous approach) does NOT force drift — it triggers a reconcile that
-// re-hits the no-drift branch and never promotes the stuck Unknown.
+// Why forcing Ready=False AND bumping requestedAt together works: the two
+// signals are complementary — neither alone is enough.
 //
-// The recovery state (attempt count + last-force timestamp) lives on the AG
-// itself as annotations so it survives operator restarts. If the AG's Ready
-// condition has a LastTransitionTime newer than our lastRecoveryAt, the
-// attempt counter is reset — that signals a fresh stall episode after a
-// previous give-up, not a continuation of the same run.
+//   - The status write (Ready=False, reason=SourceWatcherRecoveryForced) is
+//     what source-watcher v2.1.0's detectDrift
+//     (internal/controller/artifactgenerator_drift.go:52) treats as drift =
+//     "NotReady", promoting the reconcile past the no-drift early-return at
+//     controller.go:164 that traps a lost-Ready-condition state.
+//   - The annotation write (reconcile.fluxcd.io/requestedAt = now) is what
+//     ReconcileRequestedPredicate on source-watcher's ArtifactGenerator
+//     watch keys on to enqueue that reconcile in the first place. A
+//     status-only patch changes neither the AG's generation nor the
+//     requestedAt annotation, so it never triggers a watch event — the AG
+//     would sit until the periodic self-requeue (hardcoded to 1h),
+//     well outside the 15m HR install timeout.
+//
+// On successful rebuild source-watcher writes Ready=True at
+// controller.go:254; on a genuine rebuild failure it writes Ready=False
+// with a real reason. Either way an honest condition from upstream
+// replaces our synthetic False, and our Owns(&ArtifactGenerator{}) watch
+// fires this reconciler to copy the resolved condition onto the
+// PackageSource.
+//
+// The recovery state (attempt count + last-force timestamp) lives on the
+// AG itself as annotations so it survives operator restarts. The counter
+// is NOT reset on a fresh Ready.LastTransitionTime — source-watcher's
+// Progressing write during rebuild always advances that timestamp, and a
+// reset there would make the SourceWatcherStalled give-up unreachable
+// under the very race this driver targets. The canonical reset is the
+// natural clearRecoveryTracking on updateStatus's not-stuck path, once
+// source-watcher lands a definitive Ready=True or Ready=False with a
+// real upstream reason.
 //
 // TODO(remove once fluxcd/pkg#934 lands and is rolled out): once source-watcher
 // consumes a patch.Helper that either serialises or transactionally combines

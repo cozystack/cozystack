@@ -547,9 +547,15 @@ func TestForceArtifactGeneratorDrift_MetadataPatchFailure_RollbackAnnotations(t 
 		t.Errorf("ag.Status Ready condition = %+v, want False (status patch succeeded)", ready)
 	}
 	// Annotations must roll back — the counter never advanced in apiserver so
-	// leaving it locally advanced would desync the caller's view.
+	// leaving it locally advanced would desync the caller's view. Both the
+	// tracking annotations AND the requestedAt bump (added for B1) must be
+	// symmetrically rolled back — otherwise source-watcher would see a bumped
+	// requestedAt with no matching backoff-state on our side.
 	if _, ok := ag.Annotations[annotationRecoveryAttempts]; ok {
 		t.Errorf("tracking annotation not rolled back after metadata patch failure: %v", ag.Annotations)
+	}
+	if _, ok := ag.Annotations[annotationFluxRequestedAt]; ok {
+		t.Errorf("requestedAt annotation not rolled back after metadata patch failure: %v", ag.Annotations)
 	}
 	if ag.Annotations["unrelated"] != "value" {
 		t.Errorf("pre-existing annotation lost: %v", ag.Annotations)
@@ -1065,8 +1071,12 @@ func TestUpdateStatus_OwnMarkerRoutesToAwait(t *testing.T) {
 	if err != nil {
 		t.Fatalf("updateStatus: %v", err)
 	}
-	if res.RequeueAfter == 0 {
-		t.Error("expected RequeueAfter to be set — awaitSourceWatcherResponse must schedule a follow-up")
+	// The routing goes through maybeRecoverArtifactGenerator's Wait branch:
+	// decideRecovery(attempts=1, lastRecoveryAt=referenceTime-5s, now=referenceTime)
+	// → elapsed 5s, backoffFor(1)=30s → wait 25s. Exact equality catches
+	// silent backoff-schedule regressions.
+	if res.RequeueAfter != 25*time.Second {
+		t.Errorf("RequeueAfter = %v, want 25s (backoffFor(1)=30s minus 5s elapsed)", res.RequeueAfter)
 	}
 	if agWrites != 0 {
 		t.Errorf("clearRecoveryTracking wrote to AG %d times — tracking must be held while our own marker is visible", agWrites)
@@ -1211,5 +1221,126 @@ func TestUpdateStatus_ReadyTrueClearsTracking(t *testing.T) {
 	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
 	if psReady == nil || psReady.Status != metav1.ConditionTrue {
 		t.Errorf("PS Ready = %+v, want True (copied through from AG)", psReady)
+	}
+}
+
+// TestUpdateStatus_OwnMarkerStale_TriggersRetry regression-tests the
+// source-watcher-unresponsive path that an earlier iteration of this driver
+// tripped on: after we force-drift, source-watcher never enqueues (network
+// partition, missing predicate, pod dead), and our previous force's marker
+// keeps reflecting back via Owns(). If updateStatus routed that into a
+// perpetual "await" helper the recovery would tight-loop forever and
+// SourceWatcherStalled would be unreachable. Asserted here: past
+// backoffFor(attempts), the state machine issues another force (bumps
+// attempts, re-stamps requestedAt) rather than idling.
+func TestUpdateStatus_OwnMarkerStale_TriggersRetry(t *testing.T) {
+	// attempts=1, lastRecoveryAt=referenceTime-60s. backoffFor(1)=30s, so
+	// 60s > 30s → decideRecovery must Force again.
+	forceAt := referenceTime.Add(-60 * time.Second)
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations: map[string]string{
+				annotationRecoveryAttempts: "1",
+				annotationLastRecoveryAt:   forceAt.UTC().Format(time.RFC3339Nano),
+				annotationFluxRequestedAt:  forceAt.UTC().Format(time.RFC3339Nano),
+			},
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonRecoveryForced,
+				Message:            "cozystack-operator forced drift (source-watcher never responded)",
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(forceAt),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	if _, err := r.updateStatus(context.Background(), ps, referenceTime); err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	// attempts must have incremented from 1 → 2.
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if got := persistedAG.Annotations[annotationRecoveryAttempts]; got != "2" {
+		t.Errorf("AG %s = %q, want 2 — stale own-marker must escalate through Force, not idle", annotationRecoveryAttempts, got)
+	}
+	// requestedAt must have been re-stamped to a fresh timestamp so
+	// source-watcher's next reconcile-request predicate fires.
+	if got := persistedAG.Annotations[annotationFluxRequestedAt]; got == forceAt.UTC().Format(time.RFC3339Nano) {
+		t.Errorf("AG %s = %q — must be re-stamped on retry", annotationFluxRequestedAt, got)
+	}
+}
+
+// TestUpdateStatus_OwnMarkerAttemptsExhausted_GivesUp regression-tests the
+// endpoint of the retry loop: with attempts=maxRecoveryAttempts and our own
+// marker still reflecting back (source-watcher never reacted through the
+// whole budget), updateStatus must surface Ready=False /
+// SourceWatcherStalled on the PackageSource instead of looping forever.
+func TestUpdateStatus_OwnMarkerAttemptsExhausted_GivesUp(t *testing.T) {
+	forceAt := referenceTime.Add(-10 * time.Minute) // well past any backoff
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations: map[string]string{
+				annotationRecoveryAttempts: strconv.Itoa(maxRecoveryAttempts),
+				annotationLastRecoveryAt:   forceAt.UTC().Format(time.RFC3339Nano),
+			},
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonRecoveryForced,
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(forceAt),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v on give-up, want 0 (operator must intervene)", res.RequeueAfter)
+	}
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionFalse || psReady.Reason != reasonSourceWatcherBad {
+		t.Errorf("PS Ready = %+v, want False/%s — unresponsive source-watcher must eventually surface as stalled", psReady, reasonSourceWatcherBad)
 	}
 }
