@@ -684,9 +684,10 @@ func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Conte
 	if ag.Annotations == nil {
 		ag.Annotations = map[string]string{}
 	}
-	ag.Annotations[annotationFluxRequestedAt] = now.UTC().Format(time.RFC3339Nano)
+	nowStr := now.UTC().Format(time.RFC3339Nano)
+	ag.Annotations[annotationFluxRequestedAt] = nowStr
 	ag.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
-	ag.Annotations[annotationLastRequeueAt] = now.UTC().Format(time.RFC3339Nano)
+	ag.Annotations[annotationLastRequeueAt] = nowStr
 	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
 		ag.Annotations = priorAnnotations
 		return err

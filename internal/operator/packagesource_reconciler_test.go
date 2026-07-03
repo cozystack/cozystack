@@ -392,7 +392,7 @@ func TestCloneAnnotations(t *testing.T) {
 			t.Errorf("cloneAnnotations(empty) len = %d, want 0", len(got))
 		}
 	})
-	t.Run("populated in, deep copy out", func(t *testing.T) {
+	t.Run("populated in, independent copy out", func(t *testing.T) {
 		src := map[string]string{"a": "1", "b": "2"}
 		got := cloneAnnotations(src)
 		if len(got) != 2 || got["a"] != "1" || got["b"] != "2" {
@@ -516,6 +516,41 @@ func TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackPreservesUnrelated(t 
 	}
 	if _, ok := ag.Annotations[annotationRequeueAttempts]; ok {
 		t.Errorf("tracking annotation leaked after rollback: %v", ag.Annotations)
+	}
+}
+
+// TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackRestoresPriorBump
+// covers the rollback contract in its most subtle form: our tracking keys are
+// already present from an EARLIER bump, and the new bump's Patch fails. The
+// rollback must restore the PRIOR bump's values, not delete the keys — a
+// refactor that naively used `delete(ag.Annotations, key)` on failure would
+// pass the two nil-rollback tests but silently regress this one.
+func TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackRestoresPriorBump(t *testing.T) {
+	priorTimestamp := referenceTime.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	ag := newAG(map[string]string{
+		annotationFluxRequestedAt: priorTimestamp,
+		annotationRequeueAttempts: "1",
+		annotationLastRequeueAt:   priorTimestamp,
+	})
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).Build()
+	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+			return errors.New("simulated Patch failure")
+		},
+	})
+	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
+
+	if err := r.bumpArtifactGeneratorRequeue(context.Background(), ag, referenceTime, 2); err == nil {
+		t.Fatal("bump succeeded, want error")
+	}
+	if got := ag.Annotations[annotationRequeueAttempts]; got != "1" {
+		t.Errorf("annotationRequeueAttempts = %q after rollback, want prior value 1", got)
+	}
+	if got := ag.Annotations[annotationFluxRequestedAt]; got != priorTimestamp {
+		t.Errorf("annotationFluxRequestedAt = %q after rollback, want prior %q", got, priorTimestamp)
+	}
+	if got := ag.Annotations[annotationLastRequeueAt]; got != priorTimestamp {
+		t.Errorf("annotationLastRequeueAt = %q after rollback, want prior %q", got, priorTimestamp)
 	}
 }
 
