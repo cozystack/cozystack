@@ -181,6 +181,24 @@ tests:
       - hasDocuments:
           count: 0
 
+  # Belt-and-suspenders: the templates are structurally gated on
+  # `existingSecret`, but pinning that the pod-template carries NEITHER
+  # `checksum/tls-secret` (legacy amplifier) NOR `checksum/tls-cert`
+  # (cert-manager runtime lookup) locks the contract at the observable
+  # boundary. If a future refactor accidentally moves either checksum
+  # outside its `if` gate, this catches it before it hits a customer
+  # cluster and starts a fresh ReplicaSet-churn incident.
+  - it: existingSecret emits neither tls-secret nor tls-cert checksum on the admission-controller pod
+    set:
+      vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-secret"]
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-cert"]
+
   # `checksum/tls-cert` uses a runtime `lookup` on the Secret content —
   # `helm template` in a test suite has no cluster, so the Secret is never
   # found and the annotation is absent. That's actually the correct

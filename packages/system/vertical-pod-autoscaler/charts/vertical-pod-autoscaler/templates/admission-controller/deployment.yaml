@@ -105,6 +105,18 @@ spec:
           the same ReplicaSet-churn pattern in a different disguise.
           Runtime-content-based checksum only mutates when the runtime
           content actually mutates, so the loop cannot form.
+
+          Hashing only `tls.crt` is sufficient because the Issuer is
+          `selfSigned` (see `certificate.yaml`): the leaf is its own CA,
+          so `ca.crt == tls.crt` and every rotation re-issues `tls.crt`
+          regardless of key-rotation policy. If a future change ever
+          switches the Issuer to a CA-backed one (external CA, ACME,
+          Vault, etc.), the CA can rotate independently of the leaf and
+          this checksum MUST be extended to also cover `ca.crt` —
+          otherwise a CA-only rotation would leave the pod serving with
+          a stale caBundle in its self-registered
+          MutatingWebhookConfiguration until the next full leaf
+          rotation.
         */}}
         {{- if and .Values.admissionController.tls.certManagerEnabled (not .Values.admissionController.tls.existingSecret) }}
         {{- $secret := lookup "v1" "Secret" (include "common.names.namespace" .) (include "vertical-pod-autoscaler.admissionController.tls.secretName" .) }}

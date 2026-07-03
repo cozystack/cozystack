@@ -107,7 +107,24 @@ spec:
   dnsNames:
     - {{ printf "vpa-webhook.%s.svc" (include "common.names.namespace" .) }}
   duration: 8760h
-  renewBefore: 360h
+  {{- /*
+    renewBefore is intentionally 90 days rather than the more common 15
+    days. cert-manager rotates the Secret at (duration - renewBefore), but
+    the running pod holds the old certificate in memory and only picks up
+    the new one when the ReplicaSet rolls. The ReplicaSet only rolls when a
+    Helm action fires: helm-controller does not re-render on reconcile
+    ticks after the release converges, only on install/upgrade/rollback.
+    With webhook `failurePolicy: Ignore`, an expired cert silently drops
+    admission traffic instead of failing loudly, so operators only notice
+    when VPA silently stops mutating pods.
+
+    Wider `renewBefore` shifts the "must have a Helm action land after
+    rotation" window from 15 days to ~90 days, decoupling admission-webhook
+    liveness from release cadence on clusters that go months without a
+    chart bump. This does not eliminate the rotate-and-restart requirement
+    — it just makes it survive realistic release schedules.
+  */}}
+  renewBefore: 2160h
   issuerRef:
     name: {{ include "vertical-pod-autoscaler.admissionController.fullname" . }}-tls-issuer
     kind: Issuer
