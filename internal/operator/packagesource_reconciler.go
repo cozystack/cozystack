@@ -38,6 +38,25 @@ import (
 
 // Constants tuning the workaround for fluxcd/pkg#934 (patch.Helper split-write
 // race in source-watcher). See the block comment on maybeRequeueArtifactGenerator.
+//
+// The schedule is deliberately conservative:
+//
+//   - `stuckGracePeriod = 30s` — source-watcher normally settles an
+//     ArtifactGenerator in under 10s (measured under 5-round rapid-fire load
+//     on dev3), so a 30s Unknown window comfortably distinguishes a real
+//     stall from a legitimate in-flight rebuild.
+//   - `initialBackoff = 30s`, `maxBackoff = 4m`, `maxRequeueAttempts = 5` —
+//     exponential 30s + 60s + 2m + 4m + 4m gives ~11.5m of total budget
+//     before we give up, safely inside the 15m upstream HelmRelease install
+//     timeout so a real stall surfaces as SourceWatcherStalled rather than
+//     silently timing out an install.
+//
+// HA note: the retry driver stores its state (attempt counter, last-bump
+// timestamp) as annotations on the ArtifactGenerator itself, so a single
+// replica converges deterministically. Running cozystack-operator with
+// multiple replicas WITHOUT leader election will let both replicas race on
+// annotation writes, corrupting the counter and the elapsed-time math. Deploy
+// this operator with `--leader-elect=true` (or replicas=1).
 const (
 	stuckGracePeriod   = 30 * time.Second
 	initialBackoff     = 30 * time.Second
@@ -76,6 +95,16 @@ func (r *PackageSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	// Skip work on objects that are already being torn down. Without this
+	// guard the retry driver could keep writing annotations to an
+	// ArtifactGenerator whose owning PackageSource is about to be garbage
+	// collected, and Status().Update below would leave a misleading
+	// "AwaitingSourceWatcherRequeue" condition on a doomed object.
+	// ownerReference cascade takes care of the actual AG cleanup.
+	if !packageSource.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, nil
 	}
 
 	// Generate ArtifactGenerator for package source
@@ -544,10 +573,13 @@ func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Cont
 		logger.Info("nudged source-watcher via reconcile.fluxcd.io/requestedAt",
 			"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "attempt", nextAttempt)
 		return ctrl.Result{RequeueAfter: backoffFor(nextAttempt)}, nil
-	}
 
-	// Unreachable — decideRequeue always returns one of the three actions above.
-	return ctrl.Result{}, nil
+	default:
+		// Force a loud failure if a new requeueAction is ever added without a
+		// matching case here — a silent return would leave the PackageSource
+		// Ready condition frozen at whatever value it had before this call.
+		panic(fmt.Sprintf("unhandled requeueAction %d", decision.action))
+	}
 }
 
 // artifactGeneratorStuck detects the fluxcd/pkg#934 stall signature: artifacts
@@ -635,27 +667,37 @@ func backoffFor(attempt int) time.Duration {
 
 // bumpArtifactGeneratorRequeue nudges source-watcher via
 // reconcile.fluxcd.io/requestedAt and updates our own bookkeeping annotations
-// in a single merge patch. Operates on a deep copy so the caller's `ag` is not
-// mutated if the Patch fails: leaving a locally-mutated ag whose changes never
-// hit the apiserver would desynchronise subsequent code paths reading the same
-// pointer.
+// in a single merge patch.
+//
+// On success, `ag.Annotations` reflects the persisted state so the caller can
+// re-read the same pointer. On Patch failure the annotations are rolled back
+// to their pre-call values so the caller does not see a locally-mutated `ag`
+// whose changes never hit the apiserver.
 func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time, nextAttempt int) error {
 	patchBase := ag.DeepCopy()
-	target := ag.DeepCopy()
-	if target.Annotations == nil {
-		target.Annotations = map[string]string{}
+	priorAnnotations := cloneAnnotations(ag.Annotations)
+	if ag.Annotations == nil {
+		ag.Annotations = map[string]string{}
 	}
-	target.Annotations[annotationFluxRequestedAt] = now.UTC().Format(time.RFC3339Nano)
-	target.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
-	target.Annotations[annotationLastRequeueAt] = now.UTC().Format(time.RFC3339Nano)
-	return r.Patch(ctx, target, client.MergeFrom(patchBase))
+	ag.Annotations[annotationFluxRequestedAt] = now.UTC().Format(time.RFC3339Nano)
+	ag.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
+	ag.Annotations[annotationLastRequeueAt] = now.UTC().Format(time.RFC3339Nano)
+	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
+		ag.Annotations = priorAnnotations
+		return err
+	}
+	return nil
 }
 
 // clearRequeueTracking removes our bookkeeping annotations once the AG is
-// healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — that annotation
-// is owned by source-watcher's own reconcile loop semantics and must persist.
-// Like bumpArtifactGeneratorRequeue, the mutation is done on a copy so a Patch
-// failure does not leave the caller's `ag` desynchronised from the apiserver.
+// healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — that
+// annotation is owned by source-watcher's own reconcile loop semantics and
+// standard flux controllers persist it after processing (they only advance
+// `.status.lastHandledReconcileAt`).
+//
+// Same success/failure contract as bumpArtifactGeneratorRequeue: on success
+// `ag.Annotations` matches the persisted state; on Patch failure the caller's
+// annotations are rolled back to their pre-call values.
 func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator) error {
 	if ag.Annotations == nil {
 		return nil
@@ -666,10 +708,28 @@ func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *
 		return nil
 	}
 	patchBase := ag.DeepCopy()
-	target := ag.DeepCopy()
-	delete(target.Annotations, annotationRequeueAttempts)
-	delete(target.Annotations, annotationLastRequeueAt)
-	return r.Patch(ctx, target, client.MergeFrom(patchBase))
+	priorAnnotations := cloneAnnotations(ag.Annotations)
+	delete(ag.Annotations, annotationRequeueAttempts)
+	delete(ag.Annotations, annotationLastRequeueAt)
+	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
+		ag.Annotations = priorAnnotations
+		return err
+	}
+	return nil
+}
+
+// cloneAnnotations returns a shallow copy suitable for rollback on Patch
+// failure. Nil in → nil out (preserved as a distinct sentinel from an empty
+// map so the caller sees exactly the same state it started with).
+func cloneAnnotations(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // readRequeueTracking pulls the retry-attempt counter and last-bump timestamp
