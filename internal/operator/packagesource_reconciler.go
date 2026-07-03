@@ -87,8 +87,10 @@ func (r *PackageSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// Update PackageSource status (variants and conditions from ArtifactGenerator).
 	// The status update may schedule a follow-up reconcile via RequeueAfter when
 	// it detects a source-watcher status-patch stall and needs to wait for the
-	// next backoff window; that Result is honoured on the way out.
-	result, err := r.updateStatus(ctx, packageSource)
+	// next backoff window; that Result is honoured on the way out. `now` is
+	// threaded down as a single sample so the whole reconcile agrees on one
+	// wall-clock reading.
+	result, err := r.updateStatus(ctx, packageSource, nowFunc())
 	if err != nil {
 		logger.Error(err, "failed to update status")
 		// Don't return error, status update is not critical
@@ -356,8 +358,10 @@ func (r *PackageSourceReconciler) createOrUpdate(ctx context.Context, obj client
 // ArtifactGenerator). It may return a Result with RequeueAfter set when the
 // ArtifactGenerator's upstream Ready condition is stuck and the reconciler is
 // driving source-watcher through a bounded requeue schedule; see
-// maybeRequeueArtifactGenerator for the strategy.
-func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSource *cozyv1alpha1.PackageSource) (ctrl.Result, error) {
+// maybeRequeueArtifactGenerator for the strategy. `now` is passed by the
+// caller so every time-sensitive check inside this reconcile agrees on the
+// same wall-clock reading.
+func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, now time.Time) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Update variants in status from spec
@@ -371,10 +375,11 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	if packageSource.Spec.SourceRef == nil {
 		// Set status to unknown if SourceRef is not set
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionUnknown,
-			Reason:  "SourceRefNotSet",
-			Message: "SourceRef is not configured",
+			Type:               "Ready",
+			Status:             metav1.ConditionUnknown,
+			Reason:             "SourceRefNotSet",
+			Message:            "SourceRef is not configured",
+			ObservedGeneration: packageSource.Generation,
 		})
 		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 	}
@@ -390,10 +395,11 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 		if apierrors.IsNotFound(err) {
 			// ArtifactGenerator not found, set status to unknown
 			meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
-				Type:    "Ready",
-				Status:  metav1.ConditionUnknown,
-				Reason:  "ArtifactGeneratorNotFound",
-				Message: "ArtifactGenerator not found",
+				Type:               "Ready",
+				Status:             metav1.ConditionUnknown,
+				Reason:             "ArtifactGeneratorNotFound",
+				Message:            "ArtifactGenerator not found",
+				ObservedGeneration: packageSource.Generation,
 			})
 			return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 		}
@@ -407,8 +413,8 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	// stuck, drive source-watcher through a bounded retry schedule instead of
 	// blindly copying the stuck Unknown across. See maybeRequeueArtifactGenerator
 	// for the mechanism.
-	if artifactGeneratorStuck(ag, readyCondition, nowFunc()) {
-		return r.maybeRequeueArtifactGenerator(ctx, packageSource, ag)
+	if artifactGeneratorStuck(ag, readyCondition, now) {
+		return r.maybeRequeueArtifactGenerator(ctx, packageSource, ag, now)
 	}
 
 	// AG is not stuck — clear any requeue-tracking annotations the previous
@@ -422,10 +428,11 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	if readyCondition == nil {
 		// No Ready condition in ArtifactGenerator, set status to unknown
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
-			Type:    "Ready",
-			Status:  metav1.ConditionUnknown,
-			Reason:  "ArtifactGeneratorNotReady",
-			Message: "ArtifactGenerator Ready condition not found",
+			Type:               "Ready",
+			Status:             metav1.ConditionUnknown,
+			Reason:             "ArtifactGeneratorNotReady",
+			Message:            "ArtifactGenerator Ready condition not found",
+			ObservedGeneration: packageSource.Generation,
 		})
 		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 	}
@@ -460,14 +467,21 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 // itself as annotations so it survives operator restarts and rides the same
 // ownerReference lifecycle as the AG.
 //
+// This mechanism relies on source-watcher registering the standard flux
+// ReconcileRequestedPredicate on ArtifactGenerator (fluxcd/pkg/runtime/predicates),
+// which fires a fresh reconcile whenever `reconcile.fluxcd.io/requestedAt`
+// changes. All flux-native controllers wire this predicate through
+// controller.Options{}; if a future source-watcher release drops it, the
+// requeue driver becomes a no-op and stuck AGs will time out at the
+// SourceWatcherStalled cutoff.
+//
 // TODO(remove once fluxcd/pkg#934 lands and is rolled out): once source-watcher
 // consumes a patch.Helper that either serialises or transactionally combines
 // the .status / .status.conditions writes, this whole retry driver can be
 // deleted and updateStatus can copy the AG's Ready condition through
 // unconditionally.
-func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator) (ctrl.Result, error) {
+func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
-	now := nowFunc()
 
 	attempts, lastRequeueAt := readRequeueTracking(ag)
 	decision := decideRequeue(attempts, lastRequeueAt, now)
@@ -621,21 +635,27 @@ func backoffFor(attempt int) time.Duration {
 
 // bumpArtifactGeneratorRequeue nudges source-watcher via
 // reconcile.fluxcd.io/requestedAt and updates our own bookkeeping annotations
-// in a single merge patch so the AG is only mutated once per attempt.
+// in a single merge patch. Operates on a deep copy so the caller's `ag` is not
+// mutated if the Patch fails: leaving a locally-mutated ag whose changes never
+// hit the apiserver would desynchronise subsequent code paths reading the same
+// pointer.
 func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time, nextAttempt int) error {
 	patchBase := ag.DeepCopy()
-	if ag.Annotations == nil {
-		ag.Annotations = map[string]string{}
+	target := ag.DeepCopy()
+	if target.Annotations == nil {
+		target.Annotations = map[string]string{}
 	}
-	ag.Annotations[annotationFluxRequestedAt] = now.UTC().Format(time.RFC3339Nano)
-	ag.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
-	ag.Annotations[annotationLastRequeueAt] = now.UTC().Format(time.RFC3339Nano)
-	return r.Patch(ctx, ag, client.MergeFrom(patchBase))
+	target.Annotations[annotationFluxRequestedAt] = now.UTC().Format(time.RFC3339Nano)
+	target.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
+	target.Annotations[annotationLastRequeueAt] = now.UTC().Format(time.RFC3339Nano)
+	return r.Patch(ctx, target, client.MergeFrom(patchBase))
 }
 
 // clearRequeueTracking removes our bookkeeping annotations once the AG is
 // healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — that annotation
 // is owned by source-watcher's own reconcile loop semantics and must persist.
+// Like bumpArtifactGeneratorRequeue, the mutation is done on a copy so a Patch
+// failure does not leave the caller's `ag` desynchronised from the apiserver.
 func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator) error {
 	if ag.Annotations == nil {
 		return nil
@@ -646,9 +666,10 @@ func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *
 		return nil
 	}
 	patchBase := ag.DeepCopy()
-	delete(ag.Annotations, annotationRequeueAttempts)
-	delete(ag.Annotations, annotationLastRequeueAt)
-	return r.Patch(ctx, ag, client.MergeFrom(patchBase))
+	target := ag.DeepCopy()
+	delete(target.Annotations, annotationRequeueAttempts)
+	delete(target.Annotations, annotationLastRequeueAt)
+	return r.Patch(ctx, target, client.MergeFrom(patchBase))
 }
 
 // readRequeueTracking pulls the retry-attempt counter and last-bump timestamp
