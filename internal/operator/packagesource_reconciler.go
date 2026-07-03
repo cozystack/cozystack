@@ -460,7 +460,11 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 			Message:            "ArtifactGenerator Ready condition not found",
 			ObservedGeneration: packageSource.Generation,
 		})
-		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
+		// Fresh AG with no Ready yet — if source-watcher doesn't act within
+		// the grace period, artifactGeneratorStuck will fire on the next
+		// reconcile. Schedule that reconcile explicitly so we don't sit
+		// waiting for an AG-status change that may never come.
+		return ctrl.Result{RequeueAfter: agFollowUpDelay(ag.CreationTimestamp.Time, now)}, r.Status().Update(ctx, packageSource)
 	}
 
 	// Copy Ready condition from ArtifactGenerator to PackageSource
@@ -478,7 +482,34 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 		"status", readyCondition.Status,
 		"reason", readyCondition.Reason)
 
-	return ctrl.Result{}, r.Status().Update(ctx, packageSource)
+	// If we just copied Ready=Unknown across, the artifactGeneratorStuck
+	// predicate will fire once the grace period elapses. Without an
+	// explicit RequeueAfter here, this reconciler would wait for a fresh
+	// AG-status change to re-fire via the Owns() watch — and if
+	// source-watcher's next write is the one lost to the fluxcd/pkg#934
+	// split-patch race (i.e., exactly the scenario this workaround exists
+	// for), no such change will land and we would sit dormant until the
+	// 10h informer resync. Schedule a follow-up reconcile at grace-period
+	// expiry so the recovery driver can take over. On Ready=True/False,
+	// the AG has resolved and no explicit follow-up is needed.
+	result := ctrl.Result{}
+	if readyCondition.Status == metav1.ConditionUnknown {
+		result.RequeueAfter = agFollowUpDelay(readyCondition.LastTransitionTime.Time, now)
+	}
+	return result, r.Status().Update(ctx, packageSource)
+}
+
+// agFollowUpDelay returns how long to wait before re-reconciling an AG whose
+// Ready=Unknown state is still within the grace period. Anchor is the last
+// state transition (or AG creation, when no Ready condition exists yet). The
+// result is at least one second so we never schedule a zero-delay requeue
+// tight loop when the grace period has just elapsed.
+func agFollowUpDelay(transitionOrCreation time.Time, now time.Time) time.Duration {
+	remaining := transitionOrCreation.Add(stuckGracePeriod).Sub(now)
+	if remaining < time.Second {
+		return time.Second
+	}
+	return remaining
 }
 
 // maybeRecoverArtifactGenerator advances the bounded-recovery schedule for an

@@ -684,6 +684,119 @@ func TestReconcile_DeletionTimestamp_EarlyReturn(t *testing.T) {
 	}
 }
 
+// TestUpdateStatus_UnknownWithinGrace_SchedulesFollowUp locks in the fix for
+// the dormancy bug caught on dev3: when Ready=Unknown but grace hasn't elapsed
+// yet, artifactGeneratorStuck returns false, we fall through to the copy path
+// and — without an explicit RequeueAfter — the reconciler would sleep until
+// the AG's next status change (which may never come if it's exactly the
+// split-patch race we exist to fix) or the 10h informer resync. This test
+// asserts we schedule a follow-up reconcile at grace-period expiry so the
+// recovery driver can take over.
+func TestUpdateStatus_UnknownWithinGrace_SchedulesFollowUp(t *testing.T) {
+	// Ready=Unknown, transitioned 10s ago — grace is 30s, so 20s remaining.
+	transitionAt := referenceTime.Add(-10 * time.Second)
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{
+				Name:      "src",
+				Kind:      "OCIRepository",
+				Namespace: "cozy-system",
+			},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionUnknown,
+				Reason:             "Progressing",
+				Message:            "Reconciliation in progress",
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(transitionAt),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	// remaining = transitionAt + stuckGracePeriod - now = -10s + 30s = 20s
+	if res.RequeueAfter != 20*time.Second {
+		t.Errorf("RequeueAfter = %v, want 20s (remaining grace after 10s elapsed)", res.RequeueAfter)
+	}
+}
+
+// TestUpdateStatus_MissingReadyWithinGrace_SchedulesFollowUp — same dormancy
+// fix but for the ready==nil branch: a fresh AG with no Ready condition yet
+// must also schedule a follow-up so the operator notices when grace elapses.
+func TestUpdateStatus_MissingReadyWithinGrace_SchedulesFollowUp(t *testing.T) {
+	createdAt := referenceTime.Add(-5 * time.Second) // 25s remaining on grace
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{
+				Name:      "src",
+				Kind:      "OCIRepository",
+				Namespace: "cozy-system",
+			},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(createdAt),
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{}, // no Ready
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if res.RequeueAfter != 25*time.Second {
+		t.Errorf("RequeueAfter = %v, want 25s", res.RequeueAfter)
+	}
+}
+
+// TestAgFollowUpDelay pins the follow-up-delay computation, including the
+// one-second floor that prevents a zero-delay tight loop when the anchor is
+// right at or beyond grace expiry.
+func TestAgFollowUpDelay(t *testing.T) {
+	tests := []struct {
+		name         string
+		anchorOffset time.Duration
+		want         time.Duration
+	}{
+		{"anchor 10s ago — grace has 20s left", -10 * time.Second, 20 * time.Second},
+		{"anchor 5s ago — grace has 25s left", -5 * time.Second, 25 * time.Second},
+		{"anchor right at grace expiry — floor to 1s", -stuckGracePeriod, time.Second},
+		{"anchor past grace expiry — floor to 1s", -2 * stuckGracePeriod, time.Second},
+		{"anchor now — full grace remaining", 0, stuckGracePeriod},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := agFollowUpDelay(referenceTime.Add(tt.anchorOffset), referenceTime)
+			if got != tt.want {
+				t.Errorf("agFollowUpDelay(offset=%v) = %v, want %v", tt.anchorOffset, got, tt.want)
+			}
+		})
+	}
+}
+
 // stuckAG builds an ArtifactGenerator in the fluxcd/pkg#934 stall signature:
 // Inventory populated, ObservedSourcesDigest set, Ready=Unknown on the current
 // generation, LastTransitionTime old enough to clear the grace period. Used by
