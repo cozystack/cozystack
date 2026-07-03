@@ -453,14 +453,21 @@ func TestForceArtifactGeneratorDrift_Success(t *testing.T) {
 
 	// In-memory ag: Ready=False + tracking annotations reflect the writes.
 	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
-	if ready == nil || ready.Status != metav1.ConditionFalse {
-		t.Fatalf("ag.Status Ready condition = %+v, want False", ready)
+	if ready == nil || ready.Status != metav1.ConditionFalse || ready.Reason != reasonRecoveryForced {
+		t.Fatalf("ag.Status Ready condition = %+v, want False/%s", ready, reasonRecoveryForced)
 	}
 	if got := ag.Annotations[annotationRecoveryAttempts]; got != "2" {
 		t.Errorf("ag.Annotations[%s] = %q, want 2", annotationRecoveryAttempts, got)
 	}
 	if got := ag.Annotations[annotationLastRecoveryAt]; got == "" {
 		t.Errorf("ag.Annotations[%s] not set", annotationLastRecoveryAt)
+	}
+	// B1 (lexfrei): the requestedAt annotation MUST also be set — it is the
+	// signal source-watcher's ReconcileRequestedPredicate keys on to enqueue
+	// a reconcile. Without it the status patch alone is a no-op for up to
+	// the AG's 1h self-requeue interval.
+	if got := ag.Annotations[annotationFluxRequestedAt]; got == "" {
+		t.Errorf("ag.Annotations[%s] not set — source-watcher will not enqueue a reconcile", annotationFluxRequestedAt)
 	}
 
 	// apiserver reflects both writes.
@@ -472,7 +479,7 @@ func TestForceArtifactGeneratorDrift_Success(t *testing.T) {
 	if persistedReady == nil || persistedReady.Status != metav1.ConditionFalse {
 		t.Errorf("persisted AG Ready condition = %+v, want False", persistedReady)
 	}
-	for _, k := range []string{annotationRecoveryAttempts, annotationLastRecoveryAt} {
+	for _, k := range []string{annotationFluxRequestedAt, annotationRecoveryAttempts, annotationLastRecoveryAt} {
 		if _, ok := persisted.Annotations[k]; !ok {
 			t.Errorf("persisted AG missing annotation %s", k)
 		}
@@ -960,16 +967,20 @@ func TestMaybeRecoverArtifactGenerator_GiveUpBranch(t *testing.T) {
 	}
 }
 
-// TestMaybeRecoverArtifactGenerator_ResetsCounterOnFreshTransition pins the
-// fresh-episode escape hatch: attempts=maxRecoveryAttempts BUT the AG's Ready
-// condition has a LastTransitionTime newer than lastRecoveryAt. That means
-// source-watcher touched the condition after our last give-up (whether the AG
-// briefly recovered and re-stalled or a concurrent operator moved on), so this
-// is a fresh stall episode and deserves a fresh budget rather than an instant
-// give-up. Expected: counter resets to 0 → Force branch → attempts land at 1.
-func TestMaybeRecoverArtifactGenerator_ResetsCounterOnFreshTransition(t *testing.T) {
+// TestMaybeRecoverArtifactGenerator_DoesNotResetCounterOnFreshTransition pins
+// the fix for lexfrei's B3: source-watcher writes Ready=Unknown (Progressing)
+// as it takes the drifted branch after our force, and that transition's
+// LastTransitionTime is always newer than lastRecoveryAt. A reset-counter
+// heuristic that keys on that comparison would restart the budget on every
+// Progressing write, making the SourceWatcherStalled give-up unreachable
+// under the very race this driver targets. Assertion: with attempts already
+// at maxRecoveryAttempts, we go straight to GiveUp even when Ready has just
+// been touched — the natural clearRecoveryTracking on the not-stuck path is
+// the only counter reset, and the awaitSourceWatcherResponse path in
+// updateStatus holds tracking through Progressing.
+func TestMaybeRecoverArtifactGenerator_DoesNotResetCounterOnFreshTransition(t *testing.T) {
 	priorForceAt := referenceTime.Add(-time.Hour)
-	freshTransitionAt := referenceTime.Add(-2 * time.Minute) // AFTER priorForceAt
+	freshTransitionAt := referenceTime.Add(-2 * time.Minute) // AFTER priorForceAt — must NOT reset
 	ps := &cozyv1alpha1.PackageSource{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
 	}
@@ -985,17 +996,220 @@ func TestMaybeRecoverArtifactGenerator_ResetsCounterOnFreshTransition(t *testing
 	if err != nil {
 		t.Fatalf("maybeRecoverArtifactGenerator: %v", err)
 	}
-	// If reset worked, we take the Force branch — RequeueAfter is backoffFor(1),
-	// not zero (which give-up would produce).
-	if res.RequeueAfter != backoffFor(1) {
-		t.Errorf("RequeueAfter = %v, want backoffFor(1)=%v — reset-counter branch did not fire", res.RequeueAfter, backoffFor(1))
+	// Give-up path returns no RequeueAfter (operator must intervene).
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 — give-up should not schedule a follow-up", res.RequeueAfter)
 	}
-	// Attempts counter must now be 1 in the apiserver (reset to 0, incremented on Force).
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionFalse || psReady.Reason != reasonSourceWatcherBad {
+		t.Errorf("PS Ready = %+v, want False/%s — reset would have taken the Force branch instead", psReady, reasonSourceWatcherBad)
+	}
+}
+
+// TestUpdateStatus_OwnMarkerRoutesToAwait pins lexfrei's B2 fix: when the AG's
+// Ready condition carries our own reasonRecoveryForced marker (our previous
+// forceArtifactGeneratorDrift write reflecting back through the Owns() watch),
+// updateStatus must (a) NOT clear the recovery-tracking annotations we just
+// wrote, and (b) NOT copy the synthetic Ready=False through to the
+// PackageSource. It routes to awaitSourceWatcherResponse and keeps the PS in
+// AwaitingSourceWatcherRecovery.
+func TestUpdateStatus_OwnMarkerRoutesToAwait(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	forceAt := referenceTime.Add(-5 * time.Second)
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations: map[string]string{
+				annotationRecoveryAttempts: "1",
+				annotationLastRecoveryAt:   forceAt.UTC().Format(time.RFC3339Nano),
+			},
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonRecoveryForced,
+				Message:            "cozystack-operator forced drift",
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(forceAt),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	agWrites := 0
+	watched := interceptor.NewClient(c, interceptor.Funcs{
+		Patch: func(ctx context.Context, cli client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*sourcewatcherv1beta1.ArtifactGenerator); ok {
+				agWrites++
+			}
+			return cli.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	r := &PackageSourceReconciler{Client: watched, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if res.RequeueAfter == 0 {
+		t.Error("expected RequeueAfter to be set — awaitSourceWatcherResponse must schedule a follow-up")
+	}
+	if agWrites != 0 {
+		t.Errorf("clearRecoveryTracking wrote to AG %d times — tracking must be held while our own marker is visible", agWrites)
+	}
+	// AG's recovery-tracking annotations must still be intact.
 	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
 		t.Fatalf("Get AG: %v", err)
 	}
 	if got := persistedAG.Annotations[annotationRecoveryAttempts]; got != "1" {
-		t.Errorf("AG %s = %q after reset, want 1", annotationRecoveryAttempts, got)
+		t.Errorf("AG %s = %q after own-marker reconcile, want 1 (held)", annotationRecoveryAttempts, got)
+	}
+	// PS must be Unknown/AwaitingSourceWatcherRecovery — NOT False/SourceWatcherRecoveryForced.
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionUnknown || psReady.Reason != reasonAwaitingRecovery {
+		t.Errorf("PS Ready = %+v, want Unknown/%s — synthetic marker must not leak to PS status", psReady, reasonAwaitingRecovery)
+	}
+}
+
+// TestUpdateStatus_ProgressingDuringRecoveryRoutesToAwait pins lexfrei's B2
+// fix for the second Owns()-re-entrancy path: source-watcher writes
+// Ready=Unknown/Progressing after taking the drifted branch and before
+// finalising the rebuild. That transition arrives via the Owns() watch, and
+// if we cleared tracking on it the attempts counter would never accumulate.
+// Assertion: with tracking annotations present (attempts>0) and Ready=Unknown
+// visible, we hold tracking and route to awaitSourceWatcherResponse.
+func TestUpdateStatus_ProgressingDuringRecoveryRoutesToAwait(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	forceAt := referenceTime.Add(-10 * time.Second)
+	progressingAt := referenceTime.Add(-3 * time.Second) // Newer than forceAt
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations: map[string]string{
+				annotationRecoveryAttempts: "2",
+				annotationLastRecoveryAt:   forceAt.UTC().Format(time.RFC3339Nano),
+			},
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionUnknown,
+				Reason:             "Progressing",
+				Message:            "Reconciliation in progress",
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(progressingAt),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	agWrites := 0
+	watched := interceptor.NewClient(c, interceptor.Funcs{
+		Patch: func(ctx context.Context, cli client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*sourcewatcherv1beta1.ArtifactGenerator); ok {
+				agWrites++
+			}
+			return cli.Patch(ctx, obj, patch, opts...)
+		},
+	})
+	r := &PackageSourceReconciler{Client: watched, Scheme: testScheme(t)}
+
+	if _, err := r.updateStatus(context.Background(), ps, referenceTime); err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	if agWrites != 0 {
+		t.Errorf("tracking cleared during recovery Progressing — attempts=2 wrote to AG %d times, want 0", agWrites)
+	}
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if got := persistedAG.Annotations[annotationRecoveryAttempts]; got != "2" {
+		t.Errorf("AG %s = %q, want 2 (held through Progressing)", annotationRecoveryAttempts, got)
+	}
+}
+
+// TestUpdateStatus_ReadyTrueClearsTracking pins the canonical reset: once
+// source-watcher writes Ready=True (recovery succeeded), the not-stuck path
+// clears the recovery-tracking annotations and copies the real condition
+// through. This is the only counter reset that remains after B3.
+func TestUpdateStatus_ReadyTrueClearsTracking(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations: map[string]string{
+				annotationRecoveryAttempts: "3",
+				annotationLastRecoveryAt:   referenceTime.Add(-time.Minute).UTC().Format(time.RFC3339Nano),
+			},
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionTrue,
+				Reason:             "Succeeded",
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(referenceTime.Add(-time.Second)),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	if _, err := r.updateStatus(context.Background(), ps, referenceTime); err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if _, ok := persistedAG.Annotations[annotationRecoveryAttempts]; ok {
+		t.Errorf("recovery-attempts annotation still present after Ready=True: %v", persistedAG.Annotations)
+	}
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionTrue {
+		t.Errorf("PS Ready = %+v, want True (copied through from AG)", psReady)
 	}
 }
