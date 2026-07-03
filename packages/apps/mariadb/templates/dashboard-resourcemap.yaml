@@ -8,8 +8,14 @@ rules:
   resources:
   - services
   resourceNames:
+  # The bare <name> service exists in both topologies; -primary/-secondary
+  # only when replication is on (replicas>1). Grant exactly what exists so the
+  # RBAC matches the services the ApplicationDefinition (mariadb-rd) lists.
+  - {{ .Release.Name }}
+  {{- if gt (int .Values.replicas) 1 }}
   - {{ .Release.Name }}-primary
   - {{ .Release.Name }}-secondary
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - ""
