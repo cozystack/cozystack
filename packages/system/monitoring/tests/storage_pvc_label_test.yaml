@@ -2,11 +2,11 @@ suite: VM/VL storage claim templates carry the release-scoping cleanup label
 
 # The extra/monitoring post-delete cleanup hook deletes orphaned VM/VL storage
 # PVCs scoped to this release via apps.cozystack.io/application.name=<release>.
-# On the shipped vm-operator v0.68.4 managedMetadata is NOT propagated to PVCs
-# (only from v0.71.0), so the label must be stamped on the claim template
-# itself — vm-operator copies volumeClaimTemplate.metadata.labels onto the PVCs
-# (IntoSTSVolume) even on v0.68.4. release.name mirrors the flux release of this
-# chart (monitoring-system), which is exactly what the hook selector expects.
+# vm-operator does NOT apply spec.managedMetadata to PVCs, so the label must be
+# stamped on the claim template itself — vm-operator copies
+# volumeClaimTemplate.metadata.labels onto the PVCs (IntoSTSVolume). release.name
+# mirrors the flux release of this chart (monitoring-system), which is exactly
+# what the hook selector expects.
 
 release:
   name: monitoring-system

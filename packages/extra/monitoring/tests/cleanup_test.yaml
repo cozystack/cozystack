@@ -71,7 +71,8 @@ tests:
       # The selector is scoped to this release by apps.cozystack.io/application.name
       # alone. That label is stamped on the VM/VL CRs'
       # storage.volumeClaimTemplate.metadata.labels (packages/system/monitoring) and
-      # is copied onto the PVCs by vm-operator (IntoSTSVolume) even on v0.68.4.
+      # is copied onto the PVCs by vm-operator (IntoSTSVolume); spec.managedMetadata
+      # is not applied to PVCs, so the claim template is the only path that works.
       # managed-by=vm-operator is deliberately NOT in the selector: on v0.68.4 it
       # lives only on the StatefulSet selector/pod labels, so relying on it is
       # fragile; application.name=<release>-system is already release-scoped and

@@ -31,9 +31,10 @@ spec:
       volumeClaimTemplate:
         metadata:
           # Stamped on the claim template so vm-operator copies it onto the
-          # storage PVCs (IntoSTSVolume) even on v0.68.4, which does not yet
-          # propagate managedMetadata to PVCs. The monitoring post-delete
-          # cleanup hook selects PVCs by this label to stay release-scoped.
+          # storage PVCs (IntoSTSVolume). The operator does NOT apply
+          # spec.managedMetadata to PVCs, so the claim template is the only path
+          # that lands a label on them. The monitoring post-delete cleanup hook
+          # selects PVCs by this label to stay release-scoped.
           labels:
             apps.cozystack.io/application.name: {{ $.Release.Name }}
         spec:
@@ -50,9 +51,10 @@ spec:
       volumeClaimTemplate:
         metadata:
           # Stamped on the claim template so vm-operator copies it onto the
-          # storage PVCs (IntoSTSVolume) even on v0.68.4, which does not yet
-          # propagate managedMetadata to PVCs. The monitoring post-delete
-          # cleanup hook selects PVCs by this label to stay release-scoped.
+          # storage PVCs (IntoSTSVolume). The operator does NOT apply
+          # spec.managedMetadata to PVCs, so the claim template is the only path
+          # that lands a label on them. The monitoring post-delete cleanup hook
+          # selects PVCs by this label to stay release-scoped.
           labels:
             apps.cozystack.io/application.name: {{ $.Release.Name }}
         spec:
