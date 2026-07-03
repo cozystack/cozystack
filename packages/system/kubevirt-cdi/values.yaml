@@ -1,1 +1,5 @@
 uploadProxyURL: ""
+
+## @param cloneStrategyOverride Strategy CDI uses to clone DataVolumes (golden image -> VM disk).
+## One of: csi-clone, snapshot, copy. Defaults to csi-clone (unchanged behavior).
+cloneStrategyOverride: csi-clone
