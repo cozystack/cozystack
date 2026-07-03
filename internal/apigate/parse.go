@@ -17,6 +17,7 @@ limitations under the License.
 package apigate
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
@@ -87,53 +88,73 @@ func ParseCRDs(origin string, data []byte) ([]Resource, error) {
 		if len(strings.TrimSpace(string(docBytes))) == 0 {
 			continue
 		}
-		var doc struct {
-			Kind string `json:"kind"`
-			Spec struct {
-				Group string `json:"group"`
-				Names struct {
-					Kind   string `json:"kind"`
-					Plural string `json:"plural"`
-				} `json:"names"`
-				Versions []struct {
-					Name   string `json:"name"`
-					Served bool   `json:"served"`
-					Schema struct {
-						OpenAPIV3Schema Schema `json:"openAPIV3Schema"`
-					} `json:"schema"`
-				} `json:"versions"`
-			} `json:"spec"`
+		res, ok, err := crdFromDoc(origin, i, docBytes)
+		if err != nil {
+			return nil, err
 		}
-		if err := unmarshalYAMLDoc(docBytes, &doc); err != nil {
-			continue
+		if ok {
+			out = append(out, res)
 		}
-		if doc.Kind != "CustomResourceDefinition" {
-			continue
-		}
-		if doc.Spec.Group == "" || doc.Spec.Names.Plural == "" {
-			return nil, fmt.Errorf("%s (document %d): CRD missing spec.group or spec.names.plural", origin, i)
-		}
-		res := Resource{
-			Group:    doc.Spec.Group,
-			Kind:     doc.Spec.Names.Kind,
-			Plural:   doc.Spec.Names.Plural,
-			Source:   SourceCRD,
-			Origin:   origin,
-			Versions: map[string]Schema{},
-		}
-		for _, v := range doc.Spec.Versions {
-			// Only served versions are live API surface. Skipping unserved
-			// versions keeps the classifier from diffing schemas no client can
-			// call, and makes the standard CRD deprecation step (flip
-			// served:true -> false) surface as a removed served version.
-			if v.Name == "" || !v.Served {
-				continue
-			}
-			res.Versions[v.Name] = v.Schema.OpenAPIV3Schema
-		}
-		out = append(out, res)
 	}
 	return out, nil
+}
+
+// crdFromDoc attempts to parse a single YAML document as a
+// CustomResourceDefinition. ok is false whenever the document is not a CRD,
+// including when it fails to parse at all; err is non-nil only when the
+// document unambiguously claims to be a CRD (right kind) but is structurally
+// incomplete. docKind is checked first so the fuller CRD-shaped unmarshal —
+// and its cost — is paid only for documents that are actually CRDs, since
+// LoadSnapshot's content-based walk runs this against every YAML file in the
+// tree, the overwhelming majority of which are not CRDs at all.
+func crdFromDoc(origin string, i int, docBytes []byte) (Resource, bool, error) {
+	if docKind(docBytes) != "CustomResourceDefinition" {
+		return Resource{}, false, nil
+	}
+	var doc struct {
+		Spec struct {
+			Group string `json:"group"`
+			Names struct {
+				Kind   string `json:"kind"`
+				Plural string `json:"plural"`
+			} `json:"names"`
+			Versions []struct {
+				Name   string `json:"name"`
+				Served bool   `json:"served"`
+				Schema struct {
+					OpenAPIV3Schema Schema `json:"openAPIV3Schema"`
+				} `json:"schema"`
+			} `json:"versions"`
+		} `json:"spec"`
+	}
+	if err := unmarshalYAMLDoc(docBytes, &doc); err != nil {
+		// docKind above already parsed this document successfully, so this
+		// would be surprising; tolerate it like any other unparseable
+		// document rather than erroring.
+		return Resource{}, false, nil
+	}
+	if doc.Spec.Group == "" || doc.Spec.Names.Plural == "" {
+		return Resource{}, false, fmt.Errorf("%s (document %d): CRD missing spec.group or spec.names.plural", origin, i)
+	}
+	res := Resource{
+		Group:    doc.Spec.Group,
+		Kind:     doc.Spec.Names.Kind,
+		Plural:   doc.Spec.Names.Plural,
+		Source:   SourceCRD,
+		Origin:   origin,
+		Versions: map[string]Schema{},
+	}
+	for _, v := range doc.Spec.Versions {
+		// Only served versions are live API surface. Skipping unserved
+		// versions keeps the classifier from diffing schemas no client can
+		// call, and makes the standard CRD deprecation step (flip
+		// served:true -> false) surface as a removed served version.
+		if v.Name == "" || !v.Served {
+			continue
+		}
+		res.Versions[v.Name] = v.Schema.OpenAPIV3Schema
+	}
+	return res, true, nil
 }
 
 // storageVarGroups maps the storage-map variable prefixes used in
@@ -221,29 +242,40 @@ func ParseAPIServices(origin string, data []byte) []Resource {
 		if len(strings.TrimSpace(string(docBytes))) == 0 {
 			continue
 		}
-		var doc struct {
-			Kind string `json:"kind"`
-			Spec struct {
-				Group   string `json:"group"`
-				Version string `json:"version"`
-			} `json:"spec"`
+		if res, ok := apiServiceFromDoc(origin, docBytes); ok {
+			out = append(out, res)
 		}
-		if err := unmarshalYAMLDoc(docBytes, &doc); err != nil {
-			continue
-		}
-		if doc.Kind != "APIService" || doc.Spec.Group == "" || doc.Spec.Version == "" {
-			continue
-		}
-		out = append(out, Resource{
-			Group:    doc.Spec.Group,
-			Kind:     "(aggregated apiserver)",
-			Plural:   apiServicePlural,
-			Source:   SourceAPIService,
-			Origin:   origin,
-			Versions: map[string]Schema{doc.Spec.Version: {}},
-		})
 	}
 	return out
+}
+
+// apiServiceFromDoc attempts to parse a single YAML document as an
+// APIService. See crdFromDoc for why docKind is checked before the fuller
+// unmarshal.
+func apiServiceFromDoc(origin string, docBytes []byte) (Resource, bool) {
+	if docKind(docBytes) != "APIService" {
+		return Resource{}, false
+	}
+	var doc struct {
+		Spec struct {
+			Group   string `json:"group"`
+			Version string `json:"version"`
+		} `json:"spec"`
+	}
+	if err := unmarshalYAMLDoc(docBytes, &doc); err != nil {
+		return Resource{}, false
+	}
+	if doc.Spec.Group == "" || doc.Spec.Version == "" {
+		return Resource{}, false
+	}
+	return Resource{
+		Group:    doc.Spec.Group,
+		Kind:     "(aggregated apiserver)",
+		Plural:   apiServicePlural,
+		Source:   SourceAPIService,
+		Origin:   origin,
+		Versions: map[string]Schema{doc.Spec.Version: {}},
+	}, true
 }
 
 // helmDirectiveLine matches a line that is entirely Go-template/Helm markup
@@ -269,12 +301,52 @@ func unmarshalYAMLDoc(doc []byte, out any) error {
 	return yaml.Unmarshal(helmDirectiveLine.ReplaceAll(doc, nil), out)
 }
 
+// docKind cheaply extracts a YAML document's top-level kind field, without
+// paying for a full CRD- or APIService-shaped unmarshal on documents that
+// are neither. LoadSnapshot's discovery walk scans every .yaml/.yml file
+// under packages/ and internal/ rather than a curated directory allowlist
+// (see discoverYAMLFiles), so the overwhelming majority of documents it
+// sees are not API manifests at all; probing kind first, once, keeps that
+// walk cheap.
+// mightBeAPIManifest is a cheap fast-reject shared by docKind (per document)
+// and LoadSnapshot (per whole file, before even splitting it into
+// documents). Both kinds this package looks for (crdFromDoc,
+// apiServiceFromDoc) appear as their own kind name verbatim in a valid
+// manifest; content containing neither substring cannot be either kind. This
+// is the overwhelming majority of what a content-based walk across the whole
+// tree sees — Deployments, Services, plain values trees, and everything else
+// that is neither a CRD nor an APIService — so rejecting on a raw substring
+// scan avoids the cost of the `---` split, the YAML parse attempt, and (for
+// a document that isn't valid strict YAML at all — an ordinary Helm
+// template) the further regex-stripped retry in unmarshalYAMLDoc.
+func mightBeAPIManifest(data []byte) bool {
+	return bytes.Contains(data, []byte("CustomResourceDefinition")) || bytes.Contains(data, []byte("APIService"))
+}
+
+func docKind(docBytes []byte) string {
+	if !mightBeAPIManifest(docBytes) {
+		return ""
+	}
+	var probe struct {
+		Kind string `json:"kind"`
+	}
+	if err := unmarshalYAMLDoc(docBytes, &probe); err != nil {
+		return ""
+	}
+	return probe.Kind
+}
+
+// yamlDocSeparator matches a `---` document-separator line. Compiled once at
+// package init rather than per splitYAMLDocs call, since LoadSnapshot's
+// content-based walk now runs this against every YAML file in the tree.
+var yamlDocSeparator = regexp.MustCompile(`(?m)^---\s*$`)
+
 // splitYAMLDocs splits a YAML stream into individual document byte slices on
 // `---` separators. It intentionally mirrors the simple splitting Helm and
 // kubectl use; CRD manifests in this repo do not embed `---` inside block
 // scalars, so line-based splitting is safe.
 func splitYAMLDocs(data []byte) [][]byte {
-	parts := regexp.MustCompile(`(?m)^---\s*$`).Split(string(data), -1)
+	parts := yamlDocSeparator.Split(string(data), -1)
 	out := make([][]byte, 0, len(parts))
 	for _, p := range parts {
 		out = append(out, []byte(p))

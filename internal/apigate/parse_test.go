@@ -402,6 +402,99 @@ spec: {group: metrics.k8s.io, version: v1beta1}
 	}
 }
 
+// TestLoadSnapshotSkipsOversizedFiles guards the size cap added alongside
+// content-based discovery: since every .yaml/.yml file in the tree is now a
+// candidate (no directory allowlist), an untrusted PR head checkout could
+// otherwise force an unbounded read/parse of a pathologically large file. A
+// first-party CRD past maxYAMLFileSize must be excluded from discovery.
+func TestLoadSnapshotSkipsOversizedFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	padding := strings.Repeat("# padding\n", (maxYAMLFileSize/len("# padding\n"))+1)
+	write("packages/system/oversized/crds/widgets.yaml", padding+sampleCRD)
+	// A small, legitimate resource so the empty-snapshot guard doesn't fire
+	// for an unrelated reason.
+	write("packages/system/postgres-rd/cozyrds/postgres.yaml", sampleCozyRD)
+
+	snap, err := LoadSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap[resourceKey{Group: "example.cozystack.io", Plural: "widgets"}]; ok {
+		t.Fatalf("CRD in a file past maxYAMLFileSize must be excluded: %v", snap)
+	}
+}
+
+// TestLoadSnapshotMergesAPIServiceOriginAcrossFiles covers the traceability
+// fix: when a group's versions are registered via several sibling APIService
+// objects in different files (the real-world shape — one object per
+// version), the merged resource's Origin must mention every contributing
+// file, not just the first one encountered.
+func TestLoadSnapshotMergesAPIServiceOriginAcrossFiles(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("packages/system/cozyplane/templates/apiserver-v1alpha1.yaml", `apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata: {name: v1alpha1.sdn.cozystack.io}
+spec: {group: sdn.cozystack.io, version: v1alpha1}
+`)
+	write("packages/system/cozyplane/templates/apiserver-v1beta1.yaml", `apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata: {name: v1beta1.sdn.cozystack.io}
+spec: {group: sdn.cozystack.io, version: v1beta1}
+`)
+
+	snap, err := LoadSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, ok := snap[resourceKey{Group: "sdn.cozystack.io", Plural: apiServicePlural}]
+	if !ok {
+		t.Fatalf("APIService group was not discovered: %v", snap)
+	}
+	for _, want := range []string{
+		"packages/system/cozyplane/templates/apiserver-v1alpha1.yaml",
+		"packages/system/cozyplane/templates/apiserver-v1beta1.yaml",
+	} {
+		if !strings.Contains(res.Origin, want) {
+			t.Fatalf("expected Origin to mention %q, got %q", want, res.Origin)
+		}
+	}
+}
+
+// BenchmarkLoadSnapshotRealTree tracks LoadSnapshot's wall-clock cost against
+// this repository's own checkout — the actual worst case the CI gate runs
+// against on every PR. Content-based discovery (see discoverYAMLFiles) scans
+// every .yaml/.yml file under packages/ and internal/, not a curated
+// directory allowlist, so this is meant to catch a future change that
+// reintroduces redundant per-file work (e.g. splitting or parsing the same
+// file's documents more than once). Run with:
+//
+//	go test ./internal/apigate/ -run '^$' -bench LoadSnapshotRealTree
+func BenchmarkLoadSnapshotRealTree(b *testing.B) {
+	for b.Loop() {
+		if _, err := LoadSnapshot("../.."); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // TestLoadSnapshotEmptyErrors covers the silent-bypass guard: an empty result
 // (e.g. wrong directory) must be an error, not a clean pass.
 func TestLoadSnapshotEmptyErrors(t *testing.T) {

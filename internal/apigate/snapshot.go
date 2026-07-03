@@ -87,10 +87,15 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 	}
 
 	// Typed groups (CRD manifests) and APIService-backed groups: both are
-	// discovered by content from the same file walk. APIService resources
-	// are accumulated separately and merged by group below, since a group's
-	// versions are commonly registered as several sibling APIService objects
-	// (one per version) rather than a single document listing all of them.
+	// discovered by content from the same file walk, splitting each file's
+	// documents exactly once and probing each document's kind exactly once
+	// (docKind) before deciding which of the two shapes to try — the walk
+	// now scans every YAML file under packages/ and internal/ rather than a
+	// curated directory allowlist, so most documents are neither and this
+	// keeps the common case cheap. APIService resources are accumulated
+	// separately and merged by group below, since a group's versions are
+	// commonly registered as several sibling APIService objects (one per
+	// version) rather than a single document listing all of them.
 	yamlFiles, err := discoverYAMLFiles(dir)
 	if err != nil {
 		return nil, err
@@ -101,33 +106,48 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 		if err != nil {
 			return nil, err
 		}
-		origin := rel(dir, path)
-
-		resources, err := ParseCRDs(origin, data)
-		if err != nil {
-			// A file that does not parse as YAML at all (not even one
-			// tolerated document) is almost always an upstream/templated
-			// artifact, not a first-party CRD; skip it rather than failing
-			// the whole gate.
+		if !mightBeAPIManifest(data) {
+			// Whole file contains neither marker substring anywhere, so no
+			// document within it can be a CRD or an APIService either;
+			// skip the `---` split (a regexp pass over the full file) too.
 			continue
 		}
-		for _, res := range resources {
-			if isFirstPartyGroup(res.Group) {
-				add(res)
-			}
-		}
+		origin := rel(dir, path)
 
-		for _, res := range ParseAPIServices(origin, data) {
-			if !isFirstPartyGroup(res.Group) {
+		for i, docBytes := range splitYAMLDocs(data) {
+			if len(strings.TrimSpace(string(docBytes))) == 0 {
 				continue
 			}
-			key := resourceKey{Group: res.Group, Plural: res.Plural}
-			existing, ok := apiServices[key]
-			if !ok {
-				apiServices[key] = res
-				continue
+			switch docKind(docBytes) {
+			case "CustomResourceDefinition":
+				res, ok, err := crdFromDoc(origin, i, docBytes)
+				if err != nil {
+					// A document unambiguously claiming to be a first-party
+					// CRD but structurally incomplete; skip just this
+					// document rather than losing any other resource that
+					// shares its file.
+					continue
+				}
+				if ok && isFirstPartyGroup(res.Group) {
+					add(res)
+				}
+			case "APIService":
+				res, ok := apiServiceFromDoc(origin, docBytes)
+				if !ok || !isFirstPartyGroup(res.Group) {
+					continue
+				}
+				key := resourceKey{Group: res.Group, Plural: res.Plural}
+				existing, ok := apiServices[key]
+				if !ok {
+					apiServices[key] = res
+					continue
+				}
+				maps.Copy(existing.Versions, res.Versions)
+				if existing.Origin != res.Origin {
+					existing.Origin += ", " + res.Origin
+				}
+				apiServices[key] = existing
 			}
-			maps.Copy(existing.Versions, res.Versions)
 		}
 	}
 	for key, res := range apiServices {
@@ -165,9 +185,19 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 	return snap, nil
 }
 
+// maxYAMLFileSize bounds how large a single discovered file is read and
+// parsed. Discovery is now content-based across every YAML file in the tree
+// (no directory allowlist — see crdRoots), so this walk runs against
+// untrusted PR head checkouts with no other size guard; real chart
+// CRD/APIService manifests in this repo are well under a megabyte, so this
+// is generous headroom, not a tight fit, and only bounds a pathological or
+// adversarial file.
+const maxYAMLFileSize = 8 << 20 // 8 MiB
+
 // discoverYAMLFiles walks the crdRoots under dir and returns the path of
-// every .yaml/.yml file found. Filtering to the CRD / APIService documents we
-// actually care about happens at parse time in LoadSnapshot.
+// every .yaml/.yml file found, up to maxYAMLFileSize. Filtering to the CRD /
+// APIService documents we actually care about happens at parse time in
+// LoadSnapshot.
 func discoverYAMLFiles(dir string) ([]string, error) {
 	var out []string
 	for _, root := range crdRoots {
@@ -183,6 +213,13 @@ func discoverYAMLFiles(dir string) ([]string, error) {
 				return nil
 			}
 			if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
+				return nil
+			}
+			info, err := d.Info()
+			if err != nil {
+				return err
+			}
+			if info.Size() > maxYAMLFileSize {
 				return nil
 			}
 			out = append(out, path)
