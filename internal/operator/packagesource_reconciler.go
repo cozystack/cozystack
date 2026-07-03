@@ -19,7 +19,9 @@ package operator
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
@@ -33,6 +35,25 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
+
+// Constants tuning the workaround for fluxcd/pkg#934 (patch.Helper split-write
+// race in source-watcher). See the block comment on maybeRequeueArtifactGenerator.
+const (
+	stuckGracePeriod   = 30 * time.Second
+	initialBackoff     = 30 * time.Second
+	maxBackoff         = 4 * time.Minute
+	maxRequeueAttempts = 5
+
+	annotationFluxRequestedAt = "reconcile.fluxcd.io/requestedAt"
+	annotationRequeueAttempts = "cozystack.io/source-watcher-requeue-attempts"
+	annotationLastRequeueAt   = "cozystack.io/source-watcher-last-requeue-at"
+
+	reasonAwaitingRequeue  = "AwaitingSourceWatcherRequeue"
+	reasonSourceWatcherBad = "SourceWatcherStalled"
+)
+
+// nowFunc is overridable in tests; production code always uses time.Now.
+var nowFunc = time.Now
 
 // PackageSourceReconciler reconciles PackageSource resources
 type PackageSourceReconciler struct {
@@ -63,13 +84,17 @@ func (r *PackageSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, err
 	}
 
-	// Update PackageSource status (variants and conditions from ArtifactGenerator)
-	if err := r.updateStatus(ctx, packageSource); err != nil {
+	// Update PackageSource status (variants and conditions from ArtifactGenerator).
+	// The status update may schedule a follow-up reconcile via RequeueAfter when
+	// it detects a source-watcher status-patch stall and needs to wait for the
+	// next backoff window; that Result is honoured on the way out.
+	result, err := r.updateStatus(ctx, packageSource)
+	if err != nil {
 		logger.Error(err, "failed to update status")
 		// Don't return error, status update is not critical
 	}
 
-	return ctrl.Result{}, nil
+	return result, nil
 }
 
 // reconcileArtifactGenerators generates a single ArtifactGenerator for the package source
@@ -327,8 +352,12 @@ func (r *PackageSourceReconciler) createOrUpdate(ctx context.Context, obj client
 	return r.Patch(ctx, obj, client.Apply, client.FieldOwner("cozystack-packagesource-controller"))
 }
 
-// updateStatus updates PackageSource status (variants and conditions from ArtifactGenerator)
-func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSource *cozyv1alpha1.PackageSource) error {
+// updateStatus updates PackageSource status (variants and conditions from
+// ArtifactGenerator). It may return a Result with RequeueAfter set when the
+// ArtifactGenerator's upstream Ready condition is stuck and the reconciler is
+// driving source-watcher through a bounded requeue schedule; see
+// maybeRequeueArtifactGenerator for the strategy.
+func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSource *cozyv1alpha1.PackageSource) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	// Update variants in status from spec
@@ -347,7 +376,7 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 			Reason:  "SourceRefNotSet",
 			Message: "SourceRef is not configured",
 		})
-		return r.Status().Update(ctx, packageSource)
+		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 	}
 
 	// Get ArtifactGenerator
@@ -366,113 +395,28 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 				Reason:  "ArtifactGeneratorNotFound",
 				Message: "ArtifactGenerator not found",
 			})
-			return r.Status().Update(ctx, packageSource)
+			return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 		}
-		return fmt.Errorf("failed to get ArtifactGenerator: %w", err)
+		return ctrl.Result{}, fmt.Errorf("failed to get ArtifactGenerator: %w", err)
 	}
 
 	// Find Ready condition in ArtifactGenerator
 	readyCondition := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 
-	// Workaround for a race in fluxcd's patch.Helper — tracked upstream at
-	// https://github.com/fluxcd/pkg/issues/934 ("patch.Helper creates race
-	// conditions in downstream controllers"). The helper writes .status
-	// and .status.conditions as separate apiserver requests, and an etcd
-	// timeout can land between the two so that the artifact/inventory
-	// fields land while the Ready condition write does not.
-	// TODO(remove): drop this synthesis once fluxcd/pkg#934 is fixed and
-	// cozystack has bumped past the fix. Verified against source-watcher
-	// v2.1.0 sources; the same code paths ship in v2.2.x (flux-aio latest
-	// as of this writing) because both consume the same fluxcd/pkg
-	// runtime, so a source-watcher version bump alone does not remove
-	// the need for this synthesis.
-	//
-	// Kvaps' review on #3182 confirmed the diagnosis by tracing the
-	// upstream reconciler:
-	//   1. source-watcher writes new Inventory + ObservedSourcesDigest and
-	//      then tries to patch conditions with Ready=True. fluxcd uses a
-	//      `patch.Helper` that patches `.status` and `.status.conditions`
-	//      as SEPARATE apiserver requests — the etcd load window during
-	//      first-install can land a timeout between the two so that the
-	//      "artifacts done" fields land while the Ready condition write
-	//      never does.
-	//   2. On the next reconcile the "!hasDrifted" branch returns before
-	//      touching conditions again. The deferred `summarizeStatus` still
-	//      runs and adjusts the Reconciling condition, but it never
-	//      promotes a stuck Unknown Ready to True — that promotion is only
-	//      done on the successful `hasDrifted` path.
-	// Result: the ArtifactGenerator is functionally Ready — downstream Flux
-	// consumes its ExternalArtifacts, HelmReleases install and become Ready
-	// — but its Ready condition stays Unknown, this reconciler faithfully
-	// copies Unknown onto the PackageSource, and any Package/HR that waits
-	// on `PackageSource.status.conditions[Ready]=True` (in particular
-	// `cozystack-platform`) times out at 15m and fails the install.
-	//
-	// The workaround synthesises Ready=True from observable state when
-	// artifacts are present. Note that this is an INTENTIONAL contract
-	// change on PackageSource.status.conditions[Ready]:
-	//
-	//   BEFORE: Ready=True means "source-watcher has processed the current
-	//           revision of the sources referenced by this PackageSource".
-	//   AFTER:  Ready=True means "valid consumable artifacts for THIS
-	//           PackageSource exist in the cluster" — a slightly weaker
-	//           but strictly more useful signal for the downstream Package
-	//           / HelmRelease reconcile ordering that actually cares about
-	//           artifact availability rather than reconcile progress.
-	//
-	// The reason for the weaker contract: source-watcher writes the same
-	// `condition.ObservedGeneration = ag.Generation` on EVERY condition
-	// mutation, including the Progressing/Unknown mark at the very start of
-	// a rebuild (see `fluxcd/pkg/runtime/conditions.Set`). And
-	// ArtifactGeneratorStatus exposes no object-level ObservedGeneration
-	// (only ReconcileRequestStatus is inlined). So a condition-level
-	// Generation match cannot distinguish "current revision fully
-	// processed" from "rebuild in progress, previous Inventory/digest still
-	// persisted" — meaning the predicate can (and does) fire during a
-	// legitimate content-only regeneration where the OCI revision changed
-	// but `.metadata.generation` did not.
-	//
-	// Consequence in practice — accepted, and arguably better:
-	//   * install/upgrade ordering no longer flaps: PackageSource Ready
-	//     does not dip through Unknown while a new artifact revision is
-	//     being processed and previous artifacts are still on disk.
-	//   * a genuine regeneration FAILURE still surfaces — the upstream
-	//     writes Ready=False on the same reconcile, and this predicate
-	//     returns false for Ready=False so the caller passes it through.
-	//   * a spec-edit (which does bump ag.Generation) is still detected by
-	//     the ObservedGeneration matching in
-	//     `artifactGeneratorObservablyReady`, so we do not synthesise
-	//     Ready=True on artifacts that are known-stale by generation.
-	//
-	// If the upstream Ready condition eventually resolves, the
-	// Owns(&ArtifactGenerator{}) watch below re-fires this reconciler and
-	// the real Ready condition is copied over, replacing the synthetic
-	// one. The synthesis reason `ArtifactsGeneratedAwaitingUpstreamStatus`
-	// is greppable so operators can audit which PackageSources are
-	// currently on the workaround path.
-	if artifactGeneratorObservablyReady(ag, readyCondition) {
-		syntheticReason := "ArtifactsGeneratedAwaitingUpstreamStatus"
-		syntheticMessage := "ArtifactGenerator Inventory populated and ObservedSourcesDigest set; " +
-			"upstream Ready condition has not been finalised. Synthesising Ready=True " +
-			"from observable artifact state so downstream Package/HR reconciles do not " +
-			"block on the fluxcd/source-watcher status-patch early-exit bug."
-		// Preserve LastTransitionTime if we've already stamped this same synthetic
-		// condition — apimachinery meta.SetStatusCondition only rewrites
-		// LastTransitionTime when Status changes (Reason/Message updates in
-		// place); repeated calls with the same Status/Reason/Message are
-		// therefore no-ops on the persisted object.
-		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
-			Type:               "Ready",
-			Status:             metav1.ConditionTrue,
-			Reason:             syntheticReason,
-			Message:            syntheticMessage,
-			ObservedGeneration: packageSource.Generation,
-		})
-		logger.V(1).Info("synthesised PackageSource Ready=True from ArtifactGenerator observable state",
-			"packageSource", packageSource.Name,
-			"reason", syntheticReason,
-			"inventoryLen", len(ag.Status.Inventory))
-		return r.Status().Update(ctx, packageSource)
+	// Detect the source-watcher status-patch stall (fluxcd/pkg#934) and, if
+	// stuck, drive source-watcher through a bounded retry schedule instead of
+	// blindly copying the stuck Unknown across. See maybeRequeueArtifactGenerator
+	// for the mechanism.
+	if artifactGeneratorStuck(ag, readyCondition, nowFunc()) {
+		return r.maybeRequeueArtifactGenerator(ctx, packageSource, ag)
+	}
+
+	// AG is not stuck — clear any requeue-tracking annotations the previous
+	// stuck path left behind, then either surface the missing-Ready case or
+	// copy the real condition through.
+	if err := r.clearRequeueTracking(ctx, ag); err != nil {
+		logger.Error(err, "failed to clear requeue tracking annotations", "artifactGenerator", ag.Name)
+		// Non-fatal: annotations are best-effort bookkeeping.
 	}
 
 	if readyCondition == nil {
@@ -483,7 +427,7 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 			Reason:  "ArtifactGeneratorNotReady",
 			Message: "ArtifactGenerator Ready condition not found",
 		})
-		return r.Status().Update(ctx, packageSource)
+		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 	}
 
 	// Copy Ready condition from ArtifactGenerator to PackageSource
@@ -501,47 +445,108 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 		"status", readyCondition.Status,
 		"reason", readyCondition.Reason)
 
-	return r.Status().Update(ctx, packageSource)
+	return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 }
 
-// artifactGeneratorObservablyReady returns true iff the ArtifactGenerator has
-// observable consumable artifacts (Inventory populated, ObservedSourcesDigest
-// set, Ready condition present and observed at the current Generation) AND
-// its Ready condition has stalled in Unknown. That is exactly the window the
-// fluxcd/source-watcher status-patch race produces; treating it as Ready lets
-// downstream Package / HelmRelease reconciles proceed without waiting on
-// an upstream fix.
+// maybeRequeueArtifactGenerator advances the bounded-retry schedule for an AG
+// whose Ready condition is stuck in the fluxcd/pkg#934 window (Inventory and
+// ObservedSourcesDigest persisted, Ready condition write lost to the split
+// patch). It nudges source-watcher via `reconcile.fluxcd.io/requestedAt` with
+// exponential backoff and — after maxRequeueAttempts fruitless attempts —
+// stops lying and surfaces the failure as PackageSource.Ready=False with
+// reason SourceWatcherStalled so an operator can intervene.
 //
-// The caller MUST pass in the pre-resolved Ready condition (or nil) — the
-// caller already did the FindStatusCondition lookup in order to copy it
-// through on the non-workaround path, and re-doing the lookup here (kvaps'
-// nit) is wasted work when both call sites want the same result.
+// The retry state (attempt count + last-requeue timestamp) lives on the AG
+// itself as annotations so it survives operator restarts and rides the same
+// ownerReference lifecycle as the AG.
 //
-// The Generation check is load-bearing for SPEC edits: if the user edits
-// PackageSource.spec.variants the derived ArtifactGenerator gets a new
-// Generation. Between "source-watcher started rebuilding gen=N+1" and
-// "source-watcher persisted the new Inventory/digest", Inventory / digest
-// still reflect gen=N. Without the Generation match, we would synthesise
-// Ready=True on artifacts that are known-stale by generation. See the block
-// comment at the call site for why this predicate can — and does —
-// intentionally still fire during a content-only regeneration (same
-// Generation, new OCI revision), which is what makes the resulting
-// PackageSource Ready contract "valid consumable artifacts exist" rather
-// than "current revision processed".
+// TODO(remove once fluxcd/pkg#934 lands and is rolled out): once source-watcher
+// consumes a patch.Helper that either serialises or transactionally combines
+// the .status / .status.conditions writes, this whole retry driver can be
+// deleted and updateStatus can copy the AG's Ready condition through
+// unconditionally.
+func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	now := nowFunc()
+
+	attempts, lastRequeueAt := readRequeueTracking(ag)
+	decision := decideRequeue(attempts, lastRequeueAt, now)
+
+	switch decision.action {
+	case requeueActionGiveUp:
+		message := fmt.Sprintf(
+			"ArtifactGenerator %s/%s has been stuck with a lost Ready condition through %d requeue attempts; "+
+				"source-watcher is not recovering. See https://github.com/fluxcd/pkg/issues/934. "+
+				"An operator must restart source-watcher or manually inspect the ArtifactGenerator.",
+			ag.Namespace, ag.Name, maxRequeueAttempts,
+		)
+		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionFalse,
+			Reason:             reasonSourceWatcherBad,
+			Message:            message,
+			ObservedGeneration: packageSource.Generation,
+		})
+		logger.Info("source-watcher stalled after bounded requeues; surfacing PackageSource Ready=False",
+			"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "attempts", attempts)
+		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
+
+	case requeueActionWait:
+		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
+			Type:   "Ready",
+			Status: metav1.ConditionUnknown,
+			Reason: reasonAwaitingRequeue,
+			Message: fmt.Sprintf(
+				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
+					"requeue %d/%d nudged source-watcher, waiting for a real Ready write.",
+				attempts, maxRequeueAttempts,
+			),
+			ObservedGeneration: packageSource.Generation,
+		})
+		if err := r.Status().Update(ctx, packageSource); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: decision.wait}, nil
+
+	case requeueActionBump:
+		nextAttempt := attempts + 1
+		if err := r.bumpArtifactGeneratorRequeue(ctx, ag, now, nextAttempt); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to bump ArtifactGenerator requeue annotation: %w", err)
+		}
+		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
+			Type:   "Ready",
+			Status: metav1.ConditionUnknown,
+			Reason: reasonAwaitingRequeue,
+			Message: fmt.Sprintf(
+				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
+					"bumped reconcile.fluxcd.io/requestedAt (attempt %d/%d) to nudge source-watcher.",
+				nextAttempt, maxRequeueAttempts,
+			),
+			ObservedGeneration: packageSource.Generation,
+		})
+		if err := r.Status().Update(ctx, packageSource); err != nil {
+			return ctrl.Result{}, err
+		}
+		logger.Info("nudged source-watcher via reconcile.fluxcd.io/requestedAt",
+			"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "attempt", nextAttempt)
+		return ctrl.Result{RequeueAfter: backoffFor(nextAttempt)}, nil
+	}
+
+	// Unreachable — decideRequeue always returns one of the three actions above.
+	return ctrl.Result{}, nil
+}
+
+// artifactGeneratorStuck detects the fluxcd/pkg#934 stall signature: artifacts
+// are demonstrably produced (Inventory populated and ObservedSourcesDigest set)
+// on the current spec generation, yet the Ready condition is either missing or
+// has been sitting in Unknown longer than stuckGracePeriod. The grace period
+// keeps this predicate off the fast path during a normal in-flight rebuild;
+// only genuinely quiescent AGs land here.
 //
-// Ready is required to be present because condition.ObservedGeneration is
-// the only Generation signal source-watcher exposes on
-// ArtifactGeneratorStatus (only ReconcileRequestStatus is inlined at the
-// object level, and it carries no Generation). Without a condition to read
-// the Generation from we cannot verify the artifacts are for the current
-// spec.
-//
-// Ready=True is passed through by the caller unchanged (we return false so
-// the caller copies the real True across, preserving upstream reason/message
-// for audit). Ready=False is passed through unchanged (we return false so
-// the caller surfaces the real failure — this workaround must NEVER mask a
-// genuine regeneration failure).
-func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition) bool {
+// Ready=True and Ready=False are BOTH pass-through (return false) — the retry
+// driver only runs on the specific stuck-Unknown case. A real regeneration
+// failure surfaces as Ready=False and is copied through unchanged.
+func artifactGeneratorStuck(ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition, now time.Time) bool {
 	if len(ag.Status.Inventory) == 0 {
 		return false
 	}
@@ -549,16 +554,121 @@ func artifactGeneratorObservablyReady(ag *sourcewatcherv1beta1.ArtifactGenerator
 		return false
 	}
 	if ready == nil {
-		return false
+		// Ready condition entirely absent: this is the half-persisted case the
+		// PR was written for. Wait out the grace period from AG creation before
+		// intervening so we don't fight a fresh-install AG that just hasn't
+		// been touched yet.
+		return ag.CreationTimestamp.Time.Add(stuckGracePeriod).Before(now)
 	}
 	if ready.Status != metav1.ConditionUnknown {
 		return false
 	}
-	// Ready condition must observe the current spec Generation — otherwise
-	// Inventory and ObservedSourcesDigest may still reflect a previous
-	// spec-edit generation. (This does not distinguish content-only
-	// regenerations on the same Generation; see call-site comment.)
-	return ready.ObservedGeneration == ag.Generation
+	if ready.ObservedGeneration != ag.Generation {
+		return false
+	}
+	// Only intervene if Unknown has held for the grace period; otherwise source
+	// -watcher is legitimately mid-rebuild and will settle on its own.
+	return ready.LastTransitionTime.Time.Add(stuckGracePeriod).Before(now)
+}
+
+// requeueAction enumerates what maybeRequeueArtifactGenerator should do given
+// the current retry state.
+type requeueAction int
+
+const (
+	requeueActionBump   requeueAction = iota // enough time elapsed — issue a fresh reconcile.fluxcd.io/requestedAt
+	requeueActionWait                        // in backoff window — schedule a follow-up reconcile at wait
+	requeueActionGiveUp                      // exceeded maxRequeueAttempts — surface as Ready=False
+)
+
+type requeueDecision struct {
+	action requeueAction
+	wait   time.Duration
+}
+
+// decideRequeue is the pure decision function driving maybeRequeueArtifactGenerator.
+// Split out so it can be unit-tested without a cluster.
+func decideRequeue(attempts int, lastRequeueAt time.Time, now time.Time) requeueDecision {
+	if attempts >= maxRequeueAttempts {
+		return requeueDecision{action: requeueActionGiveUp}
+	}
+	if attempts == 0 {
+		return requeueDecision{action: requeueActionBump}
+	}
+	elapsed := now.Sub(lastRequeueAt)
+	needed := backoffFor(attempts)
+	if elapsed >= needed {
+		return requeueDecision{action: requeueActionBump}
+	}
+	return requeueDecision{action: requeueActionWait, wait: needed - elapsed}
+}
+
+// backoffFor returns the backoff duration to wait AFTER the Nth bump before
+// the (N+1)th. Attempts are 1-indexed. Exponential up to maxBackoff.
+func backoffFor(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	d := initialBackoff
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= maxBackoff {
+			return maxBackoff
+		}
+	}
+	return d
+}
+
+// bumpArtifactGeneratorRequeue nudges source-watcher via
+// reconcile.fluxcd.io/requestedAt and updates our own bookkeeping annotations
+// in a single merge patch so the AG is only mutated once per attempt.
+func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time, nextAttempt int) error {
+	patchBase := ag.DeepCopy()
+	if ag.Annotations == nil {
+		ag.Annotations = map[string]string{}
+	}
+	ag.Annotations[annotationFluxRequestedAt] = now.UTC().Format(time.RFC3339Nano)
+	ag.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
+	ag.Annotations[annotationLastRequeueAt] = now.UTC().Format(time.RFC3339Nano)
+	return r.Patch(ctx, ag, client.MergeFrom(patchBase))
+}
+
+// clearRequeueTracking removes our bookkeeping annotations once the AG is
+// healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — that annotation
+// is owned by source-watcher's own reconcile loop semantics and must persist.
+func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator) error {
+	if ag.Annotations == nil {
+		return nil
+	}
+	_, hasAttempts := ag.Annotations[annotationRequeueAttempts]
+	_, hasLast := ag.Annotations[annotationLastRequeueAt]
+	if !hasAttempts && !hasLast {
+		return nil
+	}
+	patchBase := ag.DeepCopy()
+	delete(ag.Annotations, annotationRequeueAttempts)
+	delete(ag.Annotations, annotationLastRequeueAt)
+	return r.Patch(ctx, ag, client.MergeFrom(patchBase))
+}
+
+// readRequeueTracking pulls the retry-attempt counter and last-bump timestamp
+// off the AG. Missing/malformed annotations are treated as "no prior attempts"
+// so a corrupted counter can't wedge the retry loop.
+func readRequeueTracking(ag *sourcewatcherv1beta1.ArtifactGenerator) (attempts int, lastRequeueAt time.Time) {
+	if ag.Annotations == nil {
+		return 0, time.Time{}
+	}
+	if raw, ok := ag.Annotations[annotationRequeueAttempts]; ok {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
+			attempts = parsed
+		}
+	}
+	if raw, ok := ag.Annotations[annotationLastRequeueAt]; ok {
+		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+			lastRequeueAt = parsed
+		}
+	}
+	return attempts, lastRequeueAt
 }
 
 // SetupWithManager sets up the controller with the Manager.
