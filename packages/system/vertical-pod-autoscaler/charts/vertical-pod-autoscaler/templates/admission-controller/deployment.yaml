@@ -61,7 +61,7 @@ spec:
                                    the new CA + cert.
             * steady state:        Secret content stable → sha stable
                                    → no rotation.
-            * renewal (~350d):     cert-manager rotates Secret → sha
+            * renewal (~275d):     cert-manager rotates Secret → sha
                                    flips → pod restarts ONCE **only if a
                                    Helm action fires**; see the trade-off
                                    below.

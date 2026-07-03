@@ -144,7 +144,7 @@ index 0000000..ad99d64
 +*/}}
 +{{- end }}
 diff --git a/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml b/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
-index b7a9237..b62688c 100644
+index b7a9237..b067196 100644
 --- a/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
 +++ b/charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
 @@ -30,9 +30,103 @@ spec:
@@ -183,7 +183,7 @@ index b7a9237..b62688c 100644
 +                                   the new CA + cert.
 +            * steady state:        Secret content stable → sha stable
 +                                   → no rotation.
-+            * renewal (~350d):     cert-manager rotates Secret → sha
++            * renewal (~275d):     cert-manager rotates Secret → sha
 +                                   flips → pod restarts ONCE **only if a
 +                                   Helm action fires**; see the trade-off
 +                                   below.
