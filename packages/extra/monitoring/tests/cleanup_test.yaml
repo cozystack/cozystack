@@ -66,7 +66,9 @@ tests:
       # managed-by=vm-operator: the bare label matches every VMCluster/VLCluster
       # in the namespace, so tearing one release down could delete another's
       # storage. apps.cozystack.io/application.name is stamped on the VM CRs'
-      # managedMetadata and propagated by vm-operator onto the PVCs.
+      # storage.volumeClaimTemplate.metadata.labels (packages/system/monitoring),
+      # which vm-operator copies onto the PVCs via IntoSTSVolume even on v0.68.4
+      # (managedMetadata itself reaches PVCs only from v0.71.0).
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'kubectl delete pvc -n tenant-root -l managed-by=vm-operator,apps\.cozystack\.io/application\.name=monitoring-system --ignore-not-found --wait=false'
@@ -151,3 +153,6 @@ tests:
       - equal:
           path: subjects[0].name
           value: monitoring-cleanup
+      - equal:
+          path: subjects[0].namespace
+          value: tenant-root

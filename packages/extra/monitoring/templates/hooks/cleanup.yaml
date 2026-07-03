@@ -108,3 +108,4 @@ roleRef:
 subjects:
   - kind: ServiceAccount
     name: {{ .Release.Name }}-cleanup
+    namespace: {{ .Release.Namespace }}

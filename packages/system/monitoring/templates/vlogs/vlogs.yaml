@@ -22,6 +22,13 @@ spec:
     resources: {}
     storage:
       volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs (IntoSTSVolume) even on v0.68.4, which does not yet
+          # propagate managedMetadata to PVCs. The monitoring post-delete
+          # cleanup hook selects PVCs by this label to stay release-scoped.
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
         spec:
           {{- with .storageClassName }}
           storageClassName: {{ . }}
