@@ -37,37 +37,37 @@ import (
 )
 
 // Constants tuning the workaround for fluxcd/pkg#934 (patch.Helper split-write
-// race in source-watcher). See the block comment on maybeRequeueArtifactGenerator.
+// race in source-watcher v2.1.0). See the block comment on
+// maybeRecoverArtifactGenerator for the mechanism.
 //
 // The schedule is deliberately conservative:
 //
 //   - `stuckGracePeriod = 30s` — source-watcher normally settles an
-//     ArtifactGenerator in under 10s (measured under 5-round rapid-fire load
-//     on dev3), so a 30s Unknown window comfortably distinguishes a real
-//     stall from a legitimate in-flight rebuild.
-//   - `initialBackoff = 30s`, `maxBackoff = 4m`, `maxRequeueAttempts = 5` —
+//     ArtifactGenerator in under 10s once it takes the drifted branch, so a
+//     30s Unknown window comfortably distinguishes a real stall from a
+//     legitimate in-flight rebuild.
+//   - `initialBackoff = 30s`, `maxBackoff = 4m`, `maxRecoveryAttempts = 5` —
 //     exponential 30s + 60s + 2m + 4m + 4m gives ~11.5m of total budget
 //     before we give up, safely inside the 15m upstream HelmRelease install
 //     timeout so a real stall surfaces as SourceWatcherStalled rather than
 //     silently timing out an install.
 //
-// HA note: the retry driver stores its state (attempt counter, last-bump
+// HA note: the retry driver stores its state (attempt counter, last-force
 // timestamp) as annotations on the ArtifactGenerator itself, so a single
 // replica converges deterministically. Running cozystack-operator with
 // multiple replicas WITHOUT leader election will let both replicas race on
 // annotation writes, corrupting the counter and the elapsed-time math. Deploy
 // this operator with `--leader-elect=true` (or replicas=1).
 const (
-	stuckGracePeriod   = 30 * time.Second
-	initialBackoff     = 30 * time.Second
-	maxBackoff         = 4 * time.Minute
-	maxRequeueAttempts = 5
+	stuckGracePeriod    = 30 * time.Second
+	initialBackoff      = 30 * time.Second
+	maxBackoff          = 4 * time.Minute
+	maxRecoveryAttempts = 5
 
-	annotationFluxRequestedAt = "reconcile.fluxcd.io/requestedAt"
-	annotationRequeueAttempts = "cozystack.io/source-watcher-requeue-attempts"
-	annotationLastRequeueAt   = "cozystack.io/source-watcher-last-requeue-at"
+	annotationRecoveryAttempts = "cozystack.io/source-watcher-recovery-attempts"
+	annotationLastRecoveryAt   = "cozystack.io/source-watcher-last-recovery-at"
 
-	reasonAwaitingRequeue  = "AwaitingSourceWatcherRequeue"
+	reasonAwaitingRecovery = "AwaitingSourceWatcherRecovery"
 	reasonSourceWatcherBad = "SourceWatcherStalled"
 )
 
@@ -118,14 +118,11 @@ func (r *PackageSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// it detects a source-watcher status-patch stall and needs to wait for the
 	// next backoff window; that Result is honoured on the way out. `now` is
 	// threaded down as a single sample so the whole reconcile agrees on one
-	// wall-clock reading.
-	result, err := r.updateStatus(ctx, packageSource, nowFunc())
-	if err != nil {
-		logger.Error(err, "failed to update status")
-		// Don't return error, status update is not critical
-	}
-
-	return result, nil
+	// wall-clock reading. Errors from updateStatus are propagated so
+	// controller-runtime's exponential backoff can retry transient failures —
+	// swallowing them would drop force-drift or backoff-schedule writes on the
+	// floor and leave the retry driver in a stale state.
+	return r.updateStatus(ctx, packageSource, nowFunc())
 }
 
 // reconcileArtifactGenerators generates a single ArtifactGenerator for the package source
@@ -439,18 +436,18 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	readyCondition := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
 
 	// Detect the source-watcher status-patch stall (fluxcd/pkg#934) and, if
-	// stuck, drive source-watcher through a bounded retry schedule instead of
-	// blindly copying the stuck Unknown across. See maybeRequeueArtifactGenerator
-	// for the mechanism.
+	// stuck, drive source-watcher through a bounded recovery schedule instead
+	// of blindly copying the stuck Unknown across. See
+	// maybeRecoverArtifactGenerator for the mechanism.
 	if artifactGeneratorStuck(ag, readyCondition, now) {
-		return r.maybeRequeueArtifactGenerator(ctx, packageSource, ag, now)
+		return r.maybeRecoverArtifactGenerator(ctx, packageSource, ag, readyCondition, now)
 	}
 
-	// AG is not stuck — clear any requeue-tracking annotations the previous
+	// AG is not stuck — clear any recovery-tracking annotations the previous
 	// stuck path left behind, then either surface the missing-Ready case or
 	// copy the real condition through.
-	if err := r.clearRequeueTracking(ctx, ag); err != nil {
-		logger.Error(err, "failed to clear requeue tracking annotations", "artifactGenerator", ag.Name)
+	if err := r.clearRecoveryTracking(ctx, ag); err != nil {
+		logger.Error(err, "failed to clear recovery tracking annotations", "artifactGenerator", ag.Name)
 		// Non-fatal: annotations are best-effort bookkeeping.
 	}
 
@@ -484,44 +481,60 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 }
 
-// maybeRequeueArtifactGenerator advances the bounded-retry schedule for an AG
-// whose Ready condition is stuck in the fluxcd/pkg#934 window (Inventory and
-// ObservedSourcesDigest persisted, Ready condition write lost to the split
-// patch). It nudges source-watcher via `reconcile.fluxcd.io/requestedAt` with
-// exponential backoff and — after maxRequeueAttempts fruitless attempts —
-// stops lying and surfaces the failure as PackageSource.Ready=False with
+// maybeRecoverArtifactGenerator advances the bounded-recovery schedule for an
+// AG whose Ready condition is stuck in the fluxcd/pkg#934 window (Inventory
+// and ObservedSourcesDigest persisted on the current spec generation, Ready
+// condition write lost to the split patch). It forces source-watcher onto its
+// drifted-branch reconcile by patching Ready=False on the AG's status
+// subresource with exponential backoff and — after maxRecoveryAttempts
+// fruitless attempts — surfaces the failure as PackageSource.Ready=False with
 // reason SourceWatcherStalled so an operator can intervene.
 //
-// The retry state (attempt count + last-requeue timestamp) lives on the AG
-// itself as annotations so it survives operator restarts and rides the same
-// ownerReference lifecycle as the AG.
+// Why writing Ready=False works: source-watcher v2.1.0's detectDrift
+// (internal/controller/artifactgenerator_drift.go:52) treats IsFalse(Ready) as
+// drift = "NotReady", promoting the reconcile past the no-drift early-return
+// at controller.go:164 that traps a lost-Ready-condition state. On successful
+// rebuild source-watcher writes Ready=True at controller.go:254; on a genuine
+// rebuild failure it writes Ready=False with a real reason. Either way an
+// honest condition from upstream replaces our synthetic False, and our
+// Owns(&ArtifactGenerator{}) watch fires this reconciler to copy the resolved
+// condition onto the PackageSource. Bumping `reconcile.fluxcd.io/requestedAt`
+// (the previous approach) does NOT force drift — it triggers a reconcile that
+// re-hits the no-drift branch and never promotes the stuck Unknown.
 //
-// This mechanism relies on source-watcher registering the standard flux
-// ReconcileRequestedPredicate on ArtifactGenerator (fluxcd/pkg/runtime/predicates),
-// which fires a fresh reconcile whenever `reconcile.fluxcd.io/requestedAt`
-// changes. All flux-native controllers wire this predicate through
-// controller.Options{}; if a future source-watcher release drops it, the
-// requeue driver becomes a no-op and stuck AGs will time out at the
-// SourceWatcherStalled cutoff.
+// The recovery state (attempt count + last-force timestamp) lives on the AG
+// itself as annotations so it survives operator restarts. If the AG's Ready
+// condition has a LastTransitionTime newer than our lastRecoveryAt, the
+// attempt counter is reset — that signals a fresh stall episode after a
+// previous give-up, not a continuation of the same run.
 //
 // TODO(remove once fluxcd/pkg#934 lands and is rolled out): once source-watcher
 // consumes a patch.Helper that either serialises or transactionally combines
-// the .status / .status.conditions writes, this whole retry driver can be
+// the .status / .status.conditions writes, this whole recovery driver can be
 // deleted and updateStatus can copy the AG's Ready condition through
 // unconditionally.
-func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time) (ctrl.Result, error) {
+func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, ag *sourcewatcherv1beta1.ArtifactGenerator, ready *metav1.Condition, now time.Time) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	attempts, lastRequeueAt := readRequeueTracking(ag)
-	decision := decideRequeue(attempts, lastRequeueAt, now)
+	attempts, lastRecoveryAt := readRecoveryTracking(ag)
+	// Reset the counter if source-watcher has touched the Ready condition
+	// after our previous force-write. That means either (a) source-watcher
+	// recovered and re-stalled — a fresh episode deserves a fresh budget, or
+	// (b) our operator missed the recovery event (crash, restart) and the AG
+	// re-stalled independently. Either way, stale attempts should not force
+	// an immediate give-up.
+	if ready != nil && !ready.LastTransitionTime.IsZero() && ready.LastTransitionTime.After(lastRecoveryAt) {
+		attempts = 0
+	}
+	decision := decideRecovery(attempts, lastRecoveryAt, now)
 
 	switch decision.action {
-	case requeueActionGiveUp:
+	case recoveryActionGiveUp:
 		message := fmt.Sprintf(
-			"ArtifactGenerator %s/%s has been stuck with a lost Ready condition through %d requeue attempts; "+
+			"ArtifactGenerator %s/%s has been stuck with a lost Ready condition through %d force-drift attempts; "+
 				"source-watcher is not recovering. See https://github.com/fluxcd/pkg/issues/934. "+
 				"An operator must restart source-watcher or manually inspect the ArtifactGenerator.",
-			ag.Namespace, ag.Name, maxRequeueAttempts,
+			ag.Namespace, ag.Name, maxRecoveryAttempts,
 		)
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
 			Type:               "Ready",
@@ -530,19 +543,19 @@ func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Cont
 			Message:            message,
 			ObservedGeneration: packageSource.Generation,
 		})
-		logger.Info("source-watcher stalled after bounded requeues; surfacing PackageSource Ready=False",
+		logger.Info("source-watcher stalled after bounded force-drift attempts; surfacing PackageSource Ready=False",
 			"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "attempts", attempts)
 		return ctrl.Result{}, r.Status().Update(ctx, packageSource)
 
-	case requeueActionWait:
+	case recoveryActionWait:
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
 			Type:   "Ready",
 			Status: metav1.ConditionUnknown,
-			Reason: reasonAwaitingRequeue,
+			Reason: reasonAwaitingRecovery,
 			Message: fmt.Sprintf(
 				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
-					"requeue %d/%d nudged source-watcher, waiting for a real Ready write.",
-				attempts, maxRequeueAttempts,
+					"force-drift %d/%d issued, waiting for source-watcher to rebuild.",
+				attempts, maxRecoveryAttempts,
 			),
 			ObservedGeneration: packageSource.Generation,
 		})
@@ -551,39 +564,39 @@ func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Cont
 		}
 		return ctrl.Result{RequeueAfter: decision.wait}, nil
 
-	case requeueActionBump:
+	case recoveryActionForce:
 		nextAttempt := attempts + 1
-		if err := r.bumpArtifactGeneratorRequeue(ctx, ag, now, nextAttempt); err != nil {
-			return ctrl.Result{}, fmt.Errorf("failed to bump ArtifactGenerator requeue annotation: %w", err)
+		if err := r.forceArtifactGeneratorDrift(ctx, ag, now, nextAttempt); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to force ArtifactGenerator drift: %w", err)
 		}
 		meta.SetStatusCondition(&packageSource.Status.Conditions, metav1.Condition{
 			Type:   "Ready",
 			Status: metav1.ConditionUnknown,
-			Reason: reasonAwaitingRequeue,
+			Reason: reasonAwaitingRecovery,
 			Message: fmt.Sprintf(
 				"ArtifactGenerator Ready condition lost to fluxcd/pkg#934 patch.Helper race; "+
-					"bumped reconcile.fluxcd.io/requestedAt (attempt %d/%d) to nudge source-watcher.",
-				nextAttempt, maxRequeueAttempts,
+					"forced drift on AG.status.conditions[Ready]=False (attempt %d/%d) so source-watcher rebuilds.",
+				nextAttempt, maxRecoveryAttempts,
 			),
 			ObservedGeneration: packageSource.Generation,
 		})
 		if err := r.Status().Update(ctx, packageSource); err != nil {
 			return ctrl.Result{}, err
 		}
-		logger.Info("nudged source-watcher via reconcile.fluxcd.io/requestedAt",
+		logger.Info("forced source-watcher drift via AG status Ready=False patch",
 			"packageSource", packageSource.Name, "artifactGenerator", ag.Name, "attempt", nextAttempt)
 		return ctrl.Result{RequeueAfter: backoffFor(nextAttempt)}, nil
 
 	default:
-		// Force a loud failure if a new requeueAction is ever added without a
-		// matching case here — a silent return would leave the PackageSource
+		// Force a loud failure if a new recoveryAction is ever added without
+		// a matching case here — a silent return would leave the PackageSource
 		// Ready condition frozen at whatever value it had before this call.
 		// controller-runtime v0.15+ recovers panics inside Reconcile by
 		// default (Options.RecoverPanic), so this manifests as a requeue with
 		// a logged stack trace rather than a crash-loop; if that default is
 		// ever flipped off in SetupWithManager, this needs to become an
 		// error return instead.
-		panic(fmt.Sprintf("unhandled requeueAction %d", decision.action))
+		panic(fmt.Sprintf("unhandled recoveryAction %d", decision.action))
 	}
 }
 
@@ -622,39 +635,39 @@ func artifactGeneratorStuck(ag *sourcewatcherv1beta1.ArtifactGenerator, ready *m
 	return ready.LastTransitionTime.Time.Add(stuckGracePeriod).Before(now)
 }
 
-// requeueAction enumerates what maybeRequeueArtifactGenerator should do given
+// recoveryAction enumerates what maybeRecoverArtifactGenerator should do given
 // the current retry state.
-type requeueAction int
+type recoveryAction int
 
 const (
-	requeueActionBump   requeueAction = iota // enough time elapsed — issue a fresh reconcile.fluxcd.io/requestedAt
-	requeueActionWait                        // in backoff window — schedule a follow-up reconcile at wait
-	requeueActionGiveUp                      // exceeded maxRequeueAttempts — surface as Ready=False
+	recoveryActionForce  recoveryAction = iota // enough time elapsed — issue a fresh force-drift status patch
+	recoveryActionWait                         // in backoff window — schedule a follow-up reconcile at wait
+	recoveryActionGiveUp                       // exceeded maxRecoveryAttempts — surface as Ready=False
 )
 
-type requeueDecision struct {
-	action requeueAction
+type recoveryDecision struct {
+	action recoveryAction
 	wait   time.Duration
 }
 
-// decideRequeue is the pure decision function driving maybeRequeueArtifactGenerator.
+// decideRecovery is the pure decision function driving maybeRecoverArtifactGenerator.
 // Split out so it can be unit-tested without a cluster.
-func decideRequeue(attempts int, lastRequeueAt time.Time, now time.Time) requeueDecision {
-	if attempts >= maxRequeueAttempts {
-		return requeueDecision{action: requeueActionGiveUp}
+func decideRecovery(attempts int, lastRecoveryAt time.Time, now time.Time) recoveryDecision {
+	if attempts >= maxRecoveryAttempts {
+		return recoveryDecision{action: recoveryActionGiveUp}
 	}
 	if attempts == 0 {
-		return requeueDecision{action: requeueActionBump}
+		return recoveryDecision{action: recoveryActionForce}
 	}
-	elapsed := now.Sub(lastRequeueAt)
+	elapsed := now.Sub(lastRecoveryAt)
 	needed := backoffFor(attempts)
 	if elapsed >= needed {
-		return requeueDecision{action: requeueActionBump}
+		return recoveryDecision{action: recoveryActionForce}
 	}
-	return requeueDecision{action: requeueActionWait, wait: needed - elapsed}
+	return recoveryDecision{action: recoveryActionWait, wait: needed - elapsed}
 }
 
-// backoffFor returns the backoff duration to wait AFTER the Nth bump before
+// backoffFor returns the backoff duration to wait AFTER the Nth force before
 // the (N+1)th. Attempts are 1-indexed. Exponential up to maxBackoff.
 func backoffFor(attempt int) time.Duration {
 	if attempt < 1 {
@@ -670,24 +683,79 @@ func backoffFor(attempt int) time.Duration {
 	return d
 }
 
-// bumpArtifactGeneratorRequeue nudges source-watcher via
-// reconcile.fluxcd.io/requestedAt and updates our own bookkeeping annotations
-// in a single merge patch.
+// forceArtifactGeneratorDrift writes Ready=False on the AG's status subresource
+// to trigger source-watcher's drifted-branch reconcile (see the block comment
+// on maybeRecoverArtifactGenerator for why this is what actually recovers a
+// stuck AG). Then updates our tracking annotations so the retry loop can back
+// off.
 //
-// On success, `ag.Annotations` reflects the persisted state so the caller can
-// re-read the same pointer. On Patch failure the annotations are rolled back
-// to their pre-call values so the caller does not see a locally-mutated `ag`
-// whose changes never hit the apiserver.
-func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time, nextAttempt int) error {
-	patchBase := ag.DeepCopy()
+// Two subresources are patched — status for the Ready condition, metadata for
+// the annotations — because status is a separate endpoint and cannot be
+// combined with metadata in a single PATCH. Order is: status first, then
+// metadata. If the status patch fails, we return the error and leave both the
+// caller's `ag` and the apiserver untouched. If the status patch succeeds but
+// the annotations patch fails, we still return an error — the retry loop will
+// pick up on the next reconcile and, because source-watcher already got the
+// Ready=False signal from the successful status write, the extra force-drift
+// on that retry is benign (source-watcher is already mid-rebuild).
+//
+// On success, `ag.Status.Conditions` and `ag.Annotations` reflect the
+// persisted state so the caller can re-read the same pointer. On any Patch
+// failure the corresponding field is rolled back to its pre-call value.
+func (r *PackageSourceReconciler) forceArtifactGeneratorDrift(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time, nextAttempt int) error {
+	// Step 1: patch AG.status.conditions[Ready]=False. This is the signal
+	// source-watcher's detectDrift picks up as `NotReady` drift.
+	statusBase := ag.DeepCopy()
+	priorConditions := cloneConditions(ag.Status.Conditions)
+	meta.SetStatusCondition(&ag.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             "SourceWatcherRecoveryForced",
+		Message:            "cozystack-operator forced drift after fluxcd/pkg#934 stall; source-watcher will rebuild",
+		ObservedGeneration: ag.Generation,
+	})
+	if err := r.Status().Patch(ctx, ag, client.MergeFrom(statusBase)); err != nil {
+		ag.Status.Conditions = priorConditions
+		return fmt.Errorf("status patch to force drift: %w", err)
+	}
+
+	// Step 2: update tracking annotations so the retry loop can back off.
+	// Status write already took effect; if this fails the retry logic will
+	// notice on the next reconcile and re-issue force-drift (benign — source-
+	// watcher is already rebuilding).
+	metadataBase := ag.DeepCopy()
 	priorAnnotations := cloneAnnotations(ag.Annotations)
 	if ag.Annotations == nil {
 		ag.Annotations = map[string]string{}
 	}
-	nowStr := now.UTC().Format(time.RFC3339Nano)
-	ag.Annotations[annotationFluxRequestedAt] = nowStr
-	ag.Annotations[annotationRequeueAttempts] = strconv.Itoa(nextAttempt)
-	ag.Annotations[annotationLastRequeueAt] = nowStr
+	ag.Annotations[annotationRecoveryAttempts] = strconv.Itoa(nextAttempt)
+	ag.Annotations[annotationLastRecoveryAt] = now.UTC().Format(time.RFC3339Nano)
+	if err := r.Patch(ctx, ag, client.MergeFrom(metadataBase)); err != nil {
+		ag.Annotations = priorAnnotations
+		return fmt.Errorf("metadata patch to update recovery tracking: %w", err)
+	}
+	return nil
+}
+
+// clearRecoveryTracking removes our bookkeeping annotations once the AG is
+// healthy again.
+//
+// Same success/failure contract as forceArtifactGeneratorDrift: on success
+// `ag.Annotations` matches the persisted state; on Patch failure the caller's
+// annotations are rolled back to their pre-call values.
+func (r *PackageSourceReconciler) clearRecoveryTracking(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator) error {
+	if ag.Annotations == nil {
+		return nil
+	}
+	_, hasAttempts := ag.Annotations[annotationRecoveryAttempts]
+	_, hasLast := ag.Annotations[annotationLastRecoveryAt]
+	if !hasAttempts && !hasLast {
+		return nil
+	}
+	patchBase := ag.DeepCopy()
+	priorAnnotations := cloneAnnotations(ag.Annotations)
+	delete(ag.Annotations, annotationRecoveryAttempts)
+	delete(ag.Annotations, annotationLastRecoveryAt)
 	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
 		ag.Annotations = priorAnnotations
 		return err
@@ -695,33 +763,16 @@ func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Conte
 	return nil
 }
 
-// clearRequeueTracking removes our bookkeeping annotations once the AG is
-// healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — standard flux
-// controllers do not clear it after processing; the ReconcileRequestedPredicate
-// only advances `.status.lastHandledReconcileAt` and compares against the
-// annotation to decide whether a new reconcile has been requested.
-//
-// Same success/failure contract as bumpArtifactGeneratorRequeue: on success
-// `ag.Annotations` matches the persisted state; on Patch failure the caller's
-// annotations are rolled back to their pre-call values.
-func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator) error {
-	if ag.Annotations == nil {
+// cloneConditions returns a shallow copy of a conditions slice suitable for
+// rollback on Patch failure. Each metav1.Condition holds only value-typed
+// fields (strings, ints, Time), so a shallow slice copy is sufficient.
+func cloneConditions(src []metav1.Condition) []metav1.Condition {
+	if src == nil {
 		return nil
 	}
-	_, hasAttempts := ag.Annotations[annotationRequeueAttempts]
-	_, hasLast := ag.Annotations[annotationLastRequeueAt]
-	if !hasAttempts && !hasLast {
-		return nil
-	}
-	patchBase := ag.DeepCopy()
-	priorAnnotations := cloneAnnotations(ag.Annotations)
-	delete(ag.Annotations, annotationRequeueAttempts)
-	delete(ag.Annotations, annotationLastRequeueAt)
-	if err := r.Patch(ctx, ag, client.MergeFrom(patchBase)); err != nil {
-		ag.Annotations = priorAnnotations
-		return err
-	}
-	return nil
+	dst := make([]metav1.Condition, len(src))
+	copy(dst, src)
+	return dst
 }
 
 // cloneAnnotations returns a shallow copy suitable for rollback on Patch
@@ -740,24 +791,24 @@ func cloneAnnotations(src map[string]string) map[string]string {
 	return dst
 }
 
-// readRequeueTracking pulls the retry-attempt counter and last-bump timestamp
+// readRecoveryTracking pulls the retry-attempt counter and last-force timestamp
 // off the AG. Missing/malformed annotations are treated as "no prior attempts"
 // so a corrupted counter can't wedge the retry loop.
-func readRequeueTracking(ag *sourcewatcherv1beta1.ArtifactGenerator) (attempts int, lastRequeueAt time.Time) {
+func readRecoveryTracking(ag *sourcewatcherv1beta1.ArtifactGenerator) (attempts int, lastRecoveryAt time.Time) {
 	if ag.Annotations == nil {
 		return 0, time.Time{}
 	}
-	if raw, ok := ag.Annotations[annotationRequeueAttempts]; ok {
+	if raw, ok := ag.Annotations[annotationRecoveryAttempts]; ok {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed >= 0 {
 			attempts = parsed
 		}
 	}
-	if raw, ok := ag.Annotations[annotationLastRequeueAt]; ok {
+	if raw, ok := ag.Annotations[annotationLastRecoveryAt]; ok {
 		if parsed, err := time.Parse(time.RFC3339Nano, raw); err == nil {
-			lastRequeueAt = parsed
+			lastRecoveryAt = parsed
 		}
 	}
-	return attempts, lastRequeueAt
+	return attempts, lastRecoveryAt
 }
 
 // SetupWithManager sets up the controller with the Manager.

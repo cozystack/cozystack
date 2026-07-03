@@ -204,28 +204,28 @@ func TestArtifactGeneratorStuck(t *testing.T) {
 // TestDecideRequeue locks in the bounded-retry state machine that drives
 // source-watcher out of the stuck window. First attempt bumps immediately; the
 // N-th subsequent attempt waits backoffFor(N) since the last bump before firing
-// again; after maxRequeueAttempts fruitless attempts we surface Ready=False.
+// again; after maxRecoveryAttempts fruitless attempts we surface Ready=False.
 func TestDecideRequeue(t *testing.T) {
 	tests := []struct {
 		name          string
 		attempts      int
 		lastRequeueAt time.Time
 		now           time.Time
-		wantAction    requeueAction
+		wantAction    recoveryAction
 		wantWaitMin   time.Duration // wait must be > 0 and roughly this long; 0 means don't check
 	}{
 		{
 			name:       "first-ever detection — bump immediately",
 			attempts:   0,
 			now:        referenceTime,
-			wantAction: requeueActionBump,
+			wantAction: recoveryActionForce,
 		},
 		{
 			name:          "backoff not yet elapsed after attempt 1 — wait",
 			attempts:      1,
 			lastRequeueAt: referenceTime.Add(-10 * time.Second),
 			now:           referenceTime,
-			wantAction:    requeueActionWait,
+			wantAction:    recoveryActionWait,
 			wantWaitMin:   19 * time.Second, // ~initialBackoff (30s) minus elapsed 10s
 		},
 		{
@@ -233,33 +233,33 @@ func TestDecideRequeue(t *testing.T) {
 			attempts:      1,
 			lastRequeueAt: referenceTime.Add(-45 * time.Second),
 			now:           referenceTime,
-			wantAction:    requeueActionBump,
+			wantAction:    recoveryActionForce,
 		},
 		{
 			name:          "backoff after attempt 3 (2m) — wait",
 			attempts:      3,
 			lastRequeueAt: referenceTime.Add(-30 * time.Second),
 			now:           referenceTime,
-			wantAction:    requeueActionWait,
+			wantAction:    recoveryActionWait,
 			wantWaitMin:   time.Minute,
 		},
 		{
 			name:       "attempts exhausted — give up",
-			attempts:   maxRequeueAttempts,
+			attempts:   maxRecoveryAttempts,
 			now:        referenceTime,
-			wantAction: requeueActionGiveUp,
+			wantAction: recoveryActionGiveUp,
 		},
 		{
 			name:       "attempts exceeded — still give up",
-			attempts:   maxRequeueAttempts + 3,
+			attempts:   maxRecoveryAttempts + 3,
 			now:        referenceTime,
-			wantAction: requeueActionGiveUp,
+			wantAction: recoveryActionGiveUp,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := decideRequeue(tt.attempts, tt.lastRequeueAt, tt.now)
+			got := decideRecovery(tt.attempts, tt.lastRequeueAt, tt.now)
 			if got.action != tt.wantAction {
 				t.Fatalf("action = %v, want %v", got.action, tt.wantAction)
 			}
@@ -318,8 +318,8 @@ func TestReadRequeueTracking(t *testing.T) {
 		{
 			name: "valid attempt + valid timestamp",
 			annotations: map[string]string{
-				annotationRequeueAttempts: "3",
-				annotationLastRequeueAt:   fixed,
+				annotationRecoveryAttempts: "3",
+				annotationLastRecoveryAt:   fixed,
 			},
 			wantAttempt: 3,
 			wantTimeSet: true,
@@ -327,8 +327,8 @@ func TestReadRequeueTracking(t *testing.T) {
 		{
 			name: "corrupt attempt counter — read as zero",
 			annotations: map[string]string{
-				annotationRequeueAttempts: "not-a-number",
-				annotationLastRequeueAt:   fixed,
+				annotationRecoveryAttempts: "not-a-number",
+				annotationLastRecoveryAt:   fixed,
 			},
 			wantAttempt: 0,
 			wantTimeSet: true,
@@ -336,7 +336,7 @@ func TestReadRequeueTracking(t *testing.T) {
 		{
 			name: "negative attempt — clamped to zero",
 			annotations: map[string]string{
-				annotationRequeueAttempts: "-5",
+				annotationRecoveryAttempts: "-5",
 			},
 			wantAttempt: 0,
 			wantTimeSet: false,
@@ -344,8 +344,8 @@ func TestReadRequeueTracking(t *testing.T) {
 		{
 			name: "corrupt timestamp — read as zero time",
 			annotations: map[string]string{
-				annotationRequeueAttempts: "2",
-				annotationLastRequeueAt:   "not-a-date",
+				annotationRecoveryAttempts: "2",
+				annotationLastRecoveryAt:   "not-a-date",
 			},
 			wantAttempt: 2,
 			wantTimeSet: false,
@@ -357,7 +357,7 @@ func TestReadRequeueTracking(t *testing.T) {
 			ag := &sourcewatcherv1beta1.ArtifactGenerator{
 				ObjectMeta: metav1.ObjectMeta{Annotations: tt.annotations},
 			}
-			attempt, ts := readRequeueTracking(ag)
+			attempt, ts := readRecoveryTracking(ag)
 			if attempt != tt.wantAttempt {
 				t.Errorf("attempt = %d, want %d", attempt, tt.wantAttempt)
 			}
@@ -372,7 +372,7 @@ func TestReadRequeueTracking(t *testing.T) {
 }
 
 // TestCloneAnnotations pins the "shallow copy, nil in / nil out" contract that
-// the rollback path in bumpArtifactGeneratorRequeue / clearRequeueTracking
+// the rollback path in forceArtifactGeneratorDrift / clearRecoveryTracking
 // depends on. If a future refactor "normalises" nil to an empty map, the
 // rollback would leave the caller with an empty map instead of the original
 // nil, subtly changing observable state in downstream code that treats
@@ -430,134 +430,155 @@ func newAG(annotations map[string]string) *sourcewatcherv1beta1.ArtifactGenerato
 	}
 }
 
-// TestBumpArtifactGeneratorRequeue_Success asserts that on a successful Patch:
-//   - the three annotations land on the caller's `ag` (so re-reads of the same
-//     pointer see the persisted state),
-//   - the same three annotations land in the apiserver.
+// TestForceArtifactGeneratorDrift_Success asserts that on a successful
+// force-drift call:
+//   - the AG's status.conditions[Ready] is set to False in the apiserver (this
+//     is the signal source-watcher's detectDrift keys on),
+//   - the tracking annotations land on the caller's `ag` AND in the apiserver,
+//   - the same in-memory `ag` reflects both mutations (mutation contract).
 //
-// This locks in the mutation contract documented on the function.
-func TestBumpArtifactGeneratorRequeue_Success(t *testing.T) {
+// This locks in the two-subresource shape (status patch + metadata patch) and
+// the mutation contract documented on the function.
+func TestForceArtifactGeneratorDrift_Success(t *testing.T) {
 	ag := newAG(nil)
-	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).Build()
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ag).WithObjects(ag).Build()
 	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
-	now := referenceTime
 
-	if err := r.bumpArtifactGeneratorRequeue(context.Background(), ag, now, 2); err != nil {
-		t.Fatalf("bumpArtifactGeneratorRequeue: %v", err)
-	}
-
-	// In-memory ag reflects the write.
-	if ag.Annotations == nil {
-		t.Fatal("ag.Annotations is nil after successful bump")
-	}
-	if got := ag.Annotations[annotationRequeueAttempts]; got != "2" {
-		t.Errorf("ag.Annotations[%s] = %q, want 2", annotationRequeueAttempts, got)
-	}
-	if got := ag.Annotations[annotationFluxRequestedAt]; got == "" {
-		t.Errorf("ag.Annotations[%s] not set", annotationFluxRequestedAt)
-	}
-	if got := ag.Annotations[annotationLastRequeueAt]; got == "" {
-		t.Errorf("ag.Annotations[%s] not set", annotationLastRequeueAt)
+	if err := r.forceArtifactGeneratorDrift(context.Background(), ag, referenceTime, 2); err != nil {
+		t.Fatalf("forceArtifactGeneratorDrift: %v", err)
 	}
 
-	// apiserver reflects the write.
+	// In-memory ag: Ready=False + tracking annotations reflect the writes.
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Fatalf("ag.Status Ready condition = %+v, want False", ready)
+	}
+	if got := ag.Annotations[annotationRecoveryAttempts]; got != "2" {
+		t.Errorf("ag.Annotations[%s] = %q, want 2", annotationRecoveryAttempts, got)
+	}
+	if got := ag.Annotations[annotationLastRecoveryAt]; got == "" {
+		t.Errorf("ag.Annotations[%s] not set", annotationLastRecoveryAt)
+	}
+
+	// apiserver reflects both writes.
 	persisted := &sourcewatcherv1beta1.ArtifactGenerator{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persisted); err != nil {
-		t.Fatalf("Get after bump: %v", err)
+		t.Fatalf("Get after force-drift: %v", err)
 	}
-	for _, k := range []string{annotationFluxRequestedAt, annotationRequeueAttempts, annotationLastRequeueAt} {
+	persistedReady := meta.FindStatusCondition(persisted.Status.Conditions, "Ready")
+	if persistedReady == nil || persistedReady.Status != metav1.ConditionFalse {
+		t.Errorf("persisted AG Ready condition = %+v, want False", persistedReady)
+	}
+	for _, k := range []string{annotationRecoveryAttempts, annotationLastRecoveryAt} {
 		if _, ok := persisted.Annotations[k]; !ok {
 			t.Errorf("persisted AG missing annotation %s", k)
 		}
 	}
 }
 
-// TestBumpArtifactGeneratorRequeue_PatchFailure_Rollback drives the failure
-// branch by wrapping the fake client with an interceptor that errors on Patch,
-// and asserts the caller's `ag.Annotations` is restored to its pre-call value
-// (nil in this test) — the whole point of introducing the rollback.
-func TestBumpArtifactGeneratorRequeue_PatchFailure_Rollback(t *testing.T) {
-	ag := newAG(nil)
-	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).Build()
-	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
-		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-			return errors.New("simulated Patch failure")
-		},
-	})
-	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
-
-	err := r.bumpArtifactGeneratorRequeue(context.Background(), ag, referenceTime, 3)
-	if err == nil {
-		t.Fatal("bumpArtifactGeneratorRequeue succeeded, want error")
-	}
-	if ag.Annotations != nil {
-		t.Errorf("ag.Annotations = %v after failed Patch, want nil (rolled back)", ag.Annotations)
-	}
-}
-
-// TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackPreservesUnrelated
-// ensures the rollback restores the caller's pre-existing annotations rather
-// than nuking them along with our writes.
-func TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackPreservesUnrelated(t *testing.T) {
+// TestForceArtifactGeneratorDrift_StatusPatchFailure_Rollback drives the
+// status-patch failure branch: an interceptor errors on SubResourcePatch.
+// The caller's `ag` must be untouched (both conditions and annotations) and
+// no metadata patch should have been issued.
+func TestForceArtifactGeneratorDrift_StatusPatchFailure_Rollback(t *testing.T) {
 	ag := newAG(map[string]string{"unrelated": "value"})
-	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).Build()
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ag).WithObjects(ag).Build()
+	metadataPatches := 0
 	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
-		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-			return errors.New("simulated Patch failure")
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			metadataPatches++
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+		SubResourcePatch: func(_ context.Context, _ client.Client, _ string, _ client.Object, _ client.Patch, _ ...client.SubResourcePatchOption) error {
+			return errors.New("simulated status patch failure")
 		},
 	})
 	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
 
-	if err := r.bumpArtifactGeneratorRequeue(context.Background(), ag, referenceTime, 1); err == nil {
-		t.Fatal("bump succeeded, want error")
+	if err := r.forceArtifactGeneratorDrift(context.Background(), ag, referenceTime, 3); err == nil {
+		t.Fatal("forceArtifactGeneratorDrift succeeded, want error")
+	}
+	if ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready"); ready != nil {
+		t.Errorf("ag.Status Ready condition = %+v after failed status patch, want unset (rolled back)", ready)
+	}
+	if _, ok := ag.Annotations[annotationRecoveryAttempts]; ok {
+		t.Errorf("tracking annotation leaked despite status-patch failure: %v", ag.Annotations)
+	}
+	if metadataPatches != 0 {
+		t.Errorf("metadata patch issued %d times despite status-patch failure, want 0", metadataPatches)
 	}
 	if ag.Annotations["unrelated"] != "value" {
-		t.Errorf("unrelated annotation lost after rollback: %v", ag.Annotations)
-	}
-	if _, ok := ag.Annotations[annotationRequeueAttempts]; ok {
-		t.Errorf("tracking annotation leaked after rollback: %v", ag.Annotations)
+		t.Errorf("pre-existing annotation lost: %v", ag.Annotations)
 	}
 }
 
-// TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackRestoresPriorBump
-// covers the rollback contract in its most subtle form: our tracking keys are
-// already present from an EARLIER bump, and the new bump's Patch fails. The
-// rollback must restore the PRIOR bump's values, not delete the keys — a
-// refactor that naively used `delete(ag.Annotations, key)` on failure would
-// pass the two nil-rollback tests but silently regress this one.
-func TestBumpArtifactGeneratorRequeue_PatchFailure_RollbackRestoresPriorBump(t *testing.T) {
-	priorTimestamp := referenceTime.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
-	ag := newAG(map[string]string{
-		annotationFluxRequestedAt: priorTimestamp,
-		annotationRequeueAttempts: "1",
-		annotationLastRequeueAt:   priorTimestamp,
-	})
-	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).Build()
+// TestForceArtifactGeneratorDrift_MetadataPatchFailure_RollbackAnnotations
+// drives the second-step failure: status patch succeeds, metadata patch fails.
+// Ready=False must remain in the caller's `ag` (successfully persisted) but
+// the tracking annotations must roll back to pre-call state so the counter
+// doesn't advance without landing in the apiserver.
+func TestForceArtifactGeneratorDrift_MetadataPatchFailure_RollbackAnnotations(t *testing.T) {
+	ag := newAG(map[string]string{"unrelated": "value"})
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ag).WithObjects(ag).Build()
 	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
 		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
-			return errors.New("simulated Patch failure")
+			return errors.New("simulated metadata patch failure")
 		},
 	})
 	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
 
-	if err := r.bumpArtifactGeneratorRequeue(context.Background(), ag, referenceTime, 2); err == nil {
-		t.Fatal("bump succeeded, want error")
+	if err := r.forceArtifactGeneratorDrift(context.Background(), ag, referenceTime, 4); err == nil {
+		t.Fatal("forceArtifactGeneratorDrift succeeded, want error from metadata patch")
 	}
-	if got := ag.Annotations[annotationRequeueAttempts]; got != "1" {
-		t.Errorf("annotationRequeueAttempts = %q after rollback, want prior value 1", got)
+	// Status patch already landed, so ag.Status.Conditions carries Ready=False
+	// even though the operation as a whole errored.
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	if ready == nil || ready.Status != metav1.ConditionFalse {
+		t.Errorf("ag.Status Ready condition = %+v, want False (status patch succeeded)", ready)
 	}
-	if got := ag.Annotations[annotationFluxRequestedAt]; got != priorTimestamp {
-		t.Errorf("annotationFluxRequestedAt = %q after rollback, want prior %q", got, priorTimestamp)
+	// Annotations must roll back — the counter never advanced in apiserver so
+	// leaving it locally advanced would desync the caller's view.
+	if _, ok := ag.Annotations[annotationRecoveryAttempts]; ok {
+		t.Errorf("tracking annotation not rolled back after metadata patch failure: %v", ag.Annotations)
 	}
-	if got := ag.Annotations[annotationLastRequeueAt]; got != priorTimestamp {
-		t.Errorf("annotationLastRequeueAt = %q after rollback, want prior %q", got, priorTimestamp)
+	if ag.Annotations["unrelated"] != "value" {
+		t.Errorf("pre-existing annotation lost: %v", ag.Annotations)
 	}
 }
 
-// TestClearRequeueTracking_Noop asserts that if the AG has no tracking
+// TestForceArtifactGeneratorDrift_MetadataPatchFailure_RollbackRestoresPriorBump
+// exercises the subtle case where prior tracking annotations were set by an
+// EARLIER force-drift and the current metadata patch fails. Rollback must
+// restore prior values, not delete them.
+func TestForceArtifactGeneratorDrift_MetadataPatchFailure_RollbackRestoresPriorBump(t *testing.T) {
+	priorTimestamp := referenceTime.Add(-time.Minute).UTC().Format(time.RFC3339Nano)
+	ag := newAG(map[string]string{
+		annotationRecoveryAttempts: "1",
+		annotationLastRecoveryAt:   priorTimestamp,
+	})
+	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ag).WithObjects(ag).Build()
+	failing := interceptor.NewClient(baseClient, interceptor.Funcs{
+		Patch: func(_ context.Context, _ client.WithWatch, _ client.Object, _ client.Patch, _ ...client.PatchOption) error {
+			return errors.New("simulated metadata patch failure")
+		},
+	})
+	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
+
+	if err := r.forceArtifactGeneratorDrift(context.Background(), ag, referenceTime, 2); err == nil {
+		t.Fatal("force-drift succeeded, want error")
+	}
+	if got := ag.Annotations[annotationRecoveryAttempts]; got != "1" {
+		t.Errorf("annotationRecoveryAttempts = %q after rollback, want prior value 1", got)
+	}
+	if got := ag.Annotations[annotationLastRecoveryAt]; got != priorTimestamp {
+		t.Errorf("annotationLastRecoveryAt = %q after rollback, want prior %q", got, priorTimestamp)
+	}
+}
+
+// TestClearRecoveryTracking_Noop asserts that if the AG has no tracking
 // annotations, we don't issue a Patch at all — otherwise every healthy
 // reconcile would generate a no-op write.
-func TestClearRequeueTracking_Noop(t *testing.T) {
+func TestClearRecoveryTracking_Noop(t *testing.T) {
 	ag := newAG(map[string]string{"unrelated": "value"})
 	baseClient := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ag).Build()
 	patchCount := 0
@@ -569,20 +590,20 @@ func TestClearRequeueTracking_Noop(t *testing.T) {
 	})
 	r := &PackageSourceReconciler{Client: watched, Scheme: testScheme(t)}
 
-	if err := r.clearRequeueTracking(context.Background(), ag); err != nil {
-		t.Fatalf("clearRequeueTracking: %v", err)
+	if err := r.clearRecoveryTracking(context.Background(), ag); err != nil {
+		t.Fatalf("clearRecoveryTracking: %v", err)
 	}
 	if patchCount != 0 {
-		t.Errorf("clearRequeueTracking issued %d Patch calls, want 0", patchCount)
+		t.Errorf("clearRecoveryTracking issued %d Patch calls, want 0", patchCount)
 	}
 }
 
-// TestClearRequeueTracking_PatchFailure_Rollback drives the failure branch and
+// TestClearRecoveryTracking_PatchFailure_Rollback drives the failure branch and
 // asserts the tracking annotations are restored on the caller's `ag`.
-func TestClearRequeueTracking_PatchFailure_Rollback(t *testing.T) {
+func TestClearRecoveryTracking_PatchFailure_Rollback(t *testing.T) {
 	original := map[string]string{
-		annotationRequeueAttempts: "3",
-		annotationLastRequeueAt:   referenceTime.UTC().Format(time.RFC3339Nano),
+		annotationRecoveryAttempts: "3",
+		annotationLastRecoveryAt:   referenceTime.UTC().Format(time.RFC3339Nano),
 		"unrelated":               "value",
 	}
 	ag := newAG(cloneAnnotations(original))
@@ -594,8 +615,8 @@ func TestClearRequeueTracking_PatchFailure_Rollback(t *testing.T) {
 	})
 	r := &PackageSourceReconciler{Client: failing, Scheme: testScheme(t)}
 
-	if err := r.clearRequeueTracking(context.Background(), ag); err == nil {
-		t.Fatal("clearRequeueTracking succeeded, want error")
+	if err := r.clearRecoveryTracking(context.Background(), ag); err == nil {
+		t.Fatal("clearRecoveryTracking succeeded, want error")
 	}
 	if len(ag.Annotations) != len(original) {
 		t.Fatalf("ag.Annotations size = %d, want %d after rollback", len(ag.Annotations), len(original))
@@ -622,7 +643,7 @@ func TestReconcile_DeletionTimestamp_EarlyReturn(t *testing.T) {
 		},
 		Spec: cozyv1alpha1.PackageSourceSpec{},
 	}
-	ag := newAG(map[string]string{annotationRequeueAttempts: "2"})
+	ag := newAG(map[string]string{annotationRecoveryAttempts: "2"})
 
 	writes := 0
 	base := fake.NewClientBuilder().WithScheme(testScheme(t)).WithObjects(ps, ag).Build()
