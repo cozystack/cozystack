@@ -609,9 +609,11 @@ func (r *PackageSourceReconciler) maybeRecoverArtifactGenerator(ctx context.Cont
 	// completes; that transition's timestamp is always newer than
 	// lastRecoveryAt, and resetting on it would make the give-up budget
 	// unreachable under the very race this driver targets — force → Progressing
-	// → reset → force → Progressing → reset → forever. Instead, the
-	// Owns()-re-entrancy path in updateStatus routes those Progressing
-	// transitions into awaitSourceWatcherResponse, and the natural
+	// → reset → force → Progressing → reset → forever. Instead, the unified
+	// Owns()-re-entrancy gate in updateStatus routes those Progressing
+	// transitions back through this same maybeRecoverArtifactGenerator so
+	// decideRecovery holds tracking through Wait until either source-watcher
+	// resolves the AG or the attempt budget exhausts. The natural
 	// clearRecoveryTracking on the not-stuck path (Ready=True from
 	// source-watcher, or Ready=False with an upstream reason) is the
 	// canonical reset. The trade-off — an operator restart between a prior

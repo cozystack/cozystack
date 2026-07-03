@@ -982,8 +982,9 @@ func TestMaybeRecoverArtifactGenerator_GiveUpBranch(t *testing.T) {
 // under the very race this driver targets. Assertion: with attempts already
 // at maxRecoveryAttempts, we go straight to GiveUp even when Ready has just
 // been touched — the natural clearRecoveryTracking on the not-stuck path is
-// the only counter reset, and the awaitSourceWatcherResponse path in
-// updateStatus holds tracking through Progressing.
+// the only counter reset, and the unified own-marker / progressing-in-recovery
+// gate in updateStatus holds tracking through Progressing by routing back
+// through this same maybeRecoverArtifactGenerator's Wait branch.
 func TestMaybeRecoverArtifactGenerator_DoesNotResetCounterOnFreshTransition(t *testing.T) {
 	priorForceAt := referenceTime.Add(-time.Hour)
 	freshTransitionAt := referenceTime.Add(-2 * time.Minute) // AFTER priorForceAt — must NOT reset
@@ -1016,14 +1017,17 @@ func TestMaybeRecoverArtifactGenerator_DoesNotResetCounterOnFreshTransition(t *t
 	}
 }
 
-// TestUpdateStatus_OwnMarkerRoutesToAwait pins lexfrei's B2 fix: when the AG's
-// Ready condition carries our own reasonRecoveryForced marker (our previous
-// forceArtifactGeneratorDrift write reflecting back through the Owns() watch),
-// updateStatus must (a) NOT clear the recovery-tracking annotations we just
-// wrote, and (b) NOT copy the synthetic Ready=False through to the
-// PackageSource. It routes to awaitSourceWatcherResponse and keeps the PS in
-// AwaitingSourceWatcherRecovery.
-func TestUpdateStatus_OwnMarkerRoutesToAwait(t *testing.T) {
+// TestUpdateStatus_OwnMarkerHoldsTrackingViaStateMachine pins lexfrei's B2
+// fix: when the AG's Ready condition carries our own reasonRecoveryForced
+// marker (our previous forceArtifactGeneratorDrift write reflecting back
+// through the Owns() watch), updateStatus must (a) NOT clear the
+// recovery-tracking annotations we just wrote, and (b) NOT copy the
+// synthetic Ready=False through to the PackageSource. It routes through the
+// unified own-marker / progressing-in-recovery / stuck gate into
+// maybeRecoverArtifactGenerator, and — because we are inside the backoff
+// window — the state machine's Wait branch keeps the PS in
+// Unknown/AwaitingSourceWatcherRecovery with a follow-up requeue.
+func TestUpdateStatus_OwnMarkerHoldsTrackingViaStateMachine(t *testing.T) {
 	ps := &cozyv1alpha1.PackageSource{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
 		Spec: cozyv1alpha1.PackageSourceSpec{
@@ -1100,14 +1104,16 @@ func TestUpdateStatus_OwnMarkerRoutesToAwait(t *testing.T) {
 	}
 }
 
-// TestUpdateStatus_ProgressingDuringRecoveryRoutesToAwait pins lexfrei's B2
+// TestUpdateStatus_ProgressingDuringRecoveryHoldsTracking pins lexfrei's B2
 // fix for the second Owns()-re-entrancy path: source-watcher writes
 // Ready=Unknown/Progressing after taking the drifted branch and before
 // finalising the rebuild. That transition arrives via the Owns() watch, and
 // if we cleared tracking on it the attempts counter would never accumulate.
 // Assertion: with tracking annotations present (attempts>0) and Ready=Unknown
-// visible, we hold tracking and route to awaitSourceWatcherResponse.
-func TestUpdateStatus_ProgressingDuringRecoveryRoutesToAwait(t *testing.T) {
+// visible on the current generation, updateStatus routes through the unified
+// own-marker / progressing-in-recovery gate into maybeRecoverArtifactGenerator
+// so the state machine holds tracking through Wait instead of clearing it.
+func TestUpdateStatus_ProgressingDuringRecoveryHoldsTracking(t *testing.T) {
 	ps := &cozyv1alpha1.PackageSource{
 		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
 		Spec: cozyv1alpha1.PackageSourceSpec{
