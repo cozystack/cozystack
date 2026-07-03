@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for packages/core/platform/images/migrations/migrations/50
+# Unit tests for packages/core/platform/images/migrations/migrations/51
 #
-# Migration 50 backfills apps.cozystack.io/application.name onto the pre-existing
+# Migration 51 backfills apps.cozystack.io/application.name onto the pre-existing
 # VictoriaMetrics/VictoriaLogs storage PVCs of the monitoring module so the
 # post-delete cleanup hook (PR #3094) can reclaim storage on already-deployed
 # clusters. Its correctness property is that it must relabel EXACTLY the
@@ -34,7 +34,7 @@
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$HACK_DIR/.." && pwd)"
-MIGRATION="$REPO_ROOT/packages/core/platform/images/migrations/migrations/50"
+MIGRATION="$REPO_ROOT/packages/core/platform/images/migrations/migrations/51"
 
 # write_fake_kubectl <dir>
 # Emits a fake `kubectl` that logs every call to $KLOG and, when $MOCK_ABSENT=1,
@@ -74,7 +74,7 @@ case "$*" in
     ;;
   *"get pvc"*"items[*]"*)
     printf 'vmstorage-db-vmstorage-shortterm-0\n'
-    printf 'cache-vmselect-shortterm-0\n'
+    printf 'vmselect-cachedir-vmselect-shortterm-0\n'
     printf 'vmstorage-db-vmstorage-custom-0\n'
     printf 'vlstorage-db-vlstorage-generic-0\n'
     printf 'grafana-db-1\n'
@@ -92,7 +92,7 @@ KEOF
   chmod +x "$1/kubectl"
 }
 
-@test "migration 50 relabels only the monitoring VM/VL storage PVCs and stamps the version" {
+@test "migration 51 relabels only the monitoring VM/VL storage PVCs and stamps the version" {
   tmp=$(mktemp -d)
   export KLOG="$tmp/kubectl.log"
   : > "$KLOG"
@@ -106,7 +106,7 @@ KEOF
   fi
 
   # The monitoring cluster's storage PVCs must be relabeled with the exact value.
-  for pvc in vmstorage-db-vmstorage-shortterm-0 cache-vmselect-shortterm-0 vlstorage-db-vlstorage-generic-0; do
+  for pvc in vmstorage-db-vmstorage-shortterm-0 vmselect-cachedir-vmselect-shortterm-0 vlstorage-db-vlstorage-generic-0; do
     if ! grep -Eq "label pvc -n tenant-test $pvc apps.cozystack.io/application.name=monitoring-system --overwrite" "$KLOG"; then
       echo "expected $pvc to be relabeled with application.name=monitoring-system" >&2
       cat "$KLOG" >&2
@@ -141,7 +141,7 @@ KEOF
   rm -rf "$tmp"
 }
 
-@test "migration 50 is a safe no-op that still stamps when the VM/VL CRDs are absent" {
+@test "migration 51 is a safe no-op that still stamps when the VM/VL CRDs are absent" {
   tmp=$(mktemp -d)
   export KLOG="$tmp/kubectl.log"
   : > "$KLOG"
