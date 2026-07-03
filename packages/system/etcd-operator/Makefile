@@ -14,3 +14,6 @@ update:
 	@echo "etcd-operator is a cozystack-authored chart; refresh templates/rbac.yaml"
 	@echo "from github.com/cozystack/etcd-operator config/rbac/role.yaml @ $(ETCD_OPERATOR_REF)"
 	@echo "and re-vendor CRDs via 'make -C ../etcd-operator-crds update'."
+
+test:
+	helm unittest .

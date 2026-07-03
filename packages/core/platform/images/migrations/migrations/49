@@ -92,9 +92,6 @@ CREDS_MANAGED_BY_LABEL="apps.cozystack.io/managed-by"
 CREDS_MANAGED_BY_VALUE="cozystack-backups"
 CREDS_TENANT_LABEL="internal.cozystack.io/tenantresource"
 
-# Cluster DNS domain, used to build the FQDN form of the cert SANs below.
-CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-cozy.local}"
-
 # Re-issue the server and peer certificates for one adopted cluster so they
 # cover the domains the NEW operator uses, BEFORE the operator can ever replace
 # a member. Background: in secretRef TLS (what adoption produces) the operator
@@ -109,13 +106,21 @@ CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-cozy.local}"
 # native and the (transient, mixed-window) legacy wildcard to the server and
 # peer cert-manager Certificates and wait for cert-manager to re-issue.
 # Idempotent: a cert that already carries the native wildcard is left untouched.
+#
+# Only the short `.svc` wildcard forms are added — deliberately NOT the
+# `.svc.<cluster-domain>` FQDN forms. The operator dials members by the short
+# `.svc` name (helpers.go peerURL/clientURL) and only mints FQDN SANs in
+# certManager mode, which this chart does not use; the etcd chart's Certificate
+# templates declare only the short forms, so adding FQDN SANs here would be
+# stripped on the next HelmRelease reconcile — adoption and chart output must
+# converge to the same fixed point on the cert SANs.
 ensure_wildcard_sans() {
   local ns="$1" name="$2"
   local native="*.${name}.${ns}.svc"
   local sans
   sans=$(printf '%s\n' \
-    "*.${name}.${ns}.svc" "*.${name}.${ns}.svc.${CLUSTER_DOMAIN}" \
-    "*.${name}-headless.${ns}.svc" "*.${name}-headless.${ns}.svc.${CLUSTER_DOMAIN}" \
+    "*.${name}.${ns}.svc" \
+    "*.${name}-headless.${ns}.svc" \
     | jq -R . | jq -s .)
   local cert secret
   for cert in "${name}-server" "${name}-peer"; do
@@ -131,7 +136,7 @@ ensure_wildcard_sans() {
       continue
     fi
     if [ "$DRY_RUN" = "1" ]; then
-      echo "  - [dry-run] ${ns}/${cert}: would add SANs ${native} (+FQDN, +legacy headless wildcard) and wait for re-issue"
+      echo "  - [dry-run] ${ns}/${cert}: would add SANs ${native} (+legacy headless wildcard) and wait for re-issue"
       continue
     fi
     echo "  - ${ns}/${cert}: adding native + legacy wildcard SANs and re-issuing"

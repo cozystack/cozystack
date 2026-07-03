@@ -79,14 +79,22 @@ etcd_drain() {
   done
 }
 
-# Best-effort teardown of the backup round-trip's resources (bucket,
-# BackupJob/Backup, RestoreJob, etcdctl pod, creds Secret, BackupClass,
-# strategy). cleanup.sh resumes the source Etcd HelmRelease first, so a
-# round-trip aborted mid-restore does not strand the app suspended. Idempotent
-# and safe even when the round-trip test never ran (deletes nothing else owns).
+# Teardown of the backup round-trip's resources (bucket, BackupJob/Backup,
+# RestoreJob, etcdctl pod, creds Secret, BackupClass, strategy). cleanup.sh
+# resumes the source Etcd HelmRelease first, so a round-trip aborted mid-restore
+# does not strand the app suspended. Idempotent and safe even when the
+# round-trip test never ran (deletes nothing else owns).
+#
+# Has teeth, mirroring etcd_drain: cleanup.sh is `set -e` with --ignore-not-found
+# on every delete, so it exits 0 on a clean namespace and non-zero only on a real
+# failure (stuck finalizer, RBAC error, wait timeout). We deliberately do NOT
+# `|| true` it — inline at the end of the last @test (under set -e) a stuck
+# cleanup must fail the suite rather than leak a wedged bucket/BackupClass into
+# the next app test. The cozy_cleanup safety-net path stays best-effort because
+# cozytest wraps cozy_cleanup in `|| true` (same split as etcd_drain).
 backup_cleanup() {
   [ -x "${ETCD_EXAMPLES}/cleanup.sh" ] || return 0
-  NAMESPACE=tenant-test "${ETCD_EXAMPLES}/cleanup.sh" 2>&1 || true
+  NAMESPACE=tenant-test "${ETCD_EXAMPLES}/cleanup.sh" 2>&1
 }
 
 cozy_cleanup() {
