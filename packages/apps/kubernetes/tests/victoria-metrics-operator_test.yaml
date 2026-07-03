@@ -1,0 +1,77 @@
+suite: victoria-metrics-operator.yaml cert-manager-crds dependency gating
+
+templates:
+  - templates/helmreleases/victoria-metrics-operator.yaml
+
+values:
+  - values/common.yaml
+
+# The vmop HelmRelease is gated on monitoringAgents.enabled, but the
+# cert-manager-crds HelmRelease it can depend on is only created when
+# certManager.enabled is true. The dependsOn entry must therefore be gated on
+# the same condition, otherwise the valid combination
+# monitoringAgents.enabled=true + certManager.enabled=false leaves vmop blocked
+# on a non-existent dependency.
+
+tests:
+  - it: renders the vmop HelmRelease when monitoringAgents is enabled
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HelmRelease
+      - equal:
+          path: metadata.name
+          value: kubernetes-test-cozy-victoria-metrics-operator
+
+  - it: always depends on cilium
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: true
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: kubernetes-test-cilium
+            namespace: tenant-test
+
+  - it: does NOT depend on cert-manager-crds when certManager is disabled
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: true
+      addons.certManager.enabled: false
+    asserts:
+      - notContains:
+          path: spec.dependsOn
+          content:
+            name: kubernetes-test-cert-manager-crds
+            namespace: tenant-test
+      - lengthEqual:
+          path: spec.dependsOn
+          count: 1
+
+  - it: depends on cert-manager-crds when certManager is enabled
+    release:
+      name: kubernetes-test
+      namespace: tenant-test
+    set:
+      addons.monitoringAgents.enabled: true
+      addons.certManager.enabled: true
+    asserts:
+      - contains:
+          path: spec.dependsOn
+          content:
+            name: kubernetes-test-cert-manager-crds
+            namespace: tenant-test
+      - lengthEqual:
+          path: spec.dependsOn
+          count: 2
