@@ -78,17 +78,20 @@ spec:
               rotated since the last render — Kubernetes rolls the pod
               on the resulting podTemplate change.
             - Between Helm actions the pod holds the certificate it
-              loaded at startup. If cert-manager renews at day ~350 and
-              NO Helm action happens in the following ~15 days, the pod
-              keeps serving with an expired in-memory cert (--reload-
-              cert alone would make this worse — the mounted cert would
-              rotate while the pod's self-registered
-              MutatingWebhookConfiguration caBundle went stale). Given
+              loaded at startup. With `duration: 8760h` (365d) and
+              `renewBefore: 2160h` (90d) in `certificate.yaml`,
+              cert-manager rotates the Secret at day ~275; if NO Helm
+              action fires in the following ~90 days, the pod keeps
+              serving with an expired in-memory cert past day 365
+              (--reload-cert alone would make this worse — the mounted
+              cert would rotate while the pod's self-registered
+              MutatingWebhookConfiguration caBundle went stale). At
               cozystack's release cadence a Helm action realistically
-              lands well before day 365, so we accept this. If ever it
-              stops holding, a small post-renewal Job that annotates
-              the Deployment podTemplate would close the gap without
-              re-introducing the ReplicaSet-churn amplifier.
+              lands well within that 90-day post-rotation window, so
+              we accept this. If ever it stops holding, a small
+              post-renewal Job that annotates the Deployment
+              podTemplate would close the gap without re-introducing
+              the ReplicaSet-churn amplifier.
 
           `lookup` returns nil during `helm template --dry-run=client`
           (offline CI renders / this chart's helm-unittest suite) — that
