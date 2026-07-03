@@ -578,6 +578,11 @@ func (r *PackageSourceReconciler) maybeRequeueArtifactGenerator(ctx context.Cont
 		// Force a loud failure if a new requeueAction is ever added without a
 		// matching case here — a silent return would leave the PackageSource
 		// Ready condition frozen at whatever value it had before this call.
+		// controller-runtime v0.15+ recovers panics inside Reconcile by
+		// default (Options.RecoverPanic), so this manifests as a requeue with
+		// a logged stack trace rather than a crash-loop; if that default is
+		// ever flipped off in SetupWithManager, this needs to become an
+		// error return instead.
 		panic(fmt.Sprintf("unhandled requeueAction %d", decision.action))
 	}
 }
@@ -690,10 +695,10 @@ func (r *PackageSourceReconciler) bumpArtifactGeneratorRequeue(ctx context.Conte
 }
 
 // clearRequeueTracking removes our bookkeeping annotations once the AG is
-// healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — that
-// annotation is owned by source-watcher's own reconcile loop semantics and
-// standard flux controllers persist it after processing (they only advance
-// `.status.lastHandledReconcileAt`).
+// healthy again. Leaves reconcile.fluxcd.io/requestedAt alone — standard flux
+// controllers do not clear it after processing; the ReconcileRequestedPredicate
+// only advances `.status.lastHandledReconcileAt` and compares against the
+// annotation to decide whether a new reconcile has been requested.
 //
 // Same success/failure contract as bumpArtifactGeneratorRequeue: on success
 // `ag.Annotations` matches the persisted state; on Patch failure the caller's
@@ -719,7 +724,9 @@ func (r *PackageSourceReconciler) clearRequeueTracking(ctx context.Context, ag *
 }
 
 // cloneAnnotations returns a shallow copy suitable for rollback on Patch
-// failure. Nil in → nil out (preserved as a distinct sentinel from an empty
+// failure. A shallow copy is enough because annotation values are plain
+// strings, which are immutable in Go; there is no shared mutable state to
+// deep-copy. Nil in → nil out (preserved as a distinct sentinel from an empty
 // map so the caller sees exactly the same state it started with).
 func cloneAnnotations(src map[string]string) map[string]string {
 	if src == nil {
