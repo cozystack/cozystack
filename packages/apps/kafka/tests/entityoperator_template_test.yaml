@@ -20,3 +20,15 @@ tests:
       # the phantom template.spec key must not reappear
       - notExists:
           path: spec.entityOperator.template.spec
+
+  - it: topic-operator and user-operator set explicit resources (avoid 128Mi LimitRange OOM)
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: spec.entityOperator.topicOperator.resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.entityOperator.userOperator.resources.limits.memory
+          value: 512Mi
