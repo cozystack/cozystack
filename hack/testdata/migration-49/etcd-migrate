@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Fake etcd-migrate for hack/migration-49-etcd-adopt.bats: records its full
+# argument vector to $FAKE_CMDLOG and succeeds. The real tool refuses --apply
+# without a backup destination or --skip-backup; the test asserts that the
+# script always passes a destination, so this stub never needs to reproduce
+# that guard.
+set -u
+[ -n "${FAKE_CMDLOG:-}" ] && printf 'ETCD-MIGRATE %s\n' "$*" >> "$FAKE_CMDLOG"
+# FAKE_MIGRATE_FAIL=1 makes the --apply invocation fail, to exercise the
+# migration's restore-operator-on-failure trap (review blocker B1).
+case " $* " in
+  *" --apply "*) [ "${FAKE_MIGRATE_FAIL:-0}" = "1" ] && { echo "fake etcd-migrate: forced failure" >&2; exit 1; } ;;
+esac
+exit 0

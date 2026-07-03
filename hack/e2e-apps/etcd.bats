@@ -6,12 +6,13 @@
 # sequence that reconfigures that singleton in place.
 #
 # The e2e runner (hack/cozytest.sh) is not real bats: it never calls
-# setup()/teardown() and never opens fd 3. It recognises @test blocks and a
-# cozy_cleanup() hook, which it invokes once at suite exit and on the first
-# failing test. A dead setup() therefore did nothing — etcd leaked into the
-# shared tenant-test namespace.
+# setup()/teardown(), never opens fd 3, and knows no `run`/$status/$output —
+# only @test blocks and bash. Assertions are direct shell tests; diagnostics
+# go to stdout (cozytest captures and prints it on failure). The suite defines
+# a cozy_cleanup() hook, which cozytest invokes once at suite exit and on the
+# first failing test.
 #
-# Teardown lives in etcd_drain(). It is run two ways:
+# Teardown lives in etcd_drain() and backup_cleanup(). They run two ways:
 #   - inline at the end of the last @test, where set -e makes a teardown
 #     failure fail the suite (e2e-testing.md §4 — don't mask teardown
 #     failures); and
@@ -20,6 +21,9 @@
 #     path alone cannot fail the suite — the inline call is what has teeth).
 # The first @test also drains up front so a dirty namespace from a previous
 # run cannot taint it (e2e-testing.md §3 — pre-cleanup at test start).
+
+ETCD_EXAMPLES="${BATS_TEST_DIRNAME}/../../examples/backups/etcd"
+
 etcd_drain() {
   etcd_pvc_selector='app.kubernetes.io/name=etcd,app.kubernetes.io/managed-by=etcd-operator'
   kubectl -n tenant-test delete etcd.apps.cozystack.io etcd \
@@ -70,7 +74,18 @@ etcd_drain() {
   done
 }
 
+# Best-effort teardown of the backup round-trip's resources (bucket,
+# BackupJob/Backup, RestoreJob, etcdctl pod, creds Secret, BackupClass,
+# strategy). cleanup.sh resumes the source Etcd HelmRelease first, so a
+# round-trip aborted mid-restore does not strand the app suspended. Idempotent
+# and safe even when the round-trip test never ran (deletes nothing else owns).
+backup_cleanup() {
+  [ -x "${ETCD_EXAMPLES}/cleanup.sh" ] || return 0
+  NAMESPACE=tenant-test "${ETCD_EXAMPLES}/cleanup.sh" 2>&1 || true
+}
+
 cozy_cleanup() {
+  backup_cleanup
   etcd_drain
 }
 
@@ -78,8 +93,8 @@ dump_diagnostics() {
   # cozytest captures the test's stdout/stderr and prints it on failure, so
   # diagnostics go to stdout — fd 3 is never opened by the runner.
   echo "# --- diagnostics ---"
-  kubectl -n tenant-test get etcdcluster,etcdbackupschedule,cronjob -o wide 2>&1 || true
-  kubectl -n tenant-test describe etcdbackupschedule etcd 2>&1 || true
+  kubectl -n tenant-test get etcdcluster.etcd-operator.cozystack.io,etcdmember.etcd-operator.cozystack.io,etcdsnapshot.etcd-operator.cozystack.io -o wide 2>&1 || true
+  kubectl -n tenant-test describe etcdcluster.etcd-operator.cozystack.io etcd 2>&1 || true
   kubectl -n cozy-etcd-operator logs -l app.kubernetes.io/name=etcd-operator --tail=100 2>&1 || true
 }
 
@@ -91,7 +106,7 @@ wait_etcd_hr_ready() {
   kubectl -n tenant-test wait hr/etcd --timeout=5m --for=condition=ready
 }
 
-@test "Create Etcd" {
+@test "Create Etcd and verify v1alpha2 operator runtime contracts" {
   # Pre-clean: drain any etcd left by a previous run so the singleton starts
   # from a clean slate (no stale data PVCs / wedged DataStore).
   etcd_drain
@@ -110,80 +125,90 @@ spec:
     memory: 128Mi
 EOF
   wait_etcd_hr_ready || { dump_diagnostics; false; }
-  kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
+  # The v1alpha2 operator reports Available (not Ready) once quorum is healthy.
+  kubectl -n tenant-test wait etcdcluster.etcd-operator.cozystack.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True || { dump_diagnostics; false; }
+
+  # --- Runtime contracts the chart depends on but the operator owns. Each is a
+  # silent failure if a future operator bump changes it, so assert against the
+  # LIVE cluster (not the manifests). ---
+
+  # podscrape.yaml + the WorkloadMonitor in etcd-cluster.yaml select member Pods
+  # by app.kubernetes.io/{name=etcd,instance=etcd,managed-by=etcd-operator}.
+  # If the operator labels members differently, metrics scraping and the
+  # reported replica count silently break. Assert the selector matches all 3.
+  running=$(kubectl -n tenant-test get pods \
+    -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
+    --field-selector=status.phase=Running -o name) || { dump_diagnostics; false; }
+  [ "$(printf '%s\n' "$running" | grep -c .)" -eq 3 ] || { echo "# WorkloadMonitor selector matched $(printf '%s\n' "$running" | grep -c .)/3 member Pods"; dump_diagnostics; false; }
+
+  # vpa.yaml drives the EtcdCluster through its scale subresource; if the CRD
+  # stops exposing /scale the VPA target silently fails to resolve.
+  scale_replicas=$(kubectl -n tenant-test get etcdcluster.etcd-operator.cozystack.io etcd \
+    --subresource=scale -o jsonpath='{.spec.replicas}') || { dump_diagnostics; false; }
+  [ "$scale_replicas" = "3" ] || { echo "# /scale reported replicas='$scale_replicas' (want 3)"; dump_diagnostics; false; }
+
+  # The WorkloadMonitor (etcd-cluster.yaml) selects member Pods by the same
+  # operator-set labels and drives the app's dashboard health indicator. Assert
+  # the controller actually matched them and flipped operational - a label
+  # mismatch leaves it operational=false / wrong replica count, a silent break.
+  kubectl -n tenant-test wait workloadmonitor.cozystack.io/etcd \
+    --for=jsonpath='{.status.operational}'=true --timeout=180s \
+    || { kubectl -n tenant-test get workloadmonitor.cozystack.io/etcd -o yaml 2>&1 || true; dump_diagnostics; false; }
+  avail=$(kubectl -n tenant-test get workloadmonitor.cozystack.io/etcd -o jsonpath='{.status.availableReplicas}')
+  [ "$avail" = "3" ] || { echo "# WorkloadMonitor availableReplicas=$avail (want 3)"; dump_diagnostics; false; }
+
+  # vpa.yaml pins containerPolicies[].containerName=etcd; if the operator names
+  # the member container anything else the VPA min/max bounds silently no-op.
+  cname=$(kubectl -n tenant-test get pods -l app.kubernetes.io/name=etcd -o jsonpath='{.items[0].spec.containers[0].name}')
+  [ "$cname" = "etcd" ] || { echo "# member container is '$cname' (want 'etcd' to match vpa.yaml containerName)"; dump_diagnostics; false; }
+
+  # podscrape.yaml (VMPodScrape) scrapes the port named 'metrics' over http on
+  # the member Pods. Assert the operator exposes that named port AND it actually
+  # serves metrics on plaintext http (etcd 3.6 can be made to serve metrics on
+  # the TLS client port, which would silently yield empty dashboards). Probe the
+  # Pod IP directly - the scrape targets Pods, and the client Service is headless
+  # and does not publish the metrics port.
+  mport=$(kubectl -n tenant-test get pods -l app.kubernetes.io/name=etcd -o jsonpath='{.items[0].spec.containers[0].ports[?(@.name=="metrics")].containerPort}')
+  [ -n "$mport" ] || { echo "# no container port named 'metrics' on member Pod (VMPodScrape would scrape nothing)"; dump_diagnostics; false; }
+  pod_ip=$(kubectl -n tenant-test get pods -l app.kubernetes.io/name=etcd -o jsonpath='{.items[0].status.podIP}')
+  kubectl -n tenant-test delete pod etcd-metrics-probe --ignore-not-found >/dev/null 2>&1
+  probe_out=$(kubectl -n tenant-test run etcd-metrics-probe --rm --restart=Never --attach \
+    --image=curlimages/curl:8.10.1 \
+    --overrides="{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true,\"runAsUser\":1000,\"seccompProfile\":{\"type\":\"RuntimeDefault\"}},\"containers\":[{\"name\":\"c\",\"image\":\"curlimages/curl:8.10.1\",\"command\":[\"sh\",\"-c\",\"curl -fsS -o /dev/null -w code=%{http_code} http://${pod_ip}:${mport}/metrics\"],\"securityContext\":{\"allowPrivilegeEscalation\":false,\"capabilities\":{\"drop\":[\"ALL\"]}}}]}}" 2>&1) || true
+  echo "$probe_out" | grep -q "code=200" || { echo "# metrics endpoint did not return 200 over http on the 'metrics' port; got: $probe_out"; dump_diagnostics; false; }
+
+  # etcd-defrag.yaml's hourly CronJob targets the client Service
+  # https://etcd.<ns>.svc:2379 with --cluster + the etcd-client-tls cert. Run it
+  # on demand: a clean completion proves the Service name resolves to every
+  # member and the client cert authenticates (the whole defrag contract). It
+  # fails forever and silently if the operator names the Service differently.
+  kubectl -n tenant-test delete job etcd-defrag-e2e --ignore-not-found
+  kubectl -n tenant-test create job etcd-defrag-e2e --from=cronjob/etcd-defrag
+  kubectl -n tenant-test wait job/etcd-defrag-e2e --for=condition=complete --timeout=180s \
+    || { kubectl -n tenant-test logs job/etcd-defrag-e2e --tail=50 2>&1 || true; dump_diagnostics; false; }
+  kubectl -n tenant-test delete job etcd-defrag-e2e --ignore-not-found
 }
 
-@test "Create Etcd with empty backup block (disabled by default)" {
-  kubectl apply -f- <<EOF
-apiVersion: apps.cozystack.io/v1alpha1
-kind: Etcd
-metadata:
-  name: etcd
-  namespace: tenant-test
-spec:
-  size: 1Gi
-  replicas: 3
-  storageClass: ""
-  resources:
-    cpu: 100m
-    memory: 128Mi
-  backup: {}
-EOF
-  wait_etcd_hr_ready || { dump_diagnostics; false; }
-  # With backup disabled, neither the schedule nor the secret should be created.
-  ! kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd 2>/dev/null
-  ! kubectl -n tenant-test get secret etcd-s3-creds 2>/dev/null
-}
-
-@test "Create Etcd with backup schedule" {
-  kubectl apply -f- <<EOF
-apiVersion: apps.cozystack.io/v1alpha1
-kind: Etcd
-metadata:
-  name: etcd
-  namespace: tenant-test
-spec:
-  size: 1Gi
-  replicas: 3
-  storageClass: ""
-  resources:
-    cpu: 100m
-    memory: 128Mi
-  backup:
-    enabled: true
-    # Schedule is chosen far in the future so no Jobs fire during the
-    # ~6-minute test window; this test only checks that the chart renders
-    # EtcdBackupSchedule/Secret and that the etcd-operator materializes a
-    # CronJob — it does NOT verify that backups reach S3. The endpoint
-    # below intentionally resolves nowhere to keep the test self-contained.
-    schedule: "0 0 1 1 *"
-    destinationPath: "s3://test-bucket/etcd-backups/"
-    endpointURL: "http://no-such-endpoint.invalid:9000"
-    region: "us-east-1"
-    forcePathStyle: true
-    s3AccessKey: "e2e-access-key"
-    s3SecretKey: "e2e-secret-key"
-    successfulJobsHistoryLimit: 1
-    failedJobsHistoryLimit: 1
-EOF
-  wait_etcd_hr_ready || { dump_diagnostics; false; }
-  kubectl -n tenant-test wait etcdcluster.etcd.aenix.io etcd --timeout=180s --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True || { dump_diagnostics; false; }
-  # Reconfiguring the Etcd CR triggers a HelmRelease upgrade that renders the
-  # EtcdBackupSchedule; hr/etcdcluster readiness can report ready on the prior
-  # revision before that resource materializes, so poll for it instead of a
-  # bare get (same pattern this test already uses for the CronJob below).
-  timeout 120 sh -ec "until kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd >/dev/null 2>&1; do sleep 2; done" || { dump_diagnostics; false; }
-  # Verify the region field propagated to the EtcdBackupSchedule.
-  REGION=$(kubectl -n tenant-test get etcdbackupschedule.etcd.aenix.io etcd -o jsonpath='{.spec.destination.s3.region}')
-  [ "$REGION" = "us-east-1" ]
-  kubectl -n tenant-test get secret etcd-s3-creds -o jsonpath='{.data.AWS_ACCESS_KEY_ID}' | base64 -d | grep -q '^e2e-access-key$'
-  # The etcd-operator generates a CronJob from the EtcdBackupSchedule. Wait for it.
-  timeout 120 sh -ec "until [ \"\$(kubectl -n tenant-test get cronjob -l etcd.aenix.io/etcdbackupschedule-name=etcd -o jsonpath='{.items[*].metadata.name}' 2>/dev/null)\" != '' ]; do sleep 5; done" || { dump_diagnostics; false; }
-  # Inline teardown for the last scenario: drain etcd, its retained data PVCs,
-  # and the Kamaji DataStore. Runs under set -e, so a teardown that does not
-  # settle fails the suite instead of leaking into later app tests. This drain
-  # MUST stay in the last @test to keep its teeth — if you append a scenario
-  # after this one, move the inline drain there (cozy_cleanup alone is the
-  # best-effort safety net cozytest `|| true`s, so it cannot fail the suite).
+# Full backup -> EtcdSnapshot -> in-place RestoreJob round-trip against the
+# v1alpha2 operator, driving the validated example scripts (examples/backups/etcd)
+# as the harness so the test and the documented flow can never drift. The scripts
+# run 01 strategy -> 02 bucket+BackupClass -> 03 source Etcd + sentinel write ->
+# 04 BackupJob (waits Succeeded) -> 05 mutate sentinel + RestoreJob (waits
+# Succeeded) and assert the sentinel reverts to its pre-mutation value -- the
+# in-cluster witness that the snapshot round-tripped through S3. NAMESPACE is
+# overridden to the e2e tenant; run-all.sh is `set -e` so any step failing fails
+# the test. 03 re-applies the singleton Etcd 'etcd' in place, so this scenario
+# reuses the cluster the previous @test created.
+@test "Backup and in-place restore round-trip (EtcdSnapshot driver)" {
+  [ -x "${ETCD_EXAMPLES}/run-all.sh" ] || skip "etcd backup example scripts not found at ${ETCD_EXAMPLES}"
+  NAMESPACE=tenant-test "${ETCD_EXAMPLES}/run-all.sh" || { dump_diagnostics; false; }
+  # Inline teardown for the last scenario: clean up the backup-flow resources
+  # (best-effort) then drain etcd, its retained data PVCs, and the Kamaji
+  # DataStore. etcd_drain runs under set -e, so a teardown that does not settle
+  # fails the suite instead of leaking into later app tests. This drain MUST
+  # stay in the last @test to keep its teeth — if you append a scenario after
+  # this one, move the inline drain there (cozy_cleanup alone is the best-effort
+  # safety net cozytest `|| true`s, so it cannot fail the suite).
+  backup_cleanup
   etcd_drain
 }

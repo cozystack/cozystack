@@ -18,7 +18,7 @@ coordinates baked into `parameters`.
 ## 2. Deploy the source Etcd (`03-create-etcd-src.sh`)
 
 The tenant applies an `apps.cozystack.io/Etcd` named `etcd`. The
-HelmRelease materialises an `etcd.aenix.io/EtcdCluster` and three
+HelmRelease materialises an `etcd-operator.cozystack.io/EtcdCluster` and three
 members. The script writes a sentinel key under `etcdctl` so step 05
 can witness the round-trip.
 
@@ -27,7 +27,7 @@ can witness the round-trip.
 A `BackupJob` references the `BackupClass` and the source `Etcd`. The
 driver resolves the strategy, renders its template against the live
 application and class parameters, then materialises one
-`etcd.aenix.io/EtcdBackup` CR per `BackupJob`. The etcd-operator's
+`etcd-operator.cozystack.io/EtcdSnapshot` CR per `BackupJob`. The etcd-operator's
 controller runs a one-shot Job that snapshots etcd and uploads the
 file to S3. On `phase=Complete`, the driver creates a Cozystack
 `Backup` artefact with the S3 coordinates baked into
@@ -36,7 +36,7 @@ file to S3. On `phase=Complete`, the driver creates a Cozystack
 
 ## What the tenant does NOT do
 
-- Author `EtcdBackup` CRs by hand. The driver owns the lifecycle.
+- Author `EtcdSnapshot` CRs by hand. The driver owns the lifecycle.
 - Manage the underlying S3 credentials. The driver consumes them from
   the per-app Secret the bucket flow already produced.
 - Track snapshot retention via cron. A `Plan` resource (not part of

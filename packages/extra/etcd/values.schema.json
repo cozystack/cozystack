@@ -2,6 +2,11 @@
   "title": "Chart Values",
   "type": "object",
   "properties": {
+    "version": {
+      "description": "etcd version (X.Y.Z) to run, set on the EtcdCluster's spec.version; the operator pulls etcd from its own configured image.",
+      "type": "string",
+      "default": "3.6.11"
+    },
     "size": {
       "description": "Persistent Volume size.",
       "default": "4Gi",
@@ -58,63 +63,6 @@
             }
           ],
           "x-kubernetes-int-or-string": true
-        }
-      }
-    },
-    "backup": {
-      "description": "DEPRECATED: Backup configuration. The chart still renders the legacy EtcdBackupSchedule when backup.enabled=true, but new tenants should drive backups through a BackupClass bound to the Etcd strategy (strategy.backups.cozystack.io/v1alpha1).",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "destinationPath": {
-          "description": "DEPRECATED: Destination path for backups (e.g. s3://bucket/path/).",
-          "type": "string",
-          "default": ""
-        },
-        "enabled": {
-          "description": "DEPRECATED: Enable scheduled S3 backups. Use a BackupJob against an Etcd strategy instead.",
-          "type": "boolean",
-          "default": false
-        },
-        "endpointURL": {
-          "description": "DEPRECATED: S3 endpoint URL for uploads.",
-          "type": "string",
-          "default": ""
-        },
-        "failedJobsHistoryLimit": {
-          "description": "DEPRECATED: Number of failed backup jobs to retain.",
-          "type": "integer",
-          "default": 1
-        },
-        "forcePathStyle": {
-          "description": "DEPRECATED: Use path-style S3 URLs (required for MinIO and most S3-compatible providers).",
-          "type": "boolean",
-          "default": true
-        },
-        "region": {
-          "description": "DEPRECATED: S3 region.",
-          "type": "string",
-          "default": ""
-        },
-        "s3AccessKey": {
-          "description": "DEPRECATED: Access key for S3 authentication.",
-          "type": "string",
-          "default": ""
-        },
-        "s3SecretKey": {
-          "description": "DEPRECATED: Secret key for S3 authentication.",
-          "type": "string",
-          "default": ""
-        },
-        "schedule": {
-          "description": "DEPRECATED: Cron schedule for automated backups. Use a backups.cozystack.io/Plan instead.",
-          "type": "string",
-          "default": "0 2 * * *"
-        },
-        "successfulJobsHistoryLimit": {
-          "description": "DEPRECATED: Number of successful backup jobs to retain.",
-          "type": "integer",
-          "default": 3
         }
       }
     }

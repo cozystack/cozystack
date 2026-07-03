@@ -5,6 +5,14 @@ sourceRef:
   path: /
 migrations:
   enabled: false
+  # The image digest is NOT hand-edited alongside targetVersion. The release
+  # build rebuilds the migrations image from this same source tree (which
+  # carries migrations/<N> and the etcd-migrate binary) and restamps this pin
+  # in the same commit via `make image-migrations` (yq --inplace) — so image and
+  # targetVersion are only consistent at a release tag, not mid-PR. The digest
+  # below therefore lags targetVersion in-tree by design; run-migrations.sh
+  # refuses to advance past a migration file missing from the image (exit 1), so
+  # a stale pin fails loudly rather than silently skipping the etcd adoption.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.0@sha256:8bf61f17e99eb4a3365394e3d97ac52a1d68cc84aa104894ecb09de25721dc1d
   targetVersion: 50
 # Bundle deployment configuration

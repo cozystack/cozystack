@@ -1,7 +1,7 @@
 #!/bin/bash
 # Step 01: Apply the cluster-scoped Etcd strategy. Admin operation -
 # tenants do not author the strategy CR directly. The strategy carries
-# the templated EtcdBackup destination shape; the BackupClass created in
+# the templated EtcdSnapshot destination shape; the BackupClass created in
 # step 02 supplies bucket/endpoint/credentials per tenant via parameters.
 set -euo pipefail
 

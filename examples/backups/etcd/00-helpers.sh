@@ -15,7 +15,7 @@ export BOLD='\033[1m'
 # Default settings (override via environment).
 export NAMESPACE="${NAMESPACE:-tenant-root}"
 # The chart pins the Helm release name (and the operator-side
-# etcd.aenix.io/EtcdCluster name) to "etcd" via
+# etcd-operator.cozystack.io/EtcdCluster name) to "etcd" via
 # templates/check-release-name.yaml, so the apps.cozystack.io/Etcd CR
 # MUST be named "etcd" per namespace. To-copy in the same namespace is
 # unsupported by design (chart constraint).
@@ -109,7 +109,7 @@ spec:
   restartPolicy: Never
   containers:
   - name: etcdctl
-    image: quay.io/coreos/etcd:v3.5.12
+    image: quay.io/coreos/etcd:v3.6.11
     command:
     - etcdctl
     - "--cacert=/etc/etcd/pki/client/ca.crt"
