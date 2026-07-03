@@ -125,6 +125,68 @@ spec:
 	}
 }
 
+// TestParseCRDsToleratesTemplatedNeighborDocument reproduces the cozyplane
+// bug: a real CRD living in a chart's templates/ dir, guarded by a
+// `{{- if }}` block that is not valid YAML on its own. The malformed
+// neighbor document must not take the real CRD down with it.
+func TestParseCRDsToleratesTemplatedNeighborDocument(t *testing.T) {
+	const doc = `{{- /* CRDs are installed only in CRD mode */ -}}
+{{- if not .Values.apiserver.enabled }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: vpcs.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names: {kind: VPC, plural: vpcs}
+  versions:
+  - name: v1alpha1
+    served: true
+    schema: {openAPIV3Schema: {type: object}}
+{{- end }}
+`
+	rs, err := ParseCRDs("templates/crds.yaml", []byte(doc))
+	if err != nil {
+		t.Fatalf("ParseCRDs failed: %v", err)
+	}
+	if len(rs) != 1 || rs[0].Plural != "vpcs" {
+		t.Fatalf("expected the CRD sharing the file with templated markup to survive, got %v", rs)
+	}
+}
+
+// TestParseAPIServices covers the new APIService source: a first-party group
+// registration is surfaced as a schema-less resource, and a non-APIService or
+// incomplete document is ignored.
+func TestParseAPIServices(t *testing.T) {
+	const doc = `apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozyplane-apiserver
+`
+	rs := ParseAPIServices("apiserver.yaml", []byte(doc))
+	if len(rs) != 1 {
+		t.Fatalf("expected exactly 1 APIService resource, got %v", rs)
+	}
+	r := rs[0]
+	if r.Group != "sdn.cozystack.io" || r.Source != SourceAPIService || r.Plural != apiServicePlural {
+		t.Fatalf("unexpected APIService resource: %+v", r)
+	}
+	if _, ok := r.Versions["v1alpha1"]; !ok {
+		t.Fatalf("expected v1alpha1 in versions, got %v", r.Versions)
+	}
+}
+
 func TestParseAPIServerStorages(t *testing.T) {
 	src := `
 	coreV1alpha1Storage["tenantsecrets"] = cozyregistry.RESTInPeace(x)
@@ -183,6 +245,160 @@ func TestLoadSnapshotDiscoversCRDsUnderChartsCrds(t *testing.T) {
 	}
 	if _, ok := snap[resourceKey{Group: "example.cozystack.io", Plural: "widgets"}]; !ok {
 		t.Fatalf("CRD under charts/*/crds/ was not discovered: %v", snap)
+	}
+}
+
+// TestLoadSnapshotDiscoversCRDUnderTemplatesDir reproduces the real gap found
+// in the cozyplane PR: a raw CRD document guarded by `{{- if }}`, sitting in a
+// chart's templates/ dir (not crds/), must still be discovered — directory
+// name is no longer the discovery signal, file content is.
+func TestLoadSnapshotDiscoversCRDUnderTemplatesDir(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("packages/system/cozyplane/templates/crds.yaml", `{{- if not .Values.apiserver.enabled }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: vpcs.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names: {kind: VPC, plural: vpcs}
+  versions:
+  - name: v1alpha1
+    served: true
+    schema: {openAPIV3Schema: {type: object}}
+{{- end }}
+`)
+
+	snap, err := LoadSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap[resourceKey{Group: "sdn.cozystack.io", Plural: "vpcs"}]; !ok {
+		t.Fatalf("CRD under templates/ was not discovered: %v", snap)
+	}
+}
+
+// TestLoadSnapshotDiscoversAPIServiceAndTripsNewGroup covers the other half of
+// the cozyplane gap: a group served only by an aggregated apiserver (no CRD,
+// no cozyrd, no apiserver.go entry) — its schema lives entirely outside this
+// repo, but the group's first appearance must still require review. Versions
+// registered via separate sibling APIService objects (one per version, the
+// real-world shape) must merge onto the same resource.
+func TestLoadSnapshotDiscoversAPIServiceAndTripsNewGroup(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("packages/system/cozyplane/templates/apiserver-v1alpha1.yaml", `apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata: {name: v1alpha1.sdn.cozystack.io}
+spec: {group: sdn.cozystack.io, version: v1alpha1}
+`)
+	write("packages/system/cozyplane/templates/apiserver-v1beta1.yaml", `apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata: {name: v1beta1.sdn.cozystack.io}
+spec: {group: sdn.cozystack.io, version: v1beta1}
+`)
+
+	// A minimal but non-empty base, unrelated to sdn.cozystack.io.
+	baseRoot := t.TempDir()
+	writeBase := func(rel, content string) {
+		p := filepath.Join(baseRoot, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeBase("packages/system/postgres-rd/cozyrds/postgres.yaml", sampleCozyRD)
+
+	base, err := LoadSnapshot(baseRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	head, err := LoadSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key := resourceKey{Group: "sdn.cozystack.io", Plural: apiServicePlural}
+	res, ok := head[key]
+	if !ok {
+		t.Fatalf("APIService group was not discovered: %v", head)
+	}
+	if _, ok := res.Versions["v1alpha1"]; !ok {
+		t.Fatalf("expected v1alpha1 merged in, got %v", res.Versions)
+	}
+	if _, ok := res.Versions["v1beta1"]; !ok {
+		t.Fatalf("expected v1beta1 from the sibling APIService object merged in, got %v", res.Versions)
+	}
+
+	if countCategory(Classify(base, head), NewGroup) != 1 {
+		t.Fatalf("expected the APIService-only group to trip NewGroup, got %v", Classify(base, head))
+	}
+}
+
+// TestLoadSnapshotIgnoresThirdPartyManifestsUnderTemplates guards against the
+// content-based walk becoming too permissive: a vendored CRD and APIService
+// for a non-cozystack.io group, sitting in the exact same templates/ shape,
+// must still be filtered out.
+func TestLoadSnapshotIgnoresThirdPartyManifestsUnderTemplates(t *testing.T) {
+	root := t.TempDir()
+	write := func(rel, content string) {
+		p := filepath.Join(root, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("packages/system/cert-manager/templates/crds.yaml", `apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata: {name: certificates.cert-manager.io}
+spec:
+  group: cert-manager.io
+  names: {kind: Certificate, plural: certificates}
+  versions:
+  - name: v1
+    served: true
+    schema: {openAPIV3Schema: {type: object}}
+`)
+	write("packages/system/metrics/templates/apiservice.yaml", `apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata: {name: v1beta1.metrics.k8s.io}
+spec: {group: metrics.k8s.io, version: v1beta1}
+`)
+	// Give the checkout a first-party resource so LoadSnapshot's
+	// empty-snapshot guard doesn't fire for an unrelated reason.
+	write("packages/system/postgres-rd/cozyrds/postgres.yaml", sampleCozyRD)
+
+	snap, err := LoadSnapshot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := snap[resourceKey{Group: "cert-manager.io", Plural: "certificates"}]; ok {
+		t.Fatalf("vendored third-party CRD must not be discovered: %v", snap)
+	}
+	if _, ok := snap[resourceKey{Group: "metrics.k8s.io", Plural: apiServicePlural}]; ok {
+		t.Fatalf("vendored third-party APIService must not be discovered: %v", snap)
 	}
 }
 

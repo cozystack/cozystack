@@ -73,7 +73,14 @@ func ParseCozyRD(origin string, data []byte) (Resource, bool, error) {
 
 // ParseCRDs parses a (possibly multi-document) CustomResourceDefinition YAML
 // file into one Resource per CRD, keyed by spec.group + spec.names.plural with
-// each served version's openAPIV3Schema.
+// each served version's openAPIV3Schema. CRD discovery is content-based (any
+// file under the walked roots, regardless of directory name — see
+// discoverYAMLFiles), so a single file routinely mixes genuine CRD documents
+// with unrendered Helm markup (a `{{- if }}` guard, an `{{ include }}` call)
+// in neighboring documents of the same `---`-delimited stream. A document
+// that fails to parse as YAML is therefore skipped on its own rather than
+// aborting the whole file, so a real CRD sharing a file with templated
+// documents is still found.
 func ParseCRDs(origin string, data []byte) ([]Resource, error) {
 	var out []Resource
 	for i, docBytes := range splitYAMLDocs(data) {
@@ -97,8 +104,8 @@ func ParseCRDs(origin string, data []byte) ([]Resource, error) {
 				} `json:"versions"`
 			} `json:"spec"`
 		}
-		if err := yaml.Unmarshal(docBytes, &doc); err != nil {
-			return nil, fmt.Errorf("%s (document %d): %w", origin, i, err)
+		if err := unmarshalYAMLDoc(docBytes, &doc); err != nil {
+			continue
 		}
 		if doc.Kind != "CustomResourceDefinition" {
 			continue
@@ -188,6 +195,78 @@ func ParseAPIServerStorages(origin string, data []byte) []Resource {
 		})
 	}
 	return out
+}
+
+// apiServicePlural is the sentinel Plural used for SourceAPIService
+// resources. An APIService does not describe an individual resource the way
+// a CRD or cozyrd does — it registers a whole (group, version) pair, served
+// by whatever aggregated apiserver binary the group's registration points
+// at, which may be built entirely outside this repository (no vendored Go
+// types, no checked-in CRD). The literal is namespaced with "$" so it can
+// never collide with a real plural name.
+const apiServicePlural = "$apiservice"
+
+// ParseAPIServices parses a (possibly multi-document) YAML file for
+// kind: APIService manifests, surfacing one schema-less Resource per
+// first-party (group, version) registration. Like ParseAPIServerStorages,
+// these resources carry no checked-in schema, so they participate only in
+// new-group / new-resource / removal detection via the shared
+// empty-Versions mechanism — diffResource has nothing to iterate, so no
+// Breaking finding is ever produced from one of these alone. Documents that
+// fail to parse (Helm markup sharing a file with a real APIService, as with
+// ParseCRDs) are skipped rather than failing the file.
+func ParseAPIServices(origin string, data []byte) []Resource {
+	var out []Resource
+	for _, docBytes := range splitYAMLDocs(data) {
+		if len(strings.TrimSpace(string(docBytes))) == 0 {
+			continue
+		}
+		var doc struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Group   string `json:"group"`
+				Version string `json:"version"`
+			} `json:"spec"`
+		}
+		if err := unmarshalYAMLDoc(docBytes, &doc); err != nil {
+			continue
+		}
+		if doc.Kind != "APIService" || doc.Spec.Group == "" || doc.Spec.Version == "" {
+			continue
+		}
+		out = append(out, Resource{
+			Group:    doc.Spec.Group,
+			Kind:     "(aggregated apiserver)",
+			Plural:   apiServicePlural,
+			Source:   SourceAPIService,
+			Origin:   origin,
+			Versions: map[string]Schema{doc.Spec.Version: {}},
+		})
+	}
+	return out
+}
+
+// helmDirectiveLine matches a line that is entirely Go-template/Helm markup
+// (`{{- if ... }}`, `{{- end }}`, `{{- /* comment */ -}}`), including its
+// trailing newline.
+var helmDirectiveLine = regexp.MustCompile(`(?m)^[ \t]*\{\{-?[^\n]*-?\}\}[ \t]*\r?\n?`)
+
+// unmarshalYAMLDoc decodes one `---`-delimited document, tolerating Helm
+// directive lines that share a document with otherwise-valid YAML. The
+// convention this repo's charts use for a raw CRD/APIService body is to wrap
+// the whole manifest in a single `{{- if }}...{{- end }}` block; the `{{- if
+// }}` half is naturally its own document (nothing precedes it since it opens
+// the block before a `---`), but the closing `{{- end }}` has no `---` before
+// it and so lands in the same document as the manifest itself — plain
+// yaml.Unmarshal rejects that whole document as invalid. Stripping
+// whole-line directives before decoding recovers the manifest; a document
+// that still fails after stripping is genuinely not YAML and is left to the
+// caller to skip.
+func unmarshalYAMLDoc(doc []byte, out any) error {
+	if err := yaml.Unmarshal(doc, out); err == nil {
+		return nil
+	}
+	return yaml.Unmarshal(helmDirectiveLine.ReplaceAll(doc, nil), out)
 }
 
 // splitYAMLDocs splits a YAML stream into individual document byte slices on

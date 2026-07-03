@@ -19,6 +19,7 @@ package apigate
 import (
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,22 +30,15 @@ import (
 const cozyRDGlob = "packages/system/*-rd/cozyrds/*.yaml"
 
 // crdRoots are the trees walked to discover checked-in CustomResourceDefinition
-// manifests. Within them, only files under a directory named in crdDirNames are
-// parsed, and only CRDs whose group belongs to the cozystack.io family are
-// kept. Discovering CRDs by location + content (rather than an explicit file
-// list) means a first-party CRD that moves — e.g. into a chart's crds/ dir — is
-// still covered here rather than slipping through until an incident.
+// and APIService manifests. Every .yaml/.yml file under them is a candidate;
+// filtering to the resources we actually care about is content-based (does
+// this document parse, and does it have the right kind and a first-party
+// group?) rather than directory-based. A directory-name allowlist (crds/,
+// definitions/, manifests/, ...) was tried first and missed a real CRD that
+// shipped inside a chart's templates/ dir behind a `{{- if }}` guard — the
+// convention a contributor uses for a chart layout is not a reliable signal,
+// so content sniffing replaces it entirely.
 var crdRoots = []string{"packages", "internal"}
-
-// crdDirNames are the directory names that hold raw (non-templated) first-party
-// CRD manifests. Helm's crds/ convention and this repo's definitions/ and
-// manifests/ dirs all hold rendered CRDs; templated CRDs live under templates/
-// and are intentionally excluded so we never try to parse Helm markup.
-var crdDirNames = map[string]struct{}{
-	"crds":        {},
-	"definitions": {},
-	"manifests":   {},
-}
 
 // apiserverGoFile is the source of the static Go-backed aggregated registrations.
 const apiserverGoFile = "pkg/apiserver/apiserver.go"
@@ -63,9 +57,10 @@ func isFirstPartyGroup(group string) bool {
 
 // LoadSnapshot walks a repository checkout rooted at dir and builds the full
 // API Snapshot from every source of truth: cozyrds (apps API), CRD manifests
-// (typed groups), and the apiserver storage registrations (static Go groups).
-// Files that are absent are skipped so the loader works against historical
-// checkouts predating a given path.
+// (typed groups), the apiserver storage registrations (static Go groups), and
+// APIService manifests (groups delegated to an aggregated apiserver, possibly
+// built outside this repo entirely). Files that are absent are skipped so the
+// loader works against historical checkouts predating a given path.
 func LoadSnapshot(dir string) (Snapshot, error) {
 	snap := Snapshot{}
 	add := func(r Resource) {
@@ -91,27 +86,57 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 		}
 	}
 
-	// Typed groups: CRD manifests discovered by location + content.
-	crdFiles, err := discoverCRDFiles(dir)
+	// Typed groups (CRD manifests) and APIService-backed groups: both are
+	// discovered by content from the same file walk. APIService resources
+	// are accumulated separately and merged by group below, since a group's
+	// versions are commonly registered as several sibling APIService objects
+	// (one per version) rather than a single document listing all of them.
+	yamlFiles, err := discoverYAMLFiles(dir)
 	if err != nil {
 		return nil, err
 	}
-	for _, path := range crdFiles {
+	apiServices := map[resourceKey]Resource{}
+	for _, path := range yamlFiles {
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
 		}
-		resources, err := ParseCRDs(rel(dir, path), data)
+		origin := rel(dir, path)
+
+		resources, err := ParseCRDs(origin, data)
 		if err != nil {
-			// A file living in a crds/ or definitions/ dir that does not parse
-			// as YAML is almost always an upstream/templated artifact, not a
-			// first-party CRD; skip it rather than failing the whole gate.
+			// A file that does not parse as YAML at all (not even one
+			// tolerated document) is almost always an upstream/templated
+			// artifact, not a first-party CRD; skip it rather than failing
+			// the whole gate.
 			continue
 		}
 		for _, res := range resources {
 			if isFirstPartyGroup(res.Group) {
 				add(res)
 			}
+		}
+
+		for _, res := range ParseAPIServices(origin, data) {
+			if !isFirstPartyGroup(res.Group) {
+				continue
+			}
+			key := resourceKey{Group: res.Group, Plural: res.Plural}
+			existing, ok := apiServices[key]
+			if !ok {
+				apiServices[key] = res
+				continue
+			}
+			maps.Copy(existing.Versions, res.Versions)
+		}
+	}
+	for key, res := range apiServices {
+		// Do not overwrite a richer cozyrd/CRD/apiserver-storage resource
+		// that shares the same key; apiServicePlural is reserved and cannot
+		// collide with a real plural, so in practice this only guards
+		// against processing the same merged group twice.
+		if _, exists := snap[key]; !exists {
+			add(res)
 		}
 	}
 
@@ -140,10 +165,10 @@ func LoadSnapshot(dir string) (Snapshot, error) {
 	return snap, nil
 }
 
-// discoverCRDFiles walks the crdRoots under dir and returns the paths of files
-// that sit in a CRD directory (crdDirNames). Content filtering to first-party
-// CRDs happens at parse time in LoadSnapshot.
-func discoverCRDFiles(dir string) ([]string, error) {
+// discoverYAMLFiles walks the crdRoots under dir and returns the path of
+// every .yaml/.yml file found. Filtering to the CRD / APIService documents we
+// actually care about happens at parse time in LoadSnapshot.
+func discoverYAMLFiles(dir string) ([]string, error) {
 	var out []string
 	for _, root := range crdRoots {
 		base := filepath.Join(dir, root)
@@ -158,9 +183,6 @@ func discoverCRDFiles(dir string) ([]string, error) {
 				return nil
 			}
 			if ext := filepath.Ext(path); ext != ".yaml" && ext != ".yml" {
-				return nil
-			}
-			if _, ok := crdDirNames[filepath.Base(filepath.Dir(path))]; !ok {
 				return nil
 			}
 			out = append(out, path)
