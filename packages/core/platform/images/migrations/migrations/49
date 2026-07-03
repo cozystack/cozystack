@@ -4,11 +4,14 @@
 # etcd-operator.cozystack.io/v1alpha2 operator, in place (no data move, no pod
 # restart), using the etcd-migrate tool baked into this image.
 #
-# Context: the etcd-operator HelmRelease has already been upgraded to the
-# v1alpha2 operator by the time this runs (same deployment name/namespace,
-# replaced in place). The new operator ignores etcd.aenix.io CRs; the legacy
-# StatefulSets keep the etcd pods running until adoption. etcd-migrate rewrites
-# ownership/labels/CRs so the new operator takes over the live data plane.
+# Context: this is a PRE-upgrade hook — it runs BEFORE the etcd-operator
+# HelmRelease reconciles, so the etcd-operator Deployment is still the LEGACY
+# operator while this runs (that is why --agent-image is passed explicitly
+# below, and why the Deployment we scale to 0 during adoption is the legacy
+# one). Once it reconciles the new v1alpha2 operator ignores etcd.aenix.io CRs;
+# until adoption the legacy StatefulSets keep the etcd pods running. etcd-migrate
+# rewrites ownership/labels/CRs so the new operator takes over the live data
+# plane on its first reconcile after this hook.
 #
 # Idempotent: etcd-migrate completes a partially-applied adoption on re-run,
 # and a cluster with no remaining legacy CRs is a no-op. The version stamp at
@@ -18,6 +21,15 @@ set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-cozy-system}"
 DRY_RUN="${MIGRATION_DRY_RUN:-0}"
+# Supported escape hatch for the mandatory pre-adoption safety snapshot. The
+# snapshot to the platform cozy-backups bucket is the default and cannot be
+# silently skipped, but not every cluster has backup storage: backups may be
+# disabled, an external S3 may have no staged creds, or SeaweedFS may not be
+# ready at upgrade time. Those are individually-supported configs, so rather
+# than turn "no backup storage" into a total upgrade block, an operator who
+# accepts adopting live etcd WITHOUT a snapshot can set ETCD_ADOPT_SKIP_BACKUP=1
+# to pass etcd-migrate's --skip-backup. Default 0 keeps the fail-loud behaviour.
+SKIP_BACKUP="${ETCD_ADOPT_SKIP_BACKUP:-0}"
 
 # Shared cozystack-version stamp helper. Every migration >= 42 must stamp via
 # this (labeled, no-delete-guarded) helper rather than a hand-rolled apply — the
@@ -43,12 +55,14 @@ ETCD_CRD_DIR="${ETCD_CRD_DIR:-/etcd-operator-crds}"
 # Pre-adoption safety snapshot. etcd-migrate --apply rewires ownership of LIVE
 # etcd storage, so it refuses to run without a backup destination (or an
 # explicit --skip-backup, which we deliberately DO NOT use). The unattended
-# platform upgrade must never skip this snapshot: a botched adoption on a
-# tenant control-plane etcd would be unrecoverable. So we ALWAYS snapshot every
-# adopted cluster to the platform-managed object store — the built-in
-# cozy-backups bucket that every cozy-default BackupClass already writes to —
-# before adopting. There is no opt-out: if the target cannot be resolved we
-# FAIL LOUDLY rather than adopt without a snapshot.
+# platform upgrade must never skip this snapshot silently: a botched adoption on
+# a tenant control-plane etcd would be unrecoverable. So by default we ALWAYS
+# snapshot every adopted cluster to the platform-managed object store — the
+# built-in cozy-backups bucket that every cozy-default BackupClass already
+# writes to — before adopting, and if the target cannot be resolved we FAIL
+# LOUDLY rather than adopt without a snapshot. The ONLY opt-out is the explicit
+# ETCD_ADOPT_SKIP_BACKUP=1 escape hatch (see SKIP_BACKUP above), for clusters
+# that intentionally have no backup storage; it is never taken implicitly.
 #
 # Tenant isolation: the snapshots land under a SYSTEM key prefix
 # (SNAPSHOT_KEY_PREFIX), separate from the per-app "<ns>/<name>/" keys. But the
@@ -272,20 +286,31 @@ fi
 
 # Resolve the platform-managed safety-snapshot destination (policy block at the
 # top). Done BEFORE the dry-run so the printed plan reflects the real flags, and
-# before any mutation so an unresolvable target aborts cleanly. There is no
-# skip path: the snapshot to the cozy-backups bucket is mandatory. Any inbound
-# ETCD_MIGRATE_BACKUP_ARGS is overwritten here on purpose.
+# before any mutation so an unresolvable target aborts cleanly. The snapshot to
+# the cozy-backups bucket is mandatory unless the operator sets the explicit
+# ETCD_ADOPT_SKIP_BACKUP=1 escape hatch; any inbound ETCD_MIGRATE_BACKUP_ARGS is
+# overwritten here on purpose (it can never suppress the snapshot).
 if [ "$LEGACY_COUNT" -gt 0 ]; then
-  echo "Resolving platform-managed S3 snapshot target ('${PLATFORM_STRATEGY}' strategy)..."
-  if ETCD_MIGRATE_BACKUP_ARGS=$(resolve_platform_backup_args); then
-    echo "  -> safety snapshot: ${ETCD_MIGRATE_BACKUP_ARGS}"
+  if [ "$SKIP_BACKUP" = "1" ]; then
+    echo "WARNING: ETCD_ADOPT_SKIP_BACKUP=1 — adopting live etcd WITHOUT a pre-adoption" >&2
+    echo "  safety snapshot, by explicit operator request. A botched adoption on a" >&2
+    echo "  tenant control-plane etcd is UNRECOVERABLE with no snapshot." >&2
+    ETCD_MIGRATE_BACKUP_ARGS="--skip-backup"
   else
-    echo "ERROR: refusing to adopt live etcd without a safety snapshot." >&2
-    echo "  Could not resolve the platform backup target: the '${PLATFORM_STRATEGY}'" >&2
-    echo "  strategy and a projected '${PLATFORM_CREDS_SECRET}' Secret (AWS_ACCESS_KEY_ID/" >&2
-    echo "  AWS_SECRET_ACCESS_KEY) in '${PLATFORM_CREDS_NS}' are required. Ensure the" >&2
-    echo "  cozy-backups Bucket and the backupstrategy-controller are healthy, then re-run." >&2
-    exit 1
+    echo "Resolving platform-managed S3 snapshot target ('${PLATFORM_STRATEGY}' strategy)..."
+    if ETCD_MIGRATE_BACKUP_ARGS=$(resolve_platform_backup_args); then
+      echo "  -> safety snapshot: ${ETCD_MIGRATE_BACKUP_ARGS}"
+    else
+      echo "ERROR: refusing to adopt live etcd without a safety snapshot." >&2
+      echo "  Could not resolve the platform backup target: the '${PLATFORM_STRATEGY}'" >&2
+      echo "  strategy and a projected '${PLATFORM_CREDS_SECRET}' Secret (AWS_ACCESS_KEY_ID/" >&2
+      echo "  AWS_SECRET_ACCESS_KEY) in '${PLATFORM_CREDS_NS}' are required. Ensure the" >&2
+      echo "  cozy-backups Bucket and the backupstrategy-controller are healthy, then re-run." >&2
+      echo "  If this cluster intentionally has no backup storage (backups disabled," >&2
+      echo "  external S3 without staged creds, or SeaweedFS not yet ready) and you accept" >&2
+      echo "  adopting live etcd WITHOUT a snapshot, re-run with ETCD_ADOPT_SKIP_BACKUP=1." >&2
+      exit 1
+    fi
   fi
 fi
 
@@ -315,13 +340,17 @@ fi
 if [ "$LEGACY_COUNT" -gt 0 ]; then
   # Stage the snapshot credentials into every adopted namespace BEFORE adoption:
   # etcd-migrate's per-namespace snapshot Job mounts PLATFORM_CREDS_SECRET there.
-  echo "=== staging snapshot credentials ('${PLATFORM_CREDS_SECRET}') into adopted namespaces ==="
-  while read -r ns name; do
-    [ -n "$ns" ] || continue
-    echo "  - ${ns}"
-    stage_backup_creds "$ns"
-  done < <(kubectl get etcdclusters.etcd.aenix.io -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+  # Skipped entirely when ETCD_ADOPT_SKIP_BACKUP=1 (no snapshot Job runs, so no
+  # creds are needed) — adoption below still proceeds.
+  if [ "$SKIP_BACKUP" != "1" ]; then
+    echo "=== staging snapshot credentials ('${PLATFORM_CREDS_SECRET}') into adopted namespaces ==="
+    while read -r ns name; do
+      [ -n "$ns" ] || continue
+      echo "  - ${ns}"
+      stage_backup_creds "$ns"
+    done < <(kubectl get etcdclusters.etcd.aenix.io -A \
+      -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)
+  fi
 
   # The etcd-operator is cluster-wide: while it sits at 0 replicas NO tenant's
   # etcd is reconciled. With `set -euo pipefail`, a non-zero exit from

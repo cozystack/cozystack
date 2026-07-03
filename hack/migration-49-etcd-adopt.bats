@@ -217,6 +217,49 @@ lineno() {
   rm -rf "$WORK"
 }
 
+@test "ETCD_ADOPT_SKIP_BACKUP=1 adopts with --skip-backup and stages no creds" {
+  prep
+  # The supported escape hatch: an operator who accepts adopting without a
+  # snapshot sets ETCD_ADOPT_SKIP_BACKUP=1 (distinct from the inbound
+  # ETCD_MIGRATE_BACKUP_ARGS above, which cannot suppress the snapshot). --apply
+  # then carries --skip-backup, no creds are staged, but adoption still proceeds.
+  export ETCD_ADOPT_SKIP_BACKUP=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--skip-backup"
+  ! echo "$apply" | grep -qF -- "--backup-s3-endpoint"
+  # No snapshot Job runs, so no credentials are staged.
+  ! grep -qF -- "STAGE " "$FAKE_CMDLOG"
+  # Adoption still runs and stamps: scale down -> --apply -> scale up -> stamp.
+  grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
+  grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "ETCD_ADOPT_SKIP_BACKUP=1 unblocks adoption when no backup target resolves" {
+  prep
+  # The narrowing the reviewer asked for: a cluster with legacy etcd but no
+  # resolvable backup target (backups disabled / external S3 without staged
+  # creds / SeaweedFS not ready) is no longer a total upgrade block when the
+  # operator opts into skipping the snapshot.
+  export FAKE_STRATEGY=0
+  export ETCD_ADOPT_SKIP_BACKUP=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  ! grep -qF -- "refusing to adopt" "$WORK/out"
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--skip-backup"
+  grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
 @test "idempotent re-run with zero remaining clusters stamps without adopting" {
   prep
   # CRD still present (a prior run adopted everything) but no legacy clusters left.

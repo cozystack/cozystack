@@ -209,9 +209,15 @@ EOF
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
   kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
 
-  # etcd statefulset
-  timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=10m
+  # etcd cluster. The v1alpha2 operator manages member Pods directly and creates
+  # NO StatefulSet, so gate on the EtcdCluster readiness signal (mirrors
+  # hack/e2e-apps/etcd.bats and the examples) plus the member Pods themselves.
+  timeout 60 sh -ec 'until kubectl -n tenant-root get etcdcluster.etcd-operator.cozystack.io/etcd >/dev/null 2>&1; do sleep 2; done'
+  kubectl -n tenant-root wait etcdcluster.etcd-operator.cozystack.io/etcd \
+    --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True --timeout=10m
+  kubectl -n tenant-root wait pod \
+    -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
+    --for=condition=ready --timeout=10m
 
   # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
   # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip

@@ -22,7 +22,12 @@
 # The first @test also drains up front so a dirty namespace from a previous
 # run cannot taint it (e2e-testing.md §3 — pre-cleanup at test start).
 
-ETCD_EXAMPLES="${BATS_TEST_DIRNAME}/../../examples/backups/etcd"
+# Repo-root-relative: hack/cozytest.sh sources this file under `set -u` without
+# ever setting BATS_TEST_DIRNAME (it is not real bats), so an interpolation of
+# that unbound var would abort the whole suite at load time. cozytest's CWD is
+# the repo root, so the plain relative path resolves — same convention
+# hack/migration-49-etcd-adopt.bats uses with $PWD/...
+ETCD_EXAMPLES="examples/backups/etcd"
 
 etcd_drain() {
   etcd_pvc_selector='app.kubernetes.io/name=etcd,app.kubernetes.io/managed-by=etcd-operator'
