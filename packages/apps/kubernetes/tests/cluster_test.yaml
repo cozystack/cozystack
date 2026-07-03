@@ -479,3 +479,143 @@ tests:
           path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["apps.cozystack.io/application.name"]
           value: foo
         documentIndex: 5
+
+  ###############################################
+  # resources is optional when instanceType set #
+  ###############################################
+
+  # A node group may be sized either by instanceType or by explicit resources.
+  # When instanceType is the sizing source, resources may be omitted entirely.
+  # helm-unittest enforces values.schema.json, so the render below only succeeds
+  # if the schema does NOT require resources on each node group.
+  #
+  # instanceType is set to "" here only to bypass the live-cluster lookup() that
+  # validates a real VirtualMachineClusterInstancetype; the schema acceptance of
+  # an omitted resources key is independent of the instanceType value.
+  #
+  # The "worker" group sorts after "md0". On this release line each node group
+  # renders a KubeadmConfigTemplate before its KubevirtMachineTemplate, so the
+  # per-group document stride is 5 and worker's KubevirtMachineTemplate is
+  # document index 10 (md0 → 5, worker → 10).
+
+  - it: accepts a node group that omits resources and renders no explicit cpu/memory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups:
+        worker:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: "20Gi"
+          roles:
+            - worker
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 10
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.metadata.labels["cluster.x-k8s.io/deployment-name"]
+          value: test-k8s-worker
+        documentIndex: 10
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu
+        documentIndex: 10
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory
+        documentIndex: 10
+
+  # Complementary case: when explicit resources ARE provided (md0 in common.yaml
+  # has cpu: 2 / memory: 4Gi), they take effect on the VM domain. Confirms the fix
+  # only relaxes the schema requirement and does not drop honoured resources.
+  - it: still renders explicit cpu and memory when resources are provided
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory.guest
+          value: 4Gi
+        documentIndex: 5
+
+  # instanceType and explicit resources are alternative sizing sources, and
+  # explicit resources take precedence. When both are set the VM is sized by the
+  # explicit resources and the instancetype is omitted, so KubeVirt does not
+  # reject a VM that both references an instancetype and overrides domain.cpu/memory.
+  # (md0 in common.yaml already carries cpu: 2 / memory: 4Gi; this only adds an
+  # instanceType on top to exercise the both-set case.)
+  - it: prefers explicit resources over instanceType when both are set
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.instanceType: "u1.medium"
+    asserts:
+      - isKind:
+          of: KubevirtMachineTemplate
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.cpu.cores
+          value: 2
+        documentIndex: 5
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.template.spec.domain.memory.guest
+          value: 4Gi
+        documentIndex: 5
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.instancetype
+        documentIndex: 5
+
+  # Explicit resources are all-or-nothing when an instanceType is present. A
+  # partial spec (only cpu, or only memory) on a group that also carries a
+  # non-empty instanceType would emit one domain override alongside the
+  # instancetype, which KubeVirt rejects. Fail fast with a clear render-time
+  # error instead of shipping a VM the admission webhook rejects at apply time.
+  # (Fresh group names are used so the partial spec is real — a `set` on md0
+  # would deep-merge with common.yaml's md0, which already carries both cpu and
+  # memory.)
+  - it: fails when only resources.cpu is set without resources.memory
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups:
+        mdcpuonly:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup mdcpuonly: set both resources.cpu and resources.memory, or neither"
+
+  - it: fails when only resources.memory is set without resources.cpu
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups:
+        mdmemonly:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            memory: 4Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "nodeGroup mdmemonly: set both resources.cpu and resources.memory, or neither"
