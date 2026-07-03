@@ -201,47 +201,50 @@ func TestArtifactGeneratorStuck(t *testing.T) {
 	}
 }
 
-// TestDecideRequeue locks in the bounded-retry state machine that drives
-// source-watcher out of the stuck window. First attempt bumps immediately; the
-// N-th subsequent attempt waits backoffFor(N) since the last bump before firing
-// again; after maxRecoveryAttempts fruitless attempts we surface Ready=False.
-func TestDecideRequeue(t *testing.T) {
+// TestDecideRecovery locks in the bounded-retry state machine that drives
+// source-watcher out of the stuck window. First attempt forces immediately;
+// the N-th subsequent attempt waits backoffFor(N) since the last force before
+// firing again; after maxRecoveryAttempts fruitless attempts we surface
+// Ready=False. Wait durations are asserted for exact equality because
+// decideRecovery is deterministic (`needed - elapsed`) — a loose bound would
+// silently miss a backoff-schedule regression.
+func TestDecideRecovery(t *testing.T) {
 	tests := []struct {
-		name          string
-		attempts      int
-		lastRequeueAt time.Time
-		now           time.Time
-		wantAction    recoveryAction
-		wantWaitMin   time.Duration // wait must be > 0 and roughly this long; 0 means don't check
+		name           string
+		attempts       int
+		lastRecoveryAt time.Time
+		now            time.Time
+		wantAction     recoveryAction
+		wantWait       time.Duration // 0 means don't check (Force / GiveUp branches ignore wait)
 	}{
 		{
-			name:       "first-ever detection — bump immediately",
+			name:       "first-ever detection — force immediately",
 			attempts:   0,
 			now:        referenceTime,
 			wantAction: recoveryActionForce,
 		},
 		{
-			name:          "backoff not yet elapsed after attempt 1 — wait",
-			attempts:      1,
-			lastRequeueAt: referenceTime.Add(-10 * time.Second),
-			now:           referenceTime,
-			wantAction:    recoveryActionWait,
-			wantWaitMin:   19 * time.Second, // ~initialBackoff (30s) minus elapsed 10s
+			name:           "backoff not yet elapsed after attempt 1 — wait",
+			attempts:       1,
+			lastRecoveryAt: referenceTime.Add(-10 * time.Second),
+			now:            referenceTime,
+			wantAction:     recoveryActionWait,
+			wantWait:       20 * time.Second, // initialBackoff (30s) minus elapsed 10s
 		},
 		{
-			name:          "backoff elapsed after attempt 1 — bump",
-			attempts:      1,
-			lastRequeueAt: referenceTime.Add(-45 * time.Second),
-			now:           referenceTime,
-			wantAction:    recoveryActionForce,
+			name:           "backoff elapsed after attempt 1 — force",
+			attempts:       1,
+			lastRecoveryAt: referenceTime.Add(-45 * time.Second),
+			now:            referenceTime,
+			wantAction:     recoveryActionForce,
 		},
 		{
-			name:          "backoff after attempt 3 (2m) — wait",
-			attempts:      3,
-			lastRequeueAt: referenceTime.Add(-30 * time.Second),
-			now:           referenceTime,
-			wantAction:    recoveryActionWait,
-			wantWaitMin:   time.Minute,
+			name:           "backoff after attempt 3 (2m) — wait 90s",
+			attempts:       3,
+			lastRecoveryAt: referenceTime.Add(-30 * time.Second),
+			now:            referenceTime,
+			wantAction:     recoveryActionWait,
+			wantWait:       90 * time.Second, // backoffFor(3)=2m minus elapsed 30s
 		},
 		{
 			name:       "attempts exhausted — give up",
@@ -259,12 +262,12 @@ func TestDecideRequeue(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := decideRecovery(tt.attempts, tt.lastRequeueAt, tt.now)
+			got := decideRecovery(tt.attempts, tt.lastRecoveryAt, tt.now)
 			if got.action != tt.wantAction {
 				t.Fatalf("action = %v, want %v", got.action, tt.wantAction)
 			}
-			if tt.wantWaitMin > 0 && got.wait < tt.wantWaitMin {
-				t.Errorf("wait = %v, want at least %v", got.wait, tt.wantWaitMin)
+			if tt.wantWait > 0 && got.wait != tt.wantWait {
+				t.Errorf("wait = %v, want %v", got.wait, tt.wantWait)
 			}
 		})
 	}
@@ -296,11 +299,11 @@ func TestBackoffFor(t *testing.T) {
 	}
 }
 
-// TestReadRequeueTracking verifies that a corrupted or malformed retry-tracking
+// TestReadRecoveryTracking verifies that a corrupted or malformed retry-tracking
 // annotation cannot wedge the retry loop by producing a nonsensical counter —
 // missing, empty, non-numeric, or negative values must all read back as
 // "no prior attempts".
-func TestReadRequeueTracking(t *testing.T) {
+func TestReadRecoveryTracking(t *testing.T) {
 	fixed := referenceTime.UTC().Format(time.RFC3339Nano)
 
 	tests := []struct {
@@ -678,5 +681,208 @@ func TestReconcile_DeletionTimestamp_EarlyReturn(t *testing.T) {
 	}
 	if writes != 0 {
 		t.Errorf("Reconcile issued %d writes on a deleted object, want 0", writes)
+	}
+}
+
+// stuckAG builds an ArtifactGenerator in the fluxcd/pkg#934 stall signature:
+// Inventory populated, ObservedSourcesDigest set, Ready=Unknown on the current
+// generation, LastTransitionTime old enough to clear the grace period. Used by
+// the maybeRecoverArtifactGenerator tests below.
+func stuckAG(t *testing.T, annotations map[string]string, readyTransition time.Time) *sourcewatcherv1beta1.ArtifactGenerator {
+	t.Helper()
+	return &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "example",
+			Namespace:   "cozy-system",
+			Generation:  1,
+			Annotations: annotations,
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionUnknown,
+				Reason:             "Progressing",
+				Message:            "Reconciliation in progress",
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(readyTransition),
+			}},
+		},
+	}
+}
+
+// TestMaybeRecoverArtifactGenerator_ForceBranch pins the first-time-stuck path:
+// no prior tracking annotations, so decideRecovery returns Force, we patch
+// Ready=False on the AG's status, update tracking annotations, and set the
+// PackageSource to Unknown/AwaitingSourceWatcherRecovery with a RequeueAfter
+// equal to backoffFor(1).
+func TestMaybeRecoverArtifactGenerator_ForceBranch(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+	}
+	ag := stuckAG(t, nil, referenceTime.Add(-2*time.Minute))
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	res, err := r.maybeRecoverArtifactGenerator(context.Background(), ps, ag, ready, referenceTime)
+	if err != nil {
+		t.Fatalf("maybeRecoverArtifactGenerator: %v", err)
+	}
+	if res.RequeueAfter != backoffFor(1) {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, backoffFor(1))
+	}
+
+	// AG status.Ready must be False in apiserver.
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	agReady := meta.FindStatusCondition(persistedAG.Status.Conditions, "Ready")
+	if agReady == nil || agReady.Status != metav1.ConditionFalse {
+		t.Errorf("AG Ready in apiserver = %+v, want False", agReady)
+	}
+	if persistedAG.Annotations[annotationRecoveryAttempts] != "1" {
+		t.Errorf("AG %s annotation = %q, want 1", annotationRecoveryAttempts, persistedAG.Annotations[annotationRecoveryAttempts])
+	}
+
+	// PackageSource must be Unknown/AwaitingSourceWatcherRecovery in apiserver.
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionUnknown || psReady.Reason != reasonAwaitingRecovery {
+		t.Errorf("PS Ready = %+v, want Unknown/%s", psReady, reasonAwaitingRecovery)
+	}
+}
+
+// TestMaybeRecoverArtifactGenerator_WaitBranch pins the in-backoff-window path:
+// prior attempt exists, backoff not yet elapsed, so decideRecovery returns
+// Wait and we do NOT touch the AG's status/annotations — only the PackageSource
+// gets Unknown/AwaitingSourceWatcherRecovery and RequeueAfter set to the
+// remaining backoff.
+func TestMaybeRecoverArtifactGenerator_WaitBranch(t *testing.T) {
+	priorForceAt := referenceTime.Add(-10 * time.Second) // 20s remaining on initialBackoff=30s
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+	}
+	ag := stuckAG(t, map[string]string{
+		annotationRecoveryAttempts: "1",
+		annotationLastRecoveryAt:   priorForceAt.UTC().Format(time.RFC3339Nano),
+	}, referenceTime.Add(-2*time.Minute))
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	agWriteCount := 0
+	watched := interceptor.NewClient(c, interceptor.Funcs{
+		Patch: func(ctx context.Context, cli client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, ok := obj.(*sourcewatcherv1beta1.ArtifactGenerator); ok {
+				agWriteCount++
+			}
+			return cli.Patch(ctx, obj, patch, opts...)
+		},
+		SubResourcePatch: func(ctx context.Context, cli client.Client, sub string, obj client.Object, patch client.Patch, opts ...client.SubResourcePatchOption) error {
+			if _, ok := obj.(*sourcewatcherv1beta1.ArtifactGenerator); ok {
+				agWriteCount++
+			}
+			return cli.SubResource(sub).Patch(ctx, obj, patch, opts...)
+		},
+	})
+	r := &PackageSourceReconciler{Client: watched, Scheme: testScheme(t)}
+
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	res, err := r.maybeRecoverArtifactGenerator(context.Background(), ps, ag, ready, referenceTime)
+	if err != nil {
+		t.Fatalf("maybeRecoverArtifactGenerator: %v", err)
+	}
+	if res.RequeueAfter != 20*time.Second {
+		t.Errorf("RequeueAfter = %v, want 20s", res.RequeueAfter)
+	}
+	if agWriteCount != 0 {
+		t.Errorf("wait branch wrote %d times to AG, want 0", agWriteCount)
+	}
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Reason != reasonAwaitingRecovery {
+		t.Errorf("PS Ready = %+v, want reason %s", psReady, reasonAwaitingRecovery)
+	}
+}
+
+// TestMaybeRecoverArtifactGenerator_GiveUpBranch pins the exhaustion path:
+// attempts equals maxRecoveryAttempts, so we surface the failure as
+// PackageSource Ready=False/SourceWatcherStalled and schedule no follow-up
+// reconcile (an operator must intervene). The AG is left untouched.
+func TestMaybeRecoverArtifactGenerator_GiveUpBranch(t *testing.T) {
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+	}
+	priorForceAt := referenceTime.Add(-time.Hour).UTC().Format(time.RFC3339Nano)
+	ag := stuckAG(t, map[string]string{
+		annotationRecoveryAttempts: strconv.Itoa(maxRecoveryAttempts),
+		annotationLastRecoveryAt:   priorForceAt,
+	}, referenceTime.Add(-time.Hour)) // last transition BEFORE lastRecoveryAt so reset-counter doesn't fire
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	res, err := r.maybeRecoverArtifactGenerator(context.Background(), ps, ag, ready, referenceTime)
+	if err != nil {
+		t.Fatalf("maybeRecoverArtifactGenerator: %v", err)
+	}
+	if res.RequeueAfter != 0 {
+		t.Errorf("RequeueAfter = %v, want 0 (give-up path stops rescheduling)", res.RequeueAfter)
+	}
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionFalse || psReady.Reason != reasonSourceWatcherBad {
+		t.Errorf("PS Ready = %+v, want False/%s", psReady, reasonSourceWatcherBad)
+	}
+}
+
+// TestMaybeRecoverArtifactGenerator_ResetsCounterOnFreshTransition pins the
+// fresh-episode escape hatch: attempts=maxRecoveryAttempts BUT the AG's Ready
+// condition has a LastTransitionTime newer than lastRecoveryAt. That means
+// source-watcher touched the condition after our last give-up (whether the AG
+// briefly recovered and re-stalled or a concurrent operator moved on), so this
+// is a fresh stall episode and deserves a fresh budget rather than an instant
+// give-up. Expected: counter resets to 0 → Force branch → attempts land at 1.
+func TestMaybeRecoverArtifactGenerator_ResetsCounterOnFreshTransition(t *testing.T) {
+	priorForceAt := referenceTime.Add(-time.Hour)
+	freshTransitionAt := referenceTime.Add(-2 * time.Minute) // AFTER priorForceAt
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+	}
+	ag := stuckAG(t, map[string]string{
+		annotationRecoveryAttempts: strconv.Itoa(maxRecoveryAttempts),
+		annotationLastRecoveryAt:   priorForceAt.UTC().Format(time.RFC3339Nano),
+	}, freshTransitionAt)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	ready := meta.FindStatusCondition(ag.Status.Conditions, "Ready")
+	res, err := r.maybeRecoverArtifactGenerator(context.Background(), ps, ag, ready, referenceTime)
+	if err != nil {
+		t.Fatalf("maybeRecoverArtifactGenerator: %v", err)
+	}
+	// If reset worked, we take the Force branch — RequeueAfter is backoffFor(1),
+	// not zero (which give-up would produce).
+	if res.RequeueAfter != backoffFor(1) {
+		t.Errorf("RequeueAfter = %v, want backoffFor(1)=%v — reset-counter branch did not fire", res.RequeueAfter, backoffFor(1))
+	}
+	// Attempts counter must now be 1 in the apiserver (reset to 0, incremented on Force).
+	persistedAG := &sourcewatcherv1beta1.ArtifactGenerator{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ag), persistedAG); err != nil {
+		t.Fatalf("Get AG: %v", err)
+	}
+	if got := persistedAG.Annotations[annotationRecoveryAttempts]; got != "1" {
+		t.Errorf("AG %s = %q after reset, want 1", annotationRecoveryAttempts, got)
 	}
 }

@@ -101,7 +101,7 @@ func (r *PackageSourceReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	// guard the retry driver could keep writing annotations to an
 	// ArtifactGenerator whose owning PackageSource is about to be garbage
 	// collected, and Status().Update below would leave a misleading
-	// "AwaitingSourceWatcherRequeue" condition on a doomed object.
+	// "AwaitingSourceWatcherRecovery" condition on a doomed object.
 	// ownerReference cascade takes care of the actual AG cleanup.
 	if !packageSource.DeletionTimestamp.IsZero() {
 		return ctrl.Result{}, nil
@@ -384,7 +384,7 @@ func (r *PackageSourceReconciler) createOrUpdate(ctx context.Context, obj client
 // ArtifactGenerator). It may return a Result with RequeueAfter set when the
 // ArtifactGenerator's upstream Ready condition is stuck and the reconciler is
 // driving source-watcher through a bounded requeue schedule; see
-// maybeRequeueArtifactGenerator for the strategy. `now` is passed by the
+// maybeRecoverArtifactGenerator for the strategy. `now` is passed by the
 // caller so every time-sensitive check inside this reconcile agrees on the
 // same wall-clock reading.
 func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSource *cozyv1alpha1.PackageSource, now time.Time) (ctrl.Result, error) {
@@ -698,6 +698,14 @@ func backoffFor(attempt int) time.Duration {
 // pick up on the next reconcile and, because source-watcher already got the
 // Ready=False signal from the successful status write, the extra force-drift
 // on that retry is benign (source-watcher is already mid-rebuild).
+//
+// JSON merge patch semantics note: `client.MergeFrom` produces a JSON merge
+// patch, which replaces arrays in full (RFC 7396). If source-watcher writes a
+// new Reconciling condition between our Get and our status Patch, that
+// concurrent addition is overwritten by our patch. This is net-neutral —
+// source-watcher's next reconcile (which our force-drift is about to trigger)
+// re-emits Reconciling anyway, and any legitimate concurrent add would already
+// have been at risk from the same split-write race this workaround exists for.
 //
 // On success, `ag.Status.Conditions` and `ag.Annotations` reflect the
 // persisted state so the caller can re-read the same pointer. On any Patch
