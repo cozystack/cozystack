@@ -3,6 +3,9 @@ export NAMESPACE=cozy-$(NAME)
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add jetstack https://charts.jetstack.io

@@ -1,0 +1,30 @@
+suite: cert-manager cainjector resources
+
+# Pins the cainjector memory sizing that keeps CA injection working on a full
+# cozystack install. cainjector loads all ValidatingWebhookConfigurations,
+# APIServices and CRDs into its informer caches at startup; on a large cluster
+# that working set exceeds the old 128Mi limit, so the single leader-elected
+# cainjector Pod is OOMKilled during cache population and CrashLoops before it
+# ever injects a caBundle. Every webhook then keeps an empty caBundle and
+# admission calls fail with "x509: certificate signed by unknown authority"
+# (failurePolicy: Fail). This guards the override in values.yaml against a
+# blanket resource change or a `make update` silently lowering it again.
+
+templates:
+  - charts/cert-manager/templates/cainjector-deployment.yaml
+
+release:
+  name: cert-manager
+  namespace: cozy-cert-manager
+
+tests:
+  - it: sizes the cainjector memory limit above the OOM floor
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 128Mi
