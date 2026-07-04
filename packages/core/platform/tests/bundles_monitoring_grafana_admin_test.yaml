@@ -1,16 +1,32 @@
-suite: bundles.system monitoring-application component wiring (Grafana OIDC uplift)
+suite: bundles.system monitoring-application variant + component wiring
+# Two invariants exercised together, because they share the same Package
+# emission site:
+#   1. `authentication.oidc.enabled` gates the PackageSource variant —
+#      `oidc` when on (extra dep on cozystack.keycloak-operator so the
+#      v1.edp.epam.com CRDs are registered before the monitoring chart
+#      reconciles), `default` when off (no wait on a Package that would
+#      not be emitted).
+#   2. Both variants MUST carry the GrafanaAdmin uplift for the platform
+#      Grafana release (`monitoring-system`) via
+#      Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin.
+#      Tenant Grafana (component `monitoring`) inherits the chart default
+#      `oidc.grafanaAdmin: false` and stays at org-level Admin — regression
+#      guard the absence of a `monitoring` override here.
 templates:
   - templates/bundles/system.yaml
 release:
   name: cozystack
   namespace: cozy-system
 tests:
-  - it: monitoring-application Package emits the GrafanaAdmin uplift for the platform Grafana release
+  - it: authentication.oidc.enabled=false selects default variant and keeps the platform GrafanaAdmin uplift
     set:
       bundles:
         system:
           enabled: true
           variant: isp-full
+      authentication:
+        oidc:
+          enabled: false
     documentSelector:
       path: metadata.name
       value: cozystack.monitoring-application
@@ -21,11 +37,31 @@ tests:
       - equal:
           path: spec.variant
           value: default
-      # The platform Grafana release (component `monitoring-system`) is
-      # promoted to server-level GrafanaAdmin via the explicit values
-      # override. Tenant Grafana (component `monitoring`) is NOT listed
-      # in .spec.components — inherits the chart default
-      # oidc.grafanaAdmin: false and stays at org-level Admin.
+      - equal:
+          path: spec.components.monitoring-system.values.oidc.grafanaAdmin
+          value: true
+      - notExists:
+          path: spec.components.monitoring.values.oidc.grafanaAdmin
+
+  - it: authentication.oidc.enabled=true selects oidc variant and keeps the platform GrafanaAdmin uplift
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-application
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: oidc
       - equal:
           path: spec.components.monitoring-system.values.oidc.grafanaAdmin
           value: true

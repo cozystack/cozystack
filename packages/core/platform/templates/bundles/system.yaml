@@ -196,9 +196,19 @@
        so `<clientId>-admin` group members become server-level Grafana
        admins. Tenant Grafana releases (component `monitoring`) inherit
        the chart default `oidc.grafanaAdmin: false` and stay at
-       org-level Admin. See docs/oidc-grafana.md and cozystack#3176. */}}
+       org-level Admin. See docs/oidc-grafana.md and cozystack#3176.
+
+       Variant selection mirrors cozystack-engine above: `oidc` when
+       platform-level OIDC is on (extra dependsOn on
+       cozystack.keycloak-operator so the v1.edp.epam.com CRDs are
+       registered before the monitoring chart reconciles), `default`
+       otherwise (no wait on a Package that would not be emitted). */}}
 {{- $monitoringApplicationComponents := dict "monitoring-system" (dict "values" (dict "oidc" (dict "grafanaAdmin" true))) -}}
+{{- if .Values.authentication.oidc.enabled }}
+{{include "cozystack.platform.package" (list "cozystack.monitoring-application" "oidc" $ $monitoringApplicationComponents) }}
+{{- else }}
 {{include "cozystack.platform.package" (list "cozystack.monitoring-application" "default" $ $monitoringApplicationComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}

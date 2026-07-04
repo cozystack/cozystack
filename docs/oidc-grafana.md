@@ -185,7 +185,12 @@ work — useful when Keycloak is down or misconfigured.
   render hard-fails:
   `spec.oidc.mode: System requires the platform-level OIDC feature`.
   Flip `authentication.oidc.enabled: true` in the platform values, or
-  switch to `CustomConfig`.
+  switch to `CustomConfig`. On the platform side that flag also
+  swings the `cozystack.monitoring-application` PackageSource from
+  variant `default` (baseline dependsOn only) to variant `oidc`
+  (additionally waits for `cozystack.keycloak-operator` so the
+  `v1.edp.epam.com` CRDs consumed by the Keycloak-side of System
+  mode are registered before the monitoring chart reconciles).
 - **`CustomConfig` with an unreachable issuer or wrong claim
   mappings** — Grafana rejects the callback and the login screen
   shows an error; the `admin_user`/`admin_password` Secret keeps
