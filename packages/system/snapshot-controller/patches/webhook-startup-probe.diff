@@ -1,5 +1,5 @@
 diff --git a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
-index ad24b32..e24c88b 100644
+index ad24b32..adaa03f 100644
 --- a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
 +++ b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
 @@ -50,6 +50,35 @@ spec:
@@ -12,7 +12,7 @@ index ad24b32..e24c88b 100644
 +          # (kubelet defaults periodSeconds=10 failureThreshold=3 = ~30s from
 +          # container Started to first liveness kill), which is insufficient
 +          # on a loaded E2E sandbox and cascades into install-wide failure
-+          # via `snapshot-controller` HR → piraeus / linstor / ~20 downstream
++          # via `snapshot-controller` HR through piraeus, linstor, and ~20
 +          # operators. See cozystack/cozystack#3203.
 +          #
 +          # Budget: 5s * 45 = 225s. Sized to comfortably clear the actual
