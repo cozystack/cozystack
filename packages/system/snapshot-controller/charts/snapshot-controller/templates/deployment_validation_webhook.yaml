@@ -50,6 +50,27 @@ spec:
           volumeMounts:
             - mountPath: /etc/snapshot-validation
               name: tls-config
+          # cozystack: startupProbe grants the webhook container up to ~10 minutes
+          # (periodSeconds * failureThreshold) to bind its HTTPS listener on
+          # :8443 before liveness begins gating. Two things eat into that budget
+          # under first-install load on the E2E sandbox:
+          #   1) cert-manager issuing the Certificate CR whose Secret the pod
+          #      mounts as tls-config — observed at 8+ minutes when cainjector
+          #      / cert-manager are backlogged (see cozystack/cozystack#3203).
+          #   2) the webhook binary's own startup after the Secret is present.
+          # Without a startupProbe the kubelet applies the (non-configurable in
+          # the upstream chart) liveness defaults `periodSeconds=10,
+          # failureThreshold=3`, giving the pod only ~30s from start to bind
+          # :8443 — insufficient under load and the root of the E2E flake
+          # cascading through this HR into piraeus/linstor and ~20 downstream
+          # operators.
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: https
+              scheme: HTTPS
+            periodSeconds: 10
+            failureThreshold: 60
           livenessProbe:
             httpGet:
               path: /readyz
