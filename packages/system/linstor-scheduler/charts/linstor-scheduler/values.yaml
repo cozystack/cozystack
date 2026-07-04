@@ -87,10 +87,21 @@ tolerations: []
 
 affinity: {}
 
+# Optional admission webhook that automatically sets the schedulerName on Pods
+# using LINSTOR-backed PersistentVolumeClaims, so they are scheduled by this
+# scheduler without having to set schedulerName by hand.
 admission:
   enabled: false
   replicaCount: 2
+  # CSI driver name the webhook treats as LINSTOR-backed. Pods whose PVCs resolve
+  # to this provisioner get the schedulerName mutation. Defaults to the LINSTOR
+  # CSI driver; override only for a non-standard driver name.
+  driver: linstor.csi.linbit.com
   failurePolicy: Ignore
+  # Webhook call timeout in seconds. Kept below the Kubernetes default of 10s so
+  # an unreachable webhook adds less latency to Pod creation before failurePolicy
+  # takes effect.
+  timeoutSeconds: 5
   namespaceSelector: {}
   #  matchExpressions:
   #    - key: kubernetes.io/metadata.name
@@ -104,3 +115,51 @@ admission:
     # requests:
     #   cpu: 10m
     #   memory: 64Mi
+  # Pod-level security context for the webhook pod.
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+  # Container-level security context for the webhook container.
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    readOnlyRootFilesystem: true
+  # Affinity for the webhook pods. When empty, a soft (preferred) pod
+  # anti-affinity spreads the replicas across nodes by hostname; set this to
+  # override it entirely (e.g. a required anti-affinity or a nodeAffinity).
+  affinity: {}
+  # The webhook binary loads its TLS certificate once at startup and does NOT
+  # hot-reload it. When the certificate is renewed (cert-manager rotates the
+  # leaf roughly yearly, or you rotate an external secret) the running pods keep
+  # serving the old certificate until they restart, after which the webhook
+  # silently stops mutating (failurePolicy: Ignore). Set this to true to add
+  # Stakater Reloader annotations so the pods roll automatically when the TLS
+  # secret changes (requires the Reloader controller in the cluster); otherwise
+  # restart the webhook pods manually after each renewal.
+  reloadOnCertChange: false
+  # How to provision the webhook's TLS certificate:
+  # * "cert-manager" uses a self-signed cert-manager.io Issuer (default).
+  # * "helm" makes Helm itself generate the CA and server certificate.
+  #   NOTE: the "helm" method regenerates the CA and certificate on every
+  #   "helm upgrade". It suits one-shot installs, not GitOps or any
+  #   continuously-reconciled setup (e.g. Flux/Argo), where the certificate
+  #   would churn on each reconcile. Use "cert-manager" or "" there.
+  # * "" creates nothing: bring your own secret (see tls.secretName / tls.caBundle).
+  createTLS: cert-manager
+  tls:
+    # Name of the secret holding the webhook's TLS certificate.
+    # Empty defaults to "<fullname>-admission-tls". Set it to point the
+    # Deployment at a secret you manage yourself.
+    secretName: ""
+    # CA bundle injected into the webhook (base64-encoded PEM). Only used when
+    # createTLS is "" and you inject your own CA. Leave empty if an external
+    # controller (e.g. cert-manager's ca-injector) patches the caBundle.
+    caBundle: ""
+    certManager:
+      # rotationPolicy for the CA certificate's private key. "Never" keeps the
+      # CA key stable so the webhook caBundle does not churn on renewal.
+      rotationPolicy: Never

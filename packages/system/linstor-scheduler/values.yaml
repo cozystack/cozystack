@@ -1,7 +1,20 @@
 linstor-scheduler:
   fullnameOverride: linstor-scheduler
+  # Run two scheduler replicas (active/standby via the chart's leader election).
+  # A single replica under the base minAvailable:1 PodDisruptionBudget yields
+  # disruptionsAllowed 0, which makes the scheduler's node undrainable (blocks
+  # kubectl drain and Talos rolling upgrades); two replicas keep the node
+  # drainable and give leader-elected failover when a replica dies. The base
+  # scheduler sets no anti-affinity, so both replicas can still land on one
+  # node: this buys drain safety, not node-failure HA.
+  replicaCount: 2
   linstor:
     endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
     clientSecret: "linstor-client-tls"
   admission:
     enabled: true
+    # reloadOnCertChange stays at the upstream default (false). The vendored
+    # chart's values.yaml still documents the knob as required, but that text
+    # predates the binary the chart now ships: the v0.3.6 extender serves its
+    # certificate via tls.Config.GetCertificate and reloads it on rotation, so
+    # the Stakater Reloader annotation would only buy a redundant pod restart.

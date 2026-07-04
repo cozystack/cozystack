@@ -1,0 +1,258 @@
+suite: admission webhook (cozystack)
+
+templates:
+  - charts/linstor-scheduler/templates/admission-deployment.yaml
+  - charts/linstor-scheduler/templates/admission-service.yaml
+  - charts/linstor-scheduler/templates/admission-webhook.yaml
+  - charts/linstor-scheduler/templates/admission-certmanager.yaml
+  - charts/linstor-scheduler/templates/admission-serviceaccount.yaml
+  - charts/linstor-scheduler/templates/admission-poddisruptionbudget.yaml
+  - charts/linstor-scheduler/templates/poddisruptionbudget.yaml
+  - charts/linstor-scheduler/templates/rbac.yaml
+
+release:
+  name: linstor-scheduler
+
+tests:
+  # Pin 1: with admission on (package default), the admission stack renders,
+  # including the cert-manager issuer/cert chain.
+  - it: renders the admission Deployment
+    template: charts/linstor-scheduler/templates/admission-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: linstor-scheduler-admission
+
+  - it: renders the admission Service
+    template: charts/linstor-scheduler/templates/admission-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: linstor-scheduler-admission
+
+  - it: renders the MutatingWebhookConfiguration
+    template: charts/linstor-scheduler/templates/admission-webhook.yaml
+    asserts:
+      - isKind:
+          of: MutatingWebhookConfiguration
+
+  - it: cert-manager mode emits the Issuer/Certificate chain with a stable CA key
+    template: charts/linstor-scheduler/templates/admission-certmanager.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+      - matchRegex:
+          path: metadata.name
+          pattern: linstor-scheduler-admission
+      - documentIndex: 1
+        isKind:
+          of: Certificate
+      - documentIndex: 1
+        equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+
+  # Pin 4: dedicated (least-privilege) admission ServiceAccount.
+  - it: renders a separate admission ServiceAccount
+    template: charts/linstor-scheduler/templates/admission-serviceaccount.yaml
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: linstor-scheduler-admission
+
+  # Pin 3: admission image is pinned to the extender at the chart appVersion.
+  - it: admission container uses the linstor-scheduler-extender image at v0.3.6
+    template: charts/linstor-scheduler/templates/admission-deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: /linstor-scheduler-extender:v0\.3\.6$
+
+  # Pin 2: node-drain safety. The base PDB must select ONLY the scheduler
+  # (app.kubernetes.io/name: linstor-scheduler), and admission pods must carry a
+  # DISTINCT name so the base PDB cannot cover them. If either regresses, the
+  # single scheduler pod becomes evictable while admission replicas keep quorum.
+  - it: base PDB selects the scheduler, not admission
+    template: charts/linstor-scheduler/templates/poddisruptionbudget.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: linstor-scheduler
+
+  - it: admission pods carry a distinct name so the base PDB cannot select them
+    template: charts/linstor-scheduler/templates/admission-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: linstor-scheduler-admission
+      - equal:
+          path: spec.template.metadata.labels["app.kubernetes.io/name"]
+          value: linstor-scheduler-admission
+
+  - it: admission has its own PDB targeting admission pods
+    template: charts/linstor-scheduler/templates/admission-poddisruptionbudget.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: linstor-scheduler-admission
+
+  # Pin 5: with admission disabled, nothing admission renders, base PDB stays.
+  - it: renders no admission resources when disabled
+    set:
+      linstor-scheduler.admission.enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: charts/linstor-scheduler/templates/admission-deployment.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/linstor-scheduler/templates/admission-service.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/linstor-scheduler/templates/admission-webhook.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/linstor-scheduler/templates/admission-certmanager.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/linstor-scheduler/templates/admission-serviceaccount.yaml
+      - hasDocuments:
+          count: 0
+        template: charts/linstor-scheduler/templates/admission-poddisruptionbudget.yaml
+
+  - it: base PDB still renders when admission is disabled
+    set:
+      linstor-scheduler.admission.enabled: false
+    template: charts/linstor-scheduler/templates/poddisruptionbudget.yaml
+    asserts:
+      - isKind:
+          of: PodDisruptionBudget
+
+  # The whole point of the re-vendoring: the webhook matches LINSTOR-backed PVCs
+  # by CSI provisioner, which must equal the cozystack LINSTOR driver name.
+  - it: admission container is configured for the LINSTOR CSI driver
+    template: charts/linstor-scheduler/templates/admission-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: -driver=linstor.csi.linbit.com
+
+  # The v0.3.6 extender reloads its serving certificate on rotation, so the
+  # package leaves reloadOnCertChange at the upstream default and no Reloader
+  # annotation is emitted. Pin the absence: re-enabling the knob would buy only
+  # a redundant pod restart on every cert-manager renewal.
+  - it: emits no Reloader annotation, the webhook reloads its own certificate
+    template: charts/linstor-scheduler/templates/admission-deployment.yaml
+    asserts:
+      - notExists:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+
+  # createTLS is a closed enum; an unknown value must fail the render, not
+  # silently produce a half-configured webhook.
+  - it: rejects an unknown createTLS value
+    set:
+      linstor-scheduler.admission.enabled: true
+      linstor-scheduler.admission.createTLS: bogus
+    template: charts/linstor-scheduler/templates/admission-webhook.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: createTLS must be one of
+
+  # Bring-your-own TLS with nothing supplied would leave the webhook unusable;
+  # the guard must fail the render rather than ship a broken MutatingWebhook.
+  - it: rejects bring-your-own TLS with no secret or caBundle provided
+    set:
+      linstor-scheduler.admission.enabled: true
+      linstor-scheduler.admission.createTLS: ""
+    template: charts/linstor-scheduler/templates/admission-webhook.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: bring your own TLS
+
+  # helm mode self-signs: it must emit the TLS Secret and inject the matching
+  # CA inline into the webhook's clientConfig (no cert-manager involved).
+  - it: helm mode emits a TLS Secret and an inline caBundle
+    set:
+      linstor-scheduler.admission.enabled: true
+      linstor-scheduler.admission.createTLS: helm
+    template: charts/linstor-scheduler/templates/admission-webhook.yaml
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        isKind:
+          of: Secret
+      - documentIndex: 0
+        equal:
+          path: type
+          value: kubernetes.io/tls
+      - documentIndex: 1
+        isKind:
+          of: MutatingWebhookConfiguration
+      - documentIndex: 1
+        isNotEmpty:
+          path: webhooks[0].clientConfig.caBundle
+
+  # Bring-your-own TLS: no Secret is created, the supplied caBundle is wired into
+  # the webhook, and the Deployment mounts the caller-managed secret.
+  - it: bring-your-own TLS wires the supplied secret and caBundle
+    set:
+      linstor-scheduler.admission.enabled: true
+      linstor-scheduler.admission.createTLS: ""
+      linstor-scheduler.admission.tls.secretName: my-admission-tls
+      linstor-scheduler.admission.tls.caBundle: TESTCABUNDLE
+    asserts:
+      - template: charts/linstor-scheduler/templates/admission-webhook.yaml
+        hasDocuments:
+          count: 1
+      - template: charts/linstor-scheduler/templates/admission-webhook.yaml
+        isKind:
+          of: MutatingWebhookConfiguration
+      - template: charts/linstor-scheduler/templates/admission-webhook.yaml
+        equal:
+          path: webhooks[0].clientConfig.caBundle
+          value: TESTCABUNDLE
+      - template: charts/linstor-scheduler/templates/admission-deployment.yaml
+        equal:
+          path: spec.template.spec.volumes[0].secret.secretName
+          value: my-admission-tls
+
+  # Least-privilege guard. The webhook only reads PVC/PV/StorageClass via the
+  # Kubernetes API (the Pod arrives in the AdmissionReview), so its ClusterRole
+  # must not grant pods access. Pin it so a future re-vendor cannot silently
+  # re-widen the permissions.
+  - it: admission ClusterRole stays least-privilege (no pods access)
+    template: charts/linstor-scheduler/templates/rbac.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.name
+          value: linstor-scheduler-admission
+      - notContains:
+          path: rules[0].resources
+          content: pods
+      - equal:
+          path: rules[0].resources
+          value:
+            - persistentvolumeclaims
+            - persistentvolumes
+      - equal:
+          path: rules[0].verbs
+          value:
+            - get
+      - equal:
+          path: rules[1].resources
+          value:
+            - storageclasses

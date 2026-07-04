@@ -62,6 +62,65 @@ Create the name of the service account to use
 {{- end }}
 
 {{/*
+Fully qualified name for the admission webhook resources. The base fullname is
+truncated before the "-admission" suffix (and further sub-suffixes such as
+"-selfsigned") are appended, so the longest derived name still fits the 63-char
+Kubernetes name limit for long release names.
+*/}}
+{{- define "linstor-scheduler.admissionFullname" -}}
+{{- printf "%s-admission" (include "linstor-scheduler.fullname" . | trunc 42 | trimSuffix "-") }}
+{{- end }}
+
+{{/*
+Selector labels for the admission webhook. The name carries an "-admission"
+suffix so the webhook pods are NOT matched by the base scheduler's selectors
+(Deployment, PodDisruptionBudget), whose selector fields are immutable and so
+cannot be narrowed after the fact. This keeps the base PDB and HPA scoped to the
+scheduler pods only. The base name is truncated BEFORE the suffix is appended so
+a long nameOverride can never eat the "-admission" suffix and collapse the name
+back onto the base selector.
+*/}}
+{{- define "linstor-scheduler.admissionSelectorLabels" -}}
+app.kubernetes.io/name: {{ printf "%s-admission" (include "linstor-scheduler.name" . | trunc 53 | trimSuffix "-") }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+{{- end }}
+
+{{/*
+Common labels for the admission webhook resources.
+*/}}
+{{- define "linstor-scheduler.admissionLabels" -}}
+helm.sh/chart: {{ include "linstor-scheduler.chart" . }}
+{{ include "linstor-scheduler.admissionSelectorLabels" . }}
+{{- if .Chart.AppVersion }}
+app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+app.kubernetes.io/managed-by: {{ .Release.Service }}
+app.kubernetes.io/component: admission
+{{- end }}
+
+{{/*
+Name of the secret holding the admission webhook's TLS certificate.
+Defaults to "<admissionFullname>-tls" unless admission.tls.secretName is set,
+so users managing the secret externally can point the Deployment at their own.
+*/}}
+{{- define "linstor-scheduler.admissionTLSSecretName" -}}
+{{- default (printf "%s-tls" (include "linstor-scheduler.admissionFullname" .)) .Values.admission.tls.secretName }}
+{{- end }}
+
+{{/*
+Name of the service account used by the admission webhook. When the chart
+creates service accounts it gets a dedicated one, so the webhook pod does not
+inherit the scheduler's system:kube-scheduler / system:volume-scheduler bindings.
+*/}}
+{{- define "linstor-scheduler.admissionServiceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- include "linstor-scheduler.admissionFullname" . }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
+
+{{/*
 Get the kubernetes version we should assume for creating scheduler configs.
 Strips distribution suffixes like +k3s1, +rke2r1 from version string.
 */}}

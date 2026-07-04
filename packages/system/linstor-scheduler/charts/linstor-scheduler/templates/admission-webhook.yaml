@@ -1,0 +1,78 @@
+{{- if .Values.admission.enabled }}
+{{/*
+Validate the TLS provisioning method and guard against a silently-broken
+bring-your-own configuration (no cert-manager, no generated cert, and no CA to
+trust) that would leave the webhook unusable.
+*/}}
+{{- if not (has .Values.admission.createTLS (list "cert-manager" "helm" "")) }}
+{{- fail (printf "admission.createTLS must be one of \"cert-manager\", \"helm\" or \"\", got %q" .Values.admission.createTLS) }}
+{{- end }}
+{{- if and (eq .Values.admission.createTLS "") (not .Values.admission.tls.secretName) (not .Values.admission.tls.caBundle) }}
+{{- fail "admission.createTLS is \"\" (bring your own TLS): set admission.tls.secretName to your certificate secret and admission.tls.caBundle to its CA (or use an external ca-injector), or switch admission.createTLS to \"cert-manager\" or \"helm\"" }}
+{{- end }}
+{{/*
+For the "helm" TLS method the CA is generated exactly once here and shared
+between the TLS Secret (ca.crt) and the webhook caBundle below, so both are
+byte-identical. genCA is non-deterministic per call, so it must not be invoked
+from a second template file.
+*/}}
+{{- $ca := dict }}
+{{- $cert := dict }}
+{{- if eq .Values.admission.createTLS "helm" }}
+{{- $commonName := include "linstor-scheduler.admissionFullname" . }}
+{{- $altNames := list $commonName (printf "%s.%s.svc" $commonName .Release.Namespace) }}
+{{- $ca = genCA (printf "%s-ca" (include "linstor-scheduler.admissionFullname" .)) 3650 }}
+{{- $cert = genSignedCert $commonName (list) $altNames 3650 $ca }}
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/tls
+metadata:
+  name: {{ include "linstor-scheduler.admissionTLSSecretName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+stringData:
+  tls.crt: {{ $cert.Cert | quote }}
+  tls.key: {{ $cert.Key | quote }}
+  ca.crt: {{ $ca.Cert | quote }}
+{{- end }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}
+  {{- if eq .Values.admission.createTLS "cert-manager" }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "linstor-scheduler.admissionFullname" . }}-cert
+  {{- end }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+webhooks:
+  - name: linstor-scheduler-admission.linbit.com
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    failurePolicy: {{ .Values.admission.failurePolicy }}
+    timeoutSeconds: {{ .Values.admission.timeoutSeconds }}
+    clientConfig:
+      {{- if eq .Values.admission.createTLS "helm" }}
+      caBundle: {{ $ca.Cert | b64enc }}
+      {{- else if .Values.admission.tls.caBundle }}
+      caBundle: {{ .Values.admission.tls.caBundle }}
+      {{- end }}
+      service:
+        name: {{ include "linstor-scheduler.admissionFullname" . }}
+        namespace: {{ .Release.Namespace }}
+        path: /mutate
+        port: 443
+    rules:
+      - operations: ["CREATE"]
+        apiGroups: [""]
+        apiVersions: ["v1"]
+        resources: ["pods"]
+        scope: "*"
+    {{- with .Values.admission.namespaceSelector }}
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+{{- end }}
