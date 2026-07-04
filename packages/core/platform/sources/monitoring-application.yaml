@@ -18,6 +18,15 @@ spec:
         - cozystack.victoria-metrics-operator
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
+        # keycloak-operator ships the v1.edp.epam.com CRDs consumed by
+        # the OIDC selector (spec.oidc.mode: System renders KeycloakClient,
+        # KeycloakClientScope and three KeycloakRealmGroups in the cozy
+        # realm). Without this dep the monitoring chart can reconcile
+        # before the CRDs are registered on cold install — the
+        # .Capabilities.APIVersions.Has guard then silently drops all
+        # Keycloak-side objects and Grafana's auth.generic_oauth block
+        # points at a client that never gets provisioned.
+        - cozystack.keycloak-operator
       libraries:
         - name: cozy-lib
           path: library/cozy-lib

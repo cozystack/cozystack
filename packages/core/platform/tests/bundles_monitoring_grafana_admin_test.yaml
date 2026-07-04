@@ -1,0 +1,33 @@
+suite: bundles.system monitoring-application component wiring (Grafana OIDC uplift)
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: monitoring-application Package emits the GrafanaAdmin uplift for the platform Grafana release
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-application
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      # The platform Grafana release (component `monitoring-system`) is
+      # promoted to server-level GrafanaAdmin via the explicit values
+      # override. Tenant Grafana (component `monitoring`) is NOT listed
+      # in .spec.components — inherits the chart default
+      # oidc.grafanaAdmin: false and stays at org-level Admin.
+      - equal:
+          path: spec.components.monitoring-system.values.oidc.grafanaAdmin
+          value: true
+      - notExists:
+          path: spec.components.monitoring.values.oidc.grafanaAdmin

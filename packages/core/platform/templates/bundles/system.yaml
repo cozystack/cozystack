@@ -192,7 +192,13 @@
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
+{{- /* Platform Grafana (`monitoring-system`) — flip GrafanaAdmin uplift on
+       so `<clientId>-admin` group members become server-level Grafana
+       admins. Tenant Grafana releases (component `monitoring`) inherit
+       the chart default `oidc.grafanaAdmin: false` and stay at
+       org-level Admin. See docs/oidc-grafana.md and cozystack#3176. */}}
+{{- $monitoringApplicationComponents := dict "monitoring-system" (dict "values" (dict "oidc" (dict "grafanaAdmin" true))) -}}
+{{include "cozystack.platform.package" (list "cozystack.monitoring-application" "default" $ $monitoringApplicationComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}

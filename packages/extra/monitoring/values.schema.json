@@ -628,6 +628,11 @@
             }
           }
         },
+        "grafanaAdmin": {
+          "description": "Promote members of the `\u003cclientId\u003e-admin` group to server-level `GrafanaAdmin` (sets `allow_assign_grafana_admin: true` in `[auth.generic_oauth]`). Intended for the platform release; tenant Grafana keeps org-level Admin.",
+          "type": "boolean",
+          "default": false
+        },
         "mode": {
           "description": "Identity mode. `None`: no OIDC, only the `grafana-admin-password` Secret works. `System`: trust the platform `cozy` realm via a per-instance confidential client and audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.",
           "type": "string",

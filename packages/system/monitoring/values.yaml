@@ -125,3 +125,10 @@ oidc:
     ## `customConfig.config`.
     secretRef:
       name: ""
+  ## Promote `<clientId>-admin` group members to server-level
+  ## `GrafanaAdmin` via `allow_assign_grafana_admin`. Set true for the
+  ## platform Grafana release only (`monitoring-system` in the
+  ## `cozy-monitoring` namespace) — the platform bundle passes this
+  ## flag through Package.spec.components; tenant Grafana releases
+  ## keep this false and stay at org-level Admin.
+  grafanaAdmin: false

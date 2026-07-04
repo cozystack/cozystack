@@ -54,15 +54,16 @@
 {{- end -}}
 
 {{- /*
-  Platform Grafana (release name `monitoring-system` in the
-  `cozy-monitoring` namespace) is operated by the platform admin and
-  should be able to receive `GrafanaAdmin` (server-level) — currently
-  we upgrade `Admin` role assignments to `GrafanaAdmin` there via the
-  `allow_assign_grafana_admin` flag. Tenant Grafana instances stay at
-  org-level Admin.
+  Whether to promote `<clientId>-admin` group members to server-level
+  `GrafanaAdmin` (Grafana's `allow_assign_grafana_admin` flag). Driven
+  by an explicit values field so the platform bundle can flip it on
+  for the platform release via
+  `Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin`
+  without the chart having to sniff `.Release.Name`.
 */}}
 {{- define "monitoring.oidc.allowAssignGrafanaAdmin" -}}
-{{- if eq .Release.Name "monitoring-system" -}}
+{{- $grafanaAdmin := dig "grafanaAdmin" false (.Values.oidc | default dict) -}}
+{{- if $grafanaAdmin -}}
 true
 {{- else -}}
 false

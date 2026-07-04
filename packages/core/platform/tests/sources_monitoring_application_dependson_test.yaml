@@ -1,0 +1,39 @@
+suite: monitoring-application waits for the Keycloak operator that owns the OIDC CRDs
+# Regression guard for a fresh-install ordering race introduced by the Phase-1
+# OIDC selector (cozystack/cozystack#3176). Without the keycloak-operator edge,
+# the monitoring chart can reconcile before the v1.edp.epam.com CRDs are
+# registered on cold install — the `.Capabilities.APIVersions.Has` guard in
+# templates/grafana/oidc-keycloak.yaml silently drops the whole Keycloak side
+# of System mode (KeycloakClient / KeycloakClientScope / KeycloakRealmGroups),
+# Grafana boots with an auth.generic_oauth block pointing at a client that was
+# never provisioned, and OIDC login fails at request time with no build-time
+# signal.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: monitoring-application dependsOn keycloak-operator (OIDC CRDs)
+    documentSelector:
+      path: metadata.name
+      value: cozystack.monitoring-application
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.keycloak-operator
+      # The other deps we rely on transitively for the Grafana instance to
+      # even come up on a fresh cluster; regression-guard them together so
+      # a future edit does not accidentally drop the ordering edges.
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.grafana-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.postgres-operator
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.victoria-metrics-operator

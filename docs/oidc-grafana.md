@@ -81,11 +81,16 @@ CR:
 6. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
    Deployment sourced from the Secret in step 4.
 
-For the platform release (release name `monitoring-system`), the chart
-sets `allow_assign_grafana_admin: true` so an `Admin`-group member is
-auto-promoted to server-level `GrafanaAdmin` (necessary because the
-platform Grafana serves as the meta-admin dashboard). Tenant Grafana
-instances keep it `false` — organisation-level Admin is enough.
+Server-level `GrafanaAdmin` promotion is opt-in via
+`spec.oidc.grafanaAdmin: true`. When set, an `<clientId>-admin` group
+member is auto-promoted to `GrafanaAdmin` (via
+`allow_assign_grafana_admin: true` in the rendered `[auth.generic_oauth]`
+block). The platform bundle
+(`packages/core/platform/templates/bundles/system.yaml`) flips it on for
+the platform Grafana release via
+`Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin: true`;
+tenant Grafana releases inherit the chart default `false` and stay at
+org-level Admin.
 
 ## CustomConfig mode
 
@@ -185,6 +190,16 @@ work — useful when Keycloak is down or misconfigured.
   mappings** — Grafana rejects the callback and the login screen
   shows an error; the `admin_user`/`admin_password` Secret keeps
   working as break-glass.
+- **Mode toggle destroys chart-owned `KeycloakRealmGroup`
+  membership.** The three groups (`<clientId>-{admin,editor,viewer}`)
+  are release-owned. Flipping `spec.oidc.mode` from `System` to
+  `CustomConfig` or `None` runs a `helm upgrade` that deletes the
+  three `KeycloakRealmGroup` objects — and, with them, every user's
+  membership. Flipping back to `System` recreates the groups empty;
+  the platform operator has to re-populate them by hand (via the
+  Keycloak UI or new `KeycloakRealmUser` CRs). Not a bug, but a
+  one-way UX cost on the toggle; treat it like rotating an admin
+  Secret.
 - **`emailVerified` on Keycloak users is a prescriptive requirement,
   not a chart-enforced one.** The chart does not emit any
   `claimValidationRules` — the layered guarantees you rely on

@@ -316,19 +316,26 @@ tests:
           errorMessage: "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline generic_oauth map) or spec.oidc.customConfig.secretRef.name (Secret with an `auth.ini` key)."
 
   ##########################################################
-  # Platform release — allow_assign_grafana_admin gets flipped
+  # allow_assign_grafana_admin is driven by oidc.grafanaAdmin
   ##########################################################
 
-  - it: platform release (Release.Name == monitoring-system) upgrades Admin to GrafanaAdmin
+  - it: oidc.grafanaAdmin=true upgrades Admin to server-level GrafanaAdmin
     template: templates/grafana/grafana.yaml
-    release:
-      name: monitoring-system
-      namespace: cozy-monitoring
     set:
       oidc.mode: System
+      oidc.grafanaAdmin: true
       _cluster.oidc-enabled: "true"
-      _namespace.host: cozy-monitoring.example.org
     asserts:
       - equal:
           path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
           value: "true"
+
+  - it: oidc.grafanaAdmin default is false (tenant releases stay at org-level Admin)
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
+          value: "false"
