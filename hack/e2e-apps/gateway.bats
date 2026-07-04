@@ -401,6 +401,402 @@ EOF
   kubectl -n tenant-test delete httproute route-hostname-allow-probe --ignore-not-found
 }
 
+@test "cozystack-ingress-hostname-policy VAP and binding are installed" {
+  # Legacy-Ingress counterpart of the gateway/route hostname VAPs. Gateway
+  # API is off by default, so tenant apps publish through a legacy
+  # networking.k8s.io/Ingress; if these resources are missing, admission
+  # cannot constrain tenant Ingress hostnames on the shared ingress-nginx.
+  # Make that loud instead of letting it fall through as a silent pass.
+  kubectl get validatingadmissionpolicy cozystack-ingress-hostname-policy -o yaml
+  kubectl get validatingadmissionpolicybinding cozystack-ingress-hostname-policy -o yaml
+  actions=$(kubectl get validatingadmissionpolicybinding cozystack-ingress-hostname-policy -o jsonpath='{.spec.validationActions}')
+  echo "binding.validationActions=$actions"
+  case "$actions" in
+    *Deny*) ;;
+    *) echo "SETUP FAILURE: binding.validationActions lacks Deny (got '$actions')" >&2; return 1 ;;
+  esac
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects an Ingress with a foreign-apex host" {
+  # tenant-test's own apex (namespace.cozystack.io/host) is
+  # test.example.org; the platform root apex is example.org.
+  # dashboard.example.org sits under the platform root apex but outside
+  # the tenant's own apex, so it must be denied. As with the route tests,
+  # use `if !` so the dash `set -e` runner captures the expected-rejection
+  # exit status.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-out-of-apex-host-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-out-of-apex-host-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - host: "dashboard.example.org"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -qi "must be within"
+  else
+    kubectl -n tenant-test delete ingress ingress-out-of-apex-host-probe --ignore-not-found
+    echo "BUG: admission accepted an out-of-apex Ingress host — ingress was created in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects a prefix-adjacent host under the root apex" {
+  # Dot-boundary guard: eviltest.example.org is under the platform root
+  # apex example.org but is NOT a subdomain of the tenant's own apex
+  # test.example.org. A naive suffix check without the leading dot would
+  # match "test.example.org" inside "eviltest.example.org" and wrongly
+  # admit it; the CEL uses endsWith("." + apex), so it is correctly denied
+  # (under root, outside own apex).
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-prefix-adjacent-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-prefix-adjacent-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - host: "eviltest.example.org"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  else
+    kubectl -n tenant-test delete ingress ingress-prefix-adjacent-probe --ignore-not-found
+    echo "BUG: admission accepted a prefix-adjacent host under the root apex in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects an Ingress with a foreign-apex tls host" {
+  # The rule host is in-apex, but a spec.tls[].hosts[] entry
+  # (harbor.example.org) sits under the platform root apex outside the
+  # tenant's own apex. The tls branch must deny it on its own — an Ingress
+  # carries a hostname in spec.tls[].hosts[] as well as spec.rules[].host,
+  # so both are constrained the same way.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-tls-out-of-apex-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-tls-out-of-apex-probe
+  namespace: tenant-test
+spec:
+  tls:
+  - hosts:
+    - "harbor.example.org"
+    secretName: noop-tls
+  rules:
+  - host: "harbor.test.example.org"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+    echo "$output" | grep -qi "must be within"
+  else
+    kubectl -n tenant-test delete ingress ingress-tls-out-of-apex-probe --ignore-not-found
+    echo "BUG: admission accepted an out-of-apex Ingress tls host in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects a hostless catch-all Ingress rule" {
+  # A rule with no .host matches all inbound HTTP on the shared
+  # ingress-nginx — an unbounded catch-all. Every rule must carry an
+  # in-apex host, so a hostless rule is denied.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-hostless-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-hostless-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  else
+    kubectl -n tenant-test delete ingress ingress-hostless-probe --ignore-not-found
+    echo "BUG: admission accepted a hostless catch-all Ingress rule in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects an empty-string rule host" {
+  # host: "" is a valid Ingress rule and a catch-all on the shared
+  # ingress-nginx, the same as an absent host. Without an explicit empty
+  # guard it would satisfy the "outside the root apex" branch and be
+  # admitted, so the CEL denies it via r.host != "" (and via has(r.host)
+  # if the apiserver drops the empty value). Either way, expect denial.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-empty-host-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-empty-host-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - host: ""
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  else
+    kubectl -n tenant-test delete ingress ingress-empty-host-probe --ignore-not-found
+    echo "BUG: admission accepted an empty-string rule host in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects an Ingress default backend" {
+  # spec.defaultBackend is a catch-all for otherwise-unmatched traffic on
+  # the shared ingress-nginx; a tenant may not declare one.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-defaultbackend-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-defaultbackend-probe
+  namespace: tenant-test
+spec:
+  defaultBackend:
+    service:
+      name: noop
+      port:
+        number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  else
+    kubectl -n tenant-test delete ingress ingress-defaultbackend-probe --ignore-not-found
+    echo "BUG: admission accepted an Ingress with spec.defaultBackend in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP allows an in-apex Ingress" {
+  # Inverse sanity check: an Ingress whose rule host and tls hosts are all
+  # under test.example.org must NOT be rejected by the VAP.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-hostname-allow-probe --ignore-not-found
+  kubectl apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-hostname-allow-probe
+  namespace: tenant-test
+spec:
+  tls:
+  - hosts:
+    - "harbor.test.example.org"
+    secretName: noop-tls
+  rules:
+  - host: "harbor.test.example.org"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+
+  kubectl -n tenant-test delete ingress ingress-hostname-allow-probe --ignore-not-found
+}
+
+@test "cozystack-ingress-hostname-policy VAP allows an Ingress host outside the platform root apex" {
+  # Narrow rule: a tenant may route its own domain that lies entirely
+  # outside the platform root apex (example.org). This is the path the
+  # kubernetes app's Proxied exposeMethod uses — addons.ingressNginx.hosts
+  # routes a user-supplied external domain to a nested cluster — and it
+  # must be admitted. shop.example.net is not under example.org.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-external-host-probe --ignore-not-found
+  kubectl apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-external-host-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - host: "shop.example.net"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+
+  kubectl -n tenant-test delete ingress ingress-external-host-probe --ignore-not-found
+}
+
+@test "cozystack-ingress-hostname-policy VAP rejects a wildcard host that matches the platform apex" {
+  # *.org is "outside" the platform root apex example.org by a plain string
+  # test, but at ingress-nginx *.org also matches the bare root apex
+  # example.org. The outside-root path is gated on the host not being a
+  # wildcard, so this must be denied. (A wildcard under the tenant's own
+  # apex, e.g. *.test.example.org, is still allowed via the own-apex path.)
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-wildcard-host-probe --ignore-not-found
+  if ! output=$(kubectl apply -f - 2>&1 <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-wildcard-host-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - host: "*.org"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+); then
+    echo "$output" | grep -qi "ValidatingAdmissionPolicy"
+  else
+    kubectl -n tenant-test delete ingress ingress-wildcard-host-probe --ignore-not-found
+    echo "BUG: admission accepted a wildcard host matching the platform apex in tenant-test" >&2
+    echo "$output" >&2
+    return 1
+  fi
+}
+
+@test "cozystack-ingress-hostname-policy VAP allows a wildcard host under the own apex" {
+  # A wildcard under the tenant's own apex (*.test.example.org) is admitted
+  # via the own-apex path — the anti-wildcard gate applies only to the
+  # outside-root path. Locks the behavior the CEL comment describes.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-ownapex-wildcard-probe --ignore-not-found
+  kubectl apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-ownapex-wildcard-probe
+  namespace: tenant-test
+spec:
+  rules:
+  - host: "*.test.example.org"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+
+  kubectl -n tenant-test delete ingress ingress-ownapex-wildcard-probe --ignore-not-found
+}
+
+@test "cozystack-ingress-hostname-policy VAP allows an external domain on spec.tls[].hosts" {
+  # The outside-root allowance covers spec.tls[].hosts[] as well as
+  # spec.rules[].host: a concrete external domain not under the platform
+  # root apex must be admitted on the tls block too.
+  # Pre-clean a stale probe left by an interrupted prior run (e2e convention).
+  kubectl -n tenant-test delete ingress ingress-external-tls-probe --ignore-not-found
+  kubectl apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-external-tls-probe
+  namespace: tenant-test
+spec:
+  tls:
+  - hosts:
+    - "shop.example.net"
+    secretName: noop-tls
+  rules:
+  - host: "shop.example.net"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+EOF
+
+  kubectl -n tenant-test delete ingress ingress-external-tls-probe --ignore-not-found
+}
+
 @test "HTTPRoute with a matching parentRef reaches Accepted status" {
   # Put a Gateway and a route in the same namespace so allowedRoutes: Same accepts them.
   kubectl apply -f - <<'EOF'
