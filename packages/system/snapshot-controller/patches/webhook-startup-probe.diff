@@ -1,32 +1,40 @@
 diff --git a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
-index ad24b32..30fa46e 100644
+index ad24b32..e24c88b 100644
 --- a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
 +++ b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
-@@ -50,6 +50,27 @@ spec:
+@@ -50,6 +50,35 @@ spec:
            volumeMounts:
              - mountPath: /etc/snapshot-validation
                name: tls-config
-+          # cozystack: startupProbe grants the webhook container up to ~10 minutes
-+          # (periodSeconds * failureThreshold) to bind its HTTPS listener on
-+          # :8443 before liveness begins gating. Two things eat into that budget
-+          # under first-install load on the E2E sandbox:
-+          #   1) cert-manager issuing the Certificate CR whose Secret the pod
-+          #      mounts as tls-config — observed at 8+ minutes when cainjector
-+          #      / cert-manager are backlogged (see cozystack/cozystack#3203).
-+          #   2) the webhook binary's own startup after the Secret is present.
-+          # Without a startupProbe the kubelet applies the (non-configurable in
-+          # the upstream chart) liveness defaults `periodSeconds=10,
-+          # failureThreshold=3`, giving the pod only ~30s from start to bind
-+          # :8443 — insufficient under load and the root of the E2E flake
-+          # cascading through this HR into piraeus/linstor and ~20 downstream
-+          # operators.
++          # cozystack: startupProbe covers the post-Started window where the
++          # webhook binary is coming up but has not yet bound `:8443` — the
++          # upstream chart hard-codes liveness without any startup grace
++          # (kubelet defaults periodSeconds=10 failureThreshold=3 = ~30s from
++          # container Started to first liveness kill), which is insufficient
++          # on a loaded E2E sandbox and cascades into install-wide failure
++          # via `snapshot-controller` HR → piraeus / linstor / ~20 downstream
++          # operators. See cozystack/cozystack#3203.
++          #
++          # Budget: 5s * 45 = 225s. Sized to comfortably clear the actual
++          # bind-time on a loaded sandbox (single-digit-second range in the
++          # healthy case) while staying well inside the operator's default
++          # 10m HR install timeout (--helmrelease-install-timeout in
++          # cmd/cozystack-operator/main.go). A larger budget would race the
++          # HR timeout.
++          #
++          # This fix covers the "container Started, still binding :8443"
++          # window. It does NOT cover a separate class of failure where the
++          # container self-exits (e.g. cert-mount race producing an empty
++          # tls-config volume); that would need an initContainer that waits
++          # for the Certificate's Secret to have non-empty tls.crt/tls.key.
++          # Filed as a follow-up on cozystack/cozystack#3203.
 +          startupProbe:
 +            httpGet:
 +              path: /readyz
 +              port: https
 +              scheme: HTTPS
-+            periodSeconds: 10
-+            failureThreshold: 60
++            periodSeconds: 5
++            failureThreshold: 45
            livenessProbe:
              httpGet:
                path: /readyz
