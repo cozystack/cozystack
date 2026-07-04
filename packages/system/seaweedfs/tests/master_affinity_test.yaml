@@ -1,0 +1,33 @@
+suite: seaweedfs master anti-affinity
+
+# Pins the master anti-affinity override that keeps the 3-replica master
+# StatefulSet schedulable on clusters with fewer than three nodes. The upstream
+# subchart ships a HARD hostname anti-affinity
+# (requiredDuringSchedulingIgnoredDuringExecution); with three replicas that
+# leaves the surplus master Pods Pending forever on a single- or dual-node
+# cluster, so `helm install --wait` never returns. The overlay softens it to a
+# strong preference (weight 100) so the masters still spread across distinct
+# nodes when the cluster has them. This guards against a subchart bump silently
+# re-hardening the term back to required.
+
+templates:
+  - charts/seaweedfs/templates/master/master-statefulset.yaml
+
+release:
+  name: seaweedfs
+  namespace: cozy-seaweedfs
+
+tests:
+  - it: softens the master hostname anti-affinity to a preference
+    asserts:
+      - notExists:
+          path: spec.template.spec.affinity.podAntiAffinity.requiredDuringSchedulingIgnoredDuringExecution
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].weight
+          value: 100
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.topologyKey
+          value: kubernetes.io/hostname
+      - equal:
+          path: spec.template.spec.affinity.podAntiAffinity.preferredDuringSchedulingIgnoredDuringExecution[0].podAffinityTerm.labelSelector.matchLabels["app.kubernetes.io/component"]
+          value: master
