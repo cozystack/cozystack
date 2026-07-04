@@ -469,6 +469,24 @@ func (r *PackageSourceReconciler) updateStatus(ctx context.Context, packageSourc
 	// carrying it is necessarily our own reflection; the attempts counter
 	// is only ever set by that same function. Neither is observable from
 	// outside this reconciler.
+	//
+	// Asymmetric ObservedGeneration handling — deliberate, not oversight.
+	// `isProgressingInRecovery` requires `ObservedGeneration == Generation`
+	// so a Progressing condition left over from a previous spec cycle does
+	// NOT match the pattern (the AG is being rebuilt against fresh spec —
+	// no need to hold tracking around a stale Progressing). `isOwnMarker`
+	// does NOT check ObservedGeneration on purpose: if we wrote our
+	// marker at gen=N and the user then edits PS spec so AG.generation=N+1,
+	// our marker sits with `condition.ObservedGeneration=N`. That marker
+	// is stale, but we must still route through the state machine on it
+	// rather than falling into the not-stuck / clearRecoveryTracking
+	// branch — otherwise the copy-through path would leak our synthetic
+	// Ready=False/SourceWatcherRecoveryForced onto the PackageSource
+	// (exactly the B2 bug this whole gate exists to prevent).
+	// source-watcher's GenerationChangedPredicate fires on the AG's own
+	// generation bump, so the rebuild is triggered regardless of our
+	// marker's staleness — one wasted attempt in the worst case, and the
+	// state machine's Wait branch usually absorbs it without incrementing.
 	attempts, _ := readRecoveryTracking(ag)
 	isOwnMarker := readyCondition != nil && readyCondition.Reason == reasonRecoveryForced
 	isProgressingInRecovery := attempts > 0 && readyCondition != nil &&
@@ -794,18 +812,36 @@ func backoffFor(attempt int) time.Duration {
 // Ready=False signal from the successful status write, the extra force-drift
 // on that retry is benign (source-watcher is already mid-rebuild).
 //
-// JSON merge patch semantics note: `client.MergeFrom` produces a JSON merge
-// patch, which replaces arrays in full (RFC 7396). If source-watcher writes a
-// new Reconciling condition between our Get and our status Patch, that
-// concurrent addition is overwritten by our patch. This is net-neutral —
-// source-watcher's next reconcile (which our force-drift is about to trigger)
-// re-emits Reconciling anyway, and any legitimate concurrent add would already
-// have been at risk from the same split-write race this workaround exists for.
+// JSON merge patch semantics — honest trade-off. `client.MergeFrom` produces
+// a JSON merge patch, which replaces arrays in full per RFC 7396 (custom
+// resources like ArtifactGenerator do not carry the `patchStrategy: merge`
+// / `patchMergeKey` markers that would enable strategic-merge-patch
+// per-element merging on Kubernetes-native APIs). Consequences:
+//
+//   - If source-watcher writes a fresh Reconciling condition between our
+//     Get (in updateStatus, several stack frames up) and this status Patch,
+//     our patch REPLACES the entire status.conditions array with the array
+//     we hold locally — Reconciling gets transiently wiped.
+//     source-watcher restores it on its next reconcile (which our
+//     requestedAt bump in step 2 is about to trigger), so the wipe is
+//     short-lived. Downstream tooling watching for Reconciling (Grafana
+//     panels, alertmanager rules) may still observe the momentary absence.
+//   - Similarly, any other condition source-watcher added concurrently
+//     (e.g. a custom Stalled marker in future versions) would be wiped.
+//     Currently source-watcher v2.1.0 only writes Ready and Reconciling,
+//     so the blast radius is Reconciling only.
+//
+// A full fix would require server-side apply with per-condition field
+// ownership, at the cost of introducing SSA into the operator's write
+// path. Not doing it here because the transient wipe is acceptable in
+// this workaround's scope; if a future refactor moves the operator to
+// SSA globally, this call should migrate too.
 //
 // On success, `ag.Status.Conditions` and `ag.Annotations` reflect the
 // persisted state so the caller can re-read the same pointer. On any Patch
 // failure the corresponding field is rolled back to its pre-call value.
 func (r *PackageSourceReconciler) forceArtifactGeneratorDrift(ctx context.Context, ag *sourcewatcherv1beta1.ArtifactGenerator, now time.Time, nextAttempt int) error {
+	logger := log.FromContext(ctx)
 	// Step 1: patch AG.status.conditions[Ready]=False. This is the signal
 	// source-watcher's detectDrift picks up as `NotReady` drift.
 	statusBase := ag.DeepCopy()
@@ -857,6 +893,18 @@ func (r *PackageSourceReconciler) forceArtifactGeneratorDrift(ctx context.Contex
 	ag.Annotations[annotationLastRecoveryAt] = nowStr
 	if err := r.Patch(ctx, ag, client.MergeFrom(metadataBase)); err != nil {
 		ag.Annotations = priorAnnotations
+		// The status patch already landed, so source-watcher sees our
+		// Ready=False. If this metadata patch keeps failing on retry,
+		// the recovery tracking annotations never persist to the
+		// apiserver — every subsequent reconcile reads attempts=0 and
+		// re-forces from scratch instead of accumulating toward
+		// SourceWatcherStalled. Log loudly so operators can spot a
+		// metadata-write-only apiserver malfunction.
+		logger.Error(err, "recovery tracking metadata patch failed after successful status patch — "+
+			"source-watcher has been nudged but the attempt counter did not advance; "+
+			"if this repeats persistently, force-drift will loop without ever giving up",
+			"artifactGenerator", ag.Name,
+			"intendedAttempts", nextAttempt)
 		return fmt.Errorf("metadata patch to update recovery tracking: %w", err)
 	}
 	return nil
