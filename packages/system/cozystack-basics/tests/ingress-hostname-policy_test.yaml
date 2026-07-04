@@ -1,0 +1,221 @@
+suite: cozystack-ingress-hostname-policy VAP
+templates:
+  - templates/ingress-hostname-policy.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# The policy templates the platform root apex (_cluster.root-host) into
+# its CEL and renders only when that value is set, so every rendering
+# test supplies it. RFC 2606 example.org stands in for the platform apex.
+set:
+  _cluster:
+    root-host: example.org
+
+tests:
+  - it: renders ValidatingAdmissionPolicy + Binding for legacy Ingress
+    # Legacy Ingress (networking.k8s.io/v1) is the default ingress path
+    # when Gateway API is off. This template gates that path in the same
+    # family as the Gateway/route VAPs: 1 VAP + 1 Binding = 2 docs total.
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: cozystack-ingress-hostname-policy
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: cozystack-ingress-hostname-policy
+
+  - it: gates on tenant-* namespace prefix via matchConditions
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].name
+          value: tenant-namespace
+      - documentIndex: 0
+        equal:
+          path: spec.matchConditions[0].expression
+          value: object.metadata.namespace.startsWith("tenant-")
+
+  - it: targets networking.k8s.io v1 Ingress on CREATE and UPDATE
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups
+          value: ["networking.k8s.io"]
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].apiVersions
+          value: ["v1"]
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].resources
+          value: ["ingresses"]
+      - documentIndex: 0
+        equal:
+          path: spec.matchConstraints.resourceRules[0].operations
+          value: ["CREATE", "UPDATE"]
+
+  - it: validates both rules[].host and tls[].hosts against namespace.cozystack.io/host label
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'object\.spec\.rules\.all\(r,'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'object\.spec\.tls\.all\(t,'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 't\.hosts\.all\(h,'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'namespace\.cozystack\.io/host'
+
+  - it: allows a hostname outside the platform root apex (external custom domain)
+    # Narrow rule: a tenant may route its own domain that lies entirely
+    # outside the platform root apex (templated from _cluster.root-host).
+    # Pin the not-under-root clause for both rules and tls so this
+    # allowance is not silently dropped — it is the path the kubernetes
+    # app's Proxied exposeMethod relies on to route a user-supplied domain.
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!\(r\.host == "example\.org" \|\| r\.host\.endsWith\("\.example\.org"\)\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!\(h == "example\.org" \|\| h\.endsWith\("\.example\.org"\)\)'
+
+  - it: does not let a wildcard use the outside-root path (would match the platform apex)
+    # A wildcard on the root's parent label (e.g. *.org when root is
+    # example.org) is "outside root" by the plain string test but matches
+    # the bare platform apex at ingress-nginx. The outside-root branch is
+    # therefore gated on the host not being a wildcard, so such a host is
+    # denied (a wildcard is only admitted when it is under the own apex).
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!r\.host\.startsWith\("\*\."\) && !\(r\.host == "example\.org"'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!h\.startsWith\("\*\."\) && !\(h == "example\.org"'
+
+  - it: allows a wildcard under the own apex (own-apex path is not wildcard-gated)
+    # The !startsWith("*.") gate applies ONLY to the outside-root branch.
+    # A wildcard under the tenant's own apex (e.g. *.test.example.org)
+    # reaches the allow via the own-apex endsWith clause, which is a
+    # standalone disjunct BEFORE the wildcard-gated group. Pin that
+    # ordering so a future "gate all wildcards" change cannot silently
+    # deny an own-apex wildcard cert.
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'r\.host\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\) \|\| \(!r\.host\.startsWith\("\*\."\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'h\.endsWith\("\." \+ namespaceObject\.metadata\.labels\["namespace\.cozystack\.io/host"\]\) \|\| \(!h\.startsWith\("\*\."\)'
+
+  - it: rejects a hostless or empty-host catch-all rule
+    # A legacy Ingress rule with no .host (absent OR empty string) matches
+    # ALL inbound HTTP on the shared ingress-nginx — an unbounded catch-all.
+    # Unlike a Gateway route (bounded by its parent Gateway's
+    # already-validated listeners), such a rule has no bound, so every rule
+    # MUST carry a non-empty host. Pin both has(r.host) and r.host != "" —
+    # the empty-string guard matters because an empty host would otherwise
+    # satisfy the "outside the root apex" branch and be admitted.
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'object\.spec\.rules\.all\(r,\s*has\(r\.host\) && r\.host != ""'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 't\.hosts\.all\(h,\s*h != ""'
+
+  - it: rejects a tenant Ingress default backend (a catch-all for unmatched traffic)
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(object\.spec\.defaultBackend\)'
+
+  - it: validation actions are Deny so requests fail closed
+    asserts:
+      - documentIndex: 1
+        equal:
+          path: spec.validationActions
+          value: [Deny]
+
+  - it: failurePolicy is Fail so admission errors deny instead of allow
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.failurePolicy
+          value: Fail
+
+  - it: CEL is fail-closed when namespace has no host label (returns false, not true)
+    # Regression guard mirroring the route policy: a tenant-* namespace
+    # missing its own-apex namespace.cozystack.io/host label must be
+    # DENIED, not silently allowed. Pin the false branch and the exact
+    # nil-guard structure so nobody flips it back without a test failure.
+    asserts:
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '\)\s*\?\s*false\s*:'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'namespaceObject\s*==\s*null'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!has\(namespaceObject\.metadata\.labels\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '!\("namespace\.cozystack\.io/host" in namespaceObject\.metadata\.labels\)'
+
+  - it: reason is Forbidden and message references the host label
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: spec.validations[0].reason
+          value: Forbidden
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].messageExpression
+          pattern: 'namespace\.cozystack\.io/host'
+
+  - it: omits the policy when the platform root apex is unset (no fail-open)
+    # Without _cluster.root-host the "outside the root apex" test is
+    # undefined, so the policy could not constrain anything. Render nothing
+    # rather than ship a policy that would admit every hostname.
+    set:
+      _cluster:
+        root-host: ""
+    asserts:
+      - hasDocuments:
+          count: 0
