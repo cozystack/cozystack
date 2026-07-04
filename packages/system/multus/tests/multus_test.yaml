@@ -29,3 +29,98 @@ tests:
       - matchRegex:
           path: data["daemon-config.json"]
           pattern: '"multusMasterCNI": "05-cilium\.conflist"'
+
+  # Guards the reference-CNI-plugin staging init container (bridge, macvlan, ...)
+  # that installs the plugins bundled in the image into /opt/cni/bin. Distros
+  # like k3s do not populate /opt/cni/bin with them, so bridge-type NADs fail
+  # without this. The init container lives in patches/customize-deployment.patch
+  # so it survives every make update.
+  - it: stages the reference CNI plugins into the host cni bin dir
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: install-cni-plugins
+      - equal:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].mountPath
+          value: /host/opt/cni/bin
+
+  # kube-ovn (v1.15.10, the vendored version) installs portmap and macvlan into
+  # the same /opt/cni/bin with a plain cp, and portmap sits on every pod-sandbox
+  # path, so these plugins get replaced while the kubelet is executing them.
+  # Writing onto the live path truncates the binary in place and races those
+  # execs. Each plugin must instead land on a temp name and be swapped in with a
+  # rename, which is atomic within the mount — the same reason multus's own
+  # install_multus uses CopyFileAtomic and cilium's install-plugin.sh renames a
+  # temporary file into place.
+  - it: installs each plugin atomically rather than writing onto the live path
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      # The copy must target the temp name...
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'cp -f "\$plugin" "\$tmp"'
+      # ...and only the rename may publish the final name.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'mv -f "\$tmp" "/host/opt/cni/bin/\$\{name\}"'
+      # Catches the common spellings of the regression — a bulk or per-plugin
+      # copy/install naming the live path directly. This is a cheap first net,
+      # not the invariant itself: a regression that reaches the same path
+      # through a variable (`d=/host/opt/cni/bin; cp "$plugin" "$d/$name"`) has
+      # no literal for a regex to match, so hack/multus-install-cni-plugins.bats
+      # owns the real guarantee by asserting the replaced inode changes.
+      # (?m) is load-bearing — Go anchors $ to end of text, not end of line, so
+      # without it this only fires when the offending copy is the script's last
+      # line, and any line appended after it switches the net off.
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)(cp|install)[^\n]*/host/opt/cni/bin/(\$\{?name\}?|\s*$)'
+
+  # The template and the image are re-pinned on different schedules: release-prep
+  # bakes the digest, so between a Dockerfile change and the next bake the pinned
+  # image can predate the staging and have no /cni-plugins. An unguarded glob
+  # would make cp fail under `set -eu`, and this is a plain init container, so
+  # the whole multus daemonset would crashloop on every node rather than merely
+  # skip staging. A successfully built image always has the directory (the
+  # Dockerfile's tar fails otherwise), so the guard can only mask that skew.
+  - it: skips staging instead of crashlooping when the image predates the plugins
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'if \[ ! -d /cni-plugins \]; then'
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'exit 0'
+
+  # A kill between the copy and the rename strands .tmp-<name> in a directory
+  # shared with cilium and kube-ovn, so clean up on the way out, as multus's own
+  # CopyFileAtomic does. hack/multus-install-cni-plugins.bats covers the
+  # behaviour; this only pins the trap into the rendered manifest.
+  - it: does not leak temp files into the shared cni bin dir
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: "trap 'rm -f /host/opt/cni/bin/\\.tmp-\\*' EXIT"
+      # The plugins live only in the cozystack-built multus image (staged by its
+      # Dockerfile). A make update that regenerated this container with the
+      # upstream image would leave /cni-plugins absent and the cp would
+      # crashloop, so pin the image repository the same way the container image
+      # test above does.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].image
+          pattern: '^ghcr\.io/cozystack/cozystack/multus-cni:'

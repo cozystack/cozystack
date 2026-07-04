@@ -220,6 +220,50 @@ spec:
             - name: cnibin
               mountPath: /host/opt/cni/bin
               mountPropagation: Bidirectional
+        - name: install-cni-plugins
+          image: ghcr.io/cozystack/cozystack/multus-cni:v1.5.0@sha256:e006fe695d31c0ae57efbea7361eee0aa532c53e776f97285ae30e963b7dc764
+          command:
+            - "sh"
+            - "-c"
+            - |
+              set -eu
+              # Drop our temp files on the way out, whether we succeeded, failed
+              # or skipped, so a kill between copy and rename cannot strand them
+              # in this directory -- shared with cilium and kube-ovn. Registered
+              # before the skip below so it also clears files stranded by an
+              # earlier kill on a node that has since been downgraded to an image
+              # without the plugins.
+              trap 'rm -f /host/opt/cni/bin/.tmp-*' EXIT
+              # An image built before the plugins were staged has no
+              # /cni-plugins, because the release-prep digest re-pin lags a
+              # Dockerfile change. Skip rather than crashloop and take multus
+              # down node-wide: a built image always has the directory, as the
+              # Dockerfile's tar fails otherwise, so this only masks a skew.
+              if [ ! -d /cni-plugins ]; then
+                echo "no /cni-plugins in this image; skipping staging" >&2
+                exit 0
+              fi
+              for plugin in /cni-plugins/*; do
+                # An unmatched glob stays literal, so skip it rather than let cp
+                # fail the whole daemonset over an empty directory.
+                [ -e "$plugin" ] || continue
+                name="${plugin##*/}"
+                tmp="/host/opt/cni/bin/.tmp-${name}"
+                cp -f "$plugin" "$tmp"
+                chmod 0755 "$tmp"
+                mv -f "$tmp" "/host/opt/cni/bin/${name}"
+              done
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "15Mi"
+          securityContext:
+            privileged: true
+          terminationMessagePolicy: FallbackToLogsOnError
+          volumeMounts:
+            - name: cnibin
+              mountPath: /host/opt/cni/bin
+              mountPropagation: Bidirectional
       terminationGracePeriodSeconds: 10
       volumes:
         - name: cni
