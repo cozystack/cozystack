@@ -10,8 +10,8 @@ tests:
   # expose them via values, so a slow cert-manager Certificate issuance under
   # E2E-sandbox load cascades into the whole install failing through this HR
   # (see cozystack/cozystack#3203). If a future `make update` bump re-pulls
-  # upstream and the local diff drops off — or an upstream refactor renames /
-  # replaces this Deployment — these asserts catch it before the flake
+  # upstream and the local diff drops off, or an upstream refactor renames
+  # or replaces this Deployment, these asserts catch it before the flake
   # returns.
   - it: webhook Deployment carries a startupProbe covering the HTTPS-listener bind window
     template: charts/snapshot-controller/templates/deployment_validation_webhook.yaml
@@ -28,7 +28,7 @@ tests:
           path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
           value: HTTPS
       # Budget = periodSeconds * failureThreshold. Pinning both exact values
-      # locks the total (5 * 45 = 225s) as a regression sentinel — a chart
+      # locks the total (5 * 45 = 225s) as a regression sentinel: a chart
       # bump that silently zeroed one of them would still fall out here.
       # Bumping the budget deliberately requires a matching test update; the
       # comment on the patched template covers why it must stay inside the
@@ -40,7 +40,7 @@ tests:
           path: spec.template.spec.containers[0].startupProbe.failureThreshold
           value: 45
 
-  # Liveness / readiness must survive the patch unchanged — startupProbe
+  # Liveness / readiness must survive the patch unchanged. startupProbe
   # covers the slow-start window, and once it passes the kubelet gates on
   # the normal probes at their default cadence. If an upstream refactor
   # renamed the port or dropped the scheme, this catches the drift.

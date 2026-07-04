@@ -10,8 +10,8 @@ update:
 	rm -rf charts
 	helm repo add piraeus-charts https://piraeus.io/helm-charts/
 	helm repo update piraeus-charts
-	# Pin the vendored version — running `helm pull` without --version would
-	# grab whatever is latest on the piraeus-charts repo and break
+	# Pin the vendored version. Running `helm pull` without a --version pin
+	# would grab whatever is latest on the piraeus-charts repo and break
 	# `patches/webhook-startup-probe.diff` (the templates layout changed
 	# between v3.x and v5.x). Bumping this pin is a deliberate step that
 	# must regenerate the patch against the new upstream.

@@ -1,5 +1,5 @@
 diff --git a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
-index ad24b32..adaa03f 100644
+index ad24b32..3ac9bd6 100644
 --- a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
 +++ b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
 @@ -50,6 +50,35 @@ spec:
@@ -7,7 +7,7 @@ index ad24b32..adaa03f 100644
              - mountPath: /etc/snapshot-validation
                name: tls-config
 +          # cozystack: startupProbe covers the post-Started window where the
-+          # webhook binary is coming up but has not yet bound `:8443` — the
++          # webhook binary is coming up but has not yet bound `:8443`. The
 +          # upstream chart hard-codes liveness without any startup grace
 +          # (kubelet defaults periodSeconds=10 failureThreshold=3 = ~30s from
 +          # container Started to first liveness kill), which is insufficient

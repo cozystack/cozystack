@@ -51,7 +51,7 @@ spec:
             - mountPath: /etc/snapshot-validation
               name: tls-config
           # cozystack: startupProbe covers the post-Started window where the
-          # webhook binary is coming up but has not yet bound `:8443` — the
+          # webhook binary is coming up but has not yet bound `:8443`. The
           # upstream chart hard-codes liveness without any startup grace
           # (kubelet defaults periodSeconds=10 failureThreshold=3 = ~30s from
           # container Started to first liveness kill), which is insufficient
