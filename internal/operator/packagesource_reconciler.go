@@ -40,6 +40,17 @@ import (
 // race in source-watcher v2.1.0). See the block comment on
 // maybeRecoverArtifactGenerator for the mechanism.
 //
+// Version-skew note. Comments in this file reference upstream source-watcher
+// internals by exact file:line (e.g. `drift.go:52`, `controller.go:164/254`).
+// Those anchors are for the DEPLOYED source-watcher binary, currently pinned
+// to v2.1.0 at `internal/fluxinstall/manifests/fluxcd.yaml`. The Go module
+// dependency in `go.mod` (`github.com/fluxcd/source-watcher/api/v2 v2.0.3`)
+// only pulls the CRD types package — behavioural code lives in the deployed
+// binary. When the flux distribution bumps source-watcher, re-verify the
+// line anchors AND the watch predicate (`ReconcileRequestedPredicate`) and
+// drift-detection heuristics against the new version — those are the
+// load-bearing upstream assumptions this workaround stands on.
+//
 // The schedule is deliberately conservative:
 //
 //   - `stuckGracePeriod = 30s` — source-watcher normally settles an
@@ -765,8 +776,24 @@ type recoveryDecision struct {
 
 // decideRecovery is the pure decision function driving maybeRecoverArtifactGenerator.
 // Split out so it can be unit-tested without a cluster.
+//
+// The exhaustion branch (`attempts >= maxRecoveryAttempts`) also respects the
+// final backoff window before switching to GiveUp. Without that gate, the
+// Owns()-watch re-fire from the N-th force-drift's own writes triggers a
+// reconcile milliseconds later, `decideRecovery` sees `attempts == max` and
+// returns GiveUp immediately — preempting the response window the final
+// force was supposed to grant source-watcher and collapsing the documented
+// budget from ~11.5m (30s+60s+2m+4m+4m) down to ~7.5m (30s+60s+2m+4m). The
+// wait branch here holds until the full final backoff has elapsed, so the
+// last nudge actually gets its chance to succeed (Owns → Ready=True copy-
+// through) before the driver surfaces SourceWatcherStalled.
 func decideRecovery(attempts int, lastRecoveryAt time.Time, now time.Time) recoveryDecision {
 	if attempts >= maxRecoveryAttempts {
+		elapsed := now.Sub(lastRecoveryAt)
+		needed := backoffFor(maxRecoveryAttempts)
+		if elapsed < needed {
+			return recoveryDecision{action: recoveryActionWait, wait: needed - elapsed}
+		}
 		return recoveryDecision{action: recoveryActionGiveUp}
 	}
 	if attempts == 0 {

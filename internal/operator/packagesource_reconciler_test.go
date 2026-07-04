@@ -247,7 +247,7 @@ func TestDecideRecovery(t *testing.T) {
 			wantWait:       90 * time.Second, // backoffFor(3)=2m minus elapsed 30s
 		},
 		{
-			name:       "attempts exhausted — give up",
+			name:       "attempts exhausted with elapsed >> final backoff — give up",
 			attempts:   maxRecoveryAttempts,
 			now:        referenceTime,
 			wantAction: recoveryActionGiveUp,
@@ -257,6 +257,21 @@ func TestDecideRecovery(t *testing.T) {
 			attempts:   maxRecoveryAttempts + 3,
 			now:        referenceTime,
 			wantAction: recoveryActionGiveUp,
+		},
+		{
+			// lexfrei's follow-up: without holding the final backoff window,
+			// the Owns()-watch re-fire from the N-th force-drift's own
+			// writes preempts the response window and give-up fires within
+			// milliseconds of the last force. Budget collapses to ~7.5m
+			// instead of the documented ~11.5m. This case pins the fix:
+			// attempts=max but no time elapsed since the final force,
+			// expect Wait for the full backoffFor(maxRecoveryAttempts).
+			name:           "attempts exhausted but final backoff not elapsed — wait, do not give up",
+			attempts:       maxRecoveryAttempts,
+			lastRecoveryAt: referenceTime.Add(-time.Second),
+			now:            referenceTime,
+			wantAction:     recoveryActionWait,
+			wantWait:       backoffFor(maxRecoveryAttempts) - time.Second,
 		},
 	}
 
@@ -1348,5 +1363,72 @@ func TestUpdateStatus_OwnMarkerAttemptsExhausted_GivesUp(t *testing.T) {
 	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
 	if psReady == nil || psReady.Status != metav1.ConditionFalse || psReady.Reason != reasonSourceWatcherBad {
 		t.Errorf("PS Ready = %+v, want False/%s — unresponsive source-watcher must eventually surface as stalled", psReady, reasonSourceWatcherBad)
+	}
+}
+
+// TestUpdateStatus_OwnMarkerAttemptsExhaustedButFinalBackoffPending pins
+// lexfrei's follow-up on the give-up path: the Owns()-watch re-fire from the
+// 5th force-drift's own writes triggers a reconcile milliseconds after the
+// force. Without the "hold final backoff window" gate in decideRecovery,
+// that re-fire would see `attempts >= maxRecoveryAttempts` and immediately
+// return GiveUp, preempting the 4-minute response window the last nudge
+// was supposed to grant source-watcher — effective time-to-give-up
+// collapses from the documented ~11.5m to ~7.5m. Assertion: with
+// attempts=maxRecoveryAttempts AND lastRecoveryAt=now-eps (the exact shape
+// of the re-fire on the 5th force's own writes), updateStatus must return
+// Wait with RequeueAfter equal to the remaining backoffFor(maxRecoveryAttempts),
+// NOT GiveUp.
+func TestUpdateStatus_OwnMarkerAttemptsExhaustedButFinalBackoffPending(t *testing.T) {
+	// Simulate the moment right after the 5th force landed: attempts=max,
+	// lastRecoveryAt=now-eps, marker still on the AG.
+	forceAt := referenceTime.Add(-time.Second)
+	ps := &cozyv1alpha1.PackageSource{
+		ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "cozy-system", Generation: 1},
+		Spec: cozyv1alpha1.PackageSourceSpec{
+			SourceRef: &cozyv1alpha1.PackageSourceRef{Name: "src", Kind: "OCIRepository", Namespace: "cozy-system"},
+		},
+	}
+	ag := &sourcewatcherv1beta1.ArtifactGenerator{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "example", Namespace: "cozy-system", Generation: 1,
+			CreationTimestamp: metav1.NewTime(referenceTime.Add(-time.Hour)),
+			Annotations: map[string]string{
+				annotationRecoveryAttempts: strconv.Itoa(maxRecoveryAttempts),
+				annotationLastRecoveryAt:   forceAt.UTC().Format(time.RFC3339Nano),
+			},
+		},
+		Status: sourcewatcherv1beta1.ArtifactGeneratorStatus{
+			Inventory: []sourcewatcherv1beta1.ExternalArtifactReference{
+				{Name: "one", Namespace: "cozy-system", Digest: "sha256:aaa"},
+			},
+			ObservedSourcesDigest: "sha256:0e7",
+			Conditions: []metav1.Condition{{
+				Type:               "Ready",
+				Status:             metav1.ConditionFalse,
+				Reason:             reasonRecoveryForced,
+				ObservedGeneration: 1,
+				LastTransitionTime: metav1.NewTime(forceAt),
+			}},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithStatusSubresource(ps, ag).WithObjects(ps, ag).Build()
+	r := &PackageSourceReconciler{Client: c, Scheme: testScheme(t)}
+
+	res, err := r.updateStatus(context.Background(), ps, referenceTime)
+	if err != nil {
+		t.Fatalf("updateStatus: %v", err)
+	}
+	wantWait := backoffFor(maxRecoveryAttempts) - time.Second
+	if res.RequeueAfter != wantWait {
+		t.Errorf("RequeueAfter = %v, want %v — final backoff window must not be preempted", res.RequeueAfter, wantWait)
+	}
+	// PS must still be Unknown/AwaitingSourceWatcherRecovery, NOT False/SourceWatcherStalled.
+	persistedPS := &cozyv1alpha1.PackageSource{}
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(ps), persistedPS); err != nil {
+		t.Fatalf("Get PS: %v", err)
+	}
+	psReady := meta.FindStatusCondition(persistedPS.Status.Conditions, "Ready")
+	if psReady == nil || psReady.Status != metav1.ConditionUnknown || psReady.Reason != reasonAwaitingRecovery {
+		t.Errorf("PS Ready = %+v, want Unknown/%s — give-up must wait for final backoff to elapse", psReady, reasonAwaitingRecovery)
 	}
 }
