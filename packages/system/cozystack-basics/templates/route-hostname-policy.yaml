@@ -35,7 +35,14 @@
   label is absent is an in-flight namespace creation that hasn't
   finished labelling yet — in which case the caller should retry.
 */}}
-{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h == namespaceObject.metadata.labels["namespace.cozystack.io/host"] || h.endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"])))` -}}
+{{- /*
+  Both operands of the hostname comparison are normalized with
+  .lowerAscii() as defense-in-depth: the route hostname is already
+  lowercase (the CRD pattern permits nothing else), but the apex operand is the
+  namespace.cozystack.io/host label value, which Kubernetes permits to
+  carry uppercase.
+*/}}
+{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h.lowerAscii() == namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii() || h.lowerAscii().endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii())))` -}}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
