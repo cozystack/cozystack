@@ -81,16 +81,15 @@ CR:
 6. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
    Deployment sourced from the Secret in step 4.
 
-Server-level `GrafanaAdmin` promotion is opt-in via
-`spec.oidc.grafanaAdmin: true`. When set, an `<clientId>-admin` group
-member is auto-promoted to `GrafanaAdmin` (via
-`allow_assign_grafana_admin: true` in the rendered `[auth.generic_oauth]`
-block). The platform bundle
-(`packages/core/platform/templates/bundles/system.yaml`) flips it on for
-the platform Grafana release via
-`Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin: true`;
-tenant Grafana releases inherit the chart default `false` and stay at
-org-level Admin.
+Server-level `GrafanaAdmin` promotion is a platform-only lever, not
+exposed on the tenant `Monitoring` CR — a tenant cannot self-promote
+their `<clientId>-admin` group members to `GrafanaAdmin`. The platform
+bundle (`packages/core/platform/templates/bundles/system.yaml`) flips
+it on for the platform Grafana release via
+`Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin: true`,
+which sets `allow_assign_grafana_admin: true` in the rendered
+`[auth.generic_oauth]` block. Tenant Grafana releases inherit the
+chart default `false` and stay at org-level Admin.
 
 ## CustomConfig mode
 
@@ -191,6 +190,18 @@ work — useful when Keycloak is down or misconfigured.
   (additionally waits for `cozystack.keycloak-operator` so the
   `v1.edp.epam.com` CRDs consumed by the Keycloak-side of System
   mode are registered before the monitoring chart reconciles).
+- **`mode: System` without the Keycloak operator CRDs registered** —
+  chart render hard-fails:
+  `spec.oidc.mode: System requires the Keycloak operator CRDs
+  (v1.edp.epam.com/v1)`. Symmetric across
+  `templates/grafana/oidc-keycloak.yaml` and
+  `templates/grafana/grafana.yaml` so Grafana never comes up with an
+  `auth.generic_oauth` block pointing at a client that never gets
+  provisioned. For the platform `monitoring-system` release the
+  `oidc` variant's `dependsOn: cozystack.keycloak-operator` prevents
+  the race; for tenant releases (`Monitoring` CR with
+  `mode: System`) verify the keycloak-operator package is deployed
+  before creating the CR.
 - **`CustomConfig` with an unreachable issuer or wrong claim
   mappings** — Grafana rejects the callback and the login screen
   shows an error; the `admin_user`/`admin_password` Secret keeps
