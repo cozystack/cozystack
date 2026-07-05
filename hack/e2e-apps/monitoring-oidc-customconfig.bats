@@ -14,14 +14,23 @@
 # setup()/teardown(). Cleanup belongs in cozy_cleanup(), which runs at
 # suite exit and on the first failing test. Per-test isolation is done
 # inline at the top of each @test.
-TEST_NAME="mon-oidc-byo"
+#
+# Naming: the extra/monitoring chart is a singleton per tenant
+# namespace and enforces `.Release.Name == "monitoring"` in
+# templates/check-release-name.yaml. So the Monitoring CR (and its
+# operator-produced outer HelmRelease) MUST be named `monitoring`;
+# the inner packages/system/monitoring HelmRelease that carries the
+# OIDC templates is then named `${outer}-system`, i.e. `monitoring-system`.
+CR_NAME="monitoring"
+INNER_REL="${CR_NAME}-system"
+BYO_SECRET="mon-oidc-byo-oauth"
 
 cleanup_mon() {
-  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${TEST_NAME}" \
+  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${CR_NAME}" \
     --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${TEST_NAME}" \
+  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${CR_NAME}" \
     --for=delete --timeout=2m 2>/dev/null || true
-  kubectl -n tenant-test delete secret "${TEST_NAME}-byo-oauth" \
+  kubectl -n tenant-test delete secret "${BYO_SECRET}" \
     --ignore-not-found 2>/dev/null || true
 }
 
@@ -33,7 +42,7 @@ cozy_cleanup() { cleanup_mon; }
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Monitoring
 metadata:
-  name: ${TEST_NAME}
+  name: ${CR_NAME}
   namespace: tenant-test
 spec:
   host: ""
@@ -60,7 +69,10 @@ spec:
         role_attribute_path: "'Viewer'"
 EOF
 
-  timeout 60 sh -ec 'until kubectl -n tenant-test get hr "monitoring-'"${TEST_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
+  # Outer HR (created by cozystack-operator from the CR) shares the CR name.
+  timeout 60 sh -ec 'until kubectl -n tenant-test get hr "'"${CR_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
+  # Inner HR (rendered by extra/monitoring) is ${outer}-system.
+  timeout 120 sh -ec 'until kubectl -n tenant-test get hr "'"${INNER_REL}"'" >/dev/null 2>&1; do sleep 2; done'
   timeout 180 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 5; done'
 }
 
@@ -90,7 +102,9 @@ EOF
     skip "EDP Keycloak operator CRDs not present on this cluster"
   fi
 
-  CID="tenant-test-monitoring-${TEST_NAME}"
+  # clientId helper: printf "%s-%s" .Release.Namespace .Release.Name in
+  # the inner chart -> tenant-test-monitoring-system.
+  CID="tenant-test-${INNER_REL}"
 
   # Give any reconciler a moment; then assert none of the four objects
   # were created.
@@ -104,7 +118,7 @@ EOF
 
 @test "secretRef variant mounts operator Secret under /etc/grafana/oidc" {
   # Operator-owned Secret carrying a ready-made ini fragment.
-  kubectl -n tenant-test create secret generic "${TEST_NAME}-byo-oauth" \
+  kubectl -n tenant-test create secret generic "${BYO_SECRET}" \
     --from-literal=auth.ini='[auth.generic_oauth]
 enabled = true
 name = ByoIdp
@@ -113,15 +127,15 @@ client_secret = byo-secret
 ' --dry-run=client -o yaml | kubectl apply -f -
 
   # Recreate the Monitoring CR pointing at the Secret.
-  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${TEST_NAME}" --ignore-not-found
-  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${TEST_NAME}" \
+  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${CR_NAME}" --ignore-not-found
+  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${CR_NAME}" \
     --for=delete --timeout=2m 2>/dev/null || true
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Monitoring
 metadata:
-  name: ${TEST_NAME}
+  name: ${CR_NAME}
   namespace: tenant-test
 spec:
   host: ""
@@ -140,10 +154,11 @@ spec:
     mode: CustomConfig
     customConfig:
       secretRef:
-        name: ${TEST_NAME}-byo-oauth
+        name: ${BYO_SECRET}
 EOF
 
-  timeout 60 sh -ec 'until kubectl -n tenant-test get hr "monitoring-'"${TEST_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
+  timeout 60 sh -ec 'until kubectl -n tenant-test get hr "'"${CR_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
+  timeout 120 sh -ec 'until kubectl -n tenant-test get hr "'"${INNER_REL}"'" >/dev/null 2>&1; do sleep 2; done'
   timeout 180 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 5; done'
 
   # spec.config carries no auth.generic_oauth section in this branch.
@@ -161,5 +176,5 @@ EOF
   vol=$(kubectl -n tenant-test get grafana grafana \
     -o jsonpath='{.spec.deployment.spec.template.spec.volumes[?(@.name=="oidc-custom-ini")].secret.secretName}')
   echo "secret volume: ${vol}"
-  [ "${vol}" = "${TEST_NAME}-byo-oauth" ]
+  [ "${vol}" = "${BYO_SECRET}" ]
 }

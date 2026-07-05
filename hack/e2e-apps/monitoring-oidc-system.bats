@@ -20,12 +20,23 @@
 # setup()/teardown(). Cleanup belongs in cozy_cleanup(), which runs at
 # suite exit and on the first failing test. Per-test isolation is done
 # inline at the top of each @test.
-TEST_NAME="mon-oidc-sys"
+#
+# Naming: the extra/monitoring chart is a singleton per tenant
+# namespace and enforces `.Release.Name == "monitoring"` in
+# templates/check-release-name.yaml. So the Monitoring CR (and its
+# operator-produced outer HelmRelease) MUST be named `monitoring`;
+# the inner packages/system/monitoring HelmRelease that carries the
+# OIDC templates is then named `${outer}-system`, i.e. `monitoring-system`,
+# and every OIDC identifier derived by the helpers (clientId, audience
+# scope, groups, client-secret Secret) is built off that inner name.
+CR_NAME="monitoring"
+INNER_REL="${CR_NAME}-system"
+CID="tenant-test-${INNER_REL}"
 
 cleanup_mon() {
-  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${TEST_NAME}" \
+  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${CR_NAME}" \
     --ignore-not-found --wait=false 2>/dev/null || true
-  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${TEST_NAME}" \
+  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${CR_NAME}" \
     --for=delete --timeout=2m 2>/dev/null || true
 }
 
@@ -37,7 +48,7 @@ cozy_cleanup() { cleanup_mon; }
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Monitoring
 metadata:
-  name: ${TEST_NAME}
+  name: ${CR_NAME}
   namespace: tenant-test
 spec:
   host: ""
@@ -56,8 +67,9 @@ spec:
     mode: System
 EOF
 
-  # Wait for cozystack-api to materialise the HelmRelease.
-  timeout 60 sh -ec 'until kubectl -n tenant-test get hr "monitoring-'"${TEST_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
+  # Outer HR shares the CR name; inner HR (chart target) is ${outer}-system.
+  timeout 60 sh -ec 'until kubectl -n tenant-test get hr "'"${CR_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
+  timeout 120 sh -ec 'until kubectl -n tenant-test get hr "'"${INNER_REL}"'" >/dev/null 2>&1; do sleep 2; done'
 
   # Wait for the chart to render its Grafana CR. We do not wait on
   # HR Ready: that requires a full VictoriaMetrics + Postgres bringup
@@ -78,7 +90,7 @@ EOF
   client_id=$(kubectl -n tenant-test get grafana grafana \
     -o jsonpath='{.spec.config.auth\.generic_oauth.client_id}')
   echo "client_id: ${client_id}"
-  [ "${client_id}" = "tenant-test-monitoring-${TEST_NAME}" ]
+  [ "${client_id}" = "${CID}" ]
 
   auth_url=$(kubectl -n tenant-test get grafana grafana \
     -o jsonpath='{.spec.config.auth\.generic_oauth.auth_url}')
@@ -87,7 +99,8 @@ EOF
 }
 
 @test "Persistent client-secret Secret is created and 32-char random" {
-  SEC="${TEST_NAME}-oidc-client"
+  # clientSecretName helper: printf "%s-oidc-client" .Release.Name -> ${INNER_REL}-oidc-client.
+  SEC="${INNER_REL}-oidc-client"
   timeout 60 sh -ec 'until kubectl -n tenant-test get secret "'"${SEC}"'" >/dev/null 2>&1; do sleep 2; done'
   value=$(kubectl -n tenant-test get secret "${SEC}" \
     -o jsonpath='{.data.client-secret}' | base64 -d)
@@ -104,8 +117,6 @@ EOF
   if ! kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
     skip "EDP Keycloak operator CRDs not present on this cluster"
   fi
-
-  CID="tenant-test-monitoring-${TEST_NAME}"
 
   timeout 60 sh -ec 'until kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "'"${CID}"'" >/dev/null 2>&1; do sleep 2; done'
   public=$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" \
@@ -137,5 +148,5 @@ EOF
   ref=$(kubectl -n tenant-test get deploy grafana-deployment \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="grafana")].env[?(@.name=="GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET")].valueFrom.secretKeyRef.name}')
   echo "client-secret env source: ${ref}"
-  [ "${ref}" = "${TEST_NAME}-oidc-client" ]
+  [ "${ref}" = "${INNER_REL}-oidc-client" ]
 }
