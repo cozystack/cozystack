@@ -125,10 +125,17 @@ oidc:
     ## `customConfig.config`.
     secretRef:
       name: ""
-  ## Promote `<clientId>-admin` group members to server-level
-  ## `GrafanaAdmin` via `allow_assign_grafana_admin`. Set true for the
-  ## platform Grafana release only (`monitoring-system` in the
-  ## `cozy-monitoring` namespace) — the platform bundle passes this
-  ## flag through Package.spec.components; tenant Grafana releases
-  ## keep this false and stay at org-level Admin.
+  ## Chart-internal lever for `allow_assign_grafana_admin`: promote
+  ## `<clientId>-admin` group members to server-level `GrafanaAdmin`.
+  ## Defaults to `false` and stays `false` in Phase 1 — no supported
+  ## path sets it to `true` end-to-end. The obvious platform-bundle
+  ## path via `Package.spec.components["monitoring-system"].values`
+  ## is dropped by PackageReconciler because that component has no
+  ## `install:` block in
+  ## `packages/core/platform/sources/monitoring-application.yaml`.
+  ## Server-level `GrafanaAdmin` promotion is out of scope for Phase 1;
+  ## see docs/oidc-grafana.md. Kept as a values key so a future phase
+  ## can route the override (via a tenant-root chart values injection
+  ## or a new `install:` block on `monitoring-system`) without touching
+  ## the chart contract.
   grafanaAdmin: false
