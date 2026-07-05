@@ -22,6 +22,17 @@
 {{- if eq $oidcMode "CustomConfig" }}
 {{-   include "monitoring.oidc.assertCustomConfigXor" . }}
 {{- end }}
+{{- /*
+  Symmetric assertions with templates/grafana/oidc-keycloak.yaml so a
+  missing platform OIDC feature or missing Keycloak operator CRD
+  hard-fails the render instead of bringing Grafana up with an
+  `auth.generic_oauth` block pointing at a client that never gets
+  provisioned.
+*/}}
+{{- if eq $oidcMode "System" }}
+{{-   include "monitoring.oidc.assertSystemEnabled" . }}
+{{-   include "monitoring.oidc.assertSystemKeycloakCRD" . }}
+{{- end }}
 {{- $customInline := (.Values.oidc.customConfig.config | default dict) }}
 {{- $customSecretRefName := dig "secretRef" "name" "" (.Values.oidc.customConfig | default dict) }}
 {{- $useCustomInline := and (eq $oidcMode "CustomConfig") (gt (len $customInline) 0) }}

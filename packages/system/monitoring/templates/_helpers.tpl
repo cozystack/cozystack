@@ -83,6 +83,29 @@ false
 {{- end -}}
 
 {{- /*
+  Fail-fast when `mode: System` is requested but the Keycloak operator
+  CRDs (`v1.edp.epam.com/v1`) are not yet registered in the target
+  cluster. Without this guard the chart would silently drop the whole
+  Keycloak side (KeycloakClient / KeycloakClientScope / three
+  KeycloakRealmGroups) while still rendering Grafana's
+  `auth.generic_oauth` block pointing at a client that never gets
+  provisioned — a broken login path with no clear error. For the
+  platform `monitoring-system` release the `oidc` variant of
+  `cozystack.monitoring-application` waits on
+  `cozystack.keycloak-operator` (see
+  packages/core/platform/sources/monitoring-application.yaml) so the
+  CRDs are registered before this chart reconciles; the assertion
+  turns any residual race (or a manual `mode: System` toggle on a
+  cluster where the operator is not deployed) into an actionable
+  render error instead of a silent misconfiguration.
+*/}}
+{{- define "monitoring.oidc.assertSystemKeycloakCRD" -}}
+{{- if not (.Capabilities.APIVersions.Has "v1.edp.epam.com/v1") -}}
+{{-   fail "spec.oidc.mode: System requires the Keycloak operator CRDs (v1.edp.epam.com/v1). If cozystack.keycloak-operator is still bootstrapping this will resolve on the next reconcile; otherwise verify the keycloak-operator package is deployed and its CRDs are registered." -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
   Fail-fast when the CustomConfig branch has neither or both payloads
   set — mutually exclusive.
 */}}
