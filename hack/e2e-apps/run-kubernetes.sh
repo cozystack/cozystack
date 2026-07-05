@@ -191,6 +191,20 @@ ${ouroboros_addon}
       resources: {}
       roles:
       - ingress-nginx
+  # MachineHealthCheck nodeStartupTimeout in the sandbox needs headroom
+  # over the chart's 10m default: after the previous tenant Kubernetes
+  # test tears down, LINSTOR CSI is still detaching the outgoing tenant's
+  # DRBD volumes and provisioning the incoming tenant's 20Gi worker root
+  # PVCs (replicated, autoPlace=3) takes ~9 minutes cold in that state.
+  # Add ~5 minutes of CDI import + VM boot + kubelet register + CNI Ready
+  # on top and the ~10 min budget is exceeded; MHC then deletes the still-
+  # provisioning worker Machine, MachineSet creates a replacement too late
+  # for the outer node-join deadline, and the whole test fails on what is
+  # a self-inflicted timeout. 20 minutes covers the observed cold-path
+  # end-to-end with a small safety margin. E2E-tenant scope only; the
+  # 10m default in packages/apps/kubernetes/values.yaml is unchanged.
+  nodeHealthCheck:
+    nodeStartupTimeout: "20m"
   storageClass: replicated
   version: "${k8s_version}"
 EOF
@@ -241,7 +255,7 @@ EOF
   # endpoints (both Kamaji control-plane pods), so a single apiserver pod restart
   # is routed around transparently. `kubectl port-forward` instead pins to one
   # pod and dies when that pod blips: a lone kube-apiserver restart was observed
-  # leaving localhost refusing connections for the entire 12m node-Ready wait
+  # leaving localhost refusing connections for the entire node-Ready wait
   # while the cluster was in fact healthy (CAPI NodeHealthy=True on both nodes),
   # failing the test on a dead tunnel. The LB endpoint is also stable until
   # teardown, so the failure snapshot can still reach the tenant. Test-scoped and
@@ -294,14 +308,23 @@ EOF
   # two budgets starve each other under load: a slow KubeVirt VM boot consumes
   # the join budget, then the tenant cluster's cilium CNI needs several more
   # minutes to make the freshly-joined nodes Ready — overflowing the fixed 3m
-  # Ready window even though the CNI converges fine. One 12m deadline that polls
+  # Ready window even though the CNI converges fine. One deadline that polls
   # for ">=2 nodes Ready" is robust to wherever the time goes.
-  if ! timeout 12m bash -c '
+  #
+  # 20m budget is chosen to match the MachineHealthCheck.nodeStartupTimeout
+  # bumped in the CR spec above: LINSTOR CSI cold-provisioning after the
+  # preceding tenant Kubernetes test teardown routinely takes ~9 minutes for
+  # the replicated (autoPlace=3, DRBD) 20Gi worker root PVCs, on top of CDI
+  # import, VM boot, kubelet register and CNI Ready. Shorter budgets fail on
+  # the cold path with no cluster-side fault. If both nodes are still not
+  # Ready after 20m, the diagnostics below split the KubeVirt / Talos /
+  # kubelet / CNI failure sub-modes for the follow-up.
+  if ! timeout 20m bash -c '
     until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
       sleep 5
     done
   '; then
-    # Node-join failed: fewer than 2 tenant nodes became Ready inside the 12m
+    # Node-join failed: fewer than 2 tenant nodes became Ready inside the 20m
     # deadline. Dump scoped diagnostics that split the failure sub-modes, then
     # fail fast — no point running LB/NFS tests without Ready nodes.
     #
@@ -313,7 +336,7 @@ EOF
     # (2b) is the failure mode a follow-up fix has to target, and it cannot be
     # designed without this artifact. Every capture is guarded with `|| true`
     # so a capture failure never masks the real `exit 1`.
-    echo "=== node-join failed: fewer than 2 tenant nodes Ready within 12m — diagnostics follow ==="
+    echo "=== node-join failed: fewer than 2 tenant nodes Ready within the deadline — diagnostics follow ==="
     kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
     kubectl -n tenant-test get hr || true
 
