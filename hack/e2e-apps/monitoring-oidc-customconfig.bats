@@ -1,25 +1,22 @@
 #!/usr/bin/env bats
 
-# Phase-1 OIDC CustomConfig selector e2e for the Grafana instance —
+# Phase-1 OIDC CustomConfig selector e2e for the Grafana instance,
 # render-side only.
 #
 # What is exercised on a live cluster: that the new
 # `spec.oidc.mode: CustomConfig` field is admitted; that cozystack-api
 # accepts the updated schema; that the HelmRelease renders; that the
 # operator-supplied auth.generic_oauth payload lands on the Grafana
-# CR; and — crucially — that NO Keycloak objects are created in the
+# CR; and, crucially, that NO Keycloak objects are created in the
 # `cozy` realm when the tenant brings their own issuer.
 
-setup() {
-  TEST_NAME="mon-oidc-byo-$$"
-  cleanup_monitoring
-}
+# cozytest.sh (the e2e runner) is not real bats: it never invokes
+# setup()/teardown(). Cleanup belongs in cozy_cleanup(), which runs at
+# suite exit and on the first failing test. Per-test isolation is done
+# inline at the top of each @test.
+TEST_NAME="mon-oidc-byo"
 
-teardown() {
-  cleanup_monitoring
-}
-
-cleanup_monitoring() {
+cleanup_mon() {
   kubectl -n tenant-test delete monitoring.apps.cozystack.io "${TEST_NAME}" \
     --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait monitoring.apps.cozystack.io "${TEST_NAME}" \
@@ -28,7 +25,10 @@ cleanup_monitoring() {
     --ignore-not-found 2>/dev/null || true
 }
 
+cozy_cleanup() { cleanup_mon; }
+
 @test "Monitoring CR accepts spec.oidc.mode=CustomConfig with inline config" {
+  cleanup_mon
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Monitoring

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 
-# Phase-1 OIDC System-mode e2e for the Grafana instance — render-side
+# Phase-1 OIDC System-mode e2e for the Grafana instance, render-side
 # only.
 #
 # Pairs with monitoring-oidc-customconfig.bats (BYO issuer path).
@@ -16,23 +16,23 @@
 # KeycloakClientScope / KeycloakRealmGroups / persistent
 # client-secret Secret / Grafana CR carry the expected shape.
 
-setup() {
-  TEST_NAME="mon-oidc-sys-$$"
-  cleanup_monitoring
-}
+# cozytest.sh (the e2e runner) is not real bats: it never invokes
+# setup()/teardown(). Cleanup belongs in cozy_cleanup(), which runs at
+# suite exit and on the first failing test. Per-test isolation is done
+# inline at the top of each @test.
+TEST_NAME="mon-oidc-sys"
 
-teardown() {
-  cleanup_monitoring
-}
-
-cleanup_monitoring() {
+cleanup_mon() {
   kubectl -n tenant-test delete monitoring.apps.cozystack.io "${TEST_NAME}" \
     --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait monitoring.apps.cozystack.io "${TEST_NAME}" \
     --for=delete --timeout=2m 2>/dev/null || true
 }
 
+cozy_cleanup() { cleanup_mon; }
+
 @test "Monitoring CR accepts spec.oidc.mode=System" {
+  cleanup_mon
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Monitoring
@@ -60,7 +60,7 @@ EOF
   timeout 60 sh -ec 'until kubectl -n tenant-test get hr "monitoring-'"${TEST_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
 
   # Wait for the chart to render its Grafana CR. We do not wait on
-  # HR Ready — that requires a full VictoriaMetrics + Postgres bringup
+  # HR Ready: that requires a full VictoriaMetrics + Postgres bringup
   # which the render-side test deliberately avoids.
   timeout 180 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 5; done'
 }
