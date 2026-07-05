@@ -317,6 +317,13 @@ tests:
 
   ##########################################################
   # allow_assign_grafana_admin is driven by oidc.grafanaAdmin
+  #
+  # Chart-internal capability only. Phase 1 does not wire this end-
+  # to-end from the platform bundle: `Package.spec.components[].values`
+  # is dropped for `monitoring-system` because that component has no
+  # `install:` block in the PackageSource. Kept as a template unit
+  # test so a future phase that adds the wiring lands on a green
+  # chart-side contract.
   ##########################################################
 
   - it: oidc.grafanaAdmin=true upgrades Admin to server-level GrafanaAdmin

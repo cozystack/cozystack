@@ -81,15 +81,26 @@ CR:
 6. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
    Deployment sourced from the Secret in step 4.
 
-Server-level `GrafanaAdmin` promotion is a platform-only lever, not
-exposed on the tenant `Monitoring` CR — a tenant cannot self-promote
-their `<clientId>-admin` group members to `GrafanaAdmin`. The platform
-bundle (`packages/core/platform/templates/bundles/system.yaml`) flips
-it on for the platform Grafana release via
-`Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin: true`,
-which sets `allow_assign_grafana_admin: true` in the rendered
-`[auth.generic_oauth]` block. Tenant Grafana releases inherit the
-chart default `false` and stay at org-level Admin.
+Server-level `GrafanaAdmin` promotion (`allow_assign_grafana_admin`)
+is out of scope for Phase 1. All Grafana instances — platform and
+tenant — cap at org-level `Admin` for members of the
+`<clientId>-admin` group. Not exposed on the tenant `Monitoring` CR
+either.
+
+The chart carries an internal lever `oidc.grafanaAdmin` (default
+`false`), reserved for a future phase that will route the override
+through the tenant-root chart's monitoring HR values. In Phase 1
+nothing sets it to `true` end-to-end: the platform bundle's obvious
+path via `Package.spec.components["monitoring-system"].values` is
+silently dropped because the `monitoring-system` component in
+`packages/core/platform/sources/monitoring-application.yaml` has no
+`install:` block, and PackageReconciler skips components without
+one before ever copying the override onto a HelmRelease
+(`internal/operator/package_reconciler.go` around lines 197-201 and
+292-293). Wiring it end-to-end requires either an explicit values
+injection from the tenant-root chart's `templates/monitoring.yaml`
+or an `install:` block on the `monitoring-system` component that
+creates a variant-scoped HR — both defensible, both deferred.
 
 ## CustomConfig mode
 

@@ -55,11 +55,21 @@
 
 {{- /*
   Whether to promote `<clientId>-admin` group members to server-level
-  `GrafanaAdmin` (Grafana's `allow_assign_grafana_admin` flag). Driven
-  by an explicit values field so the platform bundle can flip it on
-  for the platform release via
-  `Package.spec.components["monitoring-system"].values.oidc.grafanaAdmin`
-  without the chart having to sniff `.Release.Name`.
+  `GrafanaAdmin` (Grafana's `allow_assign_grafana_admin` flag).
+  Chart-internal lever driven by `oidc.grafanaAdmin` values input;
+  defaults to `false`.
+
+  Nothing in the Phase 1 platform bundle sets this to `true` end-to-
+  end: `Package.spec.components[].values` cannot reach this chart
+  because the `monitoring-system` component in
+  packages/core/platform/sources/monitoring-application.yaml has no
+  `install:` block, and PackageReconciler skips components without
+  one before values propagation (internal/operator/package_reconciler.go
+  lines 197-201 and 292-293). A future phase will route the
+  override through the tenant-root chart's monitoring HR values;
+  until then this helper always renders `false` in practice, and
+  server-level GrafanaAdmin promotion stays out of scope. See
+  docs/oidc-grafana.md.
 */}}
 {{- define "monitoring.oidc.allowAssignGrafanaAdmin" -}}
 {{- $grafanaAdmin := dig "grafanaAdmin" false (.Values.oidc | default dict) -}}

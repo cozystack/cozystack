@@ -2,6 +2,17 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: monitoring
+  annotations:
+    # Monitoring's HR bootstraps Grafana + Alerta + VMCluster + CNPG
+    # (postgres for Grafana state) + optionally four Keycloak CRs
+    # (KeycloakClient, KeycloakClientScope, three KeycloakRealmGroups)
+    # under `spec.oidc.mode: System`. The Keycloak-side reconciliation
+    # is asynchronous against an operator in `cozy-keycloak`, not the
+    # tenant namespace, so Flux's default 5m install window is tight
+    # even before adding OIDC. Override to 15m — matches the precedent
+    # set by tenant-rd/kubernetes-rd cozyrds annotations for
+    # long-bootstrap stacks.
+    release.cozystack.io/helm-install-timeout: "15m"
 spec:
   application:
     kind: Monitoring
