@@ -370,7 +370,17 @@ spec:
   resourceQuotas:
     cpu: "60"
     memory: "128Gi"
-    storage: "100Gi"
+    # 200Gi so back-to-back tenant Kubernetes tests
+    # (kubernetes-latest, kubernetes-previous) don't run into
+    # ResourceQuota during CDI's second-phase scratch PVC allocation.
+    # Each tenant provisions 2 worker VMs × 20Gi disk + 21Gi CDI scratch
+    # during import; when kubernetes-latest teardown's DRBD detach lags
+    # past cozy_wait_tenant_drained, the leftover 40Gi of latest's worker
+    # PVCs stays counted against tenant-quota while kubernetes-previous
+    # is already asking for its own 40Gi + ~21Gi scratch: the scratch
+    # PVC create call trips the 100Gi ceiling and the second worker's
+    # DataVolume stalls in ImportInProgress indefinitely.
+    storage: "200Gi"
   seaweedfs: false
 EOF
   timeout 60 sh -ec 'until kubectl get hr/tenant-test -n tenant-root >/dev/null 2>&1; do sleep 2; done'
@@ -381,7 +391,7 @@ EOF
   timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'
   kubectl get quota -n tenant-test \
     -o jsonpath='{range .items[*]}{.spec.hard.requests\.memory}{" "}{.spec.hard.requests\.storage}{"\n"}{end}' \
-    | grep -qx '137438953472 100Gi'
+    | grep -qx '137438953472 200Gi'
 
   # Assert LimitRange defaults for containers
   kubectl get limitrange -n tenant-test \
