@@ -119,10 +119,14 @@ EOF
   fi
 
   timeout 60 sh -ec 'until kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "'"${CID}"'" >/dev/null 2>&1; do sleep 2; done'
-  public=$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" \
-    -o jsonpath='{.spec.public}')
-  echo "client public: ${public}"
-  [ "${public}" = "false" ]
+  # The EDP Keycloak operator's CRD strips `spec.public: false` on write
+  # (schema default is false, so a false value never materialises in the
+  # applied object). Assert confidentiality via clientAuthenticatorType,
+  # which the operator DOES persist.
+  auth_type=$(kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" \
+    -o jsonpath='{.spec.clientAuthenticatorType}')
+  echo "client authenticator type: ${auth_type}"
+  [ "${auth_type}" = "client-secret" ]
 
   timeout 30 sh -ec 'until kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "'"${CID}"'-audience" >/dev/null 2>&1; do sleep 2; done'
   mapper=$(kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" \

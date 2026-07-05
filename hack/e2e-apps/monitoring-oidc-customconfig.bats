@@ -126,11 +126,11 @@ client_id = byo-monitoring
 client_secret = byo-secret
 ' --dry-run=client -o yaml | kubectl apply -f -
 
-  # Recreate the Monitoring CR pointing at the Secret.
-  kubectl -n tenant-test delete monitoring.apps.cozystack.io "${CR_NAME}" --ignore-not-found
-  kubectl -n tenant-test wait monitoring.apps.cozystack.io "${CR_NAME}" \
-    --for=delete --timeout=2m 2>/dev/null || true
-
+  # Update the Monitoring CR in place: swap customConfig.config (inline)
+  # for customConfig.secretRef.name. Delete + immediate apply races
+  # kubectl's create-vs-patch decision against the API server's grace-
+  # period cache and can hit "NotFound" during patch, so let the operator
+  # reconcile the mode change on the same CR instead.
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Monitoring
@@ -160,6 +160,17 @@ EOF
   timeout 60 sh -ec 'until kubectl -n tenant-test get hr "'"${CR_NAME}"'" >/dev/null 2>&1; do sleep 2; done'
   timeout 120 sh -ec 'until kubectl -n tenant-test get hr "'"${INNER_REL}"'" >/dev/null 2>&1; do sleep 2; done'
   timeout 180 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 5; done'
+
+  # The Grafana CR from @test 1 already exists and carries the inline
+  # auth.generic_oauth block; wait for the chart to reconcile the swap
+  # to secretRef by polling for the target state (volume mount present
+  # AND inline block absent) instead of asserting immediately.
+  timeout 180 sh -ec '
+    until [ -n "$(kubectl -n tenant-test get grafana grafana -o jsonpath="{.spec.deployment.spec.template.spec.containers[?(@.name==\"grafana\")].volumeMounts[?(@.name==\"oidc-custom-ini\")].mountPath}")" ]; do sleep 5; done
+  '
+  timeout 60 sh -ec '
+    until [ -z "$(kubectl -n tenant-test get grafana grafana -o jsonpath="{.spec.config.auth\.generic_oauth}")" ]; do sleep 5; done
+  '
 
   # spec.config carries no auth.generic_oauth section in this branch.
   section=$(kubectl -n tenant-test get grafana grafana \
