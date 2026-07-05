@@ -268,6 +268,65 @@ if kubectl get deploy -n cozy-linstor linstor-controller >/dev/null 2>&1; then
   kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color n l > $DIR/nodes.txt 2>&1
   kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color sp l > $DIR/storage-pools.txt 2>&1
   kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color r l > $DIR/resources.txt 2>&1
+  # Cluster-wide ErrorReport index (IDs + timestamps + node + category)
+  # for fast triage before diving into the per-satellite bundles below.
+  kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor --no-color error-reports list > $DIR/error-reports-index.txt 2>&1 || true
+
+  # Controller-side ErrorReports live on the controller pod at
+  # /var/log/linstor-controller/ and cover autoplace decisions, RPC
+  # errors, and controller-JVM exceptions the index above only
+  # references by ID. Bundle them the same way as the satellite ones
+  # below so both ends of the storage stack are recoverable offline.
+  kubectl -n cozy-linstor exec deploy/linstor-controller --container=linstor-controller -- sh -c '
+    cd /var/log/linstor-controller 2>/dev/null || exit 0
+    tar -czf - ErrorReport-*.log 2>/dev/null || true
+  ' > "$DIR/controller-error-reports.tgz" 2>/dev/null || true
+  # Drop the bundle if empty. `tar -czf - <no-match>` produces a valid
+  # 45-byte gzipped empty archive (extracts cleanly, `tar -tzf` exits
+  # 0), so a plain readability check keeps that stub in the tree.
+  # Require the archive to contain at least one member to keep it.
+  if [ ! -s "$DIR/controller-error-reports.tgz" ] || [ -z "$(tar -tzf "$DIR/controller-error-reports.tgz" 2>/dev/null | head -n 1)" ]; then
+    rm -f "$DIR/controller-error-reports.tgz"
+  fi
+
+  # LINSTOR satellite ErrorReports carry the actual storage-driver error
+  # text (the linstor-Satellite log only references them by ID:
+  # `ERROR ... Failed to create zfsvolume [Report number 6A4A394E-...]`).
+  # crust-gather ships only pod stdout, so without this capture the
+  # report body stays on the satellite ephemeral filesystem and is lost
+  # when the sandbox is torn down. Copy them off every satellite pod so
+  # post-mortem of a `CreateVolume ResourceExhausted` or
+  # `Failed to create zfsvolume` retry loop has the concrete cause
+  # (out-of-space, dataset conflict, kernel error) instead of just the
+  # driver-level symptom.
+  DIR=$REPORT_DIR/linstor/error-reports
+  mkdir -p "$DIR"
+  for pod in $(kubectl -n cozy-linstor get pods -l app.kubernetes.io/component=linstor-satellite -o name 2>/dev/null); do
+    # Read the node name directly off the pod spec so the tarball key
+    # is stable across piraeus DaemonSet regenerations. Fallback to the
+    # pod name if .spec.nodeName is not readable for any reason (last
+    # resort; collisions between DS pod generations are theoretically
+    # possible but the bundle would still land in a distinct file).
+    node=$(kubectl -n cozy-linstor get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
+    [ -z "$node" ] && node=$(basename "$pod")
+    # Tar the ErrorReport-*.log files into a per-satellite bundle so a
+    # burst of retry-loop reports (dozens per incident) does not explode
+    # the artefact tree, and a missing directory or empty set never
+    # fails the whole cozyreport run.
+    kubectl -n cozy-linstor exec "$pod" --container=linstor-satellite -- sh -c '
+      cd /var/log/linstor-satellite 2>/dev/null || exit 0
+      tar -czf - ErrorReport-*.log 2>/dev/null || true
+    ' > "$DIR/$node.tgz" 2>/dev/null || true
+    # Drop the bundle if empty. `tar -czf - <no-match>` yields a valid
+    # 45-byte gzipped empty archive that would otherwise slip past a
+    # readability check. Require at least one member to keep it. A
+    # satellite with zero ErrorReports (healthy case) leaves nothing.
+    if [ ! -s "$DIR/$node.tgz" ] || [ -z "$(tar -tzf "$DIR/$node.tgz" 2>/dev/null | head -n 1)" ]; then
+      rm -f "$DIR/$node.tgz"
+    fi
+  done
+  # Drop the empty parent directory when no satellite had reports.
+  rmdir "$DIR" 2>/dev/null || true
 fi
 
 # -- sandbox-host module
