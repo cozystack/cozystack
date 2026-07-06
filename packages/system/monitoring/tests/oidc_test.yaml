@@ -382,7 +382,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: mode=CustomConfig inline writes the operator's map verbatim into spec.config
+  - it: mode=CustomConfig inline preserves the operator's map + chart-forced settings
     template: templates/grafana/grafana.yaml
     set:
       oidc.mode: CustomConfig
@@ -400,6 +400,31 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].auth_url
           value: https://idp.example/auth
+      # Contract: chart-forced settings are merged on top of CustomConfig
+      # inline, so the users-Job's role assignments survive login.
+      - equal:
+          path: spec.config["auth.generic_oauth"].skip_org_role_sync
+          value: "true"
+      - equal:
+          path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
+          value: "true"
+
+  - it: mode=CustomConfig inline — operator cannot override chart-forced OIDC settings
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: my-client
+        # Operator tries to disable both — chart still wins.
+        skip_org_role_sync: "false"
+        oauth_allow_insecure_email_lookup: "false"
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].skip_org_role_sync
+          value: "true"
+      - equal:
+          path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
+          value: "true"
 
   - it: mode=CustomConfig users-Job runs and honours the desired list
     template: templates/grafana/oidc-users-job.yaml
@@ -476,3 +501,26 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline generic_oauth map) or spec.oidc.customConfig.secretRef.name (Secret with an `auth.ini` key)."
+
+  - it: mode=CustomConfig secretRef + non-empty users fails the render (contract incompat)
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.secretRef.name: my-oauth-secret
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself."
+
+  - it: mode=CustomConfig secretRef + empty users renders successfully
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.secretRef.name: my-oauth-secret
+    asserts:
+      # spec.config still carries no auth.generic_oauth in this branch,
+      # matching the earlier secretRef test — this is the compatible path.
+      - notExists:
+          path: spec.config["auth.generic_oauth"]
