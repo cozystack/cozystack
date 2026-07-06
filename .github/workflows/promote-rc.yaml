@@ -89,9 +89,13 @@ jobs:
               owner: context.repo.owner, repo: context.repo.repo, per_page: 100
             });
             const rcRel = releases.find(r => r.tag_name === rcTag);
-            if (!rcRel) core.setFailed(`No release found for rc '${rcTag}' — has it been built?`);
+            if (!rcRel) {
+              core.setFailed(`No release found for rc '${rcTag}' — has it been built?`);
+              return;
+            }
             if (releases.some(r => r.tag_name === stableTag)) {
               core.setFailed(`Stable release '${stableTag}' already exists — refusing to re-promote.`);
+              return;
             }
             // The stable git tag must not pre-exist either: finalize creates it
             // write-once at the PR merge commit, so a stray tag (from a partial
@@ -103,12 +107,16 @@ jobs:
                 ref: `tags/${stableTag}`
               });
               core.setFailed(`Stable tag '${stableTag}' already exists — refusing to re-promote.`);
+              return;
             } catch (e) {
               if (e.status !== 404) throw e;
             }
             // Surface the rc's disk asset id for the copy step.
             const disk = (rcRel.assets || []).find(a => a.name === 'nocloud-amd64.raw.xz');
-            if (!disk) core.setFailed(`rc release '${rcTag}' has no nocloud-amd64.raw.xz asset.`);
+            if (!disk) {
+              core.setFailed(`rc release '${rcTag}' has no nocloud-amd64.raw.xz asset.`);
+              return;
+            }
             core.setOutput('disk_id', String(disk.id));
         id: validate
 
@@ -201,12 +209,17 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           STABLE_TAG: ${{ steps.parse.outputs.stable_tag }}
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
           RC_TAG: ${{ steps.parse.outputs.rc_tag }}
         run: |
           # Draft now; pull-requests-release.yaml publishes it on PR merge.
           gh release view "${STABLE_TAG}" >/dev/null 2>&1 \
             || gh release create "${STABLE_TAG}" --draft --title "${STABLE_TAG}" --notes "Promoted from ${RC_TAG}."
-          make upload_assets VERSION="${STABLE_TAG}"
+          # upload_assets depends on `manifests`, which re-renders the operator
+          # manifests — pass COZYSTACK_VERSION so that re-render re-stamps the
+          # stable version instead of blanking the platformVersion set by the
+          # Restamp step above.
+          make upload_assets VERSION="${STABLE_TAG}" COZYSTACK_VERSION="${STABLE_VERSION}"
 
       - name: Open promote (release) PR
         env:
