@@ -196,6 +196,8 @@ kubectl delete dv -n <namespace> -l forklift.konveyor.io/plan=<import-name>
 | `warm`                | Enable warm migration (incremental replication before cutover).                                                                                                                                                                                                                                      | `bool`     | `false` |
 | `enableAdoption`      | Automatically label imported VMs for Cozystack adoption and dashboard visibility.                                                                                                                                                                                                                    | `bool`     | `true`  |
 | `tenantNamespace`     | Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption).                                      | `string`   | `""`    |
+| `instanceType`        | KubeVirt cluster instance type (sizing preset, e.g. `u1.medium`) assigned to the adopted VMInstance. Leave empty to keep the size detected on the source VM, falling back to the adoption controller default.                                                                                        | `string`   | `""`    |
+| `instanceProfile`     | KubeVirt cluster preference (guest OS preset, e.g. `centos.stream9`) assigned to the adopted VMInstance. Leave empty to keep the preference detected on the source VM, falling back to the adoption controller default.                                                                              | `string`   | `""`    |
 
 
 ### Network Mapping
@@ -216,4 +218,14 @@ kubectl delete dv -n <namespace> -l forklift.konveyor.io/plan=<import-name>
 | `storageMap`                 | Mapping of source datastores to destination StorageClasses.         | `[]object` | `[]`  |
 | `storageMap[i].sourceId`     | The managed object reference ID of the source datastore in vSphere. | `string`   | `""`  |
 | `storageMap[i].storageClass` | Name of the destination Kubernetes StorageClass.                    | `string`   | `""`  |
+
+
+### Migration Network
+
+| Name                           | Description                                                                                                                                                         | Type       | Value |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----- |
+| `migrationHosts`               | Per-ESXi-host disk-transfer network overrides.                                                                                                                      | `[]object` | `[]`  |
+| `migrationHosts[i].id`         | The managed object reference ID of the ESXi host in vSphere (e.g. `host-10`).                                                                                       | `string`   | `""`  |
+| `migrationHosts[i].ipAddress`  | The host IP address the cluster should use for disk transfer (VDDK NFC, TCP 443 + 902).                                                                             | `string`   | `""`  |
+| `migrationHosts[i].secretName` | Name of a Kubernetes Secret (in this namespace) holding the ESXi host credentials, with keys `user`, `password`, `thumbprint`, and optionally `insecureSkipVerify`. | `string`   | `""`  |
 

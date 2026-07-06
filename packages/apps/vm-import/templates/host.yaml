@@ -1,0 +1,19 @@
+{{- range .Values.migrationHosts }}
+---
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Host
+metadata:
+  name: {{ $.Release.Name }}-{{ .id }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+spec:
+  id: {{ .id | quote }}
+  ipAddress: {{ required "migrationHosts[].ipAddress is required" .ipAddress | quote }}
+  provider:
+    name: {{ $.Release.Name }}-source
+    namespace: {{ $.Release.Namespace }}
+  secret:
+    name: {{ required "migrationHosts[].secretName is required" .secretName | quote }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}

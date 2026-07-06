@@ -40,6 +40,12 @@ enableAdoption: true
 ## @param {string} tenantNamespace - Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption).
 tenantNamespace: ""
 
+## @param {string} instanceType - KubeVirt cluster instance type (sizing preset, e.g. `u1.medium`) assigned to the adopted VMInstance. Leave empty to keep the size detected on the source VM, falling back to the adoption controller default.
+instanceType: ""
+
+## @param {string} instanceProfile - KubeVirt cluster preference (guest OS preset, e.g. `centos.stream9`) assigned to the adopted VMInstance. Leave empty to keep the preference detected on the source VM, falling back to the adoption controller default.
+instanceProfile: ""
+
 ##
 ## @section Network Mapping
 ##
@@ -63,3 +69,15 @@ networkMap: []
 
 ## @param {[]StorageMapEntry} storageMap - Mapping of source datastores to destination StorageClasses.
 storageMap: []
+
+##
+## @section Migration Network
+##
+
+## @typedef {struct} MigrationHost - Overrides the network used to transfer a VM's disks from a specific ESXi host. By default Forklift connects to the host IP advertised by vCenter; set this when that IP is not routable from the cluster (e.g. it collides with the cluster Service CIDR) and the host is reachable on a different address. Requires the host to be healthy (`green`) in vCenter, otherwise Forklift ignores the override.
+## @field {string} id - The managed object reference ID of the ESXi host in vSphere (e.g. `host-10`).
+## @field {string} ipAddress - The host IP address the cluster should use for disk transfer (VDDK NFC, TCP 443 + 902).
+## @field {string} secretName - Name of a Kubernetes Secret (in this namespace) holding the ESXi host credentials, with keys `user`, `password`, `thumbprint`, and optionally `insecureSkipVerify`.
+
+## @param {[]MigrationHost} migrationHosts - Per-ESXi-host disk-transfer network overrides.
+migrationHosts: []

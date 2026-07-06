@@ -9,6 +9,12 @@ metadata:
     vm-import.cozystack.io/adoption-enabled: {{ if hasKey .Values "enableAdoption" }}{{ .Values.enableAdoption | quote }}{{ else }}"true"{{ end }}
     vm-import.cozystack.io/target-namespace: {{ .Values.tenantNamespace | default .Release.Namespace | quote }}
     vm-import.cozystack.io/import-name: {{ .Release.Name | quote }}
+    {{- with .Values.instanceType }}
+    vm-import.cozystack.io/instance-type: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.instanceProfile }}
+    vm-import.cozystack.io/instance-profile: {{ . | quote }}
+    {{- end }}
 spec:
   warm: {{ default false .Values.warm }}
   skipGuestConversion: {{ default false .Values.skipGuestConversion }}
@@ -36,7 +42,17 @@ spec:
       namespace: {{ .Release.Namespace }}
     {{- end }}
   {{- end }}
+  {{- if and .Values.skipGuestConversion .Values.tenantNamespace }}
+  {{- /* VDDK raw-copy needs no privileged conversion pod, so Forklift can copy
+         the disk straight into the tenant — the VM is then adopted in place,
+         avoiding a second cross-namespace clone. */}}
+  targetNamespace: {{ .Values.tenantNamespace }}
+  {{- else }}
+  {{- /* virt-v2v conversion runs a privileged pod that a baseline tenant
+         forbids, so it stays in this (privileged) namespace; the
+         vm-adoption-controller then clones the disk into tenantNamespace. */}}
   targetNamespace: {{ .Release.Namespace }}
+  {{- end }}
   vms:
     {{- range .Values.vms }}
     - id: {{ .id | quote }}

@@ -68,6 +68,16 @@
       "type": "string",
       "default": ""
     },
+    "instanceType": {
+      "description": "KubeVirt cluster instance type (sizing preset, e.g. `u1.medium`) assigned to the adopted VMInstance. Leave empty to keep the size detected on the source VM, falling back to the adoption controller default.",
+      "type": "string",
+      "default": ""
+    },
+    "instanceProfile": {
+      "description": "KubeVirt cluster preference (guest OS preset, e.g. `centos.stream9`) assigned to the adopted VMInstance. Leave empty to keep the preference detected on the source VM, falling back to the adoption controller default.",
+      "type": "string",
+      "default": ""
+    },
     "networkMap": {
       "description": "Mapping of source networks to destination networks.",
       "type": "array",
@@ -115,6 +125,33 @@
           },
           "storageClass": {
             "description": "Name of the destination Kubernetes StorageClass.",
+            "type": "string"
+          }
+        }
+      }
+    },
+    "migrationHosts": {
+      "description": "Per-ESXi-host disk-transfer network overrides.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "ipAddress",
+          "secretName"
+        ],
+        "properties": {
+          "id": {
+            "description": "The managed object reference ID of the ESXi host in vSphere (e.g. `host-10`).",
+            "type": "string"
+          },
+          "ipAddress": {
+            "description": "The host IP address the cluster should use for disk transfer (VDDK NFC, TCP 443 + 902).",
+            "type": "string"
+          },
+          "secretName": {
+            "description": "Name of a Kubernetes Secret (in this namespace) holding the ESXi host credentials, with keys `user`, `password`, `thumbprint`, and optionally `insecureSkipVerify`.",
             "type": "string"
           }
         }
