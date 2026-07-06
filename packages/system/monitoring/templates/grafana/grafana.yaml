@@ -29,9 +29,14 @@
 */}}
 {{- $oidc := .Values.oidc | default dict }}
 {{- $oidcMode := $oidc.mode | default "None" }}
+{{- /*
+  Users-map prologue is included from oidc-users-job.yaml (rendered in
+  every mode), so the secretRef+users incompat is caught even when
+  oidc-users-job.yaml is disabled downstream. Only the CustomConfig-XOR
+  check is grafana.yaml-scoped.
+*/}}
 {{- if eq $oidcMode "CustomConfig" }}
 {{-   include "monitoring.oidc.assertCustomConfigXor" . }}
-{{-   include "monitoring.oidc.assertCustomSecretRefUsersEmpty" . }}
 {{- end }}
 {{- /*
   Symmetric assertions with templates/grafana/oidc-keycloak.yaml so a

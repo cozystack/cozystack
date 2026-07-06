@@ -41,7 +41,11 @@
 {{- $oidc := .Values.oidc | default dict }}
 {{- $mode := $oidc.mode | default "None" }}
 {{- $users := $oidc.users | default (list) }}
-{{- include "monitoring.oidc.assertUsersEmailShape" . }}
+{{- /*
+  Prologue: incompat (secretRef+users) first, then per-entry role +
+  email validation. See monitoring.oidc.assertUsersPrologue.
+*/}}
+{{- include "monitoring.oidc.assertUsersPrologue" . }}
 ---
 apiVersion: batch/v1
 kind: Job

@@ -112,6 +112,45 @@
 {{- end -}}
 
 {{- /*
+  Prologue that all templates touching spec.oidc.users should include
+  ONCE, near the top. Runs the incompatibility check (secretRef + users)
+  before the per-entry regexes so operators see the most actionable
+  error first — combining incompatible top-level fields is a
+  configuration bug the operator can fix immediately; a per-user
+  malformed email is a data-entry issue in the CR body.
+*/}}
+{{- define "monitoring.oidc.assertUsersPrologue" -}}
+{{-   include "monitoring.oidc.assertCustomSecretRefUsersEmpty" . }}
+{{-   include "monitoring.oidc.assertUsersRoleShape" . }}
+{{-   include "monitoring.oidc.assertUsersEmailShape" . }}
+{{- end -}}
+
+{{- /*
+  Reject `spec.oidc.users[]` entries missing `role` or carrying an
+  unknown role. openAPISchema also marks `role` required, but a stale
+  schema (dashboard-emitted CR generated before the field was added, or
+  a direct-helm invocation that bypasses the API validation) would
+  otherwise render `role: "null"` into the users-Job's Grafana admin API
+  body and fail with HTTP 400 at hook execution. Failing at render
+  time surfaces the root cause instead of a mysterious backoffLimit
+  exhaustion.
+*/}}
+{{- define "monitoring.oidc.assertUsersRoleShape" -}}
+{{- $oidc := .Values.oidc | default dict -}}
+{{- $users := $oidc.users | default (list) -}}
+{{- $allowed := list "Admin" "Editor" "Viewer" -}}
+{{- range $i, $u := $users -}}
+{{-   $role := $u.role | default "" -}}
+{{-   if eq $role "" -}}
+{{-     fail (printf "spec.oidc.users[%d].role: is required and must be one of Admin, Editor, Viewer. Omitting the field would render null into the Grafana admin API body and fail the post-install users-Job with HTTP 400." $i) -}}
+{{-   end -}}
+{{-   if not (has $role $allowed) -}}
+{{-     fail (printf "spec.oidc.users[%d].role: %q is not one of the allowed values Admin, Editor, Viewer." $i $role) -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
   Reject malformed emails in `spec.oidc.users`. Grafana passes the
   string verbatim into a query string (/api/users/lookup?loginOrEmail=)
   and into JSON bodies (create_body / add_body); the users-Job's shell
