@@ -31,7 +31,7 @@ build-console:
 		$(call image-tags,cozystack-ui,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,cozystack-ui) \
 		--metadata-file images/console.json \
-		--build-arg APP_VERSION=v$(COZYSTACK_VERSION) \
+		--build-arg APP_VERSION=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--push=$(PUSH) \
 		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
 		--load=$(LOAD)
