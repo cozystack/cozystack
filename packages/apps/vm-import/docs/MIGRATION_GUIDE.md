@@ -103,11 +103,39 @@ then adopted into the tenant.
 - **vCenter must be reachable from the cluster** (the `sourceUrl` endpoint).
   This is required for **both** modes — virt-v2v reads the disk through vCenter.
 - For **VDDK raw-copy** mode only: the cluster must **also reach the ESXi hosts
-  directly** (VDDK uses NBD straight to the host that holds the VM). Verify
-  there is no overlap between the **ESXi management network** and the cluster
-  **Service CIDR** — an ESXi IP that falls inside the Service CIDR is shadowed
-  by Kubernetes service routing and VDDK will fail with `server refused
-  connection`.
+  directly** on **TCP 443 + 902** (VDDK uses NBD/NFC straight to the host that
+  holds the VM). Verify there is no overlap between the **ESXi management
+  network** and the cluster **Service CIDR** — an ESXi IP that falls inside the
+  Service CIDR is shadowed by Kubernetes service routing and VDDK will fail with
+  `server refused connection`.
+- By default VDDK connects to the host IP **advertised by vCenter**. If that IP
+  is not routable from the cluster (e.g. it collides with the Service CIDR, or
+  the host has a separate routable NIC), declare a per-host override under
+  `migrationHosts` — Forklift will then transfer disks over the IP you specify:
+  ```yaml
+  migrationHosts:
+    - id: host-10                 # the host's managed object ref (from inventory)
+      ipAddress: 10.31.0.29       # routable IP for disk transfer
+      secretName: esxi-host-10    # ESXi creds (see below)
+  ```
+  The referenced Secret holds the **ESXi host** credentials (not vCenter):
+  ```yaml
+  apiVersion: v1
+  kind: Secret
+  metadata:
+    name: esxi-host-10            # same namespace as the VMImport
+  type: Opaque
+  stringData:
+    user: root
+    password: <esxi-root-password>
+    thumbprint: <sha1-of-esxi-cert>     # openssl s_client -connect <ip>:443 | openssl x509 -fingerprint -sha1
+    insecureSkipVerify: "true"          # needed if the ESXi cert SAN doesn't match the override IP
+  ```
+  > The override is only honored when the host is **healthy (`green`)** in
+  > vCenter. A `yellow`/unhealthy host makes Forklift mark the `Host` not-ready
+  > and silently fall back to the vCenter-advertised IP. After clearing the
+  > vCenter alarm, restart `forklift-controller` so it re-reads the cached
+  > inventory.
 
 ### 3.3 Node configuration (virt-v2v mode)
 - `virt-v2v`'s libguestfs appliance uses `passt`, which must create a **user
@@ -229,6 +257,17 @@ this migration feature depends on it for UEFI sources.
 5. **Adoption**: with `enableAdoption: true` (default) the
    `vm-adoption-controller` creates a `VMInstance` in the tenant. For UEFI
    sources, the `VMInstance` must set `firmware.bootloader: uefi` (see #3002).
+
+   Two adoption paths, chosen automatically from the disk transfer mode:
+   - **VDDK raw-copy** (`skipGuestConversion: true`) needs no privileged
+     conversion pod, so the Plan targets `tenantNamespace` directly: Forklift
+     copies the disk **once**, straight into the tenant, and the controller
+     adopts the VM **in place** (no second copy).
+   - **virt-v2v** runs a privileged conversion pod a baseline tenant forbids,
+     so conversion stays in this (privileged) namespace and the controller then
+     performs a **cross-namespace clone** of the disk into `tenantNamespace`.
+   The clone duplicates the whole disk a second time across the replicated
+   storage, so the direct VDDK path is roughly twice as fast end-to-end.
 
 ---
 
