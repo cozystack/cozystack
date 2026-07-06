@@ -2,6 +2,7 @@ suite: OIDC selector on the Grafana instance (Phase 1)
 templates:
   - templates/grafana/oidc-keycloak.yaml
   - templates/grafana/oidc-client-secret.yaml
+  - templates/grafana/oidc-users-job.yaml
   - templates/grafana/grafana.yaml
 
 release:
@@ -24,10 +25,44 @@ capabilities:
 
 tests:
   ##########################################################
-  # mode: None — nothing OIDC-related is emitted
+  # Defensive rendering — omitted / null oidc block
   ##########################################################
 
-  - it: mode=None emits no KeycloakClient / KeycloakClientScope / KeycloakRealmGroup
+  - it: oidc omitted entirely renders as if mode=None
+    template: templates/grafana/grafana.yaml
+    asserts:
+      - notExists:
+          path: spec.config["auth.generic_oauth"]
+
+  - it: oidc=null does not blow up nil-deref on grafana.yaml
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc: ~
+    asserts:
+      - notExists:
+          path: spec.config["auth.generic_oauth"]
+
+  - it: oidc=null does not blow up nil-deref on oidc-keycloak.yaml
+    template: templates/grafana/oidc-keycloak.yaml
+    set:
+      oidc: ~
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: oidc=null does not blow up nil-deref on oidc-client-secret.yaml
+    template: templates/grafana/oidc-client-secret.yaml
+    set:
+      oidc: ~
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ##########################################################
+  # mode: None
+  ##########################################################
+
+  - it: mode=None emits no KeycloakClient / KeycloakClientScope
     template: templates/grafana/oidc-keycloak.yaml
     asserts:
       - hasDocuments:
@@ -53,18 +88,40 @@ tests:
           content:
             name: GF_PATHS_CUSTOM_INI
 
+  - it: mode=None still renders the users-Job so a mode switch can prune stale members
+    template: templates/grafana/oidc-users-job.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Job
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_MODE
+            value: "None"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DESIRED_USERS_JSON
+            value: "[]"
+
   ##########################################################
   # mode: System — happy path
   ##########################################################
 
-  - it: mode=System renders KeycloakClient + KeycloakClientScope + 3 KeycloakRealmGroups
+  - it: mode=System renders exactly one KeycloakClient and one KeycloakClientScope (no groups)
     template: templates/grafana/oidc-keycloak.yaml
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
     asserts:
       - hasDocuments:
-          count: 5
+          count: 2
       - equal:
           path: kind
           value: KeycloakClientScope
@@ -73,22 +130,6 @@ tests:
           path: kind
           value: KeycloakClient
         documentIndex: 1
-      - equal:
-          path: kind
-          value: KeycloakRealmGroup
-        documentIndex: 2
-      - equal:
-          path: metadata.name
-          value: tenant-root-monitoring-admin
-        documentIndex: 2
-      - equal:
-          path: metadata.name
-          value: tenant-root-monitoring-editor
-        documentIndex: 3
-      - equal:
-          path: metadata.name
-          value: tenant-root-monitoring-viewer
-        documentIndex: 4
 
   - it: mode=System KeycloakClient is confidential and points to the persistent Secret
     template: templates/grafana/oidc-keycloak.yaml
@@ -112,6 +153,12 @@ tests:
           path: spec.defaultClientScopes
           content: tenant-root-monitoring-audience
         documentIndex: 1
+      # Groups scope removed together with the KeycloakRealmGroups — the
+      # generic_oauth block no longer consumes group membership.
+      - notContains:
+          path: spec.defaultClientScopes
+          content: groups
+        documentIndex: 1
 
   - it: mode=System audience scope pins id_token.aud to the per-instance clientId
     template: templates/grafana/oidc-keycloak.yaml
@@ -128,7 +175,7 @@ tests:
           value: tenant-root-monitoring
         documentIndex: 0
 
-  - it: mode=System persists a random 32-char client-secret at install
+  - it: mode=System persists a random client-secret at install
     template: templates/grafana/oidc-client-secret.yaml
     set:
       oidc.mode: System
@@ -142,9 +189,10 @@ tests:
       - equal:
           path: metadata.name
           value: monitoring-oidc-client
+      # 32 random alphanumeric chars base64-encoded → 44 chars (43 + '=' padding).
       - matchRegex:
           path: data["client-secret"]
-          pattern: "^[A-Za-z0-9]+={0,2}$"
+          pattern: "^[A-Za-z0-9+/]{43}=$"
 
   - it: mode=System grafana.yaml emits auth.generic_oauth pointing at the cozy realm
     template: templates/grafana/grafana.yaml
@@ -164,13 +212,24 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].auth_url
           value: "https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth"
-      - matchRegex:
-          path: spec.config["auth.generic_oauth"].role_attribute_path
-          pattern: "tenant-root-monitoring-admin.*tenant-root-monitoring-editor.*tenant-root-monitoring-viewer"
-      # tenant Grafana stays at org-level Admin, no server-level upgrade.
       - equal:
+          path: spec.config["auth.generic_oauth"].scopes
+          value: "openid email profile tenant-root-monitoring-audience"
+      # No group-based mapping; the users-Job drives roles instead.
+      - notExists:
+          path: spec.config["auth.generic_oauth"].role_attribute_path
+      - notExists:
           path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
-          value: "false"
+      # skip_org_role_sync=true keeps a login from overwriting the
+      # users-Job's role assignments.
+      - equal:
+          path: spec.config["auth.generic_oauth"].skip_org_role_sync
+          value: "true"
+      # Insecure-email-lookup is required to attach the OIDC identity to
+      # the pre-provisioned local account.
+      - equal:
+          path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
+          value: "true"
 
   - it: mode=System grafana.yaml wires GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET from the Secret
     template: templates/grafana/grafana.yaml
@@ -196,6 +255,92 @@ tests:
       - equal:
           path: spec.config.auth.disable_login_form
           value: "false"
+
+  ##########################################################
+  # users-Job — post-install/post-upgrade hook, RBAC-free
+  ##########################################################
+
+  - it: users-Job is a helm hook, has a finite deadline, and needs no ServiceAccount
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: kind
+          value: Job
+      - equal:
+          path: metadata.name
+          value: monitoring-oidc-users
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-install,post-upgrade
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 900
+      # No SA name → falls back to `default` — the Job never talks to
+      # the kube API, only to Grafana over the in-cluster Service.
+      - notExists:
+          path: spec.template.spec.serviceAccountName
+
+  - it: users-Job mounts admin credentials from the chart-managed Secret
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GF_ADMIN_USER
+            valueFrom:
+              secretKeyRef:
+                name: grafana-admin-password
+                key: user
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: GF_ADMIN_PASSWORD
+            valueFrom:
+              secretKeyRef:
+                name: grafana-admin-password
+                key: password
+
+  - it: users-Job serialises spec.oidc.users into DESIRED_USERS_JSON
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+        - email: bob@example.com
+          role: Viewer
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DESIRED_USERS_JSON
+            value: '[{"email":"alice@example.com","role":"Admin"},{"email":"bob@example.com","role":"Viewer"}]'
+
+  - it: users-Job runs a non-root, read-only-rootfs container
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
 
   ##########################################################
   # mode: System — fail-close guard
@@ -245,7 +390,6 @@ tests:
         client_id: my-client
         client_secret: xyz
         auth_url: https://idp.example/auth
-        role_attribute_path: "'Viewer'"
     asserts:
       - equal:
           path: spec.config["auth.generic_oauth"].client_id
@@ -256,9 +400,27 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].auth_url
           value: https://idp.example/auth
-      - equal:
-          path: spec.config["auth.generic_oauth"].role_attribute_path
-          value: "'Viewer'"
+
+  - it: mode=CustomConfig users-Job runs and honours the desired list
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: my-client
+      oidc.users:
+        - email: carol@example.com
+          role: Editor
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OIDC_MODE
+            value: CustomConfig
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DESIRED_USERS_JSON
+            value: '[{"email":"carol@example.com","role":"Editor"}]'
 
   ##########################################################
   # mode: CustomConfig — secretRef
@@ -314,35 +476,3 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline generic_oauth map) or spec.oidc.customConfig.secretRef.name (Secret with an `auth.ini` key)."
-
-  ##########################################################
-  # allow_assign_grafana_admin is driven by oidc.grafanaAdmin
-  #
-  # Chart-internal capability only. Phase 1 does not wire this end-
-  # to-end from the platform bundle: `Package.spec.components[].values`
-  # is dropped for `monitoring-system` because that component has no
-  # `install:` block in the PackageSource. Kept as a template unit
-  # test so a future phase that adds the wiring lands on a green
-  # chart-side contract.
-  ##########################################################
-
-  - it: oidc.grafanaAdmin=true upgrades Admin to server-level GrafanaAdmin
-    template: templates/grafana/grafana.yaml
-    set:
-      oidc.mode: System
-      oidc.grafanaAdmin: true
-      _cluster.oidc-enabled: "true"
-    asserts:
-      - equal:
-          path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
-          value: "true"
-
-  - it: oidc.grafanaAdmin default is false (tenant releases stay at org-level Admin)
-    template: templates/grafana/grafana.yaml
-    set:
-      oidc.mode: System
-      _cluster.oidc-enabled: "true"
-    asserts:
-      - equal:
-          path: spec.config["auth.generic_oauth"].allow_assign_grafana_admin
-          value: "false"
