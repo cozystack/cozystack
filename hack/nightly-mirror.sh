@@ -132,8 +132,14 @@ SRC_ESC=$(printf '%s' "$SRC_REGISTRY" | sed -e 's/[].[^$*/\\]/\\&/g')
 if [ "$DRY_RUN" -eq 1 ]; then
   echo "DRY-RUN sed -i 's|${SRC_REGISTRY}/|${DST_REGISTRY}/|g' over ${TREE}/*/*/values.yaml"
 else
-  find "$TREE" -name values.yaml -print0 \
-    | xargs -0 sed -i "s|${SRC_ESC}/|${DST_REGISTRY}/|g"
+  # Same depth-2 glob as collect_refs: the files whose hosts are rewritten are
+  # exactly the files scanned for images to mirror. A `find -name values.yaml`
+  # (any depth) could host-rewrite a deeper values.yaml whose image was never
+  # mirrored, leaving a dangling GHCR ref.
+  for f in "$TREE"/*/*/values.yaml; do
+    [ -f "$f" ] || continue
+    sed -i "s|${SRC_ESC}/|${DST_REGISTRY}/|g" "$f"
+  done
 fi
 
 echo "Mirrored cozystack-owned images to ${DST_REGISTRY} (:${VERSION} +:${FLOATING}) and rewrote tree hosts."
