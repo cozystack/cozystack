@@ -1,0 +1,81 @@
+suite: monitoring ExternalName redirects in cozy-monitoring
+templates:
+  - templates/monitoring-external-services.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# The vlinsert-generic / vminsert-shortterm / vminsert-longterm ExternalName
+# Services redirect cozy-monitoring at the platform monitoring stack the root
+# tenant hosts in tenant-root. They only resolve when the root tenant actually
+# runs that stack (Tenant/root spec.monitoring=true). When it is off the
+# redirects dead-end and fluent-bit silently drops logs (issue #3181), so they
+# must NOT be rendered.
+#
+# The render is gated solely on _cluster.monitoring-enabled (fed from the
+# platform monitoring.rootEnabled value; operators keep it in sync with
+# Tenant/root spec.monitoring). The "true" default preserves the historical
+# always-create behaviour for cozystack-values Secrets written before the key
+# existed, and a null _cluster must not panic. The cases below pin the full
+# contract: enabled, disabled, default, and the nil guard.
+tests:
+  - it: renders all three ExternalName redirects when monitoring-enabled is "true"
+    set:
+      _cluster:
+        monitoring-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 3
+      - equal:
+          path: metadata.name
+          value: vlinsert-generic
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: cozy-monitoring
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: vminsert-shortterm
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: vminsert-longterm
+        documentIndex: 2
+
+  - it: keeps the redirects (default) when monitoring-enabled is absent
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: omits all redirects when monitoring-enabled is "false"
+    set:
+      _cluster:
+        monitoring-enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Guard: a null _cluster (missing cozystack-values Secret / dry-run) must not
+  # panic the render; `index (.Values._cluster | default dict) ...` falls back
+  # to the "true" default and keeps the redirects.
+  - it: keeps the redirects (no panic) when _cluster is null
+    set:
+      _cluster: null
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: vlinsert-generic still points at tenant-root when rendered
+    set:
+      _cluster:
+        monitoring-enabled: "true"
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.type
+          value: ExternalName
+      - equal:
+          path: spec.externalName
+          value: vlinsert-generic.tenant-root.svc.cluster.local

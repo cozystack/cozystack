@@ -1,0 +1,41 @@
+suite: VLCluster rendering requires a non-empty logsStorages
+templates:
+  - templates/vlogs/vlogs.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# logsStorages drives the VLCluster(s) that back platform log ingestion. An
+# empty list renders no VLCluster, so the monitoring-system HelmRelease
+# readiness gate has nothing to match and fluent-bit silently drops logs to a
+# non-existent vlinsert-generic (issue #3181). The template rejects that
+# outright rather than documenting it, so the misconfiguration is loud. These
+# cases pin both the valid default and the rejected empty configuration.
+tests:
+  - it: renders a VLCluster for the default (non-empty) logsStorages
+    asserts:
+      - containsDocument:
+          apiVersion: operator.victoriametrics.com/v1
+          kind: VLCluster
+          name: generic
+
+  - it: renders one VLCluster per logsStorages entry
+    set:
+      logsStorages:
+        - name: generic
+          retentionPeriod: "1"
+          storage: 10Gi
+        - name: audit
+          retentionPeriod: "7"
+          storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: fails the render when logsStorages is empty
+    set:
+      logsStorages: []
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: logsStorages must define at least one entry; an empty list renders no VLCluster and fluent-bit silently drops logs to a non-existent vlinsert-generic (issue #3181)"
