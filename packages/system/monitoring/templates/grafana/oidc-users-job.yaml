@@ -41,6 +41,7 @@
 {{- $oidc := .Values.oidc | default dict }}
 {{- $mode := $oidc.mode | default "None" }}
 {{- $users := $oidc.users | default (list) }}
+{{- include "monitoring.oidc.assertUsersEmailShape" . }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -54,6 +55,11 @@ metadata:
 spec:
   backoffLimit: 6
   activeDeadlineSeconds: 900
+  # Non-hook cleanup: `hook-delete-policy: before-hook-creation` only fires
+  # on the NEXT hook activation, never on release uninstall — a succeeded
+  # Job + Pod would otherwise linger in the namespace forever. Cozystack
+  # convention: 3600s.
+  ttlSecondsAfterFinished: 3600
   template:
     metadata:
       labels:
@@ -69,7 +75,11 @@ spec:
           type: RuntimeDefault
       containers:
         - name: reconcile
-          image: "{{ $.Files.Get "images/kubectl.tag" | trim }}"
+          # Route through cozy-lib.image so mirrored / air-gapped
+          # installations (`_cluster.images-registry`) resolve the image;
+          # matches the pattern in
+          # packages/apps/mariadb/templates/hooks/cleanup-pvc.yaml.
+          image: {{ include "cozy-lib.image" (list ($.Files.Get "images/kubectl.tag" | trim) $) }}
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -149,14 +159,20 @@ spec:
               # additional orgs.
               ORG_ID=1
 
-              # Desired set — array of {email,role} objects.
-              # jq -e returns exit 1 on empty; use || true to
-              # tolerate `users: []`.
-              desired_emails=$(printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output '.[].email' 2>/dev/null || true)
+              # Emit desired emails as NUL-terminated so `while read -d ''`
+              # tolerates any RFC 5322-legal local part (whitespace, quoted
+              # literals, symbols). `for email in $var` was word-split on
+              # default IFS which broke on any non-trivial email.
+              printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output0 '.[].email' > /tmp/desired-emails 2>/dev/null || : > /tmp/desired-emails
+
+              # URL-encode a string via jq (@uri) — used for query-string
+              # values like /api/users/lookup?loginOrEmail=<encoded>.
+              urlencode() { printf '%s' "$1" | jq --slurp --raw-input --raw-output '@uri'; }
 
               if [ "$OIDC_MODE" != "None" ]; then
                 log "Reconciling ${OIDC_MODE} users into Grafana org $ORG_ID..."
-                for email in $desired_emails; do
+                while IFS= read -r -d '' email; do
+                  [ -n "$email" ] || continue
                   role=$(printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output --arg e "$email" '.[] | select(.email == $e) | .role')
                   log "  ensure user: email=$email role=$role"
 
@@ -191,8 +207,11 @@ spec:
                   esac
 
                   # 3. Look up userId, then PATCH the role to converge
-                  #    demotions/promotions across re-runs.
-                  code=$(api GET "/api/users/lookup?loginOrEmail=$email")
+                  #    demotions/promotions across re-runs. Query-string
+                  #    value URL-encoded so & = ? in the local part parse
+                  #    correctly on the Grafana side.
+                  email_enc=$(urlencode "$email")
+                  code=$(api GET "/api/users/lookup?loginOrEmail=$email_enc")
                   if [ "$code" != "200" ]; then
                     log "    GET /api/users/lookup failed with code $code:"; cat /tmp/resp >&2; exit 1
                   fi
@@ -203,7 +222,7 @@ spec:
                     200) log "    role set to $role" ;;
                     *) log "    PATCH role failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
                   esac
-                done
+                done < /tmp/desired-emails
               else
                 log "mode=None: skipping user reconcile, running prune only."
               fi
@@ -220,17 +239,25 @@ spec:
               # The chart-managed admin login name — never pruned.
               admin_login="$GF_ADMIN_USER"
 
-              existing=$(jq --raw-output '.[] | "\(.userId)|\(.login)|\(.email)"' < /tmp/members.json)
-              printf '%s\n' "$existing" | while IFS='|' read -r uid ulogin uemail; do
+              # Membership stream is emitted NUL-separated so an email
+              # containing whitespace / pipe characters cannot corrupt the
+              # field boundaries.
+              jq --raw-output0 '.[] | [.userId, .login, .email] | @tsv' < /tmp/members.json > /tmp/members.tsv0
+
+              while IFS= read -r -d '' triple; do
+                # Each triple is TAB-separated: userId \t login \t email
+                uid=$(printf '%s' "$triple" | cut -f 1)
+                ulogin=$(printf '%s' "$triple" | cut -f 2)
+                uemail=$(printf '%s' "$triple" | cut -f 3)
                 if [ -z "$uid" ] || [ "$uid" = "null" ]; then continue; fi
                 if [ "$ulogin" = "$admin_login" ]; then
                   log "  keep admin: login=$ulogin uid=$uid"
                   continue
                 fi
-                if printf '%s\n' "$desired_emails" | grep --fixed-strings --line-regexp --quiet -- "$uemail"; then
-                  continue
-                fi
-                if printf '%s\n' "$desired_emails" | grep --fixed-strings --line-regexp --quiet -- "$ulogin"; then
+                # Match uemail / ulogin against desired list via NUL-safe
+                # grep. `-z` treats input+patterns as NUL-terminated; `-F`
+                # disables regex; `-x` anchors on the full record.
+                if grep --null-data --fixed-strings --line-regexp --quiet -e "$uemail" -e "$ulogin" /tmp/desired-emails; then
                   continue
                 fi
                 log "  removing stale member: login=$ulogin email=$uemail uid=$uid"
@@ -239,7 +266,7 @@ spec:
                   200) : ;;
                   *) log "    DELETE failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
                 esac
-              done
+              done < /tmp/members.tsv0
 
               log "Done."
           volumeMounts:

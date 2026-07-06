@@ -110,3 +110,45 @@
 {{- $users := $oidc.users | default (list) -}}
 {{- toYaml $users -}}
 {{- end -}}
+
+{{- /*
+  Reject malformed emails in `spec.oidc.users`. Grafana passes the
+  string verbatim into a query string (/api/users/lookup?loginOrEmail=)
+  and into JSON bodies (create_body / add_body); the users-Job's shell
+  reader is NUL-safe and URL-encodes, but rejecting at render time is
+  cheaper than debugging a 400 from Grafana. Pattern is intentionally
+  conservative — no whitespace, no quoted literals, no bracketed IP
+  domains, no unicode; RFC 5322 in its full generality is out of scope.
+*/}}
+{{- define "monitoring.oidc.assertUsersEmailShape" -}}
+{{- $oidc := .Values.oidc | default dict -}}
+{{- $users := $oidc.users | default (list) -}}
+{{- range $i, $u := $users -}}
+{{-   $email := $u.email | default "" -}}
+{{-   if not (regexMatch "^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$" $email) -}}
+{{-     fail (printf "spec.oidc.users[%d].email: %q does not match the conservative email pattern ^[A-Za-z0-9._%%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$. Whitespace, quoted literals, and non-ASCII characters are rejected on template level so the reconcile-Job's shell handling never has to defend against malformed input." $i $email) -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{- /*
+  Reject `spec.oidc.users` in CustomConfig+secretRef mode: the
+  operator's `auth.ini` fragment is authoritative and the chart cannot
+  inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`
+  into it. Without those two settings the users-Job's role assignments
+  are overwritten on the operator's next login (skip_org_role_sync) and
+  the pre-provisioned local account is orphaned (email lookup) — the
+  Job's contract silently breaks. Force the operator into an explicit
+  choice: either use `customConfig.config` (inline) and let the chart
+  merge the two settings, or omit `spec.oidc.users` and manage
+  authorization themselves inside the mounted ini.
+*/}}
+{{- define "monitoring.oidc.assertCustomSecretRefUsersEmpty" -}}
+{{- $oidc := .Values.oidc | default dict -}}
+{{- $customConfig := $oidc.customConfig | default dict -}}
+{{- $secretName := dig "secretRef" "name" "" $customConfig -}}
+{{- $users := $oidc.users | default (list) -}}
+{{- if and (ne ($secretName | toString) "") (gt (len $users) 0) -}}
+{{-   fail "spec.oidc: `users` is not honoured under `customConfig.secretRef` — the operator's mounted auth.ini is authoritative and the chart cannot inject `skip_org_role_sync=true` / `oauth_allow_insecure_email_lookup=true`, so the users-Job's role assignments would be overwritten on the operator's next login. Either switch to `customConfig.config` (inline map, merged with the chart-forced settings) or unset `users` and manage authorization inside the ini fragment yourself." -}}
+{{- end -}}
+{{- end -}}

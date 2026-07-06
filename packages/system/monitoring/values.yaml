@@ -117,13 +117,21 @@ oidc:
   customConfig:
     ## Inline map of grafana.ini `[auth.generic_oauth]` keys. Any key
     ## accepted by Grafana's generic_oauth provider is valid; typical
-    ## keys are `client_id`, `client_secret`, `auth_url`, `token_url`,
-    ## `api_url`, `scopes`. The chart writes the map verbatim into
-    ## `spec.config.auth.generic_oauth` on the Grafana CR.
-    ## Do NOT set `role_attribute_path` here: the chart forces
-    ## `skip_org_role_sync = true` regardless of mode so a login never
-    ## overwrites the users-Job assignments; a `role_attribute_path`
-    ## would only pollute the config.
+    ## keys are `enabled: "true"`, `client_id`, `client_secret`,
+    ## `auth_url`, `token_url`, `api_url`, `scopes`. Grafana defaults
+    ## `enabled: false`, so an inline map without an explicit
+    ## `enabled: "true"` is inert — remember to set it.
+    ##
+    ## The chart merges TWO chart-forced settings on top of this map so
+    ## the users-Job contract holds:
+    ##   * `skip_org_role_sync: "true"` (login never overwrites the
+    ##     Job's org-role assignments);
+    ##   * `oauth_allow_insecure_email_lookup: "true"` (OIDC identity
+    ##     binds to the pre-provisioned local account by email).
+    ## These two keys cannot be overridden — set them explicitly here
+    ## and the chart still wins. `role_attribute_path` would be dead
+    ## config; the Job manages roles.
+    ##
     ## Mutually exclusive with `customConfig.secretRef.name`.
     config: {}
     ## Reference to an operator-managed Secret carrying a ready-made
@@ -131,6 +139,17 @@ oidc:
     ## chart mounts it and Grafana loads it via
     ## `GF_PATHS_CUSTOM_INI`. Mutually exclusive with
     ## `customConfig.config`.
+    ##
+    ## IMPORTANT — users-map is NOT supported in this branch: the
+    ## chart cannot inject `skip_org_role_sync=true` /
+    ## `oauth_allow_insecure_email_lookup=true` into a Secret-mounted
+    ## ini fragment, so the users-Job's role assignments would be
+    ## silently overwritten on the next login. Either use
+    ## `customConfig.config` (inline) and let the chart merge the two
+    ## settings, or leave `spec.oidc.users` empty and manage
+    ## authorization inside the mounted ini fragment yourself. The
+    ## chart hard-fails render when both `secretRef.name` and non-empty
+    ## `users` are set.
     secretRef:
       name: ""
   ## Users granted access to this Grafana instance's org. Each entry
