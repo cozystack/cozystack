@@ -13,7 +13,7 @@
 This directory shows how to back up and restore a Cozystack-managed `Etcd`
 application using the cluster's `Etcd` backup strategy driver. The driver
 delegates to the [etcd-operator][etcd-operator]: each Cozystack `BackupJob`
-materialises an `etcd.aenix.io/v1alpha1 EtcdBackup` CR (a one-shot Job that
+materialises an `etcd-operator.cozystack.io/v1alpha2 EtcdSnapshot` CR (a one-shot Job that
 streams `etcdctl snapshot save` output to S3), and each `RestoreJob`
 performs an in-place restore by suspending the Etcd HelmRelease,
 deleting the chart-rendered `EtcdCluster`, and recreating it with
@@ -68,7 +68,7 @@ chart change alone is not sufficient.
 | `00-helpers.sh` | Shared bash helpers and env defaults; sourced by every `01..05` step and by `cleanup.sh`. | n/a |
 | `01-create-strategy.sh` | Creates the cluster-scoped `Etcd` strategy. | admin |
 | `02-create-bucket.sh` | Provisions a `Bucket`, mints an `<app>-etcd-backup-creds` Secret in the source namespace, and creates the `BackupClass` bound to the Etcd strategy with resolved S3 coordinates. Caches raw creds in `.bucket-info.env` (chmod 600); `cleanup.sh` removes it. | tenant |
-| `03-create-etcd-src.sh` | Provisions the source `Etcd` application, waits for `EtcdCluster.status.conditions[Ready]=True`, and writes a sentinel key under `etcdctl`. | tenant |
+| `03-create-etcd-src.sh` | Provisions the source `Etcd` application, waits for `EtcdCluster.status.conditions[Available]=True`, and writes a sentinel key under `etcdctl`. | tenant |
 | `04-create-backupjob.sh` | Submits a `BackupJob` and waits for `phase=Succeeded`. | tenant |
 | `05-restore-in-place.sh` | Mutates the sentinel, submits a `RestoreJob` (no `targetApplicationRef`), and verifies the sentinel is round-tripped back to its pre-mutation value. | tenant |
 | `cleanup.sh` | Best-effort teardown. | admin or tenant |
@@ -94,13 +94,12 @@ All variables come from `00-helpers.sh`:
   running, with the Etcd dispatch wired (see
   `internal/backupcontroller/etcdstrategy_controller.go`).
 - `kubectl`, `jq`.
-- The `etcd.aenix.io` CRDs installed by `packages/system/etcd-operator`
-  v0.4.5+. The Cozystack flow specifically depends on `EtcdCluster`
-  (the driver re-creates it with `spec.bootstrap.restore.source.s3`
-  during in-place restore) and `EtcdBackup` (one materialised per
-  `BackupJob`). `EtcdBackupSchedule` is only consumed by the legacy
-  `backup.enabled=true` chart path. There is no separate `EtcdRestore`
-  CRD — restore goes through `EtcdCluster.spec.bootstrap`.
+- The `etcd-operator.cozystack.io` CRDs installed by
+  `packages/system/etcd-operator-crds`. The Cozystack flow specifically depends
+  on `EtcdCluster` (the driver re-creates it with
+  `spec.bootstrap.restore.source.s3` during in-place restore) and `EtcdSnapshot`
+  (one materialised per `BackupJob`). There is no separate `EtcdRestore` CRD —
+  restore goes through `EtcdCluster.spec.bootstrap`.
 - The Cozystack `etcd-rd` ApplicationDefinition installed so
   `apps.cozystack.io/Etcd` renders a HelmRelease.
 
@@ -125,4 +124,4 @@ All variables come from `00-helpers.sh`:
   operator drops the member PVCs alongside it). All client traffic to
   etcd is unavailable for the duration of the restore. Plan a window.
 
-[etcd-operator]: https://github.com/aenix-io/etcd-operator
+[etcd-operator]: https://github.com/cozystack/etcd-operator

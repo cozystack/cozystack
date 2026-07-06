@@ -1,12 +1,14 @@
-suite: etcd cluster pins an etcd image new enough for consistent watches
+suite: etcd cluster pins an etcd version new enough for consistent watches
 
-# The exact patch version is intentionally NOT asserted: the image is a
-# Renovate-tracked pin (.github/renovate.json) that bumps over time, so an
-# exact-equality assertion would turn every etcd bump PR red in CI. The
-# test encodes the durable contract instead - the etcd container image is
-# overridden to a coreos/etcd release >= 3.5.13 (the floor at which
-# kube-apiserver enables the RequestWatchProgress storage feature) and
-# never falls back to the operator default v3.5.12.
+# Retargeted from #3122 to the v1alpha2 chart. Under etcd.aenix.io/v1alpha1 the
+# version was forced via a spec.podTemplate container image override (the
+# operator hardcoded v3.5.12); v1alpha2 exposes spec.version and the operator
+# pulls etcd at that version from its own configured image, so there is no
+# podTemplate image to assert. The durable contract is unchanged: the requested
+# etcd release is >= 3.5.13 (the floor at which kube-apiserver enables the
+# RequestWatchProgress storage feature for consistent watches), never the
+# operator-default v3.5.12. The exact patch is intentionally NOT pinned here so
+# routine version bumps do not turn this red.
 
 release:
   name: etcd
@@ -19,17 +21,14 @@ set:
   _cluster: {}
 
 tests:
-  - it: overrides the operator default etcd image with a >= 3.5.13 release
+  - it: requests an etcd version >= 3.5.13 via spec.version
     documentSelector:
       path: kind
       value: EtcdCluster
     asserts:
-      - equal:
-          path: spec.podTemplate.spec.containers[0].name
-          value: etcd
       - matchRegex:
-          path: spec.podTemplate.spec.containers[0].image
-          pattern: ^quay\.io/coreos/etcd:v(3\.5\.(1[3-9]|[2-9][0-9]|[1-9][0-9]{2,})|3\.([6-9]|[1-9][0-9])\.[0-9]+|[4-9][0-9]*\.[0-9]+\.[0-9]+)$
+          path: spec.version
+          pattern: ^(3\.5\.(1[3-9]|[2-9][0-9]|[1-9][0-9]{2,})|3\.([6-9]|[1-9][0-9])\.[0-9]+|[4-9][0-9]*\.[0-9]+\.[0-9]+)$
 
   - it: never falls back to the operator default v3.5.12
     documentSelector:
@@ -37,5 +36,5 @@ tests:
       value: EtcdCluster
     asserts:
       - notEqual:
-          path: spec.podTemplate.spec.containers[0].image
-          value: quay.io/coreos/etcd:v3.5.12
+          path: spec.version
+          value: "3.5.12"

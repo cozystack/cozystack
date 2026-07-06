@@ -16,9 +16,15 @@ spec:
     - cozystack.cert-manager
     - cozystack.vertical-pod-autoscaler
     components:
+    - name: etcd-operator-crds
+      path: system/etcd-operator-crds
+      install:
+        namespace: cozy-etcd-operator
+        releaseName: etcd-operator-crds
     - name: etcd-operator
       path: system/etcd-operator
       install:
         namespace: cozy-etcd-operator
         releaseName: etcd-operator
-        upgradeCRDs: CreateReplace
+        dependsOn:
+        - etcd-operator-crds

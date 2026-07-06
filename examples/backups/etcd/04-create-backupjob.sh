@@ -25,7 +25,7 @@ spec:
 EOF
 
 wait_for_field backupjobs.backups.cozystack.io "$BACKUPJOB_NAME" \
-    '{.status.phase}' Succeeded "$NAMESPACE" 1200
+    '{.status.phase}' Succeeded "$NAMESPACE" 1200 Failed
 
 BACKUP_NAME=$(kubectl -n "$NAMESPACE" get backupjobs.backups.cozystack.io "$BACKUPJOB_NAME" \
     -o jsonpath='{.status.backupRef.name}')
