@@ -348,6 +348,135 @@ if [ -f /workspace/talosconfig ]; then
   done
 fi
 
+# -- per-node network diagnostics
+#
+# kubelet -> pod probe failures (readiness/liveness `dial tcp <podIP>:<port>:
+# connect: connection refused` on a pod whose stdout log confirms the server
+# is bound) are recurrent baseline flakes in the multi-CNI sandbox (kube-ovn
+# + cilium + multus). Cozyreport at end-of-job carries CiliumEndpoint
+# `state: ready`, the pod-side listener log, and the kube-ovn CNI ADD trace
+# for the pod IP -- all of which say the path should work -- but omits the
+# host-side networking state that would prove or disprove the drop. Without
+# it, the pod either (a) is silently on stale conntrack from a previous
+# incarnation with the same IP, (b) is blocked by a hostFirewall or Cilium
+# policy drop that only Hubble sees, or (c) hits a kube-ovn OVS flow race
+# between the kube-ovn-cni ADD and the kernel-side iptables NAT chain.
+# All three leave signature in per-node artefacts a cozyreport that only
+# captures pod-scoped state cannot recover.
+#
+# Every source below is a DaemonSet pod that already runs on the node with
+# hostNetwork and the required binary preinstalled: `iptables-save` +
+# `conntrack` live in `kube-ovn-cni` (`cni-server` container), OVS flows
+# live in `ovs-ovn` (`openvswitch` container), and `hubble observe` +
+# `cilium-dbg endpoint list` live in `cilium` (`cilium-agent`). Optional
+# binaries are `command -v` probed inline so an image without the tool
+# leaves a single "not present" line instead of an OCI runtime error
+# masquerading as a diagnostic capture. Every exec is wrapped in
+# `timeout 30 kubectl exec ...` (matching the upper bound the sibling
+# `hack/e2e-capture-dataplane.sh` uses for the heaviest captures) so a
+# wedged agent (bpf-map iteration stall, hubble ring-buffer replay,
+# ovn-controller lock) cannot hang the surrounding cozyreport run.
+# Files that end up empty or contain only a known error-signature line
+# are dropped so the artefact tree carries only real captures.
+#
+# `timeout(1)` from coreutils is a hard dependency of this block. Skip
+# the whole section on runners without it rather than filling the tree
+# with `sh: 1: timeout: not found` stubs.
+if ! command -v timeout >/dev/null 2>&1; then
+  echo "  timeout(1) not present -- skipping per-node network diagnostics"
+else
+echo "Collecting per-node network diagnostics..."
+DIR=$REPORT_DIR/net-diag
+mkdir -p "$DIR"
+
+# _keep_if_useful <file>
+# Drop the capture file if it is empty or its content is a known "no
+# useful data" signature (missing binary, container exec error). This
+# stops error-text stubs from pretending to be real captures. A file
+# with real data (dozens/hundreds of lines) is left untouched; a
+# single-line "not present" / "OCI runtime" / "command terminated"
+# stub gets removed so the artefact tree carries only real captures.
+_keep_if_useful() {
+  _f="$1"
+  if [ ! -s "$_f" ]; then
+    rm -f "$_f"
+    return
+  fi
+  if [ "$(wc -l < "$_f" 2>/dev/null)" -le 1 ] && \
+     grep --extended-regexp --quiet "not (present|enabled|found)|socket missing|OCI runtime|executable file not found|command terminated|error:|Error from server" "$_f" 2>/dev/null; then
+    rm -f "$_f"
+  fi
+}
+
+for pod in $(kubectl -n cozy-kubeovn get pods -l app=kube-ovn-cni -o name 2>/dev/null); do
+  node=$(kubectl -n cozy-kubeovn get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
+  [ -z "$node" ] && node=$(basename "$pod")
+  # `iptables-save` dumps every table (filter/nat/mangle/raw) as a single
+  # text blob; the whole thing lands in one file per node so an operator
+  # can grep across chains without unpacking per-table splits.
+  timeout 30 kubectl -n cozy-kubeovn exec "$pod" --container=cni-server -- \
+    sh -c 'command -v iptables-save >/dev/null 2>&1 && iptables-save || echo "iptables-save not present in cni-server"' \
+    > "$DIR/$node-iptables.txt" 2>&1 || true
+  _keep_if_useful "$DIR/$node-iptables.txt"
+  # `conntrack -L` lists the kernel conntrack table (5-tuple + state +
+  # bytes). `head -n 5000` bounds output so a node with heavy tenant
+  # traffic does not push megabytes of connections into the artefact.
+  # NOTE: conntrack iterates the kernel hash table in bucket order, not
+  # by connection age, so the truncation is not a guaranteed FIFO of
+  # recent entries — an operator chasing a specific 5-tuple should grep
+  # for the podIP/port rather than assume the tail is missing.
+  timeout 30 kubectl -n cozy-kubeovn exec "$pod" --container=cni-server -- \
+    sh -c 'command -v conntrack >/dev/null 2>&1 && conntrack -L 2>/dev/null | head -n 5000 || echo "conntrack not present in cni-server"' \
+    > "$DIR/$node-conntrack.txt" 2>&1 || true
+  _keep_if_useful "$DIR/$node-conntrack.txt"
+done
+
+for pod in $(kubectl -n cozy-kubeovn get pods -l app=ovs -o name 2>/dev/null); do
+  node=$(kubectl -n cozy-kubeovn get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
+  [ -z "$node" ] && node=$(basename "$pod")
+  # `ovs-ofctl dump-flows br-int` is the OVS side of the kube-ovn
+  # datapath. Distinguishes a CNI ADD that finished from an ovn-controller
+  # that has not programmed the pod's flow into OVS yet — the flow race
+  # the block-comment above cites as failure mode (c).
+  timeout 30 kubectl -n cozy-kubeovn exec "$pod" --container=openvswitch -- \
+    sh -c 'command -v ovs-ofctl >/dev/null 2>&1 && ovs-ofctl dump-flows br-int || echo "ovs-ofctl not present in openvswitch"' \
+    > "$DIR/$node-ovs-flows.txt" 2>&1 || true
+  _keep_if_useful "$DIR/$node-ovs-flows.txt"
+done
+
+for pod in $(kubectl -n cozy-cilium get pods -l app.kubernetes.io/name=cilium-agent -o name 2>/dev/null); do
+  node=$(kubectl -n cozy-cilium get "$pod" -o jsonpath='{.spec.nodeName}' 2>/dev/null)
+  [ -z "$node" ] && node=$(basename "$pod")
+  # `hubble observe --last N` prints the recent flow log from the local
+  # cilium-agent ring buffer, including verdicts (FORWARDED / DROPPED /
+  # ERROR) with the reason field. Probe for both the binary AND the
+  # hubble unix socket -- the CLI is present in every recent cilium
+  # image, but hubble observability itself is optional (feature flag
+  # `hubble.enabled` in the cilium chart), so the socket may not exist
+  # even when the CLI does. Sized so a probe-drop cascade over a
+  # 5-minute window still fits, and a healthy node's log stays small.
+  timeout 30 kubectl -n cozy-cilium exec "$pod" --container=cilium-agent -- \
+    sh -c 'command -v hubble >/dev/null 2>&1 && [ -S /var/run/cilium/hubble.sock ] && hubble observe --last 2000 --output=compact 2>&1 || echo "hubble not enabled or socket missing in cilium-agent"' \
+    > "$DIR/$node-hubble-flows.txt" 2>&1 || true
+  _keep_if_useful "$DIR/$node-hubble-flows.txt"
+  # `cilium-dbg endpoint list` gives the per-endpoint policy state
+  # (identity, security policies, state, controllers), which resolves
+  # the question "was the drop a policy decision or a datapath race"
+  # that hubble alone doesn't disambiguate.
+  timeout 30 kubectl -n cozy-cilium exec "$pod" --container=cilium-agent -- \
+    sh -c 'command -v cilium-dbg >/dev/null 2>&1 && cilium-dbg endpoint list || echo "cilium-dbg not present in cilium-agent"' \
+    > "$DIR/$node-cilium-endpoints.txt" 2>&1 || true
+  _keep_if_useful "$DIR/$node-cilium-endpoints.txt"
+done
+
+# Drop the parent directory if no artefact landed (e.g. neither kube-ovn
+# nor cilium was present on the cluster the report is run against, or
+# every capture was pruned by `_keep_if_useful`).
+if [ -z "$(ls -A "$DIR" 2>/dev/null)" ]; then
+  rmdir "$DIR" 2>/dev/null || true
+fi
+fi
+
 # -- finalization
 
 echo "Generating summary..."
