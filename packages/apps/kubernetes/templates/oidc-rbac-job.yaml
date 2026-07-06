@@ -1,0 +1,431 @@
+{{- /*
+  OIDC bootstrap + normalize Job — runs as Helm post-install,post-upgrade
+  hook. Always rendered (regardless of `spec.oidc.mode`) so the mode=None
+  path can force-clean the KamajiControlPlane's stale
+  `authentication-config` volume that Server-Side Apply won't remove:
+  when Kamaji's controller writes back to the KCP as part of syncing to
+  TenantControlPlane, it takes SSA ownership of `spec.deployment.extraVolumes`,
+  and a subsequent Helm apply that omits the OIDC volume from the field
+  no longer overrides it (Helm doesn't set `force: true` by default).
+  A `kubectl patch --type=merge` with the desired 2-item array replaces
+  it deterministically.
+
+  Behavior by mode:
+
+  - `mode: None`:
+      - Normalize the KCP: replace `spec.deployment.extraVolumes` with the
+        two chart-baseline volumes (talos-ca, talos-tls-cert), so any
+        leftover `authentication-config` from a previous `System` install
+        is removed. `spec.apiServer.extraArgs` and
+        `spec.apiServer.extraVolumeMounts` are already emitted as `[]` by
+        the chart (see cluster.yaml — see the comment there) and Helm
+        replaces those correctly; only extraVolumes needs the kick.
+      - No CRB apply, no Secret patch.
+
+  - `mode: System | CustomConfig`:
+      - Apply one ClusterRoleBinding per `users[]` entry inside the tenant
+        cluster (`admin` → `cluster-admin`, `view` → `view`, subject = the
+        literal email matched against the `email` claim).
+      - Prune stale CRBs labelled by this release.
+      - `mode: System`: patch the pre-rendered `<release>-oidc-kubeconfig`
+        Secret with a real kubeconfig wired to `kubectl oidc-login`
+        (the tenant CA is extracted at runtime from the Kamaji-issued
+        admin kubeconfig).
+
+  Lifecycle:
+    - ServiceAccount, Role, RoleBinding are RELEASE-OWNED (no
+      `helm.sh/hook` annotations). They are created on `helm install`
+      and deleted on `helm uninstall`, so both the post-install
+      bootstrap hook AND the pre-delete cleanup hook find a working SA.
+    - The Job itself stays a hook so `helm upgrade` re-runs it on every
+      reconcile (picks up `users[]` changes and re-normalizes the KCP).
+
+  Pod is labelled `policy.cozystack.io/allow-to-apiserver: "true"` so
+  the Cilium policy lets it reach the tenant apiserver through
+  konnectivity, matching the existing cluster-autoscaler / KCCM / CSI
+  controllers pattern.
+*/}}
+{{- $clientId := include "kubernetes.oidc.clientId" . | trim }}
+{{- $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
+{{- $externalHost := .Values.host | default (printf "%s.%s" .Release.Name (.Values._namespace.host)) }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-oidc-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-oidc-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+rules:
+  # Patch chart-owned OIDC kubeconfig Secret with runtime tenant CA + kubeconfig.
+  # `get` is needed too — `kubectl patch --type=merge` reads the current object
+  # before computing the merge (SMP does a fetch under the hood).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ .Release.Name }}-oidc-kubeconfig
+    verbs: ["get", "patch"]
+  # KCP normalize — chart-owned array field is SSA-owned by Kamaji after write-back.
+  - apiGroups: ["controlplane.cluster.x-k8s.io"]
+    resources: ["kamajicontrolplanes"]
+    resourceNames:
+      - {{ .Release.Name }}
+    verbs: ["get", "patch"]
+  # mode=None cleanup — force-delete chart-owned OIDC objects that Helm's
+  # SSA-based apply cannot reap (helm-controller relinquishes ownership on
+  # missing fields but doesn't cascade-delete namespaced resources).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ .Release.Name }}-oidc-kubeconfig
+      - {{ .Release.Name }}-oidc-authn-config
+    verbs: ["delete"]
+  - apiGroups: ["v1.edp.epam.com"]
+    resources: ["keycloakclients"]
+    resourceNames:
+      - {{ printf "%s-%s" .Release.Namespace .Release.Name }}
+    verbs: ["delete"]
+  - apiGroups: ["v1.edp.epam.com"]
+    resources: ["keycloakclientscopes"]
+    resourceNames:
+      - {{ printf "%s-%s-audience" .Release.Namespace .Release.Name }}
+    verbs: ["delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-oidc-bootstrap
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-oidc-bootstrap
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-oidc-bootstrap
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-oidc-bootstrap
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "10"
+    "helm.sh/hook-delete-policy": before-hook-creation
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        {{- include "kubernetes.selectorLabels" . | nindent 8 }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-oidc-bootstrap
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: bootstrap
+          image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: KUBECONFIG_TENANT
+              value: /etc/kubernetes/kubeconfig/super-admin.svc
+            - name: RELEASE
+              value: {{ .Release.Name }}
+            - name: RELEASE_NAMESPACE
+              value: {{ .Release.Namespace }}
+            - name: OIDC_MODE
+              value: {{ .Values.oidc.mode | quote }}
+            - name: OIDC_CLIENT_ID
+              value: {{ $clientId | quote }}
+            - name: OIDC_ISSUER_URL
+              value: {{ $issuer | quote }}
+            - name: OIDC_SERVER_URL
+              value: {{ printf "https://%s:443" $externalHost | quote }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 256Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+
+              if [ "$OIDC_MODE" = "None" ]; then
+                echo "mode=None: force-cleaning chart-owned OIDC resources Helm's SSA apply cannot reap..."
+
+                # 1. Normalize KCP: kubectl patch --type=merge REPLACES the array,
+                #    which Helm's SSA apply does not do here — Kamaji's field
+                #    manager takes ownership of spec.deployment.extraVolumes on
+                #    write-back to the TenantControlPlane. Verified end-to-end
+                #    against a real Kamaji controller.
+                echo "  patching KamajiControlPlane $RELEASE — remove OIDC-only entries from extraArgs, extraVolumeMounts, deployment.extraVolumes"
+                # Patch payload is rendered at helm template time from the same
+                # source of truth cluster.yaml uses: user-supplied extras stay
+                # intact, only the chart-owned OIDC-only entries (that Kamaji's
+                # SSA field-owner refuses to release) are stripped.
+                kubectl --namespace "$RELEASE_NAMESPACE" patch kamajicontrolplane "$RELEASE" \
+                  --type=merge \
+                  --patch {{ printf "{\"spec\":{\"apiServer\":{\"extraArgs\":%s,\"extraVolumeMounts\":%s},\"deployment\":{\"extraVolumes\":%s}}}"
+                      (default (list) .Values.controlPlane.apiServer.extraArgs | toJson)
+                      (default (list) .Values.controlPlane.apiServer.extraVolumeMounts | toJson)
+                      (concat (list (dict "name" "talos-ca" "secret" (dict "secretName" (printf "%s-talos-ca" .Release.Name))) (dict "name" "talos-tls-cert" "secret" (dict "secretName" (printf "%s-talos-tls-cert" .Release.Name)))) (default (list) .Values.controlPlane.apiServer.extraVolumes) | toJson)
+                      | quote }}
+
+                # 2. Chart-owned OIDC Secrets — Helm's SSA-based delete-on-absence
+                #    also fails here (same field-ownership pattern). Explicit
+                #    delete is safe: the templates only render these for
+                #    mode=System/CustomConfig, so at mode=None they are stale.
+                echo "  deleting chart-owned OIDC Secrets"
+                kubectl --namespace "$RELEASE_NAMESPACE" delete secret \
+                  "$RELEASE-oidc-kubeconfig" "$RELEASE-oidc-authn-config" \
+                  --ignore-not-found
+
+                # 3. Chart-owned KeycloakClient + audience KeycloakClientScope in
+                #    the cozy realm. These are created by oidc-keycloak.yaml only
+                #    for mode=System; at mode=None they must not linger.
+                if kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
+                  echo "  deleting chart-owned Keycloak objects"
+                  kubectl --namespace "$RELEASE_NAMESPACE" delete keycloakclient.v1.edp.epam.com \
+                    "$RELEASE_NAMESPACE-$RELEASE" --ignore-not-found
+                  kubectl --namespace "$RELEASE_NAMESPACE" delete keycloakclientscope.v1.edp.epam.com \
+                    "$RELEASE_NAMESPACE-$RELEASE-audience" --ignore-not-found
+                fi
+
+                echo "mode=None cleanup complete."
+                exit 0
+              fi
+
+              echo "Waiting for the tenant admin kubeconfig to appear..."
+              deadline=$(( $(date +%s) + 600 ))
+              until [ -s "$KUBECONFIG_TENANT" ]; do
+                if [ "$(date +%s)" -ge "$deadline" ]; then
+                  echo "tenant admin kubeconfig was not provisioned within 10m; aborting" >&2
+                  exit 1
+                fi
+                sleep 5
+              done
+
+              echo "Applying ${OIDC_MODE} ClusterRoleBindings to the tenant cluster..."
+              DESIRED_FILE=$(mktemp)
+              {{- range .Values.oidc.users }}
+              {{-   $hash := printf "%s-%s" $.Release.Name .email | sha256sum | trunc 16 }}
+              {{-   $crbName := printf "cozystack-oidc-%s" $hash }}
+              {{-   $role := "view" }}
+              {{-   if eq .role "admin" }}
+              {{-     $role = "cluster-admin" }}
+              {{-   end }}
+              echo "{{ $crbName }}" >> "$DESIRED_FILE"
+              cat <<'EOF' | kubectl --kubeconfig "$KUBECONFIG_TENANT" apply --filename -
+              apiVersion: rbac.authorization.k8s.io/v1
+              kind: ClusterRoleBinding
+              metadata:
+                name: {{ $crbName }}
+                labels:
+                  app.kubernetes.io/managed-by: cozystack-oidc
+                  app.kubernetes.io/instance: {{ $.Release.Name }}
+              roleRef:
+                apiGroup: rbac.authorization.k8s.io
+                kind: ClusterRole
+                name: {{ $role }}
+              subjects:
+                - kind: User
+                  apiGroup: rbac.authorization.k8s.io
+                  name: {{ .email | quote }}
+              EOF
+              {{- end }}
+
+              echo "Pruning stale ClusterRoleBindings labelled by this release..."
+              EXISTING=$(kubectl --kubeconfig "$KUBECONFIG_TENANT" get clusterrolebindings \
+                --selector=app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=$RELEASE \
+                --output=jsonpath='{.items[*].metadata.name}')
+              for crb in $EXISTING; do
+                if ! grep -x -q -F "$crb" "$DESIRED_FILE"; then
+                  echo "  removing $crb"
+                  kubectl --kubeconfig "$KUBECONFIG_TENANT" delete clusterrolebinding "$crb" --ignore-not-found
+                fi
+              done
+              rm -f "$DESIRED_FILE"
+
+              if [ "$OIDC_MODE" = "System" ]; then
+                echo "Patching the OIDC kubeconfig Secret on the management cluster..."
+                CA_DATA=$(kubectl --kubeconfig "$KUBECONFIG_TENANT" config view --raw \
+                  --output=jsonpath='{.clusters[0].cluster.certificate-authority-data}')
+                if [ -z "$CA_DATA" ]; then
+                  echo "WARNING: tenant admin kubeconfig has no certificate-authority-data; leaving OIDC kubeconfig Secret as the install-time placeholder" >&2
+                else
+                  KUBECONFIG_FILE=$(mktemp)
+                  cat > "$KUBECONFIG_FILE" <<EOF
+              apiVersion: v1
+              kind: Config
+              current-context: $RELEASE
+              clusters:
+              - name: $RELEASE
+                cluster:
+                  server: $OIDC_SERVER_URL
+                  certificate-authority-data: $CA_DATA
+              users:
+              - name: $RELEASE-oidc
+                user:
+                  exec:
+                    apiVersion: client.authentication.k8s.io/v1
+                    command: kubectl
+                    args:
+                    - oidc-login
+                    - get-token
+                    - --oidc-issuer-url=$OIDC_ISSUER_URL
+                    - --oidc-client-id=$OIDC_CLIENT_ID
+                    - --oidc-extra-scope=email
+                    - --oidc-extra-scope=groups
+                    - --oidc-use-pkce
+                    interactiveMode: IfAvailable
+                    provideClusterInfo: true
+              contexts:
+              - name: $RELEASE
+                context:
+                  cluster: $RELEASE
+                  user: $RELEASE-oidc
+              EOF
+                  KUBECONFIG_B64=$(base64 < "$KUBECONFIG_FILE" | tr -d '\n')
+                  PATCH=$(printf '{"data":{"kubeconfig":"%s"},"stringData":null}' "$KUBECONFIG_B64")
+                  kubectl --namespace "$RELEASE_NAMESPACE" patch secret \
+                    "$RELEASE-oidc-kubeconfig" \
+                    --type=merge \
+                    --patch "$PATCH"
+                  rm -f "$KUBECONFIG_FILE"
+                fi
+              fi
+
+              echo "Done."
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
+        - name: tmp
+          emptyDir: {}
+{{- /*
+  Pre-delete cleanup: remove the release's ClusterRoleBindings inside
+  the tenant cluster before the cluster itself is torn down. Reuses
+  the release-owned ServiceAccount above (NOT a hook resource, so it
+  is still present when this hook fires). Best-effort — if the tenant
+  apiserver is unreachable the orphan CRBs disappear with the control
+  plane anyway.
+*/}}
+{{- if ne .Values.oidc.mode "None" }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-oidc-cleanup
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": hook-succeeded,before-hook-creation,hook-failed
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "kubernetes.selectorLabels" . | nindent 8 }}
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-oidc-bootstrap
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: cleanup
+          image: "{{ default (.Files.Get "images/kubectl.tag" | trim) .Values.images.kubectl }}"
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+            - name: KUBECONFIG_TENANT
+              value: /etc/kubernetes/kubeconfig/super-admin.svc
+            - name: RELEASE
+              value: {{ .Release.Name }}
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -euo pipefail
+              if [ ! -s "$KUBECONFIG_TENANT" ]; then
+                echo "tenant kubeconfig not present; nothing to clean up"
+                exit 0
+              fi
+              kubectl --kubeconfig "$KUBECONFIG_TENANT" \
+                --request-timeout=30s \
+                delete clusterrolebinding \
+                --selector=app.kubernetes.io/managed-by=cozystack-oidc,app.kubernetes.io/instance=$RELEASE \
+                --ignore-not-found --timeout=30s \
+                || echo "WARNING: could not clean OIDC ClusterRoleBindings (apiserver unreachable?); they will disappear with the control plane" >&2
+          volumeMounts:
+            - name: kubeconfig
+              mountPath: /etc/kubernetes/kubeconfig
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: kubeconfig
+          secret:
+            secretName: {{ .Release.Name }}-admin-kubeconfig
+            optional: true
+        - name: tmp
+          emptyDir: {}
+{{- end }}

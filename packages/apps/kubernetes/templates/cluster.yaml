@@ -290,17 +290,90 @@ metadata:
     cluster.x-k8s.io/role: control-plane
   annotations:
     kamaji.clastix.io/kubeconfig-secret-key: "super-admin.svc"
+{{- /*
+  OIDC wiring for `spec.oidc.mode` ≠ None:
+    - Inject `--authentication-config=/etc/kubernetes/authentication-config/config.yaml`
+      into the kube-apiserver extraArgs.
+    - Mount the per-release Secret carrying the structured
+      AuthenticationConfiguration at that path.
+    - Add the Secret as an extraVolume on the KCP Deployment.
+
+  The OIDC-managed flag and volume are kept ORTHOGONAL to the
+  user-supplied controlPlane.apiServer.extraArgs / extraVolumes /
+  extraVolumeMounts knobs — the user fields are preserved verbatim
+  and the OIDC additions are appended. The OIDC mount name
+  `authentication-config` is reserved by the chart; a user-supplied
+  volume reusing it would conflict in the rendered podSpec.
+
+  For mode=CustomConfig+secretRef, the user-owned Secret is mounted
+  directly (the chart does not copy the contents). Otherwise the
+  chart-owned `<release>-oidc-authn-config` Secret is mounted.
+*/}}
+{{- $oidcEnabled := ne .Values.oidc.mode "None" }}
+{{- $oidcAuthnSecret := printf "%s-oidc-authn-config" .Release.Name }}
+{{- $customSecretRefName := dig "customConfig" "secretRef" "name" "" .Values.oidc }}
+{{- if and (eq .Values.oidc.mode "CustomConfig") (ne $customSecretRefName "") }}
+{{-   $oidcAuthnSecret = $customSecretRefName }}
+{{- end }}
+{{- if and $oidcEnabled (has "authentication-config" $userVolumeNames) }}
+{{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
+{{- end }}
+{{- /*
+  Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
+  exclusive with `--authentication-config`. The kube-apiserver refuses
+  to boot when both are set (`--authentication-config cannot be used with
+  any of --oidc-*`), so an existing cluster that previously configured
+  OIDC by hand via the user extra*-passthrough would BOOT-FAIL on upgrade
+  as soon as `spec.oidc.mode` is toggled to `System` or `CustomConfig`.
+  Fail the chart render with an actionable message instead.
+
+  When `spec.oidc.mode: None`, the user is free to keep --oidc-* flags
+  in their extraArgs (the chart does not touch them) — that path is
+  preserved for backward compatibility.
+*/}}
+{{- if $oidcEnabled }}
+{{-   range $arg := (.Values.controlPlane.apiServer.extraArgs | default list) }}
+{{-     if hasPrefix "--oidc-" $arg }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if hasPrefix "--authentication-config" $arg }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
 spec:
   apiServer:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
-    {{- with .Values.controlPlane.apiServer.extraArgs }}
+    {{- /*
+      extraArgs and extraVolumeMounts are ALWAYS emitted (empty array when
+      nothing to inject). Kamaji's KamajiControlPlane is a CRD and Helm
+      applies JSON-merge-patch to CRDs, which for arrays REPLACES the whole
+      value. If we omitted the field for `oidc.mode: None` after previously
+      rendering it under `System`, JSON-merge-patch would leave the live
+      array untouched — the tenant apiserver would keep the stale
+      --authentication-config flag pointing at a Secret that no longer
+      exists, and would refuse to start on the next kubelet restart.
+      Rendering the empty array on the "off" path forces Helm to send a
+      REPLACE patch that clears the stale value.
+    */}}
     extraArgs:
+      {{- with .Values.controlPlane.apiServer.extraArgs }}
       {{- toYaml . | nindent 6 }}
-    {{- end }}
-    {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+      {{- end }}
+      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
     extraVolumeMounts:
+      {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
       {{- toYaml . | nindent 6 }}
-    {{- end }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - name: authentication-config
+        mountPath: /etc/kubernetes/authentication-config
+        readOnly: true
+      {{- end }}
+      {{- if not (or .Values.controlPlane.apiServer.extraVolumeMounts $oidcEnabled) }} []{{ end }}
   controllerManager:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:
@@ -395,6 +468,14 @@ spec:
           secretName: {{ .Release.Name }}-talos-tls-cert
       {{- with .Values.controlPlane.apiServer.extraVolumes }}
       {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - name: authentication-config
+        secret:
+          secretName: {{ $oidcAuthnSecret }}
+          items:
+          - key: config.yaml
+            path: config.yaml
       {{- end }}
   replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}

@@ -1,3 +1,36 @@
-To get kubeconfig for this cluster run:
+To get the static admin kubeconfig (break-glass) for this cluster:
 
-kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-admin-kubeconfig -o go-template='{{`{{ printf "%s\n" (index .data "super-admin.conf" | base64decode) }}`}}'
+  kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-admin-kubeconfig -o go-template='{{`{{ printf "%s\n" (index .data "super-admin.conf" | base64decode) }}`}}'
+
+{{- if ne .Values.oidc.mode "None" }}
+
+OIDC is enabled for this cluster (spec.oidc.mode={{ .Values.oidc.mode }}).
+{{- if eq .Values.oidc.mode "System" }}
+
+  Per-user kubeconfig wired to `kubectl oidc-login` (one-shot install
+  of the plugin is a prerequisite — `kubectl krew install oidc-login`):
+
+    kubectl get secret -n {{ .Release.Namespace }} {{ .Release.Name }}-oidc-kubeconfig -o jsonpath='{.data.kubeconfig}' | base64 -d > {{ .Release.Name }}.kubeconfig
+    kubectl --kubeconfig {{ .Release.Name }}.kubeconfig get pods --all-namespaces
+
+  The first command writes the OIDC-ready kubeconfig to disk; the
+  second triggers the browser login flow on first use and caches the
+  token locally.
+
+  Per-cluster Keycloak client: {{ include "kubernetes.oidc.clientId" . | trim }}
+  Issuer: {{ include "kubernetes.oidc.systemIssuerURL" . | trim }}
+{{- else if eq .Values.oidc.mode "CustomConfig" }}
+
+  This cluster trusts a tenant-supplied issuer; the platform `cozy`
+  realm is not in the path. Distribute the OIDC kubeconfig out-of-band
+  from your IdP configuration. The static admin kubeconfig above
+  remains as the documented break-glass path.
+{{- end }}
+
+  Listed users carrying cluster-admin or view roles:
+{{- range .Values.oidc.users }}
+    - {{ .email }} ({{ .role }})
+{{- else }}
+    (none — set spec.oidc.users[] to grant access)
+{{- end }}
+{{- end }}

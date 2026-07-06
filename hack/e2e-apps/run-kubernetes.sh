@@ -1,5 +1,49 @@
 . hack/e2e-apps/remediation-guard.sh
 
+# kubectl_wait_retry: wraps `kubectl wait` with retries against transient
+# management-cluster apiserver/etcd errors.
+#
+# The e2e sandbox is a 3-node kind cluster on Talos VMs; the 3-instance
+# etcd HA cluster can shed a leader under the accumulated CDI+DRBD IO +
+# multiple back-to-back Kamaji tenant control-plane bringups this suite
+# stacks. kubectl's watch-based `wait` exits non-zero on the FIRST server
+# error it sees on the channel, even when the target is on the cusp of
+# becoming Ready. Concretely, we have seen:
+#   Error from server: etcdserver: leader changed
+# fire mid-wait for `kubernetes-<test>-{cluster-autoscaler,kccm,kcsi-controller,base}`
+# with 3 of 4 deployments already `condition met` and the 4th ~200ms
+# from Ready. The snapshot-on-fail collector then showed all four at
+# `readyReplicas: 2` — the wait exited early, not the target's fault.
+#
+# This wrapper retries a small number of times against a curated allowlist
+# of transient server-side signatures. It does NOT swallow legitimate
+# timeouts (`--timeout=... expired`) or NotFound; those still surface.
+kubectl_wait_retry() {
+  local _attempts=3
+  local _i _out _rc
+  for _i in $(seq 1 "${_attempts}"); do
+    _out=$(kubectl wait "$@" 2>&1)
+    _rc=$?
+    if [ "${_rc}" = 0 ]; then
+      printf '%s\n' "${_out}"
+      return 0
+    fi
+    # Transient server-side signatures: etcd leader flap, etcd request
+    # timeout, or apiserver watch channel closed without a clear reason.
+    # Anything else (target NotFound, --timeout expired, permission
+    # denied, etc.) is a real failure.
+    if printf '%s' "${_out}" | grep --quiet --extended-regexp "etcdserver: leader changed|etcdserver: request timed out|the server was unable to return a response in the time allotted"; then
+      printf 'kubectl_wait_retry: attempt %d/%d hit transient server error, retrying in 5s: %s\n' "${_i}" "${_attempts}" "${_out}" >&2
+      sleep 5
+      continue
+    fi
+    printf '%s\n' "${_out}"
+    return "${_rc}"
+  done
+  printf 'kubectl_wait_retry: exhausted %d attempts on transient errors\n' "${_attempts}" >&2
+  return 1
+}
+
 # Pure exit-condition for the inter-test drain loop (cozy_wait_tenant_drained).
 # Each argument is one resource-probe capture: the stdout of a
 # `kubectl get -o name` (empty once the resource is gone) or the literal "err"
@@ -277,15 +321,15 @@ EOF
   # 4m budget. The 10m wait below sits well inside the
   # helm-install-timeout: 20m annotation that cozystack-api copies from
   # cozyrds onto the HR.
-  kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=10m
+  kubectl_wait_retry --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=10m
 
   # Wait for Kubernetes resources to be ready. Same rationale as the
   # TenantControlPlaneCreated wait above — Talos PKI issuing + sidecar
   # readiness probes shift the steady-state Ready point.
-  kubectl wait tcp -n tenant-test kubernetes-${test_name} --timeout=10m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+  kubectl_wait_retry tcp -n tenant-test kubernetes-${test_name} --timeout=10m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
 
   # Wait for all required deployments to be available (timeout after 4 minutes)
-  kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
+  kubectl_wait_retry deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
 
   # Wait for the machine deployment to scale to 2 replicas. Pre-Talos this
   # was effectively instant because KubeadmConfigTemplate had no async
@@ -295,7 +339,7 @@ EOF
   # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
   # all exist; cold-start in a fresh CI sandbox pushes the time to first
   # MachineSet scale-up past the old 1m budget.
-  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
+  kubectl_wait_retry machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
