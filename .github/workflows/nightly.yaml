@@ -191,8 +191,12 @@ jobs:
         run: |
           set -eu
           cd _out/assets
+          # image.source links the package to this repo. Without it the first-
+          # ever push creates an unlinked package, and the follow-up `oras tag`
+          # can 403 permission_denied: write_package until it is linked by hand.
           oras push "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" \
             --artifact-type application/vnd.cozystack.talos.nocloud \
+            --annotation "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
             nocloud-amd64.raw.xz:application/vnd.cozystack.talos.disk.v1+xz
           oras tag "${DST_REGISTRY}/cozystack-nocloud:${VERSION}" nightly
           echo "Published cozystack-nocloud:${VERSION} (+ :nightly) to GHCR."
