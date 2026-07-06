@@ -189,15 +189,31 @@ jobs:
             [ -f "$f" ] || continue
             sed -i "s/${RC_ESC}/${STABLE_VERSION}/g" "$f"
           done
-          # -B so a retry within a re-run resets the local branch instead of
-          # failing on "already exists". The stable branch is derived
-          # deterministically from the rc; if a previous partial run already
-          # pushed a *diverged* remote branch, delete it before re-running.
+          # -B resets the local branch so a re-dispatch starts clean.
           git checkout -B "${STABLE_BRANCH}"
           git add -A
           git commit -s -m "Prepare release v${STABLE_VERSION} (promoted from ${RC_TAG})" \
             || echo "No tag-string changes to commit (digests already stable)"
-          git push origin "HEAD:refs/heads/${STABLE_BRANCH}"
+          # Compare-before-force, matching tags.yaml's Create release branch step.
+          # git commit above produces a fresh, timestamp-dependent SHA each run,
+          # so a re-dispatch (retry after a later step failed, or promoting a
+          # newer rc to the same version) creates a SIBLING commit. A plain push
+          # would then be rejected non-fast-forward and wedge re-promotion until
+          # the branch is deleted by hand — contradicting the validate step's
+          # leftover-draft tolerance and this workflow's "overwritable branch,
+          # nothing to wedge" header. This is a mutable staging branch: skip when
+          # unchanged, force + log when it genuinely moves.
+          LOCAL="$(git rev-parse HEAD)"
+          REMOTE="$(git ls-remote --heads origin "${STABLE_BRANCH}" | awk '{print $1}')"
+          if [ -z "$REMOTE" ]; then
+            git push origin "HEAD:refs/heads/${STABLE_BRANCH}"
+            echo "✅ Created staging branch ${STABLE_BRANCH} at ${LOCAL}."
+          elif [ "$REMOTE" = "$LOCAL" ]; then
+            echo "✅ ${STABLE_BRANCH} already at ${LOCAL}; nothing to do."
+          else
+            echo "::notice::Force-updating staging branch ${STABLE_BRANCH}: ${REMOTE} -> ${LOCAL}."
+            git push -f origin "HEAD:refs/heads/${STABLE_BRANCH}"
+          fi
 
       # Assemble the stable draft's assets. Start from the rc draft's assets
       # (the heavy Talos ISO/disk/kernel/initramfs are identical bits — the rc
