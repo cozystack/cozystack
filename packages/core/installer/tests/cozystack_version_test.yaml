@@ -47,6 +47,25 @@ tests:
           path: kind
           value: Deployment
 
+  - it: generic + platformVersion sets COZYSTACK_VERSION and the apiServer endpoint
+    set:
+      cozystackOperator.variant: generic
+      cozystackOperator.platformVersion: v1.4.0
+      cozystack.apiServerHost: api.example.com
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env
+          value:
+            - name: COZYSTACK_VERSION
+              value: v1.4.0
+            - name: KUBERNETES_SERVICE_HOST
+              value: api.example.com
+            - name: KUBERNETES_SERVICE_PORT
+              value: "6443"
+        documentSelector:
+          path: kind
+          value: Deployment
+
   - it: hosted + platformVersion sets COZYSTACK_VERSION and no endpoint env
     set:
       cozystackOperator.variant: hosted
