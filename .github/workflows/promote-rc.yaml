@@ -22,8 +22,11 @@ on:
         type: string
 
 env:
-  # TODO: unhardcode this (shared with the build/e2e workflows)
-  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+  # Release-tag images (rc and stable) and the cozy-installer chart are built
+  # and pushed to GHCR by tags.yaml (hack/common-envs.mk default), NOT to the
+  # OCIR CI registry. The promotion retags/repackages them on GHCR, so this must
+  # match hack/promote-retag.sh's default. TODO: share this with the workflows.
+  REGISTRY: ghcr.io/cozystack/cozystack
 
 concurrency:
   group: promote-rc-${{ inputs.rc_tag }}
@@ -132,18 +135,25 @@ jobs:
           # `git remote set-url`, so there's no need to persist it in .git/config.
           persist-credentials: false
 
-      - name: Set up toolchain (skopeo, yq)
+      - name: Set up toolchain (skopeo, yq, helm)
         run: |
           command -v yq >/dev/null \
             || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
           command -v skopeo >/dev/null \
             || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -v helm >/dev/null \
+            || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-      - name: Login to registry
-        run: skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" -p "$OCIR_TOKEN"
+      # rc/stable component images, the cozystack-packages artifact and the
+      # cozy-installer chart all live on GHCR. skopeo does the image retags;
+      # helm pushes the repackaged stable chart. Token via stdin, not argv.
+      - name: Login to registry (GHCR)
         env:
-          OCIR_USER: ${{ secrets.OCIR_USER }}
-          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+          GHCR_USER:  ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | helm registry login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
 
       # The promotion proper: retag every rc image/digest to the stable tag and
       # :latest. No rebuild — bit-for-bit the e2e-tested rc.
@@ -184,6 +194,28 @@ jobs:
           git commit -s -m "Prepare release v${STABLE_VERSION} (promoted from ${RC_TAG})" \
             || echo "No tag-string changes to commit (digests already stable)"
           git push origin "HEAD:refs/heads/${STABLE_BRANCH}"
+
+      # Publish the stable cozy-installer OCI chart — the documented install path
+      # (`helm upgrade --install cozystack oci://…/cozy-installer --version X.Y.Z`).
+      # The retag step above covers the component images and the cozystack-packages
+      # artifact, but the chart is a separate OCI artifact referenced in no
+      # values.yaml, so it must be published here or the stable install 404s
+      # (manifest unknown). No rebuild: the chart is repackaged from the stable
+      # tree, which references the retagged images + artifact by digest; only the
+      # chart's own version metadata is stamped to the stable version. Mirrors the
+      # nightly flow (nightly.yaml). :latest is (re)pointed to the newest stable,
+      # matching the image :latest the retag step moves.
+      - name: Publish stable cozy-installer chart
+        env:
+          STABLE_VERSION: ${{ steps.parse.outputs.stable_version }}
+        run: |
+          PKG="$(helm package packages/core/installer \
+            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
+          helm push "$PKG" "oci://${REGISTRY}"
+          rm -f "$PKG"
+          skopeo copy --multi-arch all \
+            "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
+            "docker://${REGISTRY}/cozy-installer:latest"
 
       # Assemble the stable draft's assets. Start from the rc draft's assets
       # (the heavy Talos ISO/disk/kernel/initramfs are identical bits — the rc
