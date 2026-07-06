@@ -3,19 +3,19 @@ kind: ClusterRole
 metadata:
   name: vm-adoption-controller
 rules:
-# Watch VirtualMachines
+# Watch VirtualMachines; delete the Forklift VM once it has been adopted
 - apiGroups: ["kubevirt.io"]
   resources: ["virtualmachines"]
-  verbs: ["get", "list", "watch", "update", "patch"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete"]
 
 # Read Forklift Plans and Migrations
 - apiGroups: ["forklift.konveyor.io"]
   resources: ["plans", "migrations"]
   verbs: ["get", "list", "watch"]
 
-# Create/manage/delete VMInstances
+# Create/manage/delete VMInstances and VMDisks (imported disks become managed VMDisks)
 - apiGroups: ["apps.cozystack.io"]
-  resources: ["vminstances"]
+  resources: ["vminstances", "vmdisks"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
 # Label DataVolumes for Helm adoption and clone them (cross-namespace adoption)

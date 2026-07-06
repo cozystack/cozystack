@@ -1,0 +1,11 @@
+# VCS and IDE
+.git
+.gitignore
+.idea/
+*.tmproj
+.vscode/
+
+# Build artifacts (controller image source + compiled binary)
+Makefile
+images/
+*.tgz
