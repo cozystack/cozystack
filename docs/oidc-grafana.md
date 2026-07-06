@@ -260,9 +260,14 @@ work — useful when Keycloak is down or misconfigured.
   and `backoffLimit: 6`. Common causes: Grafana never becomes
   ready (check `kubectl -n <ns> get pods -l app=grafana`), or the
   `grafana-admin-password` Secret is missing its `user`/`password`
-  keys. The failed hook Job stays around until the next
-  helm-upgrade for post-mortem; check its logs with
-  `kubectl -n <ns> logs job/<release>-oidc-users`.
+  keys. `ttlSecondsAfterFinished: 3600` keeps the failed hook Job
+  (and its Pod's logs) around for **one hour** after the terminal
+  Failed condition — check its logs with
+  `kubectl -n <ns> logs job/<release>-oidc-users` inside that window.
+  After 1h the Kubernetes TTL controller garbage-collects the Job
+  and the Pod together, so grab the logs quickly; if you missed
+  the window, re-trigger the hook with `helm upgrade` on the
+  release and reproduce.
 - **`emailVerified` on Keycloak users is a prescriptive requirement,
   not a chart-enforced one.** The chart does not emit any
   `claimValidationRules` — the layered guarantees you rely on
