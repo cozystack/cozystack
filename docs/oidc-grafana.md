@@ -189,9 +189,18 @@ API:
    demotions, etc.) via `PATCH /api/orgs/{orgId}/users/{userId}`.
 3. Every Main-Org member whose email is neither in the list nor the
    break-glass `grafana-admin-password` login is removed. Removing
-   an entry from `users:` and re-reconciling revokes access;
-   flipping `mode: None` treats the list as empty and prunes every
-   OIDC-provisioned account.
+   an entry from `users:` and re-reconciling revokes access.
+
+The Job is only rendered when `mode: System` or `mode: CustomConfig`
+— **in `mode: None` the chart deliberately owns nothing in Grafana
+orgs**. This matters on upgrade: existing tenants who ran the
+pre-PR Monitoring chart may have added users to Grafana manually
+through the UI; if the Job ran in `mode: None` its prune pass would
+silently delete those accounts on the next Flux reconcile. Operators
+who want to clean up OIDC-provisioned accounts after switching
+`System | CustomConfig → None` do it themselves through the Grafana
+UI or admin API. The `activeDeadlineSeconds` and `ttlSecondsAfterFinished`
+notes below only apply when the Job actually renders.
 
 Users not listed in `spec.oidc.users` who log in through OIDC get
 nothing — no default `Viewer` role, no cross-tenant read access.

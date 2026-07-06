@@ -88,27 +88,31 @@ tests:
           content:
             name: GF_PATHS_CUSTOM_INI
 
-  - it: mode=None still renders the users-Job so a mode switch can prune stale members
+  - it: mode=None does NOT render the users-Job (upgrade safety guard)
+    # Regression guard against the dev3 test finding: if the Job were
+    # rendered in mode=None, the post-upgrade prune pass would silently
+    # delete every non-admin Main-Org member on any monitoring HR
+    # reconcile — clobbering users added manually through the Grafana
+    # UI on installations that predate this PR (where `spec.oidc` did
+    # not exist and Grafana orgs were operator-curated by hand).
     template: templates/grafana/oidc-users-job.yaml
     asserts:
       - hasDocuments:
-          count: 1
-      - equal:
-          path: kind
-          value: Job
-      - equal:
-          path: metadata.annotations["helm.sh/hook"]
-          value: post-install,post-upgrade
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: OIDC_MODE
-            value: "None"
-      - contains:
-          path: spec.template.spec.containers[0].env
-          content:
-            name: DESIRED_USERS_JSON
-            value: "[]"
+          count: 0
+
+  - it: mode=None with non-empty users still fails render (users have no effect in None)
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
+    asserts:
+      # The Job is not rendered, but the prologue still validates users[]
+      # entries — an operator who lists users in mode=None almost
+      # certainly meant to also flip mode; the prologue-level shape
+      # checks (email/role) still fire so a typo doesn't slip through.
+      - hasDocuments:
+          count: 0
 
   ##########################################################
   # mode: System — happy path

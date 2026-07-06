@@ -7,7 +7,7 @@
   because grafana-operator has no user CRD.
 
   Contract:
-    - For each `spec.oidc.users[]` entry with mode != None:
+    - For each `spec.oidc.users[]` entry:
         * pre-provision a local Grafana account with the given email
           (random password — the account is a shell so the users-Job
           can set an org role before the operator's first OIDC login,
@@ -17,13 +17,18 @@
           (`Admin` / `Editor` / `Viewer`), promoting/demoting on
           re-run.
     - Prune every non-admin Main-Org member whose email is not in the
-      desired list. Handles both:
-        * a `users:` entry being removed (should lose access);
-        * `mode: None` (list is treated as empty — all OIDC-provisioned
-          accounts are pruned).
+      desired list — handles removal of a `users:` entry.
     - `skip_org_role_sync = true` in the Grafana generic_oauth block
       (see grafana.yaml) makes sure a later login never overwrites the
       role this Job sets.
+
+  NOT rendered when `mode: None`. The chart deliberately treats
+  `mode: None` as "OIDC is off, chart owns nothing in Grafana orgs";
+  a prune pass in `None` would silently delete every non-admin
+  Main-Org member on any monitoring upgrade — clobbering users added
+  manually through the Grafana UI on an installation that predates
+  this PR. Operators who need to clean up OIDC-provisioned accounts
+  after switching System/CustomConfig → None do it themselves.
 
   Lifecycle:
     - The Job itself is a Helm hook (post-install,post-upgrade) with
@@ -35,17 +40,18 @@
       Secret via `envFrom`.
     - `activeDeadlineSeconds` caps a stuck Job so a broken Grafana
       does not hold the release in `pending-upgrade`.
-
-  Rendered for all modes so `mode: None` still gets the prune pass.
 */}}
 {{- $oidc := .Values.oidc | default dict }}
 {{- $mode := $oidc.mode | default "None" }}
 {{- $users := $oidc.users | default (list) }}
 {{- /*
   Prologue: incompat (secretRef+users) first, then per-entry role +
-  email validation. See monitoring.oidc.assertUsersPrologue.
+  email validation. See monitoring.oidc.assertUsersPrologue. Runs in
+  every mode so a malformed users[] entry fails render even when the
+  Job itself is not emitted (mode=None).
 */}}
 {{- include "monitoring.oidc.assertUsersPrologue" . }}
+{{- if ne $mode "None" }}
 ---
 apiVersion: batch/v1
 kind: Job
@@ -279,3 +285,4 @@ spec:
       volumes:
         - name: tmp
           emptyDir: {}
+{{- end }}
