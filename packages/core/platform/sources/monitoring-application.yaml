@@ -35,16 +35,16 @@ spec:
             releaseName: monitoring-rd
     # `oidc` variant — additionally waits for cozystack.keycloak-operator so
     # the v1.edp.epam.com CRDs consumed by the Phase-1 OIDC selector
-    # (spec.oidc.mode: System renders KeycloakClient, KeycloakClientScope and
-    # three KeycloakRealmGroups in the cozy realm) are registered before the
+    # (spec.oidc.mode: System renders a per-instance KeycloakClient and
+    # KeycloakClientScope in the cozy realm) are registered before the
     # monitoring chart reconciles. Without this edge, the
     # `.Capabilities.APIVersions.Has "v1.edp.epam.com/v1"` guard in
-    # templates/grafana/oidc-keycloak.yaml would silently drop the whole
-    # Keycloak side and Grafana's auth.generic_oauth block would point at
-    # a client that never gets provisioned. Selected from the bundle when
-    # `authentication.oidc.enabled` is true — see
-    # packages/core/platform/templates/bundles/system.yaml. Mirrors the
-    # cozystack-engine default/oidc variant split.
+    # templates/grafana/oidc-keycloak.yaml would fail the render (or, worse,
+    # if the guard were removed, silently drop the Keycloak side and leave
+    # Grafana's auth.generic_oauth pointing at a client that never gets
+    # provisioned). Selected from the bundle when `authentication.oidc.enabled`
+    # is true — see packages/core/platform/templates/bundles/system.yaml.
+    # Mirrors the cozystack-engine default/oidc variant split.
     - name: oidc
       dependsOn:
         - cozystack.networking
