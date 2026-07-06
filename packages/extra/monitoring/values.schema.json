@@ -637,6 +637,33 @@
             "System",
             "CustomConfig"
           ]
+        },
+        "users": {
+          "description": "Users granted access to this Grafana instance's org. Each entry is reconciled into Grafana org membership + role by a chart-owned post-install/post-upgrade Job. Works for both `System` and `CustomConfig` modes; ignored when `mode: None`. Users not listed here get nothing (no default org role from group mapping).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": [
+              "email",
+              "role"
+            ],
+            "properties": {
+              "email": {
+                "description": "Email address matched against the `email` claim from the issuer. The chart pre-provisions a Grafana account with this email so the users-Job can set the org role before the operator's first login (`oauth_allow_insecure_email_lookup = true` glues the two together).",
+                "type": "string"
+              },
+              "role": {
+                "description": "Grafana org role to bind: `Admin`, `Editor`, or `Viewer`. Applied to the release's Grafana org (`Main Org.`); server-level `GrafanaAdmin` promotion is out of scope for Phase 1.",
+                "type": "string",
+                "enum": [
+                  "Admin",
+                  "Editor",
+                  "Viewer"
+                ]
+              }
+            }
+          }
         }
       }
     }
