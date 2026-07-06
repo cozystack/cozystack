@@ -13,8 +13,11 @@
 # `spec.oidc.*` fields are admitted by the Monitoring CR; that
 # cozystack-api accepts the updated schema; that the HelmRelease
 # renders the OIDC templates; and that the resulting KeycloakClient /
-# KeycloakClientScope / KeycloakRealmGroups / persistent
-# client-secret Secret / Grafana CR carry the expected shape.
+# KeycloakClientScope / persistent client-secret Secret / Grafana CR /
+# users-reconcile Job carry the expected shape. Chart-owned
+# KeycloakRealmGroups + role_attribute_path are gone (see the
+# design note in docs/oidc-grafana.md); authorization is driven by
+# spec.oidc.users reconciled into Grafana orgs by the users-Job.
 
 # cozytest.sh (the e2e runner) is not real bats: it never invokes
 # setup()/teardown(). Cleanup belongs in cozy_cleanup(), which runs at
@@ -28,7 +31,7 @@
 # the inner packages/system/monitoring HelmRelease that carries the
 # OIDC templates is then named `${outer}-system`, i.e. `monitoring-system`,
 # and every OIDC identifier derived by the helpers (clientId, audience
-# scope, groups, client-secret Secret) is built off that inner name.
+# scope, client-secret Secret) is built off that inner name.
 CR_NAME="monitoring"
 INNER_REL="${CR_NAME}-system"
 CID="tenant-test-${INNER_REL}"
@@ -65,6 +68,9 @@ spec:
       storageClassName: replicated
   oidc:
     mode: System
+    users:
+      - email: e2e-admin@example.com
+        role: Admin
 EOF
 
   # Outer HR shares the CR name; inner HR (chart target) is ${outer}-system.
@@ -110,7 +116,7 @@ EOF
   echo "${value}" | grep -qE '^[A-Za-z0-9]+$'
 }
 
-@test "Per-instance KeycloakClient + KeycloakClientScope + 3 KeycloakRealmGroups land in cozy" {
+@test "Per-instance KeycloakClient + KeycloakClientScope land in cozy (no groups)" {
   # The EDP Keycloak operator API group is only present when the
   # platform-level OIDC feature is on. Skip gracefully otherwise so the
   # test suite works on runners without Keycloak installed.
@@ -134,10 +140,51 @@ EOF
   echo "audience mapper: ${mapper}"
   [ "${mapper}" = "oidc-audience-mapper" ]
 
+  # No chart-owned KeycloakRealmGroups — directory objects stay owned
+  # by whoever runs the cozy realm; authorization is app-side (see the
+  # users-Job assertion below).
   for role in admin editor viewer; do
-    timeout 30 sh -ec 'until kubectl -n tenant-test get keycloakrealmgroup.v1.edp.epam.com "'"${CID}-${role}"'" >/dev/null 2>&1; do sleep 2; done'
-    echo "group ${CID}-${role} present"
+    if kubectl -n tenant-test get keycloakrealmgroup.v1.edp.epam.com "${CID}-${role}" >/dev/null 2>&1; then
+      echo "unexpected chart-owned realm group ${CID}-${role} present" >&2
+      false
+    fi
   done
+}
+
+@test "Grafana config has no role_attribute_path and enables skip_org_role_sync" {
+  timeout 60 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 2; done'
+  role_attr=$(kubectl -n tenant-test get grafana grafana \
+    -o jsonpath='{.spec.config.auth\.generic_oauth.role_attribute_path}')
+  echo "role_attribute_path: ${role_attr}"
+  [ -z "${role_attr}" ]
+
+  skip_sync=$(kubectl -n tenant-test get grafana grafana \
+    -o jsonpath='{.spec.config.auth\.generic_oauth.skip_org_role_sync}')
+  echo "skip_org_role_sync: ${skip_sync}"
+  [ "${skip_sync}" = "true" ]
+
+  email_lookup=$(kubectl -n tenant-test get grafana grafana \
+    -o jsonpath='{.spec.config.auth\.generic_oauth.oauth_allow_insecure_email_lookup}')
+  echo "oauth_allow_insecure_email_lookup: ${email_lookup}"
+  [ "${email_lookup}" = "true" ]
+}
+
+@test "users-Job runs and carries the desired list from spec.oidc.users" {
+  # helm.sh/hook: post-install,post-upgrade — the Job appears after the
+  # inner HR reconciles. `hook-delete-policy: before-hook-creation` keeps
+  # it around after completion so we can assert on its shape.
+  timeout 180 sh -ec 'until kubectl -n tenant-test get job "'"${INNER_REL}"'-oidc-users" >/dev/null 2>&1; do sleep 5; done'
+
+  desired=$(kubectl -n tenant-test get job "${INNER_REL}-oidc-users" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="reconcile")].env[?(@.name=="DESIRED_USERS_JSON")].value}')
+  echo "DESIRED_USERS_JSON: ${desired}"
+  echo "${desired}" | grep -q 'e2e-admin@example.com'
+  echo "${desired}" | grep -q '"role":"Admin"'
+
+  mode=$(kubectl -n tenant-test get job "${INNER_REL}-oidc-users" \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="reconcile")].env[?(@.name=="OIDC_MODE")].value}')
+  echo "OIDC_MODE: ${mode}"
+  [ "${mode}" = "System" ]
 }
 
 @test "Grafana Deployment injects GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET from the Secret" {

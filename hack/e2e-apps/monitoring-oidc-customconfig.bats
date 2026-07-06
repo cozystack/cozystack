@@ -66,7 +66,9 @@ spec:
         auth_url: https://idp.example.test/auth
         token_url: https://idp.example.test/token
         api_url: https://idp.example.test/userinfo
-        role_attribute_path: "'Viewer'"
+    users:
+      - email: e2e-byo@example.com
+        role: Viewer
 EOF
 
   # Outer HR (created by cozystack-operator from the CR) shares the CR name.
@@ -96,7 +98,7 @@ EOF
   }
 }
 
-@test "No KeycloakClient / Scope / Groups are created in the cozy realm" {
+@test "No KeycloakClient / Scope are created in the cozy realm" {
   # Only meaningful when the EDP CRDs exist on the cluster.
   if ! kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
     skip "EDP Keycloak operator CRDs not present on this cluster"
@@ -106,14 +108,12 @@ EOF
   # the inner chart -> tenant-test-monitoring-system.
   CID="tenant-test-${INNER_REL}"
 
-  # Give any reconciler a moment; then assert none of the four objects
-  # were created.
+  # Give any reconciler a moment; then assert neither cozy-realm object
+  # exists. Chart-owned KeycloakRealmGroups were removed entirely (see
+  # design note in docs/oidc-grafana.md) so no group assertions here.
   sleep 5
   ! kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" 2>/dev/null
   ! kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" 2>/dev/null
-  ! kubectl -n tenant-test get keycloakrealmgroup.v1.edp.epam.com "${CID}-admin" 2>/dev/null
-  ! kubectl -n tenant-test get keycloakrealmgroup.v1.edp.epam.com "${CID}-editor" 2>/dev/null
-  ! kubectl -n tenant-test get keycloakrealmgroup.v1.edp.epam.com "${CID}-viewer" 2>/dev/null
 }
 
 @test "secretRef variant mounts operator Secret under /etc/grafana/oidc" {
