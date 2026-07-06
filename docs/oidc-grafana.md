@@ -14,7 +14,10 @@ deferred to Phase 2. This Grafana integration follows the same shape
 as the tenant kube-apiserver's Phase 1
 ([cozystack/cozystack#3044](https://github.com/cozystack/cozystack/pull/3044)),
 adapted for a server-side (confidential) OAuth client instead of a
-public kubectl one.
+public kubectl one: authentication is wired up by the chart, but
+authorization is an operator-supplied `users:` map reconciled into
+the target (Grafana orgs here, ClusterRoleBindings in #3044) by a
+chart-owned Job. The chart does not own any directory objects.
 
 ## Selector
 
@@ -27,6 +30,11 @@ metadata:
 spec:
   oidc:
     mode: System        # System | CustomConfig | None (default)
+    users:
+      - email: alice@acme.example
+        role: Admin
+      - email: bob@acme.example
+        role: Viewer
 ```
 
 Three modes:
@@ -65,42 +73,30 @@ CR:
    per-instance clientId. This is the per-instance isolation
    primitive: a token minted for one Monitoring release is rejected
    by another's Grafana.
-3. **Three `KeycloakRealmGroup`s** named
-   `<namespace>-<release>-{admin,editor,viewer}`. The groups
-   themselves are chart-owned; their membership is not — a platform
-   operator adds users to them through the Keycloak UI or a
-   `KeycloakRealmUser` CR. See the "Users and RBAC" section.
-4. A **Secret** `<release>-oidc-client` carrying a random 32-char
+3. A **Secret** `<release>-oidc-client` carrying a random 32-char
    `client-secret`. Generated on first install (`lookup` + random
    fallback, same pattern as `packages/system/dashboard`), preserved
    across upgrades.
-5. The Grafana CR's `spec.config.auth.generic_oauth` section wired to
-   the cozy realm issuer + the per-instance audience scope +
-   `role_attribute_path` mapping the three groups above to Grafana's
-   `Admin` / `Editor` / `Viewer` roles.
-6. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
-   Deployment sourced from the Secret in step 4.
+4. The Grafana CR's `spec.config.auth.generic_oauth` section wired to
+   the cozy realm issuer + the per-instance audience scope, with
+   `skip_org_role_sync = true` so a login never overwrites the
+   app-side role assignments made by the users-Job, and
+   `oauth_allow_insecure_email_lookup = true` so the OIDC identity
+   binds to the pre-provisioned local account by email.
+5. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
+   Deployment sourced from the Secret in step 3.
+6. A post-install/post-upgrade **users-Job** — see the "Users and
+   RBAC" section — that reconciles `spec.oidc.users` into Grafana's
+   Main Org.
+
+No `KeycloakRealmGroup`s and no `role_attribute_path`. Directory
+objects (users, groups, group memberships) stay owned by whoever
+operates the `cozy` realm; the Monitoring release only requests
+authentication wiring, it does not act as a user directory.
 
 Server-level `GrafanaAdmin` promotion (`allow_assign_grafana_admin`)
 is out of scope for Phase 1. All Grafana instances — platform and
-tenant — cap at org-level `Admin` for members of the
-`<clientId>-admin` group. Not exposed on the tenant `Monitoring` CR
-either.
-
-The chart carries an internal lever `oidc.grafanaAdmin` (default
-`false`), reserved for a future phase that will route the override
-through the tenant-root chart's monitoring HR values. In Phase 1
-nothing sets it to `true` end-to-end: the platform bundle's obvious
-path via `Package.spec.components["monitoring-system"].values` is
-silently dropped because the `monitoring-system` component in
-`packages/core/platform/sources/monitoring-application.yaml` has no
-`install:` block, and PackageReconciler skips components without
-one before ever copying the override onto a HelmRelease
-(`internal/operator/package_reconciler.go` around lines 197-201 and
-292-293). Wiring it end-to-end requires either an explicit values
-injection from the tenant-root chart's `templates/monitoring.yaml`
-or an `install:` block on the `monitoring-system` component that
-creates a variant-scoped HR — both defensible, both deferred.
+tenant — cap at org-level `Admin`.
 
 ## CustomConfig mode
 
@@ -118,8 +114,7 @@ spec:
         auth_url: https://idp.acme.example/protocol/openid-connect/auth
         token_url: https://idp.acme.example/protocol/openid-connect/token
         api_url: https://idp.acme.example/protocol/openid-connect/userinfo
-        scopes: openid email profile groups
-        role_attribute_path: "contains(groups[*], 'grafana-admins') && 'Admin' || 'Viewer'"
+        scopes: openid email profile
 ```
 
 …or via an existing Secret in the tenant namespace whose `auth.ini`
@@ -134,6 +129,12 @@ spec:
         name: acme-byo-grafana-auth
 ```
 
+Do not set `role_attribute_path` in the payload: the chart forces
+`skip_org_role_sync = true` regardless of mode so a login never
+overwrites the users-Job assignments, and a `role_attribute_path`
+would just be dead config. Roles are reconciled by the same
+`spec.oidc.users` map as in `System` mode — see below.
+
 Setting both `config` and `secretRef.name` (or neither) fails the
 render. In `CustomConfig` mode no Keycloak objects are provisioned in
 `cozy` and no chart-owned client-secret Secret is created — the
@@ -142,39 +143,51 @@ operator manages their own credentials end-to-end.
 ## Users and RBAC
 
 Grafana's built-in identity model exposes three org-level roles:
-`Admin` / `Editor` / `Viewer`. The chart maps them to Keycloak groups
-via `role_attribute_path`, evaluated on the `groups` claim at login:
-
-```text
-contains(groups[*], '<ns>-<release>-admin')  && 'Admin'  ||
-contains(groups[*], '<ns>-<release>-editor') && 'Editor' ||
-contains(groups[*], '<ns>-<release>-viewer') && 'Viewer' ||
-'Viewer'
-```
-
-Authenticated identities with none of the three groups default to
-`Viewer`. To give a user a role, add them to the corresponding
-`KeycloakRealmGroup` in `cozy`:
+`Admin` / `Editor` / `Viewer`. The chart drives them from an
+operator-supplied map on the CR:
 
 ```yaml
-apiVersion: v1.edp.epam.com/v1
-kind: KeycloakRealmUser
-metadata:
-  name: alice-acme
-  namespace: cozy-keycloak
 spec:
-  realm: cozy
-  username: alice@acme.example
-  email: alice@acme.example
-  emailVerified: true
-  password: "…"
-  groups:
-    - tenant-acme-monitoring-admin
+  oidc:
+    users:
+      - email: alice@acme.example
+        role: Admin
+      - email: bob@acme.example
+        role: Editor
+      - email: carol@acme.example
+        role: Viewer
 ```
 
-Removing a user from the group demotes them (Grafana re-evaluates
-`role_attribute_path` on every login). Deleting them from `cozy`
-revokes access outright.
+A chart-owned Job runs on every `helm install` / `helm upgrade` and
+reconciles that list into Main Org. membership via Grafana's admin
+API:
+
+1. Each listed email gets a pre-provisioned local Grafana account
+   with a random password. The account is a shell; the operator
+   never uses that password. When they sign in with the OIDC flow
+   Grafana looks up the pre-provisioned account by email
+   (`oauth_allow_insecure_email_lookup = true`) and attaches the
+   OIDC identity to it.
+2. Each listed email is added to Main Org. with the requested role.
+   Re-runs of the Job converge role changes (`Editor` → `Admin`,
+   demotions, etc.) via `PATCH /api/orgs/{orgId}/users/{userId}`.
+3. Every Main-Org member whose email is neither in the list nor the
+   break-glass `grafana-admin-password` login is removed. Removing
+   an entry from `users:` and re-reconciling revokes access;
+   flipping `mode: None` treats the list as empty and prunes every
+   OIDC-provisioned account.
+
+Users not listed in `spec.oidc.users` who log in through OIDC get
+nothing — no default `Viewer` role, no cross-tenant read access.
+`skip_org_role_sync = true` in the Grafana config makes sure the
+Job's assignments outlive the next login.
+
+For `System` mode, the operator provisions the corresponding
+Keycloak user in `cozy` in whatever way they already do (Keycloak
+UI, a `KeycloakRealmUser` CR, an identity broker). The Monitoring
+release does not create Keycloak users and does not manage
+`KeycloakRealmGroup`s — group membership curated out-of-band is not
+affected by anything this chart does.
 
 ## How a user logs in
 
@@ -182,8 +195,14 @@ The user opens `https://grafana.<host>` in a browser and picks the
 "Sign in with Keycloak" button under the login form. Grafana runs the
 Authorization Code + PKCE flow against the cozy realm, receives a
 token whose `aud` claim matches this Monitoring instance's clientId,
-and creates or updates the local Grafana user on the first
-successful login with the role from `role_attribute_path`.
+and — if the user's email is in `spec.oidc.users` — binds the OIDC
+identity to the pre-provisioned local account with the role the Job
+already set.
+
+If the user's email is not in `spec.oidc.users` the login succeeds
+authentication-wise but they land with no org membership and no role.
+Add them to `spec.oidc.users` and re-apply the CR; the Job will run
+on the next helm-upgrade and pull them in.
 
 The break-glass `admin_user` / `admin_password` field on the form
 stays wired to the `grafana-admin-password` Secret and continues to
@@ -217,16 +236,17 @@ work — useful when Keycloak is down or misconfigured.
   mappings** — Grafana rejects the callback and the login screen
   shows an error; the `admin_user`/`admin_password` Secret keeps
   working as break-glass.
-- **Mode toggle destroys chart-owned `KeycloakRealmGroup`
-  membership.** The three groups (`<clientId>-{admin,editor,viewer}`)
-  are release-owned. Flipping `spec.oidc.mode` from `System` to
-  `CustomConfig` or `None` runs a `helm upgrade` that deletes the
-  three `KeycloakRealmGroup` objects — and, with them, every user's
-  membership. Flipping back to `System` recreates the groups empty;
-  the platform operator has to re-populate them by hand (via the
-  Keycloak UI or new `KeycloakRealmUser` CRs). Not a bug, but a
-  one-way UX cost on the toggle; treat it like rotating an admin
-  Secret.
+- **User successfully logs in but sees no dashboards.** Their email
+  is missing from `spec.oidc.users` — no org role was assigned.
+  Add the entry and re-apply the CR; the users-Job runs on the
+  next helm-upgrade and grants access.
+- **users-Job fails.** The Job caps at `activeDeadlineSeconds: 900`
+  and `backoffLimit: 6`. Common causes: Grafana never becomes
+  ready (check `kubectl -n <ns> get pods -l app=grafana`), or the
+  `grafana-admin-password` Secret is missing its `user`/`password`
+  keys. The failed hook Job stays around until the next
+  helm-upgrade for post-mortem; check its logs with
+  `kubectl -n <ns> logs job/<release>-oidc-users`.
 - **`emailVerified` on Keycloak users is a prescriptive requirement,
   not a chart-enforced one.** The chart does not emit any
   `claimValidationRules` — the layered guarantees you rely on
@@ -258,6 +278,8 @@ work — useful when Keycloak is down or misconfigured.
 - **`disable_login_form: true` under `mode: System`.** Kept off so
   the `admin_user`/`admin_password` Secret remains a documented
   break-glass path; hardening it is a follow-up.
+- **Server-level `GrafanaAdmin` promotion.** All Grafana instances
+  cap at org-level `Admin`. Not exposed on the CR.
 - **CEL `claimValidationRules` enforcing `email_verified`.** See the
   failure-modes note above.
 - **Multi-issuer / BYO alongside `cozy`.** `mode: System` and
