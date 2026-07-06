@@ -84,10 +84,18 @@ EOF
 }
 
 @test "Grafana CR carries auth.generic_oauth pointing at the cozy realm" {
-  timeout 60 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 2; done'
+  # Wait for the Grafana CR to actually reflect mode=System values —
+  # `until kubectl get grafana` only proves the CR EXISTS (it may still
+  # be a stale copy from a previous test or from before the inner HR
+  # picked up the new values). Poll the specific field the test is
+  # about to assert on so the race window closes.
+  timeout 180 sh -ec '
+    until [ "$(kubectl -n tenant-test get grafana grafana \
+      -o jsonpath="{.spec.config.auth\.generic_oauth.enabled}" 2>/dev/null)" = "true" ]; do
+      sleep 5
+    done
+  '
 
-  # auth.generic_oauth is a top-level key under spec.config; the key
-  # name literally contains a dot, so jsonpath needs a bracketed lookup.
   enabled=$(kubectl -n tenant-test get grafana grafana \
     -o jsonpath='{.spec.config.auth\.generic_oauth.enabled}')
   echo "generic_oauth.enabled: ${enabled}"
@@ -152,7 +160,15 @@ EOF
 }
 
 @test "Grafana config has no role_attribute_path and enables skip_org_role_sync" {
-  timeout 60 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 2; done'
+  # Same wait as the first Grafana-CR test — poll the specific field
+  # rather than merely the CR's existence so we don't hit a stale copy.
+  timeout 180 sh -ec '
+    until [ "$(kubectl -n tenant-test get grafana grafana \
+      -o jsonpath="{.spec.config.auth\.generic_oauth.skip_org_role_sync}" 2>/dev/null)" = "true" ]; do
+      sleep 5
+    done
+  '
+
   role_attr=$(kubectl -n tenant-test get grafana grafana \
     -o jsonpath='{.spec.config.auth\.generic_oauth.role_attribute_path}')
   echo "role_attribute_path: ${role_attr}"

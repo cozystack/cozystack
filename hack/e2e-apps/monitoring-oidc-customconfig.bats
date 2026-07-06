@@ -79,7 +79,15 @@ EOF
 }
 
 @test "Grafana CR carries the operator's auth.generic_oauth payload verbatim" {
-  timeout 60 sh -ec 'until kubectl -n tenant-test get grafana grafana >/dev/null 2>&1; do sleep 2; done'
+  # Poll the specific field, not just CR existence — otherwise we may
+  # grab a stale Grafana CR that hasn't yet been reconciled with the
+  # inner HR's CustomConfig values.
+  timeout 180 sh -ec '
+    until [ "$(kubectl -n tenant-test get grafana grafana \
+      -o jsonpath="{.spec.config.auth\.generic_oauth.client_id}" 2>/dev/null)" = "byo-monitoring" ]; do
+      sleep 5
+    done
+  '
 
   client_id=$(kubectl -n tenant-test get grafana grafana \
     -o jsonpath='{.spec.config.auth\.generic_oauth.client_id}')
@@ -164,11 +172,14 @@ EOF
   # The Grafana CR from @test 1 already exists and carries the inline
   # auth.generic_oauth block; wait for the chart to reconcile the swap
   # to secretRef by polling for the target state (volume mount present
-  # AND inline block absent) instead of asserting immediately.
-  timeout 180 sh -ec '
+  # AND inline block absent) instead of asserting immediately. 600s
+  # window is sized for a full inner-HR upgrade cycle + grafana-
+  # operator reconcile — 180s is too tight when the sandbox is warm-
+  # loaded, cf. the intermittent CI failure.
+  timeout 600 sh -ec '
     until [ -n "$(kubectl -n tenant-test get grafana grafana -o jsonpath="{.spec.deployment.spec.template.spec.containers[?(@.name==\"grafana\")].volumeMounts[?(@.name==\"oidc-custom-ini\")].mountPath}")" ]; do sleep 5; done
   '
-  timeout 60 sh -ec '
+  timeout 120 sh -ec '
     until [ -z "$(kubectl -n tenant-test get grafana grafana -o jsonpath="{.spec.config.auth\.generic_oauth}")" ]; do sleep 5; done
   '
 
