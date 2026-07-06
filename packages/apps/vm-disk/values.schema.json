@@ -42,10 +42,24 @@
           "properties": {
             "name": {
               "description": "Name of the image to use.",
-              "type": "string",
-              "x-cozystack-options": {
-                "source": "image"
-              }
+              "type": "string"
+            }
+          }
+        },
+        "pvc": {
+          "description": "Clone an existing PersistentVolumeClaim.",
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "description": "Name of the source PersistentVolumeClaim.",
+              "type": "string"
+            },
+            "namespace": {
+              "description": "Namespace of the source PVC (defaults to this disk's namespace).",
+              "type": "string"
             }
           }
         },
@@ -77,16 +91,7 @@
     "storageClass": {
       "description": "StorageClass used to store the data.",
       "type": "string",
-      "default": "replicated",
-      "x-kubernetes-validations": [
-        {
-          "rule": "self == oldSelf",
-          "message": "storageClass is immutable"
-        }
-      ],
-      "x-cozystack-options": {
-        "source": "storageclass"
-      }
+      "default": "replicated"
     }
   }
 }

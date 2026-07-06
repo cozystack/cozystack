@@ -28,7 +28,6 @@ type ConfigSpec struct {
 	Storage resource.Quantity `json:"storage"`
 	// StorageClass used to store the data.
 	// +kubebuilder:default:="replicated"
-	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 }
 
@@ -39,6 +38,8 @@ type Source struct {
 	Http *SourceHTTP `json:"http,omitempty"`
 	// Use image by name from default collection.
 	Image *SourceImage `json:"image,omitempty"`
+	// Clone an existing PersistentVolumeClaim.
+	Pvc *SourcePVC `json:"pvc,omitempty"`
 	// Upload local image.
 	Upload *SourceUpload `json:"upload,omitempty"`
 }
@@ -56,6 +57,13 @@ type SourceHTTP struct {
 type SourceImage struct {
 	// Name of the image to use.
 	Name string `json:"name"`
+}
+
+type SourcePVC struct {
+	// Name of the source PersistentVolumeClaim.
+	Name string `json:"name"`
+	// Namespace of the source PVC (defaults to this disk's namespace).
+	Namespace string `json:"namespace,omitempty"`
 }
 
 type SourceUpload struct {
