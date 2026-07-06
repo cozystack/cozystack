@@ -1,4 +1,4 @@
-# migration 49 runs the etcd-migrate adoption tool to move legacy etcd.aenix.io
+# migration 50 runs the etcd-migrate adoption tool to move legacy etcd.aenix.io
 # clusters onto etcd-operator.cozystack.io/v1alpha2. etcd-migrate is published
 # as a standalone CLI asset of the etcd-operator release (the operator image
 # itself contains only /manager), so we fetch the linux binary for the build's
@@ -31,7 +31,7 @@ RUN set -eux; \
 
 COPY migrations /migrations
 # v1alpha2 etcd CRDs, vendored into the build context by `make image-migrations`.
-# migration 49 applies these before adoption so it does not deadlock waiting for
+# migration 50 applies these before adoption so it does not deadlock waiting for
 # the etcd-operator-crds HelmRelease (which only reconciles after the migration
 # pre-upgrade hook completes).
 COPY etcd-operator-crds /etcd-operator-crds

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Fake kubectl for hack/migration-49-etcd-adopt.bats. It serves only the calls
-# migration 49 makes; behaviour is driven by FAKE_* env and every invocation is
+# Fake kubectl for hack/migration-50-etcd-adopt.bats. It serves only the calls
+# migration 50 makes; behaviour is driven by FAKE_* env and every invocation is
 # appended to $FAKE_CMDLOG so the test can assert on order and content.
 #
 #   FAKE_CMDLOG       file to append a one-line record of each call to

@@ -28,7 +28,7 @@ unprotect:
 image: image-migrations
 
 image-migrations:
-	# Vendor the v1alpha2 CRDs into the build context so migration 49 can ensure
+	# Vendor the v1alpha2 CRDs into the build context so migration 50 can ensure
 	# they exist before adoption (the etcd-operator-crds HelmRelease only installs
 	# AFTER this pre-upgrade hook). Copied from the committed source of truth —
 	# no build-time network fetch, stays in lockstep with the chart. Removed again
