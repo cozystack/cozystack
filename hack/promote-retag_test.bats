@@ -55,6 +55,46 @@
   [ -z "$bad" ]
 }
 
+@test "default leaves :latest unmoved" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  # :latest belongs to promotion, and only when the promoted version is the
+  # newest published stable. Without MOVE_LATEST the plan retags the stable tag
+  # but must NOT repoint :latest — otherwise a patch on an older line would drag
+  # :latest backwards.
+  rc=0
+  env -u REGISTRY hack/promote-retag.sh v9.9.9 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  # The stable tag is in the copy plan...
+  grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:v9\.9\.9' "$tmp/out"
+  # ...but nothing moves :latest.
+  ! grep -qE 'docker://[^ ]+:latest' "$tmp/out"
+}
+
+@test "MOVE_LATEST=1 also repoints :latest" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  rc=0
+  env -u REGISTRY MOVE_LATEST=1 hack/promote-retag.sh v9.9.9 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  # Every promoted repo also gets a :latest copy in the plan.
+  grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:latest' "$tmp/out"
+}
+
 @test "REGISTRY override scopes the selection" {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT

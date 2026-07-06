@@ -3,17 +3,27 @@
 # no rebuild. Every cluster artifact cozystack ships (component images, the
 # cozystack-packages OCI artifact) is content-addressed; this script reads the
 # digests the rc baked into the package values.yaml files and copies each, by
-# digest, to the stable tag (and :latest). Because the copy source is the
-# immutable digest, the stable image is bit-for-bit the rc image that passed
-# e2e — promotion cannot diverge from what was tested.
+# digest, to the stable tag. Because the copy source is the immutable digest,
+# the stable image is bit-for-bit the rc image that passed e2e — promotion
+# cannot diverge from what was tested.
 #
 # Usage: hack/promote-retag.sh <stable-version> [--dry-run]
-#   <stable-version>  e.g. v1.4.0  (the tag the rc is promoted to; :latest too)
+#   <stable-version>  e.g. v1.4.0  (the tag the rc is promoted to)
 #   --dry-run         print the skopeo copies without executing them
 #
+# Environment:
+#   MOVE_LATEST=1     also (re)point :latest at each promoted image. OFF by
+#                     default: :latest must move only when the version being
+#                     promoted is the newest published stable, otherwise a patch
+#                     on an older line (e.g. v1.4.6 while 1.5.x is current) would
+#                     drag :latest backwards. The caller (finalize) computes this
+#                     with the same max-semver test it uses for the release's
+#                     make_latest flag and sets MOVE_LATEST accordingly.
+#
 # Reads image refs from packages/*/*/values.yaml in the CURRENT tree, which is
-# expected to be the rc's digest-vendored tree (the release-X.Y.Z-rc.N staging
-# branch). Requires: yq (mikefarah), skopeo, and a registry login already done.
+# expected to be the promoted stable digest-vendored tree (the release-X.Y.Z
+# branch, whose digests are the rc's — only the cosmetic tag string differs).
+# Requires: yq (mikefarah), skopeo, and a registry login already done.
 #
 # The repo/tag split (ref_repo below) strips the :tag from the last path
 # component only, so registry hosts that carry a :port are preserved.
@@ -22,6 +32,8 @@ set -eu
 STABLE="${1:?usage: promote-retag.sh <stable-version> [--dry-run]}"
 DRY_RUN=0
 [ "${2:-}" = "--dry-run" ] && DRY_RUN=1
+# :latest is repointed only when the caller asserts this is the newest stable.
+MOVE_LATEST="${MOVE_LATEST:-0}"
 
 # Only cozystack-owned images (those the build pushed to $REGISTRY) are
 # retagged. Everything else vendored by digest — third-party images and bare
@@ -111,7 +123,7 @@ echo "$refs" | while IFS= read -r ref; do
   # before copying. No-op if it already points at this rc digest (idempotent
   # re-run), fail if it points elsewhere (a partial run or manual push already
   # put different bytes there) rather than mutate released bytes. :latest is
-  # intentionally mutable and always (re)pointed below.
+  # intentionally mutable and (re)pointed below only when MOVE_LATEST=1.
   if [ "$DRY_RUN" -eq 0 ]; then
     cur="$(skopeo inspect --format '{{.Digest}}' "docker://${repo}:${STABLE}" 2>/dev/null || echo '')"
     if [ -n "$cur" ] && [ "$cur" != "$digest" ]; then
@@ -126,7 +138,7 @@ echo "$refs" | while IFS= read -r ref; do
   else
     copy "$ref" "${repo}:${STABLE}"
   fi
-  copy "$ref" "${repo}:latest"
+  [ "$MOVE_LATEST" = "1" ] && copy "$ref" "${repo}:latest"
   # Verify the stable tag now resolves to the exact rc digest (skip in dry-run).
   if [ "$DRY_RUN" -eq 0 ]; then
     got="$(skopeo inspect --format '{{.Digest}}' "docker://${repo}:${STABLE}" 2>/dev/null || echo '')"
@@ -137,4 +149,8 @@ echo "$refs" | while IFS= read -r ref; do
   fi
 done
 
-echo "Retagged image refs to ${STABLE} (+latest)."
+if [ "$MOVE_LATEST" = "1" ]; then
+  echo "Retagged image refs to ${STABLE} (+latest)."
+else
+  echo "Retagged image refs to ${STABLE} (:latest left unmoved; MOVE_LATEST=0)."
+fi
