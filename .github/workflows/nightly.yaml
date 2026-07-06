@@ -67,9 +67,10 @@ jobs:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # skopeo (mirror copies), flux + helm (artifact/chart push) all read
-          # their own auth; log each into both registries it touches.
-          skopeo login "${SRC_REGISTRY%%/*}" -u "$OCIR_USER" -p "$OCIR_TOKEN"
-          skopeo login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" -p "$GHCR_TOKEN"
+          # their own auth; log each into both registries it touches. Token via
+          # stdin, never argv (a -p token leaks into the process list / logs).
+          echo "$OCIR_TOKEN" | skopeo login "${SRC_REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | skopeo login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
           echo "$OCIR_TOKEN" | docker login "${SRC_REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
           echo "$GHCR_TOKEN" | docker login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
           echo "$GHCR_TOKEN" | helm registry login "${DST_REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
