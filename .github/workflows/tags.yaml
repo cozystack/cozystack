@@ -55,11 +55,15 @@ jobs:
         with:
           script: |
             const tag = context.ref.replace('refs/tags/', '');
-            const releases = await github.rest.repos.listReleases({
+            // Paginate: a promote-created stable draft (or an accreting backlog
+            // of rc releases) can sit past the default first 30, and a missed
+            // draft here would wrongly rebuild instead of no-op.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
-              repo:  context.repo.repo
+              repo:  context.repo.repo,
+              per_page: 100
             });
-            const exists = releases.data.some(r => r.tag_name === tag);
+            const exists = releases.some(r => r.tag_name === tag);
             core.setOutput('release_exists', exists);
             console.log(exists ? `Release ${tag} already exists (draft or published)` : `No release ${tag} yet`);
 
@@ -89,6 +93,19 @@ jobs:
             core.setOutput('is_rc',   isRc);                             // true
             core.setOutput('is_stable', !isRc);                          // true only for a plain vX.Y.Z
             core.setOutput('line',    `${maj}.${min}`);                  // 0.31
+
+      # A stable vX.Y.Z tag must never build here. Stable tags are cut by
+      # finalize (pull-requests-release.yaml) at a promote PR's merge commit, by
+      # which point a draft release already exists (release_exists=true) and the
+      # build/draft/branch steps below are skipped. So a stable tag with NO
+      # pre-existing draft is a hand-push down the legacy full-rebuild path:
+      # fail fast rather than rebuild with release semantics, move :latest, and
+      # open a rogue release PR — silently violating the promotion invariant.
+      - name: Reject hand-pushed stable tags
+        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_stable == 'true'
+        run: |
+          echo "::error::Stable tag ${GITHUB_REF#refs/tags/} has no pre-existing draft release. Stable tags come from promote-rc.yaml — push a release candidate (vX.Y.Z-rc.N) and promote it; do not push vX.Y.Z by hand."
+          exit 1
 
       # Detect base branch (main or release-X.Y) the tag was pushed from
       - name: Get base branch
@@ -134,11 +151,14 @@ jobs:
         run: make build
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-          # Release semantics: push the release tag as :IMAGE_TAG (vX.Y.Z),
-          # the component versions as :<component-ver>, and move :latest.
+          # Push the release tag as :IMAGE_TAG (vX.Y.Z-rc.N) and the component
+          # versions as :<component-ver>. Deliberately NO PUBLISH_FLOATING: this
+          # job only ever runs for a prerelease (a stable tag is rejected or
+          # skips), so moving :latest here would point it at the newest rc — and
+          # an rc on an old line would drag it backwards. :latest belongs to
+          # promotion, which moves it only for the newest stable (finalize).
           IMAGE_TAG: ${{ github.ref_name }}
           PUBLISH_VERSIONED: '1'
-          PUBLISH_FLOATING: '1'
 
       # Commit built artifacts
       - name: Commit release artifacts
@@ -153,38 +173,12 @@ jobs:
           git add .
           git commit -m "Prepare release ${GITHUB_REF#refs/tags/}" -s || echo "No changes to commit"
 
-      # Tag the api/apps/v1alpha1 submodule for pkg.go.dev.
-      #
-      # Write-once: api/apps/v1alpha1/* tags feed the Go module proxy and
-      # pkg.go.dev, where a moved tag poisons caches irreversibly. Create the tag
-      # only when absent; if it already points at the same commit, no-op; if it
-      # exists pointing elsewhere, fail loudly rather than force-move it.
-      # Stable releases only: an immutable Go-module tag must never be cut for an
-      # rc/beta/alpha (is_stable=false) or a nightly (is_stable unset — Parse tag
-      # rejects -nightly before this), which would permanently pollute the module
-      # proxy with a prerelease version (#2677 goal 3).
-      - name: Tag API submodule (write-once)
-        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_stable == 'true'
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-          VTAG: ${{ steps.tag.outputs.tag }}
-        run: |
-          SUBTAG="api/apps/v1alpha1/${VTAG}"
-          git config user.name  "cozystack-ci[bot]"
-          git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
-          git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
-          TARGET="$(git rev-parse "${VTAG}^{}")"
-          EXISTING="$(git ls-remote --tags origin "refs/tags/${SUBTAG}" | awk '{print $1}')"
-          if [ -z "$EXISTING" ]; then
-            git tag "${SUBTAG}" "$TARGET"
-            git push origin "refs/tags/${SUBTAG}"
-            echo "✅ Created ${SUBTAG} at ${TARGET}."
-          elif [ "$EXISTING" = "$TARGET" ]; then
-            echo "✅ ${SUBTAG} already at ${TARGET}; nothing to do."
-          else
-            echo "::error::${SUBTAG} already exists at ${EXISTING}; refusing to force-move it to ${TARGET} (tags are write-once)."
-            exit 1
-          fi
+      # NB: the api/apps/v1alpha1/vX.Y.Z Go-module tag is NOT cut here. Under the
+      # promote flow this job only ever runs for an rc (a stable tag always finds
+      # its draft and skips, and a stable tag WITHOUT a draft is rejected above),
+      # and an rc must never get an immutable Go-module tag. The stable submodule
+      # tag is cut by pull-requests-release.yaml finalize, at the stable tag's
+      # merge commit (#2677 goal 3).
 
       # Create or reuse draft release
       - name: Create / reuse draft release
@@ -195,12 +189,15 @@ jobs:
           script: |
             const tag      = '${{ steps.tag.outputs.tag }}';
             const isRc     = ${{ steps.tag.outputs.is_rc }};
-            const releases = await github.rest.repos.listReleases({
+            // Paginate: the default page is 30, and promote-created stable drafts
+            // plus accreting rc releases can push an in-flight draft off it.
+            const releases = await github.paginate(github.rest.repos.listReleases, {
               owner: context.repo.owner,
-              repo:  context.repo.repo
+              repo:  context.repo.repo,
+              per_page: 100
             });
 
-            let rel = releases.data.find(r => r.tag_name === tag);
+            let rel = releases.find(r => r.tag_name === tag);
             if (!rel) {
               rel = await github.rest.repos.createRelease({
                 owner: context.repo.owner,
@@ -225,6 +222,31 @@ jobs:
           make upload_assets VERSION=${{ steps.tag.outputs.tag }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Publish the rc release once its assets are uploaded. The draft above is
+      # created draft; a stable draft stays draft for finalize to publish, but an
+      # rc has no later publish step — and the whole point of an rc is to be
+      # publicly visible so the community can download nocloud-amd64.raw.xz and
+      # validate it. rc tags are write-once, so there is nothing to protect with
+      # draft status. prerelease:true keeps it off the "Latest release" pointer.
+      - name: Publish rc release
+        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_rc == 'true'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const tag = '${{ steps.tag.outputs.tag }}';
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner, repo: context.repo.repo, per_page: 100
+            });
+            const rel = releases.find(r => r.tag_name === tag);
+            if (!rel) { core.setFailed(`rc release ${tag} not found to publish`); return; }
+            if (!rel.draft) { console.log(`${tag} already published`); return; }
+            await github.rest.repos.updateRelease({
+              owner: context.repo.owner, repo: context.repo.repo,
+              release_id: rel.id, draft: false, prerelease: true, make_latest: 'false'
+            });
+            console.log(`Published rc release ${tag} (prerelease)`);
 
       # Create the release-X.Y.Z staging branch (holds the digest-bake commit for
       # this version's release PR).
@@ -254,44 +276,10 @@ jobs:
             git push -f origin "HEAD:refs/heads/${BRANCH}"
           fi
 
-      # Create pull request into original base branch (if absent). Stable only —
-      # an rc/nightly must not auto-open a release PR (#2677 goal 3).
-      - name: Create pull request if not exists
-        if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_stable == 'true'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const version = context.ref.replace('refs/tags/v', '');
-            const base    = '${{ steps.get_base.outputs.branch }}';
-            const head    = `release-${version}`;
-
-            const prs = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo:  context.repo.repo,
-              head:  `${context.repo.owner}:${head}`,
-              base
-            });
-            if (prs.data.length === 0) {
-              const pr = await github.rest.pulls.create({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                head,
-                base,
-                title: `chore(release): cut v${version}`,
-                body:  `This PR prepares the release \`v${version}\`.`,
-                draft: false
-              });
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo:  context.repo.repo,
-                issue_number: pr.data.number,
-                labels: ['release']
-              });
-              console.log(`Created PR #${pr.data.number}`);
-            } else {
-              console.log(`PR already exists from ${head} to ${base}`);
-            }
+      # NB: no release PR is opened here. rc tags never get one, and the stable
+      # promote PR is opened by promote-rc.yaml. The old "Create pull request if
+      # not exists" step was gated on `is_stable && release_exists==false` —
+      # unreachable now that a hand-pushed stable tag is rejected above.
 
   generate-changelog:
     name: Generate Changelog
@@ -300,7 +288,11 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    if: needs.prepare-release.result == 'success'
+    # Stable tags only. A prerelease tag has a '-' in ref_name (vX.Y.Z-rc.N);
+    # firing on every rc would open a changelog-vX.Y.Z-rc.N PR that never merges
+    # (no docs/changelogs/v*-rc*.md is a real file). Cumulative rc notes are
+    # finalized at the stable release, so the changelog is generated then.
+    if: needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')
     # Non-blocking: failure here must not prevent update-website-docs from running.
     continue-on-error: true
     steps:
@@ -508,7 +500,9 @@ jobs:
     # release (so prepare-release skips the rebuild), but its website docs still
     # need publishing. Gating on release_exists here skipped docs for every
     # promoted stable.
-    if: always() && needs.prepare-release.result == 'success'
+    # Stable tags only — a prerelease (ref_name contains '-') would otherwise open
+    # an "update managed apps for vX.Y.Z-rc.N" website PR on every rc.
+    if: always() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')
     permissions:
       contents: read
     steps:
