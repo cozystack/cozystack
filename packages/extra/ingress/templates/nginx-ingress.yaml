@@ -1,5 +1,6 @@
 {{- $exposeIngress := (index .Values._cluster "expose-ingress") | default "tenant-root" }}
 {{- $exposeExternalIPs := (index .Values._cluster "expose-external-ips") | default "" | nospace }}
+{{- $loadBalancerClass := (index .Values._cluster "load-balancer-class") | default "" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 {{- /* PROXY-protocol is enabled either explicitly per-app (.Values.proxyProtocol)
        or, for the host control plane, via the platform-level publishing.proxyProtocol
@@ -81,6 +82,9 @@ spec:
           {{- else }}
           type: LoadBalancer
           externalTrafficPolicy: Local
+          {{- with $loadBalancerClass }}
+          loadBalancerClass: {{ . }}
+          {{- end }}
           {{- end }}
         {{- if or .Values.whitelist .Values.cloudflareProxy $proxyProtocol }}
         config:
