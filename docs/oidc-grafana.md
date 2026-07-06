@@ -129,11 +129,27 @@ spec:
         name: acme-byo-grafana-auth
 ```
 
-Do not set `role_attribute_path` in the payload: the chart forces
-`skip_org_role_sync = true` regardless of mode so a login never
-overwrites the users-Job assignments, and a `role_attribute_path`
-would just be dead config. Roles are reconciled by the same
-`spec.oidc.users` map as in `System` mode — see below.
+The chart merges two settings on top of the operator's inline map so
+the users-Job contract holds in `CustomConfig` mode too:
+
+- `skip_org_role_sync = true` — a login never overwrites the Job's
+  org-role assignments;
+- `oauth_allow_insecure_email_lookup = true` — the OIDC identity
+  binds to the pre-provisioned local account by email.
+
+Both keys are chart-forced (`merge` semantics, chart wins) — setting
+them in the operator's map is a no-op, and `role_attribute_path` would
+just be dead config since the Job manages roles.
+
+**`secretRef.name` mode disables the users-map.** The chart mounts the
+operator's `auth.ini` fragment verbatim via `GF_PATHS_CUSTOM_INI` and
+cannot inject either of the two chart-forced settings. Setting
+`spec.oidc.users` alongside `customConfig.secretRef.name` fails the
+render with an explicit message — the alternatives are: (a) use
+`customConfig.config` (inline) and let the chart merge, or (b) leave
+`spec.oidc.users` empty and include both `skip_org_role_sync = true`
+and `oauth_allow_insecure_email_lookup = true` in your ini fragment
+plus manage the OIDC → Grafana user mapping yourself.
 
 Setting both `config` and `secretRef.name` (or neither) fails the
 render. In `CustomConfig` mode no Keycloak objects are provisioned in

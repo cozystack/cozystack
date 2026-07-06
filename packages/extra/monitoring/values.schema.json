@@ -645,22 +645,12 @@
           "items": {
             "type": "object",
             "required": [
-              "email",
-              "role"
+              "email"
             ],
             "properties": {
               "email": {
-                "description": "Email address matched against the `email` claim from the issuer. The chart pre-provisions a Grafana account with this email so the users-Job can set the org role before the operator's first login (`oauth_allow_insecure_email_lookup = true` glues the two together).",
+                "description": "Email address matched against the `email` claim from the issuer. The chart pre-provisions a Grafana account with this email so the users-Job can set the org role before the operator's first login (`oauth_allow_insecure_email_lookup = true` glues the two together). Must match a conservative pattern: local part is `[A-Za-z0-9._%+-]+`, domain is `[A-Za-z0-9.-]+\\.[A-Za-z]{2,}`. Whitespace, quoted literals, and unusual URL-reserved characters are rejected on schema level so the reconcile-Job's shell handling never has to defend against malformed input.",
                 "type": "string"
-              },
-              "role": {
-                "description": "Grafana org role to bind: `Admin`, `Editor`, or `Viewer`. Applied to the release's Grafana org (`Main Org.`); server-level `GrafanaAdmin` promotion is out of scope for Phase 1.",
-                "type": "string",
-                "enum": [
-                  "Admin",
-                  "Editor",
-                  "Viewer"
-                ]
               }
             }
           }
