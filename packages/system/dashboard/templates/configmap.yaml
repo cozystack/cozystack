@@ -6,7 +6,9 @@
 {{- $tag := .Values.console.image | toString | splitList "@" | first | splitList ":" | last }}
 {{- $config := merge (dict) $branding }}
 {{- if regexMatch "^v?[0-9]" $tag }}
-{{- $_ := set $config "version" (trimPrefix "v" $tag) }}
+{{- /* Keep the tag verbatim (vX.Y.Z), matching the operator's COZYSTACK_VERSION
+       and the vX.Y.Z release tags, rather than stripping the leading v. */}}
+{{- $_ := set $config "version" $tag }}
 {{- end }}
 apiVersion: v1
 kind: ConfigMap
