@@ -2,7 +2,7 @@
   Helpers for the Grafana OIDC integration.
 
   Naming — the identity unit is the Monitoring release, so the clientId
-  and the associated groups are `<namespace>-<release>` prefixed. That
+  and the audience scope are `<namespace>-<release>` prefixed. That
   gives:
     tenant-foo/monitoring        (per-tenant Grafana in tenant-foo ns)
     cozy-monitoring/monitoring-system  (platform Grafana in cozy-monitoring ns)
@@ -10,6 +10,15 @@
   because the per-cluster audience scope binds `id_token.aud` to the
   clientId — same isolation primitive as the tenant kube-apiserver PR
   (cozystack/cozystack#3044).
+
+  Authorization is NOT modelled on Keycloak realm groups: the chart
+  does not own directory objects and Grafana's built-in group→role
+  mapping (`role_attribute_path`) is not wired up. Instead, `spec.oidc`
+  carries a `users:` map and a chart-owned post-install/post-upgrade
+  Job reconciles that map into Grafana org membership/roles via the
+  admin API. `skip_org_role_sync = true` prevents a login from
+  overwriting those app-side assignments. Same operator UX as the
+  tenant kube-apiserver sibling in #3044.
 */}}
 
 {{- define "monitoring.oidc.clientId" -}}
@@ -39,48 +48,6 @@
 {{- end -}}
 
 {{- /*
-  Grafana `role_attribute_path` is a JMESPath expression evaluated on
-  the `groups` claim. We emit a chain that maps membership in the
-  per-instance -admin / -editor / -viewer groups to Grafana's built-in
-  Admin / Editor / Viewer roles, defaulting to Viewer for authenticated
-  identities with none of the three groups. Group naming mirrors
-  clientId so a Keycloak operator provisions three groups per release.
-*/}}
-{{- define "monitoring.oidc.roleAttributePath" -}}
-{{-   $admin  := printf "%s-%s-admin"  .Release.Namespace .Release.Name -}}
-{{-   $editor := printf "%s-%s-editor" .Release.Namespace .Release.Name -}}
-{{-   $viewer := printf "%s-%s-viewer" .Release.Namespace .Release.Name -}}
-{{-   printf "contains(groups[*], '%s') && 'Admin' || contains(groups[*], '%s') && 'Editor' || contains(groups[*], '%s') && 'Viewer' || 'Viewer'" $admin $editor $viewer -}}
-{{- end -}}
-
-{{- /*
-  Whether to promote `<clientId>-admin` group members to server-level
-  `GrafanaAdmin` (Grafana's `allow_assign_grafana_admin` flag).
-  Chart-internal lever driven by `oidc.grafanaAdmin` values input;
-  defaults to `false`.
-
-  Nothing in the Phase 1 platform bundle sets this to `true` end-to-
-  end: `Package.spec.components[].values` cannot reach this chart
-  because the `monitoring-system` component in
-  packages/core/platform/sources/monitoring-application.yaml has no
-  `install:` block, and PackageReconciler skips components without
-  one before values propagation (internal/operator/package_reconciler.go
-  lines 197-201 and 292-293). A future phase will route the
-  override through the tenant-root chart's monitoring HR values;
-  until then this helper always renders `false` in practice, and
-  server-level GrafanaAdmin promotion stays out of scope. See
-  docs/oidc-grafana.md.
-*/}}
-{{- define "monitoring.oidc.allowAssignGrafanaAdmin" -}}
-{{- $grafanaAdmin := dig "grafanaAdmin" false (.Values.oidc | default dict) -}}
-{{- if $grafanaAdmin -}}
-true
-{{- else -}}
-false
-{{- end -}}
-{{- end -}}
-
-{{- /*
   Fail-fast when `mode: System` is requested without the platform-level
   OIDC feature being on. Mirrors the identical guard from the tenant
   kube-apiserver chart — see the note there for the reasoning.
@@ -96,12 +63,11 @@ false
   Fail-fast when `mode: System` is requested but the Keycloak operator
   CRDs (`v1.edp.epam.com/v1`) are not yet registered in the target
   cluster. Without this guard the chart would silently drop the whole
-  Keycloak side (KeycloakClient / KeycloakClientScope / three
-  KeycloakRealmGroups) while still rendering Grafana's
-  `auth.generic_oauth` block pointing at a client that never gets
-  provisioned — a broken login path with no clear error. For the
-  platform `monitoring-system` release the `oidc` variant of
-  `cozystack.monitoring-application` waits on
+  Keycloak side (KeycloakClient / KeycloakClientScope) while still
+  rendering Grafana's `auth.generic_oauth` block pointing at a client
+  that never gets provisioned — a broken login path with no clear
+  error. For the platform `monitoring-system` release the `oidc`
+  variant of `cozystack.monitoring-application` waits on
   `cozystack.keycloak-operator` (see
   packages/core/platform/sources/monitoring-application.yaml) so the
   CRDs are registered before this chart reconciles; the assertion
@@ -120,8 +86,10 @@ false
   set — mutually exclusive.
 */}}
 {{- define "monitoring.oidc.assertCustomConfigXor" -}}
-{{- $inline := (.Values.oidc.customConfig.config | default dict) -}}
-{{- $secretName := dig "secretRef" "name" "" (.Values.oidc.customConfig | default dict) -}}
+{{- $oidc := .Values.oidc | default dict -}}
+{{- $customConfig := $oidc.customConfig | default dict -}}
+{{- $inline := $customConfig.config | default dict -}}
+{{- $secretName := dig "secretRef" "name" "" $customConfig -}}
 {{- $hasInline := gt (len $inline) 0 -}}
 {{- $hasSecretRef := ne ($secretName | toString) "" -}}
 {{- if and $hasInline $hasSecretRef -}}
@@ -130,4 +98,15 @@ false
 {{- if not (or $hasInline $hasSecretRef) -}}
 {{-   fail "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline generic_oauth map) or spec.oidc.customConfig.secretRef.name (Secret with an `auth.ini` key)." -}}
 {{- end -}}
+{{- end -}}
+
+{{- /*
+  Normalised `spec.oidc.users` list. Yields an empty list when
+  `spec.oidc` is omitted, `null`, or has no `users:` key. Consumers
+  should range over this without further nil-checks.
+*/}}
+{{- define "monitoring.oidc.users" -}}
+{{- $oidc := .Values.oidc | default dict -}}
+{{- $users := $oidc.users | default (list) -}}
+{{- toYaml $users -}}
 {{- end -}}

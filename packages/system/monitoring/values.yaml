@@ -103,6 +103,11 @@ vmagent:
 ##                set — the chart fails the render otherwise. `cozy` is
 ##                not in the path in this mode.
 ##
+## Authorization is app-side: `users` is reconciled into Grafana org
+## membership/roles by a chart-owned post-install/post-upgrade Job.
+## Users not listed here get nothing when they log in — no default org
+## role from group mapping.
+##
 ## The admin_user / admin_password Secret stays a documented break-glass
 ## path regardless of mode.
 oidc:
@@ -113,9 +118,12 @@ oidc:
     ## Inline map of grafana.ini `[auth.generic_oauth]` keys. Any key
     ## accepted by Grafana's generic_oauth provider is valid; typical
     ## keys are `client_id`, `client_secret`, `auth_url`, `token_url`,
-    ## `api_url`, `scopes`, `role_attribute_path`,
-    ## `allow_assign_grafana_admin`. The chart writes the map verbatim
-    ## into `spec.config.auth.generic_oauth` on the Grafana CR.
+    ## `api_url`, `scopes`. The chart writes the map verbatim into
+    ## `spec.config.auth.generic_oauth` on the Grafana CR.
+    ## Do NOT set `role_attribute_path` here: the chart forces
+    ## `skip_org_role_sync = true` regardless of mode so a login never
+    ## overwrites the users-Job assignments; a `role_attribute_path`
+    ## would only pollute the config.
     ## Mutually exclusive with `customConfig.secretRef.name`.
     config: {}
     ## Reference to an operator-managed Secret carrying a ready-made
@@ -125,17 +133,16 @@ oidc:
     ## `customConfig.config`.
     secretRef:
       name: ""
-  ## Chart-internal lever for `allow_assign_grafana_admin`: promote
-  ## `<clientId>-admin` group members to server-level `GrafanaAdmin`.
-  ## Defaults to `false` and stays `false` in Phase 1 — no supported
-  ## path sets it to `true` end-to-end. The obvious platform-bundle
-  ## path via `Package.spec.components["monitoring-system"].values`
-  ## is dropped by PackageReconciler because that component has no
-  ## `install:` block in
-  ## `packages/core/platform/sources/monitoring-application.yaml`.
-  ## Server-level `GrafanaAdmin` promotion is out of scope for Phase 1;
-  ## see docs/oidc-grafana.md. Kept as a values key so a future phase
-  ## can route the override (via a tenant-root chart values injection
-  ## or a new `install:` block on `monitoring-system`) without touching
-  ## the chart contract.
-  grafanaAdmin: false
+  ## Users granted access to this Grafana instance's org. Each entry
+  ## produces one pre-provisioned Grafana account (matched to the OIDC
+  ## login by `email`) and one org membership + role in the release's
+  ## `Main Org.`. Empty by default — no OIDC user gets any role until
+  ## an operator lists them here.
+  ##
+  ## Example:
+  ##   users:
+  ##     - email: alice@example.com
+  ##       role: Admin
+  ##     - email: bob@example.com
+  ##       role: Viewer
+  users: []

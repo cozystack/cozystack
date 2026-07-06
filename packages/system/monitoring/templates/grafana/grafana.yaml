@@ -7,18 +7,28 @@
 
 {{- /*
   OIDC (see values.yaml — oidc.mode).
-  System        → chart-owned Keycloak client + client-secret + role
-                  mapping via role_attribute_path.
+  System        → chart-owned Keycloak client + audience client scope +
+                  persisted client-secret. Grafana authorization is
+                  app-side: `spec.oidc.users` is reconciled into
+                  Grafana org membership/roles by the users-Job.
+                  Grafana's group-based `role_attribute_path` is NOT
+                  wired up; `skip_org_role_sync = true` prevents a
+                  subsequent login from overwriting the app-side
+                  assignments.
   CustomConfig  → operator-supplied auth.generic_oauth payload — either
                   inline as a map (customConfig.config), or as a Secret
                   with a ready-made ini fragment
                   (customConfig.secretRef.name). XOR-guarded via the
-                  assertCustomConfigXor helper.
+                  assertCustomConfigXor helper. `spec.oidc.users` is
+                  also honoured in this mode by the users-Job (users
+                  are matched to Grafana identities by the `email`
+                  claim from the tenant-supplied issuer).
   None          → no auth.generic_oauth section, no OIDC env — the
                   admin_user/admin_password Secret remains the only auth
                   path.
 */}}
-{{- $oidcMode := .Values.oidc.mode | default "None" }}
+{{- $oidc := .Values.oidc | default dict }}
+{{- $oidcMode := $oidc.mode | default "None" }}
 {{- if eq $oidcMode "CustomConfig" }}
 {{-   include "monitoring.oidc.assertCustomConfigXor" . }}
 {{- end }}
@@ -33,8 +43,9 @@
 {{-   include "monitoring.oidc.assertSystemEnabled" . }}
 {{-   include "monitoring.oidc.assertSystemKeycloakCRD" . }}
 {{- end }}
-{{- $customInline := (.Values.oidc.customConfig.config | default dict) }}
-{{- $customSecretRefName := dig "secretRef" "name" "" (.Values.oidc.customConfig | default dict) }}
+{{- $customConfig := $oidc.customConfig | default dict }}
+{{- $customInline := $customConfig.config | default dict }}
+{{- $customSecretRefName := dig "secretRef" "name" "" $customConfig }}
 {{- $useCustomInline := and (eq $oidcMode "CustomConfig") (gt (len $customInline) 0) }}
 {{- $useCustomSecretRef := and (eq $oidcMode "CustomConfig") (ne $customSecretRefName "") }}
 ---
@@ -73,10 +84,16 @@ spec:
       auth_url: "{{ include "monitoring.oidc.systemIssuerURL" . }}/protocol/openid-connect/auth"
       token_url: "{{ include "monitoring.oidc.systemIssuerURL" . }}/protocol/openid-connect/token"
       api_url: "{{ include "monitoring.oidc.systemIssuerURL" . }}/protocol/openid-connect/userinfo"
-      scopes: "openid email profile groups {{ include "monitoring.oidc.audienceScopeName" . }}"
-      role_attribute_path: {{ include "monitoring.oidc.roleAttributePath" . | quote }}
-      allow_assign_grafana_admin: {{ include "monitoring.oidc.allowAssignGrafanaAdmin" . | quote }}
+      scopes: "openid email profile {{ include "monitoring.oidc.audienceScopeName" . }}"
       email_attribute_path: "email"
+      # Authorization is reconciled app-side by the users-Job (see
+      # oidc-users-job.yaml); no group→role mapping. skip_org_role_sync
+      # keeps a login from overwriting the app-side assignments.
+      skip_org_role_sync: "true"
+      # Match by email so the pre-provisioned Grafana user (created by
+      # the users-Job before the operator's first login) is picked up
+      # instead of a fresh account.
+      oauth_allow_insecure_email_lookup: "true"
       auto_login: "false"
     {{- else if $useCustomInline }}
     auth.generic_oauth:

@@ -1,14 +1,16 @@
 {{- /*
-  Phase 1 — System mode: render one per-instance Keycloak client, a
-  per-instance audience client scope, and the three role-mapping
-  groups (`-admin` / `-editor` / `-viewer`) inside the platform `cozy`
-  realm.
+  Phase 1 — System mode: render one per-instance Keycloak client and a
+  per-instance audience client scope inside the platform `cozy` realm.
 
   The clientId is namespace-prefixed so it is globally unique across
   the realm; the audience scope binds `id_token.aud` to that clientId
   so a token minted for one Monitoring instance is rejected by
   another's Grafana — the per-instance isolation primitive in the
   absence of per-tenant realms.
+
+  No realm groups: authorization is app-side, driven by `spec.oidc.users`
+  and reconciled into Grafana orgs by the users-Job. See
+  templates/grafana/oidc-users-job.yaml and docs/oidc-grafana.md.
 
   Nothing is rendered for `mode: CustomConfig` or `mode: None`: in
   those modes `cozy` is not in the path.
@@ -22,14 +24,9 @@
   in _helpers.tpl and grafana.yaml where the same assertion gates
   `auth.generic_oauth` so Grafana never comes up pointing at a
   client that never gets provisioned.
-
-  The three KeycloakRealmGroup objects are chart-owned but their
-  membership is not — a Keycloak operator adds users to them via the
-  Keycloak UI or via a KeycloakRealmUser CR. Grafana's
-  `role_attribute_path` (see grafana.yaml) evaluates group membership
-  on login and assigns Admin / Editor / Viewer accordingly.
 */}}
-{{- if eq .Values.oidc.mode "System" }}
+{{- $oidc := .Values.oidc | default dict }}
+{{- if eq ($oidc.mode | default "None") "System" }}
 {{-   include "monitoring.oidc.assertSystemEnabled" . }}
 {{-   include "monitoring.oidc.assertSystemKeycloakCRD" . }}
 {{-   $clientId := include "monitoring.oidc.clientId" . }}
@@ -82,41 +79,7 @@ spec:
   redirectUris:
     - "https://{{ $grafanaHost }}/login/generic_oauth"
   defaultClientScopes:
-    - groups
     - {{ $scopeName }}
   attributes:
     "post.logout.redirect.uris": "+"
----
-apiVersion: v1.edp.epam.com/v1
-kind: KeycloakRealmGroup
-metadata:
-  name: {{ printf "%s-admin" $clientId }}
-  namespace: {{ .Release.Namespace }}
-spec:
-  name: {{ printf "%s-admin" $clientId }}
-  realmRef:
-    name: keycloakrealm-cozy
-    kind: ClusterKeycloakRealm
----
-apiVersion: v1.edp.epam.com/v1
-kind: KeycloakRealmGroup
-metadata:
-  name: {{ printf "%s-editor" $clientId }}
-  namespace: {{ .Release.Namespace }}
-spec:
-  name: {{ printf "%s-editor" $clientId }}
-  realmRef:
-    name: keycloakrealm-cozy
-    kind: ClusterKeycloakRealm
----
-apiVersion: v1.edp.epam.com/v1
-kind: KeycloakRealmGroup
-metadata:
-  name: {{ printf "%s-viewer" $clientId }}
-  namespace: {{ .Release.Namespace }}
-spec:
-  name: {{ printf "%s-viewer" $clientId }}
-  realmRef:
-    name: keycloakrealm-cozy
-    kind: ClusterKeycloakRealm
 {{- end }}
