@@ -1,0 +1,111 @@
+# Container image for all cozyplane components (agent, CNI plugin, controller).
+# Digest-pinned (no floating tag); update on each published build.
+image: ghcr.io/lllamnyp/cozyplane@sha256:a05c5615c76b9f627d8b26d524bf98bf088f33c92fb66f8bf0d0fcb3dc379f86
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Pod MTU (underlay MTU minus Geneve overhead, ~50 bytes).
+mtu: 1450
+
+# Geneve UDP destination port. Override (e.g. 6082) only to coexist with another
+# overlay still holding 6081 on the node.
+genevePort: 6081
+
+# CNI conflist filename written to /etc/cni/net.d. Lower names sort first; use a
+# low prefix (e.g. "00-cozyplane.conflist") to win over a co-installed CNI such
+# as Cilium (which ships 05-cilium.conflist).
+cniConfName: "10-cozyplane.conflist"
+
+# The cluster DNS domain (kubelet's clusterDomain) — the zone the split-horizon
+# resolver answers authoritatively for VPC pods. Empty (the default)
+# autodetects it from the resolver's own kubelet-written search path (the
+# DaemonSet runs ClusterFirstWithHostNet, so the cluster domain is present
+# despite hostNetwork); set explicitly only to override.
+clusterDomain: ""
+
+# Cluster networking facts for pod egress to the outside world. Not reliably
+# discoverable in-cluster, so declared here.
+egress:
+  # The cluster pod supernet(s), comma-separated for dual-stack (e.g.
+  # "10.244.0.0/16,fd00:10:244::/56"). Enables the cluster-egress masquerade
+  # (pods get an off-cluster return path) and is denied to VPC tenants at
+  # their gateways. Empty disables both.
+  clusterCIDR: "10.244.0.0/16"
+  # Masquerade implementation: "bpf" (eBPF SNAT at the uplink, no netfilter,
+  # both families), "iptables" (legacy kernel rule, v4 only), or "off".
+  masquerade: "bpf"
+  # The Service CIDR, denied to VPC tenants at their gateways.
+  serviceCIDR: "10.96.0.0/16"
+  # Cluster DNS ClusterIP; the one cluster-internal door a VPC gateway opens
+  # (:53 only), so tenant pods resolve with a stock resolv.conf.
+  clusterDNS: "10.96.0.10"
+  # Additional cluster-internal networks VPC tenants must not reach through
+  # their gateways (e.g. the node/management network).
+  internalCIDRs: []
+
+agent:
+  priorityClassName: system-node-critical
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+controller:
+  replicas: 1
+  priorityClassName: system-cluster-critical
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# The export ValidatingAdmissionPolicy that gates VPCBinding creation on the
+# 'export' verb of the referenced VPC. Requires Kubernetes >= 1.30. Disable only
+# if your cluster predates VAP (then VPCBinding/VPCPeering creation is governed
+# by plain create RBAC alone, with no export/peer verb check). Only relevant in
+# CRD mode: the aggregated apiserver enforces both verbs in its strategies.
+exportPolicy:
+  enabled: true
+
+# Serve the sdn.cozystack.io API group from a real aggregated API server (backed
+# by a dedicated etcd) instead of CRDs. This is the design target — it enables
+# custom validation and subresources (e.g. the /ports observability subresource)
+# beyond CRD ergonomics. Requires cert-manager (for the serving certificate) and
+# a cluster that permits APIService aggregation. When false, the group is served
+# as CRDs (the lightweight path — no etcd/cert-manager needed).
+apiserver:
+  enabled: false
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi
+  etcd:
+    # Operator-managed etcd (aenix etcd-operator; Cozystack ships it):
+    # replicated, PVC-backed, TLS end to end. The production path — without it
+    # the built-in single-pod etcd below is used, and with its default
+    # emptyDir storage a single pod reschedule erases every sdn.cozystack.io
+    # object in the cluster.
+    operator:
+      enabled: false
+      replicas: 3
+      size: 4Gi
+      # StorageClass for the members' PVCs ("" = cluster default).
+      storageClass: ""
+    # Built-in single-pod etcd (dev/evaluation only).
+    image: registry.k8s.io/etcd:3.5.16-0
+    # Storage for the built-in etcd. The default is ephemeral (emptyDir); use a
+    # persistentVolumeClaim volume source to survive a pod restart.
+    storage:
+      emptyDir: {}
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        memory: 256Mi

@@ -1,0 +1,222 @@
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozyplane-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-agent
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  # The agent learns remote pod CIDRs from Node objects.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # The plugin (using this SA) reads pod annotations to resolve VPC membership,
+  # and the agent reads pods to distinguish revocation from ordinary teardown.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+  # Tenant network ids from VPC objects (namespaced; read across all namespaces).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs"]
+    verbs: ["get", "list", "watch"]
+  # VPCBindings authorize attachment; the plugin checks them at CNI ADD
+  # (default-deny).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcbindings"]
+    verbs: ["get", "list", "watch"]
+  # VPCPeering halves: the agent programs the peers map from mutually-matched
+  # specs (not status), so it only needs to observe them.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcpeerings"]
+    verbs: ["get", "list", "watch"]
+  # Port claims (the plugin allocates/releases; the agent watches for remotes,
+  # releases the sever finalizer on terminating Ports, and patches spec.node to
+  # itself when a migrated guest announces on this node — stage-3 cutover).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["ports"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # SecurityGroups: the agent compiles their rules into the datapath sg_rules map.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["securitygroups"]
+    verbs: ["get", "list", "watch"]
+  # FloatingIPs: the agent programs the floating map and advertises the address
+  # for those whose target Port is on this node.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["floatingips"]
+    verbs: ["get", "list", "watch"]
+  # ServiceVIPs: the agent programs the svc_vips datapath map from them, the
+  # resolver answers attached ClusterIP services with the VIP, and the CNI
+  # plugin counts them as used addresses when claiming a Port IP.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["servicevips"]
+    verbs: ["get", "list", "watch"]
+  # The split-horizon resolver (responder container) answers headless Services
+  # annotated into a VPC from their EndpointSlices; the agent reads the
+  # kube-system/kube-dns Service to discover the cluster DNS address.
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozyplane-agent
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozyplane-agent
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-agent
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: cozyplane-agent
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: cozyplane-agent
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app: cozyplane-agent
+  template:
+    metadata:
+      labels:
+        app: cozyplane-agent
+    spec:
+      hostNetwork: true
+      hostPID: true
+      dnsPolicy: ClusterFirstWithHostNet
+      serviceAccountName: cozyplane-agent
+      priorityClassName: {{ .Values.agent.priorityClassName }}
+      tolerations:
+        - operator: Exists
+      terminationGracePeriodSeconds: 5
+      {{- include "cozyplane.imagePullSecrets" . | nindent 6 }}
+      initContainers:
+        # Install the CNI binaries onto the host before the agent advertises CNI.
+        - name: install-cni
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - cp -f /opt/cni/bin/cozyplane /opt/cni/bin/host-local /opt/cni/bin/loopback /host/opt/cni/bin/
+          volumeMounts:
+            - name: cni-bin
+              mountPath: /host/opt/cni/bin
+      containers:
+        - name: agent
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          args:
+            - "--mtu={{ .Values.mtu }}"
+            - "--geneve-port={{ .Values.genevePort }}"
+            - "--cni-conf-name={{ .Values.cniConfName }}"
+            {{- if .Values.egress.clusterCIDR }}
+            # Cluster-egress masquerade: pod traffic leaving the cluster is
+            # SNATed to the node address, giving pods an off-cluster return path.
+            - "--cluster-cidr={{ .Values.egress.clusterCIDR }}"
+            - "--masquerade={{ .Values.egress.masquerade | default "bpf" }}"
+            {{- end }}
+            {{- $internal := concat (list .Values.egress.clusterCIDR .Values.egress.serviceCIDR) .Values.egress.internalCIDRs | compact }}
+            {{- if $internal }}
+            # Cluster-internal CIDRs a floating pod's public-IP egress skips
+            # (routed to the gateway instead, which proxies DNS / denies the rest).
+            - "--internal-cidrs={{ join "," $internal }}"
+            {{- end }}
+          ports:
+            # Per-VPC traffic metrics (#2), Prometheus text at /metrics.
+            - name: metrics
+              containerPort: 9411
+              hostPort: 9411
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Gateway-attach is honored only for pods in the agent's namespace.
+            - name: AGENT_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          securityContext:
+            privileged: true
+          resources:
+            {{- toYaml .Values.agent.resources | nindent 12 }}
+          volumeMounts:
+            - name: cni-conf
+              mountPath: /etc/cni/net.d
+            - name: bpffs
+              mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+            - name: run
+              mountPath: /run/cozyplane
+            - name: cni-cache
+              mountPath: /var/lib/cni
+        # The split-horizon DNS resolver for VPC pods (docs/services-in-vpc.md).
+        # Unprivileged: a DNS socket on the node address (reserved port 15353,
+        # reached only via the datapath's steering) and informers.
+        - name: responder
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/usr/local/bin/cozyplane-responder"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- if .Values.clusterDomain }}
+            # Explicit override; unset, the resolver autodetects the domain
+            # from its own kubelet-written search path.
+            - name: CLUSTER_DOMAIN
+              value: {{ .Values.clusterDomain | quote }}
+            {{- end }}
+            # Forward external names to the node's own upstreams, not the
+            # cluster DNS the pod-level dnsPolicy would hand us.
+            - name: RESOLV_CONF
+              value: /host/etc/resolv.conf
+          volumeMounts:
+            - name: host-resolv
+              mountPath: /host/etc/resolv.conf
+              readOnly: true
+      volumes:
+        - name: cni-bin
+          hostPath:
+            path: /opt/cni/bin
+            type: DirectoryOrCreate
+        - name: cni-conf
+          hostPath:
+            path: /etc/cni/net.d
+            type: DirectoryOrCreate
+        - name: bpffs
+          hostPath:
+            path: /sys/fs/bpf
+            type: Directory
+        - name: run
+          hostPath:
+            path: /run/cozyplane
+            type: DirectoryOrCreate
+        - name: cni-cache
+          hostPath:
+            path: /var/lib/cni
+            type: DirectoryOrCreate
+        - name: host-resolv
+          hostPath:
+            path: /etc/resolv.conf
+            type: File

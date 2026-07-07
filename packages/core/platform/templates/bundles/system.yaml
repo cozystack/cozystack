@@ -22,7 +22,14 @@
   "cgroup" (dict "autoMount" (dict "enabled" false))) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
-{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
+{{- /* Networking variant selector. Defaults to kubeovn-cilium (backward compatible);
+       cozyplane swaps kube-ovn AND Cilium for the cozyplane eBPF CNI +
+       cozyplane-kpr (socket-LB kube-proxy replacement) — no Cilium, no kube-proxy. */ -}}
+{{- $networkingVariant := .Values.bundles.system.networkingVariant | default "kubeovn-cilium" -}}
+{{- if not (or (eq $networkingVariant "kubeovn-cilium") (eq $networkingVariant "cozyplane")) -}}
+{{- fail (printf "bundles.system.networkingVariant must be \"kubeovn-cilium\" or \"cozyplane\", got %q" $networkingVariant) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" $networkingVariant $ $networkingComponents) }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
