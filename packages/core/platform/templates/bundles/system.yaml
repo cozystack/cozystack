@@ -113,6 +113,16 @@
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
 {{- end -}}
+{{- /* cozyplane owns the sdn.cozystack.io group (as CRDs), so cozystack-api must
+       not aggregate it — otherwise its explicit APIService hijacks the group from
+       cozyplane's CRDs and every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" -}}
+{{- $apiValues := index $cozystackEngineComponents "cozystack-api" | default (dict "values" (dict)) -}}
+{{- $apiInner := index $apiValues "values" | default (dict) -}}
+{{- $_ := set $apiInner "cozystackAPI" (dict "serveSDN" false) -}}
+{{- $_ := set $apiValues "values" $apiInner -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-api" $apiValues -}}
+{{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}

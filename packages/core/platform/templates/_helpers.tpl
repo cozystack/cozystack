@@ -61,18 +61,25 @@ Does NOT include: networking (variant differs), linstor (talos.enabled differs)
 */}}
 {{- define "cozystack.platform.system.common-packages" -}}
 {{- $root := . -}}
+{{- $networkingVariant := $root.Values.bundles.system.networkingVariant | default "kubeovn-cilium" -}}
+{{- /* Cilium/kube-ovn-coupled data-plane packages. The cozyplane variant runs no
+       Cilium and no kube-ovn, so these are orphaned there and MUST be skipped:
+       - kubeovn-webhook/-plunger: kube-ovn control plane (and a fail-closed
+         admission webhook once cert-manager lands would block resource creation);
+       - multus: delegates to the Cilium primary conflist (05-cilium.conflist),
+         which cozyplane never writes → CrashLoopBackOff;
+       - securitygroup-controller: projects sdn.cozystack.io SecurityGroups onto
+         CiliumNetworkPolicy (no such CRD here → crash), AND collides with
+         cozyplane, which owns the whole sdn.cozystack.io group. */ -}}
+{{- if ne $networkingVariant "cozyplane" }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-webhook" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubeovn-plunger" $root) }}
-{{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.multus" $root) }}
+{{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
+{{- end }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozy-proxy" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.metallb" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}
-{{- /* securitygroup-controller maintains membership labels for CiliumNetworkPolicy-backed
-       SecurityGroups, so it only makes sense where Cilium runs. Keeping it here with the
-       other data-plane packages (rather than in the variant-agnostic body of system.yaml)
-       keeps it out of the isp-hosted (networking=noop) variant, which never calls
-       common-packages and has no cilium.io CRD for the controller to watch. */ -}}
-{{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
