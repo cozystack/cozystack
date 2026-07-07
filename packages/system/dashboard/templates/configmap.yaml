@@ -1,7 +1,21 @@
 {{- $branding := .Values._cluster.branding | default dict }}
+{{- /* Surface the platform version to the SPA at deploy time, derived from the
+       console image tag (build stamps it vX.Y.Z; promotion rewrites rc->stable).
+       This decouples the displayed version from the VITE_APP_VERSION baked into
+       the bundle, so a promoted-by-retag image reports the stable version. */}}
+{{- $tag := .Values.console.image | toString | splitList "@" | first | splitList ":" | last }}
+{{- $config := merge (dict) $branding }}
+{{- /* Require digits then a dot (v1.5.0 / 1.5.0), so a tagless ref whose last
+       ":"-segment is a repo path with a port (ghcr.io:443/.../console -> last
+       "443/.../console") does not get mistaken for a version. */}}
+{{- if regexMatch "^v?[0-9]+\\." $tag }}
+{{- /* Keep the tag verbatim (vX.Y.Z), matching the operator's COZYSTACK_VERSION
+       and the vX.Y.Z release tags, rather than stripping the leading v. */}}
+{{- $_ := set $config "version" $tag }}
+{{- end }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: cozy-dashboard-console-config
 data:
-  config.json: {{ $branding | toJson | quote }}
+  config.json: {{ $config | toJson | quote }}

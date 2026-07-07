@@ -7,6 +7,13 @@ bareNamespace: false
 cozystackOperator:
   # Deployment variant: talos, generic, hosted
   variant: talos
+  # Platform version this install reports (telemetry, observability). Supplied
+  # as deploy-time data, not baked into the image — so a release-candidate image
+  # can be promoted to stable by retagging alone. Injected as the
+  # COZYSTACK_VERSION env var on the operator; when empty the operator falls back
+  # to the value baked at build time. The Makefile sets this for the
+  # kubectl-apply release artifacts (_out/assets/cozystack-operator-*.yaml).
+  platformVersion: ""
   image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.5.0@sha256:05027a381a8a97276ec426dabb87e1b7df753d4d76925b68e2dd8819f7eb22df
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
   platformSourceRef: 'digest=sha256:e2e7bc7664a9799332dc8d59ae312879ba3675929edfc0fd6ce005ec41cbeb7b'

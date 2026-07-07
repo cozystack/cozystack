@@ -4,6 +4,11 @@ export interface AppConfig {
   logoText?: string
   logoSvg?: string
   iconSvg?: string
+  // Platform version injected at deploy time by the chart (from the console
+  // image tag), so a promoted-by-retag image reports the stable version rather
+  // than the rc version baked into the bundle at build. Falls back to the
+  // build-time VITE_APP_VERSION when absent.
+  version?: string
 }
 
 const CONFIG_NAMESPACE = "cozy-dashboard"
