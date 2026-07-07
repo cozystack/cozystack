@@ -69,10 +69,10 @@
 /docs/                                       @lexfrei @myasnikovdaniil
 
 # --- CI / automation ---
-/.github/                                    @myasnikovdaniil @sircthulhu
-/hack/                                       @myasnikovdaniil @sircthulhu
-/Makefile                                    @myasnikovdaniil @sircthulhu
-/.pre-commit-config.yaml                     @myasnikovdaniil @sircthulhu
+/.github/                                    @myasnikovdaniil @lexfrei
+/hack/                                       @myasnikovdaniil @lexfrei
+/Makefile                                    @myasnikovdaniil @lexfrei
+/.pre-commit-config.yaml                     @myasnikovdaniil @lexfrei
 
 # --- Governance, licensing, project docs ---
 /LICENSE                                     @tym83 @kvaps
