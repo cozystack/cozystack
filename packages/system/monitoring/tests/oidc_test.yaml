@@ -100,17 +100,16 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: mode=None with non-empty users still fails render (users have no effect in None)
+  - it: mode=None with non-empty users still does NOT render the users-Job
     template: templates/grafana/oidc-users-job.yaml
     set:
       oidc.users:
         - email: alice@example.com
           role: Admin
     asserts:
-      # The Job is not rendered, but the prologue still validates users[]
-      # entries — an operator who lists users in mode=None almost
-      # certainly meant to also flip mode; the prologue-level shape
-      # checks (email/role) still fire so a typo doesn't slip through.
+      # The Job is not rendered because `mode: None` short-circuits the
+      # gate; the prologue-level shape checks (email/role) still fire
+      # so a typo in the users[] entries doesn't slip through unnoticed.
       - hasDocuments:
           count: 0
 
@@ -203,6 +202,9 @@ tests:
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - equal:
           path: spec.config["auth.generic_oauth"].enabled
@@ -234,12 +236,53 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
           value: "true"
+      # allow_sign_up=false is the isolation lever — without it,
+      # Grafana's default (allow_sign_up=true) combined with
+      # skip_org_role_sync=true would mint a Viewer account for every
+      # cozy-realm identity that hits the login flow, then wait for the
+      # next helm-upgrade prune pass to clean them up.
+      - equal:
+          path: spec.config["auth.generic_oauth"].allow_sign_up
+          value: "false"
+
+  - it: mode=System with empty users omits the chart-forced isolation dict
+    # Reviewer's minor from PR#3176 round-2: when users[] is empty the
+    # chart has nothing to protect; forcing insecure_email_lookup / no-
+    # sign_up in that state is a needless account-linking surface with
+    # nothing to bind. The System branch still emits auth.generic_oauth
+    # (issuer + scope), just without the users-Job contract keys.
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].enabled
+          value: "true"
+      - notExists:
+          path: spec.config["auth.generic_oauth"].skip_org_role_sync
+      - notExists:
+          path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
+      - notExists:
+          path: spec.config["auth.generic_oauth"].allow_sign_up
+
+  - it: mode=System with empty users does NOT render the users-Job
+    template: templates/grafana/oidc-users-job.yaml
+    set:
+      oidc.mode: System
+      _cluster.oidc-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 0
 
   - it: mode=System grafana.yaml wires GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET from the Secret
     template: templates/grafana/grafana.yaml
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - contains:
           path: spec.deployment.spec.template.spec.containers[0].env
@@ -269,6 +312,9 @@ tests:
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - equal:
           path: kind
@@ -295,6 +341,9 @@ tests:
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - contains:
           path: spec.template.spec.containers[0].env
@@ -335,6 +384,9 @@ tests:
     set:
       oidc.mode: System
       _cluster.oidc-enabled: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - equal:
           path: spec.template.spec.securityContext.runAsNonRoot
@@ -386,7 +438,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: mode=CustomConfig inline preserves the operator's map + chart-forced settings
+  - it: mode=CustomConfig inline preserves the operator's map + chart-forced settings (users active)
     template: templates/grafana/grafana.yaml
     set:
       oidc.mode: CustomConfig
@@ -394,6 +446,9 @@ tests:
         client_id: my-client
         client_secret: xyz
         auth_url: https://idp.example/auth
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - equal:
           path: spec.config["auth.generic_oauth"].client_id
@@ -412,6 +467,33 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
           value: "true"
+      - equal:
+          path: spec.config["auth.generic_oauth"].allow_sign_up
+          value: "false"
+
+  - it: mode=CustomConfig inline with empty users hands off — chart forces nothing
+    # Reviewer's minor from PR#3176 round-2: a BYO-IdP operator who does
+    # NOT use the users-map should not get insecure-email-lookup or
+    # allow_sign_up=false forced on top of their config — the chart has
+    # nothing app-side to protect and the extra keys are a needless
+    # account-linking surface against issuers that don't verify emails.
+    template: templates/grafana/grafana.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config:
+        client_id: my-client
+        client_secret: xyz
+        auth_url: https://idp.example/auth
+    asserts:
+      - equal:
+          path: spec.config["auth.generic_oauth"].client_id
+          value: my-client
+      - notExists:
+          path: spec.config["auth.generic_oauth"].skip_org_role_sync
+      - notExists:
+          path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
+      - notExists:
+          path: spec.config["auth.generic_oauth"].allow_sign_up
 
   - it: mode=CustomConfig inline — operator cannot override chart-forced OIDC settings
     template: templates/grafana/grafana.yaml
@@ -419,9 +501,14 @@ tests:
       oidc.mode: CustomConfig
       oidc.customConfig.config:
         client_id: my-client
-        # Operator tries to disable both — chart still wins.
+        # Operator tries to disable all three — chart still wins because
+        # users-map is active.
         skip_org_role_sync: "false"
         oauth_allow_insecure_email_lookup: "false"
+        allow_sign_up: "true"
+      oidc.users:
+        - email: alice@example.com
+          role: Admin
     asserts:
       - equal:
           path: spec.config["auth.generic_oauth"].skip_org_role_sync
@@ -429,6 +516,9 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].oauth_allow_insecure_email_lookup
           value: "true"
+      - equal:
+          path: spec.config["auth.generic_oauth"].allow_sign_up
+          value: "false"
 
   - it: mode=CustomConfig users-Job runs and honours the desired list
     template: templates/grafana/oidc-users-job.yaml

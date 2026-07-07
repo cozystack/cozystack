@@ -54,6 +54,34 @@
 {{- $customSecretRefName := dig "secretRef" "name" "" $customConfig }}
 {{- $useCustomInline := and (eq $oidcMode "CustomConfig") (gt (len $customInline) 0) }}
 {{- $useCustomSecretRef := and (eq $oidcMode "CustomConfig") (ne $customSecretRefName "") }}
+{{- $users := $oidc.users | default (list) }}
+{{- /*
+  The users-map is the switch that turns the chart's authorization
+  contract on. When it's non-empty:
+    * skip_org_role_sync=true keeps a login from overwriting the
+      users-Job's org-role assignments;
+    * oauth_allow_insecure_email_lookup=true binds the OIDC identity
+      to the pre-provisioned local account by email;
+    * allow_sign_up=false rejects any OIDC identity whose email is
+      NOT in `users:` — otherwise Grafana's default allow_sign_up=true
+      combined with skip_org_role_sync=true would silently mint a
+      Viewer account for every cozy-realm user until the next
+      helm-upgrade prune pass.
+  When users[] is empty the chart hands the auth.generic_oauth block
+  to the operator (System mode → chart-supplied issuer defaults;
+  CustomConfig-inline → operator's map applied verbatim; secretRef →
+  operator's ini fragment is authoritative). The users-Job also does
+  not render in that state so nothing app-side touches org membership.
+*/}}
+{{- $usersMapActive := gt (len $users) 0 }}
+{{- $chartForcedOidc := dict }}
+{{- if $usersMapActive }}
+{{-   $chartForcedOidc = dict
+        "skip_org_role_sync" "true"
+        "oauth_allow_insecure_email_lookup" "true"
+        "allow_sign_up" "false"
+}}
+{{- end }}
 ---
 apiVersion: grafana.integreatly.org/v1beta1
 kind: Grafana
@@ -82,20 +110,16 @@ spec:
     plugins:
       allow_loading_unsigned_plugins: "victoriametrics-logs-datasource"
     {{- /*
-      The chart-forced settings — `skip_org_role_sync` and
-      `oauth_allow_insecure_email_lookup` — are the two runtime keys the
-      users-Job contract depends on:
-        * skip_org_role_sync: "true" stops a login from overwriting the
-          Job's org-role assignments.
-        * oauth_allow_insecure_email_lookup: "true" binds the OIDC
-          identity to the local account the Job pre-provisions.
-      They are merged on top of System's generated block AND on top of
-      the operator's inline map in CustomConfig, so the contract
-      holds regardless of mode. In CustomConfig secretRef mode the
-      operator's ini fragment is authoritative and the chart cannot
-      inject anything — see _helpers.tpl assertCustomSecretRefUsersEmpty.
+      $chartForcedOidc is prepared above at file scope — it is a non-empty
+      dict when the users-map is active (skip_org_role_sync +
+      oauth_allow_insecure_email_lookup + allow_sign_up=false) and an
+      empty dict otherwise. Merged on top of System's generated block AND
+      on top of the operator's inline map in CustomConfig, so the users-
+      Job contract holds regardless of mode. In CustomConfig secretRef
+      mode the operator's ini fragment is authoritative and the chart
+      cannot inject anything — see _helpers.tpl
+      assertCustomSecretRefUsersEmpty.
     */}}
-    {{- $chartForcedOidc := dict "skip_org_role_sync" "true" "oauth_allow_insecure_email_lookup" "true" }}
     {{- if eq $oidcMode "System" }}
     {{- $systemOidc := dict
         "enabled" "true"
