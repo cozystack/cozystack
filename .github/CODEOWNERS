@@ -27,6 +27,9 @@
 # --- Extra apps ---
 /packages/extra/                             @kvaps @lllamnyp @IvanHunters
 
+# --- Core (installer / platform / talos / flux-aio) ---
+/packages/core/                              @lllamnyp @kvaps @myasnikovdaniil @IvanHunters @lexfrei
+
 # --- Virtualization (system side) ---
 /packages/system/kubevirt/                   @scooby87 @lllamnyp @kvaps @myasnikovdaniil
 /packages/system/kubevirt-cdi/               @scooby87 @lllamnyp @kvaps @myasnikovdaniil
@@ -55,8 +58,12 @@
 /cmd/cozypkg/                                @lexfrei @IvanHunters @myasnikovdaniil
 /tools/                                      @lexfrei @IvanHunters @myasnikovdaniil
 
-# --- API surface (architects) ---
+# --- API surface (architects): API types, aggregated apiserver, registry ---
 /api/                                        @kvaps @lllamnyp
+/pkg/apis/                                   @kvaps @lllamnyp
+/pkg/apiserver/                              @kvaps @lllamnyp
+/pkg/registry/                               @kvaps @lllamnyp
+/pkg/generated/                              @kvaps @lllamnyp
 
 # --- Docs ---
 /docs/                                       @lexfrei @myasnikovdaniil
