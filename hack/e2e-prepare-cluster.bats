@@ -132,6 +132,11 @@ machine:
         - usermode_helper=disabled
     - name: zfs
     - name: spl
+  install:
+    extraKernelArgs:
+    # CVE-2026-53359: disable KVM nested virtualization (guest-to-host escape mitigation)
+    - kvm_intel.nested=0
+    - kvm_amd.nested=0
   registries:
     mirrors:
       docker.io:
