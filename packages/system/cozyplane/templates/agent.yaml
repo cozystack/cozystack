@@ -17,7 +17,7 @@ rules:
   # The agent learns remote pod CIDRs from Node objects.
   - apiGroups: [""]
     resources: ["nodes"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
   # The plugin (using this SA) reads pod annotations to resolve VPC membership,
   # and the agent reads pods to distinguish revocation from ordinary teardown.
   - apiGroups: [""]
