@@ -5,8 +5,79 @@
 # Maintainer is responsible for the whole project. The two overlap but are not
 # identical by design. Security reports are NOT routed through this file; see
 # SECURITY.md (GitHub Private Vulnerability Reporting + MAINTAINERS.md).
+#
+# Ordering matters: CODEOWNERS applies the LAST matching pattern, so entries go
+# from broad to specific. The API review gate block stays last so it cannot be
+# overridden. Enable "Require review from Code Owners" in branch protection for
+# these to bind.
 
-* @kvaps @lllamnyp @lexfrei @androndo @IvanHunters @sircthulhu @myasnikovdaniil
+# --- Default: architects own anything not scoped below ---
+*                                            @kvaps @lllamnyp
+
+# --- All packages: general owners (overridden by the specific areas below) ---
+/packages/                                   @lexfrei @IvanHunters @myasnikovdaniil
+
+# --- Apps: default owners (specific apps overridden below) ---
+/packages/apps/                              @lexfrei @IvanHunters @myasnikovdaniil @scooby87
+/packages/apps/kubernetes/                   @IvanHunters @kvaps
+/packages/apps/vm-instance/                  @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/apps/vm-disk/                      @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/apps/vpc/                          @kvaps @lllamnyp
+
+# --- Extra apps ---
+/packages/extra/                             @kvaps @lllamnyp @IvanHunters
+
+# --- Virtualization (system side) ---
+/packages/system/kubevirt/                   @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-cdi/               @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-cdi-operator/      @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-operator/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-instancetypes/     @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/kubevirt-csi-node/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+/packages/system/vm-default-images/          @scooby87 @lllamnyp @kvaps @myasnikovdaniil
+
+# --- Backups ---
+/packages/system/backup-controller/          @androndo @lllamnyp
+/packages/system/backupstrategy-controller/  @androndo @lllamnyp
+/packages/system/velero/                     @androndo @lllamnyp
+/cmd/backup-controller/                      @androndo @lllamnyp
+/cmd/backupstrategy-controller/              @androndo @lllamnyp
+
+# --- cozystack-api / controller / lineage webhook ---
+/packages/system/cozystack-api/              @IvanHunters @kvaps @lllamnyp
+/packages/system/cozystack-controller/       @IvanHunters @kvaps @lllamnyp
+/packages/system/lineage-controller-webhook/ @IvanHunters @kvaps @lllamnyp
+/cmd/cozystack-api/                          @IvanHunters @kvaps @lllamnyp
+/cmd/cozystack-controller/                   @IvanHunters @kvaps @lllamnyp
+/cmd/lineage-controller-webhook/             @IvanHunters @kvaps @lllamnyp
+
+# --- CLI tooling ---
+/cmd/cozypkg/                                @lexfrei @IvanHunters @myasnikovdaniil
+/tools/                                      @lexfrei @IvanHunters @myasnikovdaniil
+
+# --- API surface (architects) ---
+/api/                                        @kvaps @lllamnyp
+
+# --- Docs ---
+/docs/                                       @lexfrei @myasnikovdaniil
+
+# --- CI / automation ---
+/.github/                                    @myasnikovdaniil @sircthulhu
+/hack/                                       @myasnikovdaniil @sircthulhu
+/Makefile                                    @myasnikovdaniil @sircthulhu
+/.pre-commit-config.yaml                     @myasnikovdaniil @sircthulhu
+
+# --- Governance, licensing, project docs ---
+/LICENSE                                     @tym83 @kvaps
+/GOVERNANCE.md                               @tym83 @kvaps
+/MAINTAINERS.md                              @tym83 @kvaps
+/CONTRIBUTOR_LADDER.md                       @tym83 @kvaps
+/CODE_OF_CONDUCT.md                          @tym83 @kvaps
+/CONTRIBUTING.md                             @tym83 @kvaps
+/SECURITY.md                                 @tym83 @kvaps
+/ADOPTERS.md                                 @tym83 @kvaps
+/README.md                                   @tym83 @kvaps
+/.github/CODEOWNERS                          @kvaps @lllamnyp
 
 # The API review gate must not be editable without an API-owner review, or a
 # PR could neuter the detector (it is compiled from the head checkout during
