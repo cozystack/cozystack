@@ -187,9 +187,20 @@ EOF
 
 @test "users-Job runs and carries the desired list from spec.oidc.users" {
   # helm.sh/hook: post-install,post-upgrade — the Job appears after the
-  # inner HR reconciles. `hook-delete-policy: before-hook-creation` keeps
-  # it around after completion so we can assert on its shape.
-  timeout 180 sh -ec 'until kubectl -n tenant-test get job "'"${INNER_REL}"'-oidc-users" >/dev/null 2>&1; do sleep 5; done'
+  # inner HR reconciles. `hook-delete-policy: before-hook-creation`
+  # keeps the previous Job around across upgrades, so `until kubectl
+  # get job` may return a stale Job from the previous test (or from
+  # the customconfig round where users was set differently or absent).
+  # Poll on the target env value directly — the new Job with our
+  # desired list is the first Job whose DESIRED_USERS_JSON contains
+  # `e2e-admin@example.com`.
+  timeout 600 sh -ec '
+    until kubectl -n tenant-test get job "'"${INNER_REL}"'-oidc-users" \
+      -o jsonpath="{.spec.template.spec.containers[?(@.name==\"reconcile\")].env[?(@.name==\"DESIRED_USERS_JSON\")].value}" 2>/dev/null \
+      | grep -q "e2e-admin@example.com"; do
+      sleep 5
+    done
+  '
 
   desired=$(kubectl -n tenant-test get job "${INNER_REL}-oidc-users" \
     -o jsonpath='{.spec.template.spec.containers[?(@.name=="reconcile")].env[?(@.name=="DESIRED_USERS_JSON")].value}')
