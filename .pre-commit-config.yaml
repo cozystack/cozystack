@@ -30,7 +30,7 @@ repos:
 # permissions (audit scope is set in .github/zizmor.yml). Runs offline so it needs
 # no GitHub token locally. The same gate runs tree-wide in .github/workflows/zizmor.yml.
 - repo: https://github.com/zizmorcore/zizmor-pre-commit
-  rev: v1.22.0
+  rev: v1.26.1
   hooks:
     - id: zizmor
       args: [--offline]
