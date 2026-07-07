@@ -44,7 +44,12 @@ spec:
   targetNamespace: cozy-cilium
   storageNamespace: cozy-cilium
   interval: 5m
-  timeout: 10m
+  # 15m matches the tenant Kubernetes install budget and gives image pull
+  # onto a fresh Talos worker VM enough headroom on slow CI runners: the
+  # Cilium container image lives in the OCIR mirror and the tenant node
+  # has no image cache on first boot; the 10m timeout raced the pull
+  # about half the time (~13m wall-clock, see cozystack/cozystack#3229).
+  timeout: 15m
   install:
     createNamespace: true
     remediation:
