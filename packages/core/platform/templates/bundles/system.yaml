@@ -56,8 +56,13 @@
        networking.stageCniPlugins turns it off, for nodes whose operator
        manages that directory. The value is always emitted rather than left to
        the chart default, so the rendered Package states which way it went. */ -}}
+{{- /* multus delegates to the Cilium primary conflist (05-cilium.conflist),
+       which cozyplane never writes (it writes 00-cozyplane) → CrashLoopBackOff,
+       so the cozyplane variant runs without it. */ -}}
+{{- if ne $networkingVariant "cozyplane" }}
 {{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
 {{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
@@ -169,6 +174,16 @@
 {{- if .Values.telemetry.disabled -}}
 {{- $controllerValues := dict "cozystackController" (dict "disableTelemetry" true) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-controller" (dict "values" $controllerValues) -}}
+{{- end -}}
+{{- /* cozyplane owns the sdn.cozystack.io group (as CRDs), so cozystack-api must
+       not aggregate it — otherwise its explicit APIService hijacks the group from
+       cozyplane's CRDs and every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" -}}
+{{- $apiValues := index $cozystackEngineComponents "cozystack-api" | default (dict "values" (dict)) -}}
+{{- $apiInner := index $apiValues "values" | default (dict) -}}
+{{- $_ := set $apiInner "cozystackAPI" (dict "serveSDN" false) -}}
+{{- $_ := set $apiValues "values" $apiInner -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-api" $apiValues -}}
 {{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
