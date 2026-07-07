@@ -1,0 +1,20 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozyplane-cilium-crds
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  - name: default
+    dependsOn: []
+    components:
+    - name: cozyplane-cilium-crds
+      path: system/cozyplane-cilium-crds
+      install:
+        namespace: cozy-system
+        releaseName: cozyplane-cilium-crds

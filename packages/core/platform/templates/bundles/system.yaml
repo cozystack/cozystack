@@ -133,6 +133,15 @@
 
 # Common Packages
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
+{{- /* The cozyplane variant runs no Cilium, but many stock components (linstor,
+       tenant, monitoring-agents, fluxcd-operator, ...) embed CiliumNetworkPolicy /
+       CiliumClusterwideNetworkPolicy objects and fail to install without the CRDs.
+       Ship them inert so those manifests apply (cozyplane doesn't enforce them yet
+       — host-firewall / default-network NetworkPolicy is a follow-up). On the
+       Cilium variants the cilium chart provides the CRDs, so skip it there. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozyplane-cilium-crds" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.8.0)
        ships a pre-delete Helm hook that sed-strips the BEGIN/END
