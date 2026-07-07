@@ -16,6 +16,16 @@ genevePort: 6081
 # as Cilium (which ships 05-cilium.conflist).
 cniConfName: "10-cozyplane.conflist"
 
+# Kube-apiserver endpoint the hostNetwork agent/responder dial. Empty = the
+# in-cluster kubernetes.default ClusterIP (10.96.0.1) — correct once a service
+# proxy serves it. When cozyplane is the CNI AND there is no kube-proxy, that
+# ClusterIP is unserved until cozyplane-kpr (which needs the agent) is up, a
+# bootstrap cycle — so point the agent at a real endpoint (Talos: KubePrism
+# localhost:7445; see values-talos.yaml).
+kubeApiServer:
+  host: ""
+  port: ""
+
 # The cluster DNS domain (kubelet's clusterDomain) — the zone the split-horizon
 # resolver answers authoritatively for VPC pods. Empty (the default)
 # autodetects it from the resolver's own kubelet-written search path (the
