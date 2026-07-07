@@ -5,15 +5,16 @@
 # the primary CNI over any co-installed one.
 cniConfName: "00-cozyplane.conflist"
 
-# Serve sdn.cozystack.io from the aggregated API server (not CRDs); Cozystack
-# ships cert-manager for the serving + etcd certificates.
+# The aggregated API server (sdn.cozystack.io — VPC tenancy) is DISABLED here,
+# and this is deliberate for the cozyplane-as-CNI topology. cozyplane installs
+# FIRST (it is the CNI), before cert-manager — but the apiserver + its etcd need
+# cert-manager Certificates, so bundling them into this first Helm release makes
+# the whole release fail ("no matches for kind Certificate") and the CNI never
+# comes up. Keeping the CNI slot cert-manager-free lets the cluster bootstrap.
+#
+# FOLLOW-UP (proper fix): split the chart so the CNI (agent) is this networking
+# component and the apiserver+etcd (with its certs) is a SEPARATE component that
+# dependsOn cert-manager. Until then, VPC tenancy (sdn.cozystack.io) is deferred;
+# the default network + Services (cozyplane-kpr) + DNS work without it.
 apiserver:
-  enabled: true
-  etcd:
-    # Operator-managed etcd (etcd-operator.cozystack.io/v1alpha2), memory-backed
-    # (no storageClass) so the API's etcd bootstraps before storage — the CNI
-    # installs first. Replicated (raft survives single-pod restarts); not durable
-    # across a full-cluster restart until a persistent mode lands.
-    operator:
-      enabled: true
-      replicas: 3
+  enabled: false
