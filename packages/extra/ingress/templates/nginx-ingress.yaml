@@ -21,6 +21,23 @@
 {{- if and .Values.cloudflareProxy $proxyProtocol }}
 {{- fail "cloudflareProxy and proxyProtocol are mutually exclusive: Cloudflare's HTTP proxy does not send PROXY-protocol frames, and the cloudflareProxy server-snippet overrides real-ip-header proxy_protocol" }}
 {{- end }}
+{{- /* spec.loadBalancerClass is immutable: once the host ingress Service exists
+       as type LoadBalancer, Kubernetes forbids adding, changing, OR removing the
+       field on update, so Flux would wedge on the reconcile instead of migrating.
+       Guard only the host ingress on the LoadBalancer path (where the class is
+       emitted on the service block below), and only against an existing
+       type: LoadBalancer Service whose class actually differs from the requested
+       value — set, change, or clear all trip it, while a ClusterIP Service
+       (externalIPs path) transitioning to LoadBalancer may set the class freely.
+       lookup returns nil on fresh install / dry-run / CI, so the guard stays
+       silent there and the Service is born with the requested class. */ -}}
+{{- if and (eq $exposeIngress .Release.Namespace) (not $exposeExternalIPs) }}
+{{- $svcName := printf "%s-ingress-controller" (trimPrefix "tenant-" .Release.Namespace) }}
+{{- $existingSvc := lookup "v1" "Service" .Release.Namespace $svcName }}
+{{- if and $existingSvc (eq (dig "spec" "type" "" $existingSvc) "LoadBalancer") (ne (dig "spec" "loadBalancerClass" "" $existingSvc) $loadBalancerClass) }}
+{{- fail (printf "publishing.loadBalancerClass cannot be changed on the existing host ingress Service %s/%s: spec.loadBalancerClass is immutable once the Service is type LoadBalancer (existing: %q, requested: %q). Delete the Service once so Flux recreates it with the new setting — the external LoadBalancer is briefly reprovisioned: kubectl -n %s delete service %s" .Release.Namespace $svcName (dig "spec" "loadBalancerClass" "" $existingSvc) $loadBalancerClass .Release.Namespace $svcName) }}
+{{- end }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

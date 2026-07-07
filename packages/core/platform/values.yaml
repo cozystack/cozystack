@@ -77,6 +77,10 @@ publishing:
   # admin provisions the matching address pool / announcer out of band (a MetalLB
   # IPAddressPool, a Cilium LB-IPAM pool, a cloud LB, etc.). Empty lets the
   # cluster's default LoadBalancer controller claim the Service.
+  # spec.loadBalancerClass is immutable: on a cluster whose host ingress Service
+  # already exists as type: LoadBalancer, setting, changing, or clearing this
+  # value requires recreating that Service once (the chart fails early with the
+  # exact command).
   loadBalancerClass: ""
   # Enable PROXY-protocol on the host ingress-nginx and auto-deploy
   # ouroboros (system/ouroboros) to fix the resulting hairpin-NAT
