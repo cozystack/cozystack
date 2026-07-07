@@ -15,7 +15,12 @@
 *                                            @kvaps @lllamnyp
 
 # --- All packages: general owners (overridden by the specific areas below) ---
-/packages/                                   @lexfrei @IvanHunters @myasnikovdaniil
+/packages/                                   @lexfrei @IvanHunters @myasnikovdaniil @sircthulhu
+
+# --- Go source: general owners (specific cmd/pkg areas overridden below) ---
+/cmd/                                        @kvaps @lllamnyp @sircthulhu
+/internal/                                   @kvaps @lllamnyp @sircthulhu
+/pkg/                                        @kvaps @lllamnyp @sircthulhu
 
 # --- Apps: default owners (specific apps overridden below) ---
 /packages/apps/                              @lexfrei @IvanHunters @myasnikovdaniil @scooby87
@@ -53,6 +58,11 @@
 /cmd/cozystack-api/                          @IvanHunters @kvaps @lllamnyp
 /cmd/cozystack-controller/                   @IvanHunters @kvaps @lllamnyp
 /cmd/lineage-controller-webhook/             @IvanHunters @kvaps @lllamnyp
+
+# --- Keycloak ---
+/packages/system/keycloak/                   @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil
+/packages/system/keycloak-operator/          @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil
+/packages/system/keycloak-configure/         @sircthulhu @lexfrei @IvanHunters @myasnikovdaniil
 
 # --- CLI tooling ---
 /cmd/cozypkg/                                @lexfrei @IvanHunters @myasnikovdaniil
