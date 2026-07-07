@@ -169,11 +169,13 @@ spec:
               # additional orgs.
               ORG_ID=1
 
-              # Emit desired emails as NUL-terminated so `while read -d ''`
-              # tolerates any RFC 5322-legal local part (whitespace, quoted
-              # literals, symbols). `for email in $var` was word-split on
-              # default IFS which broke on any non-trivial email.
-              printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output0 '.[].email' > /tmp/desired-emails 2>/dev/null || : > /tmp/desired-emails
+              # Emit desired emails one per line. Portable — BusyBox
+              # coreutils in the alpine base do not support jq
+              # --raw-output0 (jq 1.7+) nor `read -d ''`. The template-
+              # level assertUsersEmailShape helper already rejects any
+              # email containing whitespace / control characters, so
+              # line-oriented iteration is safe here.
+              printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output '.[].email' > /tmp/desired-emails 2>/dev/null || : > /tmp/desired-emails
 
               # URL-encode a string via jq (@uri) — used for query-string
               # values like /api/users/lookup?loginOrEmail=<encoded>.
@@ -181,7 +183,7 @@ spec:
 
               if [ "$OIDC_MODE" != "None" ]; then
                 log "Reconciling ${OIDC_MODE} users into Grafana org $ORG_ID..."
-                while IFS= read -r -d '' email; do
+                while IFS= read -r email; do
                   [ -n "$email" ] || continue
                   role=$(printf '%s' "$DESIRED_USERS_JSON" | jq --raw-output --arg e "$email" '.[] | select(.email == $e) | .role')
                   log "  ensure user: email=$email role=$role"
@@ -189,7 +191,8 @@ spec:
                   # 1. Pre-provision the local account so the operator
                   #    can be assigned a role before their first login.
                   #    409 is expected on re-run — already provisioned.
-                  password=$(head --bytes=24 /dev/urandom | base64 | tr --delete '=+/' | head --bytes=32)
+                  # BusyBox `head` / `tr` support only short flags.
+                  password=$(head -c 24 /dev/urandom | base64 | tr -d '=+/' | head -c 32)
                   create_body=$(jq --null-input --compact-output \
                     --arg name "$email" \
                     --arg email "$email" \
@@ -249,25 +252,26 @@ spec:
               # The chart-managed admin login name — never pruned.
               admin_login="$GF_ADMIN_USER"
 
-              # Membership stream is emitted NUL-separated so an email
-              # containing whitespace / pipe characters cannot corrupt the
-              # field boundaries.
-              jq --raw-output0 '.[] | [.userId, .login, .email] | @tsv' < /tmp/members.json > /tmp/members.tsv0
+              # Membership stream: one TAB-separated record per line —
+              # portable across BusyBox coreutils (no jq --raw-output0,
+              # no `read -d ''`, no `grep -z`). Safe because the
+              # template-level email-shape guard already rejects
+              # whitespace / TAB / newline in `spec.oidc.users[].email`.
+              jq --raw-output '.[] | [.userId, .login, .email] | @tsv' < /tmp/members.json > /tmp/members.tsv
 
-              while IFS= read -r -d '' triple; do
-                # Each triple is TAB-separated: userId \t login \t email
-                uid=$(printf '%s' "$triple" | cut -f 1)
-                ulogin=$(printf '%s' "$triple" | cut -f 2)
-                uemail=$(printf '%s' "$triple" | cut -f 3)
+              # IFS holds a literal TAB char (POSIX portable — some
+              # ash variants don't handle $'\t' escape).
+              IFS="$(printf '\t')"
+              while read -r uid ulogin uemail; do
                 if [ -z "$uid" ] || [ "$uid" = "null" ]; then continue; fi
                 if [ "$ulogin" = "$admin_login" ]; then
                   log "  keep admin: login=$ulogin uid=$uid"
                   continue
                 fi
-                # Match uemail / ulogin against desired list via NUL-safe
-                # grep. `-z` treats input+patterns as NUL-terminated; `-F`
-                # disables regex; `-x` anchors on the full record.
-                if grep --null-data --fixed-strings --line-regexp --quiet -e "$uemail" -e "$ulogin" /tmp/desired-emails; then
+                # Match uemail / ulogin against desired list. -F fixed
+                # strings, -x line-anchored, -q quiet. Portable across
+                # BusyBox and GNU grep.
+                if grep -Fxq -e "$uemail" -e "$ulogin" /tmp/desired-emails; then
                   continue
                 fi
                 log "  removing stale member: login=$ulogin email=$uemail uid=$uid"
@@ -276,7 +280,7 @@ spec:
                   200) : ;;
                   *) log "    DELETE failed with code $code:"; cat /tmp/resp >&2; exit 1 ;;
                 esac
-              done < /tmp/members.tsv0
+              done < /tmp/members.tsv
 
               log "Done."
           volumeMounts:
