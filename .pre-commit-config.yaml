@@ -26,3 +26,11 @@ repos:
         '
       language: system
       files: ^.*$
+# Lints changed GitHub Actions workflows for unpinned actions and excessive token
+# permissions (audit scope is set in .github/zizmor.yml). Runs offline so it needs
+# no GitHub token locally. The same gate runs tree-wide in .github/workflows/zizmor.yml.
+- repo: https://github.com/zizmorcore/zizmor-pre-commit
+  rev: v1.22.0
+  hooks:
+    - id: zizmor
+      args: [--offline]

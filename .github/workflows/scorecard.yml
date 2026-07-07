@@ -34,6 +34,12 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
+          # The default GITHUB_TOKEN cannot read branch-protection settings, so
+          # the Branch-Protection check is scored on partial data. Provide a PAT
+          # with admin:read on the repo as the SCORECARD_TOKEN secret to let it
+          # see the full ruleset; falls back to the default token when unset, so
+          # this is a no-op until the secret is added.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
           # Publish the results to the OpenSSF Scorecard public API so the
           # project appears at https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack
           publish_results: true
