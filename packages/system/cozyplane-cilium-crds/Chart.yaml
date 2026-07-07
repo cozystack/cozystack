@@ -1,0 +1,10 @@
+apiVersion: v2
+name: cozyplane-cilium-crds
+description: |
+  The cilium.io/v2 CiliumNetworkPolicy + CiliumClusterwideNetworkPolicy CRDs,
+  shipped INERT for the cozyplane networking variant. Stock Cozystack components
+  (linstor, tenant, monitoring-agents, fluxcd-operator, ...) embed these policy
+  objects and fail to install if the CRDs are absent. cozyplane runs no Cilium,
+  so nothing enforces them yet (host-firewall / default-network NetworkPolicy is
+  a cozyplane follow-up) — the CRDs exist only so those manifests apply.
+version: 0.1.0
