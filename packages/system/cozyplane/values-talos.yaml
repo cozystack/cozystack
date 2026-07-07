@@ -1,0 +1,17 @@
+# Talos overlay for the cozyplane networking variant (cozyplane + cozyplane-kpr).
+#
+# cozyplane is the CNI; Cilium runs alongside for kube-proxy replacement. The
+# cozyplane conflist must sort ahead of Cilium's 05-cilium.conflist so kubelet
+# uses cozyplane as the primary CNI.
+cniConfName: "00-cozyplane.conflist"
+
+# Serve sdn.cozystack.io from the aggregated API server (not CRDs); Cozystack
+# ships cert-manager for the serving certificate.
+apiserver:
+  enabled: true
+  etcd:
+    # Operator-managed etcd (aenix etcd-operator) with end-to-end TLS — the
+    # production path; matches the migrated cozyplane-etcd on dev4.
+    operator:
+      enabled: true
+      replicas: 3

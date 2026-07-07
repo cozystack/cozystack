@@ -1,0 +1,127 @@
+{{- if .Values.exportPolicy.enabled }}
+# Gate VPCBinding creation on the 'export' verb of the referenced VPC. This is
+# the escalation gate that stops a tenant binding to a VPC it doesn't own (see
+# docs/control-plane.md §6). The 'export' check is only required when vpcRef is
+# set or changed, so the controller's finalizer writes are not blocked.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozyplane-vpcbinding-export
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["sdn.cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["vpcbindings"]
+  variables:
+    - name: ref
+      expression: object.spec.vpcRef
+    - name: refUnchanged
+      expression: >-
+        oldObject != null &&
+        oldObject.spec.vpcRef.namespace == object.spec.vpcRef.namespace &&
+        oldObject.spec.vpcRef.name == object.spec.vpcRef.name
+  validations:
+    - expression: >-
+        variables.refUnchanged ||
+        authorizer.group('sdn.cozystack.io').resource('vpcs')
+          .namespace(variables.ref.namespace).name(variables.ref.name)
+          .check('export').allowed()
+      reason: Forbidden
+      messageExpression: >-
+        "creating a VPCBinding to VPC " + variables.ref.namespace + "/" +
+        variables.ref.name + " requires the 'export' verb on that VPC " +
+        "(sdn.cozystack.io vpcs)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozyplane-vpcbinding-export
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  policyName: cozyplane-vpcbinding-export
+  validationActions: ["Deny"]
+---
+# Gate VPCPeering creation on the 'peer' verb of the LOCAL VPC (see
+# deploy/authz.yaml for the full rationale). Aggregated-apiserver mode enforces
+# the same check in the vpcpeering create strategy.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozyplane-vpcpeering-peer
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["sdn.cozystack.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["vpcpeerings"]
+  variables:
+    - name: refUnchanged
+      expression: >-
+        oldObject != null &&
+        oldObject.spec.vpcRef.name == object.spec.vpcRef.name
+  validations:
+    - expression: >-
+        variables.refUnchanged ||
+        authorizer.group('sdn.cozystack.io').resource('vpcs')
+          .namespace(object.metadata.namespace).name(object.spec.vpcRef.name)
+          .check('peer').allowed()
+      reason: Forbidden
+      messageExpression: >-
+        "creating a VPCPeering for VPC " + object.metadata.namespace + "/" +
+        object.spec.vpcRef.name + " requires the 'peer' verb on that VPC " +
+        "(sdn.cozystack.io vpcs)"
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozyplane-vpcpeering-peer
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  policyName: cozyplane-vpcpeering-peer
+  validationActions: ["Deny"]
+{{- end }}
+---
+# Sample owner role. RoleBind it into a tenant namespace so that tenant can own
+# VPCs (including 'export' them) and manage VPCBindings there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-vpc-owner
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs"]
+    # 'export' and 'peer' are the virtual verbs consumed by the
+    # ValidatingAdmissionPolicies (and the aggregated apiserver's strategies).
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete", "export", "peer"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs/status"]
+    verbs: ["get"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcbindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Peering halves live in the owner's namespace; creating one declares intent
+  # (gated by the 'peer' verb on the LOCAL VPC above), deleting it revokes.
+  # Consent comes from the reciprocal half in the peer's namespace, so no verb
+  # on the *peer* VPC is needed.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcpeerings"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcpeerings/status"]
+    verbs: ["get"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["ports"]
+    verbs: ["get", "list", "watch"]

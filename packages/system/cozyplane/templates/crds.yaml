@@ -1,0 +1,1483 @@
+{{- /* CRDs are installed only in CRD mode; the aggregated apiserver serves the
+       group directly (an APIService for the same group/version would conflict
+       with these). See templates/apiserver.yaml. */ -}}
+{{- if not .Values.apiserver.enabled }}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: externalpools.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: ExternalPool
+    listKind: ExternalPoolList
+    plural: externalpools
+    singular: externalpool
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.allocated
+      name: Allocated
+      type: integer
+    - jsonPath: .status.available
+      name: Available
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ExternalPool is a cluster-scoped, admin-defined range of externally-routable
+          addresses. FloatingIPs claim addresses from a pool; a pool is the equivalent
+          of MetalLB's IPAddressPool.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ExternalPoolSpec is the specification of a pool of externally-routable
+              addresses that FloatingIPs are allocated from.
+            properties:
+              advertisement:
+                description: |-
+                  Advertisement is how in-use addresses are announced to the physical
+                  network. Empty selects the controller default (L2).
+                enum:
+                - L2
+                - BGP
+                type: string
+              cidrs:
+                description: CIDRs are the address ranges the pool hands out.
+                items:
+                  type: string
+                type: array
+            type: object
+          status:
+            description: ExternalPoolStatus is the observed state of an ExternalPool.
+            properties:
+              allocated:
+                description: Allocated is the number of addresses currently bound
+                  to FloatingIPs.
+                format: int32
+                type: integer
+              available:
+                description: Available is the number of addresses still free in the
+                  pool.
+                format: int32
+                type: integer
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: floatingips.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: FloatingIP
+    listKind: FloatingIPList
+    plural: floatingips
+    singular: floatingip
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.address
+      name: Address
+      type: string
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .spec.target
+      name: Target
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          FloatingIP binds an externally-routable address from an ExternalPool to a
+          single workload inside a VPC (the OpenStack floating-IP model). It is the
+          bidirectional counterpart to the egress-only NAT gateway.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              FloatingIPSpec binds one externally-routable address 1:1 to a workload inside
+              a VPC. The address is reachable bidirectionally: inbound connections DNAT to
+              the target, and the target's egress is SNATed from the floating address.
+            properties:
+              address:
+                description: |-
+                  Address optionally requests a specific address from the pool; empty lets
+                  the controller pick a free one.
+                type: string
+              poolRef:
+                description: |-
+                  PoolRef selects the ExternalPool to allocate from. Empty selects the
+                  default pool.
+                properties:
+                  name:
+                    description: Name is the ExternalPool name.
+                    type: string
+                type: object
+              target:
+                description: Target is the tenant IP within the VPC that the floating
+                  address binds to.
+                type: string
+              vpcRef:
+                description: |-
+                  VPCRef is the VPC the target lives in — it is in the same namespace as
+                  this object.
+                properties:
+                  name:
+                    description: Name is the VPC name within the referring object's
+                      namespace.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - target
+            - vpcRef
+            type: object
+          status:
+            description: FloatingIPStatus is the observed state of a FloatingIP.
+            properties:
+              address:
+                description: Address is the externally-routable address assigned to
+                  this binding.
+                type: string
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              phase:
+                description: Phase is the current lifecycle phase of the FloatingIP.
+                enum:
+                - Pending
+                - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: ports.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: Port
+    listKind: PortList
+    plural: ports
+    singular: port
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .spec.vpcRef.namespace
+      name: VPCNamespace
+      type: string
+    - jsonPath: .spec.ip
+      name: IP
+      type: string
+    - jsonPath: .spec.node
+      name: Node
+      type: string
+    - jsonPath: .spec.podName
+      name: Pod
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Port is a pod's realized interface on a VPC.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              PortSpec is the realized network interface of a pod on a VPC.
+
+              A Port is cluster-scoped and its name encodes the VPC's VNI and the IP
+              (v<vni>.<ip-with-dashes>), so creating it is an atomic claim on that IP within
+              the VPC — etcd name uniqueness serializes concurrent allocators. The VNI is
+              globally unique, so the name stays unique even though VPCs are namespaced.
+            properties:
+              fabricIP:
+                description: |-
+                  FabricIP is the pod's status.podIP: a unique address from the node pod
+                  CIDR, reachable on the default overlay, that the bridge DNATs to IP.
+                type: string
+              gateway:
+                description: |-
+                  Gateway marks the VPC's gateway port (the .1 leg of the egress gateway
+                  pod); agents route off-VPC traffic to it.
+                type: boolean
+              ip:
+                description: |-
+                  IP is the address allocated to the pod within the VPC CIDR (the tenant
+                  address configured inside the pod).
+                type: string
+              mac:
+                description: MAC is the pod interface MAC address.
+                type: string
+              node:
+                description: Node is the name of the node hosting the pod.
+                type: string
+              nodeIP:
+                description: NodeIP is the host IP of that node (the Geneve tunnel
+                  endpoint).
+                type: string
+              podName:
+                type: string
+              podNamespace:
+                description: PodNamespace and PodName identify the owning pod.
+                type: string
+              vpcRef:
+                description: VPCRef identifies the VPC this port belongs to (owner
+                  namespace + name).
+                properties:
+                  name:
+                    description: Name is the VPC name within that namespace.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace that owns the VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+            required:
+            - ip
+            - node
+            - nodeIP
+            - vpcRef
+            type: object
+          status:
+            description: PortStatus is the controller-observed state of a Port.
+            properties:
+              groups:
+                description: |-
+                  Groups is the set of SecurityGroup numeric ids (1..63, within the Port's
+                  VPC) this Port is a member of, resolved by the controller from the pod's
+                  labels. The agent folds it into the datapath membership bitmap. Empty
+                  means "no groups" — legacy allow-all intra-VPC ingress.
+                items:
+                  format: int32
+                  type: integer
+                type: array
+                x-kubernetes-list-type: atomic
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: securitygroups.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: SecurityGroup
+    listKind: SecurityGroupList
+    plural: securitygroups
+    singular: securitygroup
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .status.id
+      name: ID
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SecurityGroup is intra-VPC network policy, AWS-security-group-shaped: it
+          selects member pods by label and admits inbound traffic from other groups (in
+          the same VPC) or from north-south CIDRs. While no group selects a pod its
+          intra-VPC ingress is unrestricted (today's behavior); once any group selects
+          it, its ingress is default-deny, opened only by the union of its groups'
+          rules. Enforcement is destination-side in the eBPF datapath, so it is
+          placement-independent.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              SecurityGroupSpec declares an intra-VPC policy group: which ports are members
+              and, for a member, which sources may reach it.
+            properties:
+              egress:
+                description: |-
+                  Egress is the list of allowed east-west destinations (the mirror of
+                  Ingress). When any group selects a pod, its east-west egress is also
+                  default-deny: it may reach another VPC pod only if a group it belongs to
+                  admits that pod's group here. A flow is delivered only when both the
+                  destination's ingress and the source's egress admit it. `to.cidr`
+                  (north-south/external egress) is a later increment.
+                items:
+                  description: |-
+                    SecurityGroupEgressRule admits traffic from the group's members to a
+                    destination, optionally narrowed to specific ports.
+                  properties:
+                    ports:
+                      description: |-
+                        Ports narrows the rule to specific destination ports. Empty means every
+                        port and protocol.
+                      items:
+                        description: SecurityGroupPort is a protocol/port an ingress
+                          rule admits.
+                        properties:
+                          port:
+                            description: |-
+                              Port is the destination port. Zero (or omitted) means every port for the
+                              protocol.
+                            format: int32
+                            type: integer
+                          protocol:
+                            description: Protocol is TCP or UDP.
+                            enum:
+                            - TCP
+                            - UDP
+                            type: string
+                        required:
+                        - protocol
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                    to:
+                      description: To is the admitted destination (a group, optionally
+                        in a peered VPC).
+                      properties:
+                        cidr:
+                          description: |-
+                            CIDR admits north-south (bridge/floating) callers by their pre-masquerade
+                            client address. It does not match intra-VPC sources — those are identified
+                            by group. FQDN sources are a later increment.
+                          type: string
+                        group:
+                          description: |-
+                            Group is the name of another SecurityGroup — in this VPC, or in the VPC
+                            named by VPC.
+                          type: string
+                        vpc:
+                          description: |-
+                            VPC, when set, makes Group reference a group in that peered VPC (owner
+                            namespace + name). The referenced VPC must be a declared peer.
+                          properties:
+                            name:
+                              description: Name is the VPC name within that namespace.
+                              type: string
+                            namespace:
+                              description: Namespace is the namespace that owns the
+                                VPC.
+                              type: string
+                          required:
+                          - name
+                          - namespace
+                          type: object
+                      type: object
+                  required:
+                  - to
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              ingress:
+                description: |-
+                  Ingress is the list of allowed inbound sources. When *any* group selects a
+                  pod, that pod's ingress becomes default-deny and is opened only by the
+                  union of the ingress rules of the groups it belongs to.
+                items:
+                  description: |-
+                    SecurityGroupRule admits traffic from one source to the group's members,
+                    optionally narrowed to specific ports.
+                  properties:
+                    from:
+                      description: From is the admitted source.
+                      properties:
+                        cidr:
+                          description: |-
+                            CIDR admits north-south (bridge/floating) callers by their pre-masquerade
+                            client address. It does not match intra-VPC sources — those are identified
+                            by group. FQDN sources are a later increment.
+                          type: string
+                        group:
+                          description: |-
+                            Group is the name of another SecurityGroup — in this VPC, or in the VPC
+                            named by VPC.
+                          type: string
+                        vpc:
+                          description: |-
+                            VPC, when set, makes Group reference a group in that peered VPC (owner
+                            namespace + name). The referenced VPC must be a declared peer.
+                          properties:
+                            name:
+                              description: Name is the VPC name within that namespace.
+                              type: string
+                            namespace:
+                              description: Namespace is the namespace that owns the
+                                VPC.
+                              type: string
+                          required:
+                          - name
+                          - namespace
+                          type: object
+                      type: object
+                    ports:
+                      description: |-
+                        Ports narrows the rule to specific destination ports. Empty means every
+                        port and protocol.
+                      items:
+                        description: SecurityGroupPort is a protocol/port an ingress
+                          rule admits.
+                        properties:
+                          port:
+                            description: |-
+                              Port is the destination port. Zero (or omitted) means every port for the
+                              protocol.
+                            format: int32
+                            type: integer
+                          protocol:
+                            description: Protocol is TCP or UDP.
+                            enum:
+                            - TCP
+                            - UDP
+                            type: string
+                        required:
+                        - protocol
+                        type: object
+                      type: array
+                      x-kubernetes-list-type: atomic
+                  required:
+                  - from
+                  type: object
+                type: array
+                x-kubernetes-list-type: atomic
+              podSelector:
+                description: |-
+                  PodSelector selects the member pods by their labels (evaluated at Port
+                  claim time — see the controller). An empty selector selects every pod in
+                  the VPC.
+                properties:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
+                type: object
+                x-kubernetes-map-type: atomic
+              vpcRef:
+                description: |-
+                  VPCRef is the local VPC — it lives in the same namespace as this object,
+                  like VPCPeering. A group belongs to exactly one VPC.
+                properties:
+                  name:
+                    description: Name is the VPC name within the referring object's
+                      namespace.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - podSelector
+            - vpcRef
+            type: object
+          status:
+            description: SecurityGroupStatus is the observed state of a SecurityGroup.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              id:
+                description: |-
+                  ID is the per-VPC numeric identity (1..63), allocated by the controller —
+                  the wire identity the datapath keys on. Zero means unallocated.
+                format: int32
+                type: integer
+              phase:
+                description: Phase is the current lifecycle phase.
+                enum:
+                - Pending
+                - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: servicevips.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: ServiceVIP
+    listKind: ServiceVIPList
+    plural: servicevips
+    singular: servicevip
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .spec.ip
+      name: IP
+      type: string
+    - jsonPath: .spec.serviceRef.name
+      name: Service
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          ServiceVIP is the ClusterIP-equivalent of a Service inside a VPC: a virtual
+          address from the VPC's own space, load-balanced to backend VPC IPs by the
+          datapath, discovered only through the split-horizon resolver.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              ServiceVIPSpec is the materialized ClusterIP-equivalent of a Service
+              attached to a VPC (docs/services-in-vpc.md).
+
+              The controller creates one per attached non-headless Service (the pod->Port
+              idiom: the Service carries the sdn.cozystack.io/vpc annotation, the system
+              materializes this object). Like a Port, it is cluster-scoped and its name
+              encodes the VPC's VNI and the VIP (sv<vni>.<ip-with-dashes>), so creating it
+              is an atomic claim on that address among ServiceVIPs; cross-kind uniqueness
+              against Ports is enforced by the shared allocator view and the registry (a
+              Port always wins a conflict — the VIP is the movable kind, nothing addresses
+              it except through a DNS answer).
+            properties:
+              ip:
+                description: IP is the virtual address allocated from the VPC's own
+                  address space.
+                type: string
+              ports:
+                description: Ports are the service ports the VIP serves.
+                items:
+                  description: VIPPort is one service port the VIP serves.
+                  properties:
+                    name:
+                      description: Name of the service port (may be empty for a single
+                        unnamed port).
+                      type: string
+                    port:
+                      description: Port is the service port the VIP listens on.
+                      format: int32
+                      type: integer
+                    protocol:
+                      description: Protocol is TCP or UDP.
+                      type: string
+                  required:
+                  - port
+                  - protocol
+                  type: object
+                type: array
+              serviceRef:
+                description: ServiceRef is the Kubernetes Service this VIP fronts.
+                properties:
+                  name:
+                    description: Name of the Service.
+                    type: string
+                  namespace:
+                    description: Namespace of the Service.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              sessionAffinity:
+                description: |-
+                  SessionAffinity mirrors the Service's: "ClientIP" pins every connection
+                  from one client to the same backend; "None" (default) load-balances
+                  per connection.
+                type: string
+              vpcRef:
+                description: VPCRef identifies the VPC this VIP belongs to (owner
+                  namespace + name).
+                properties:
+                  name:
+                    description: Name is the VPC name within that namespace.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace that owns the VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+            required:
+            - ip
+            - serviceRef
+            - vpcRef
+            type: object
+          status:
+            description: ServiceVIPStatus is the observed state of a ServiceVIP.
+            properties:
+              backends:
+                description: |-
+                  Backends are the ready endpoints resolved to same-VPC Port addresses;
+                  the agents program the datapath from this list.
+                items:
+                  description: |-
+                    VIPBackend is one ready backend of the service, resolved to its Port's VPC
+                    address.
+                  properties:
+                    ip:
+                      description: IP is the backend's VPC IP (never the fabric IP).
+                      type: string
+                    ports:
+                      description: Ports are the resolved per-port targets on this
+                        backend.
+                      items:
+                        description: |-
+                          VIPBackendPort is one resolved (service port -> target port) pair on a
+                          backend.
+                        properties:
+                          port:
+                            description: Port is the service port on the VIP.
+                            format: int32
+                            type: integer
+                          protocol:
+                            description: Protocol is TCP or UDP.
+                            type: string
+                          targetPort:
+                            description: TargetPort is the resolved numeric port on
+                              the backend.
+                            format: int32
+                            type: integer
+                        required:
+                        - port
+                        - protocol
+                        - targetPort
+                        type: object
+                      type: array
+                  required:
+                  - ip
+                  type: object
+                type: array
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              phase:
+                description: Phase is the current lifecycle phase.
+                enum:
+                - Pending
+                - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: vpcbindings.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: VPCBinding
+    listKind: VPCBindingList
+    plural: vpcbindings
+    singular: vpcbinding
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.namespace
+      name: VPCNamespace
+      type: string
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VPCBinding grants pods in its own (consumer) namespace permission to attach to
+          the VPC named in spec.vpcRef. It is created by the VPC owner reaching into the
+          consumer namespace (gated by RBAC create here + an export SAR on the VPC), and
+          its existence is the namespace-keyed, datapath-readable authorization the CNI
+          checks at attach time. A VPC's namespace expresses ownership; a VPCBinding
+          expresses use — required even when the pod and VPC share a namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VPCBindingSpec authorizes pods in the binding's (consumer) namespace to attach
+              to the referenced VPC.
+            properties:
+              vpcRef:
+                description: VPCRef is the VPC being made usable, identified by owner
+                  namespace + name.
+                properties:
+                  name:
+                    description: Name is the VPC name within that namespace.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace that owns the VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+            required:
+            - vpcRef
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: vpcpeerings.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: VPCPeering
+    listKind: VPCPeeringList
+    plural: vpcpeerings
+    singular: vpcpeering
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.vpcRef.name
+      name: VPC
+      type: string
+    - jsonPath: .spec.peerRef.namespace
+      name: PeerNamespace
+      type: string
+    - jsonPath: .spec.peerRef.name
+      name: Peer
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VPCPeering is one half of a symmetric peering between two VPCs. Each owner
+          creates a half in its own namespace (spec.vpcRef = its VPC, spec.peerRef =
+          the other); the peering is live only while both halves exist and reference
+          each other. Reciprocity is the consent — there is no accept step — and
+          either side revokes unilaterally by deleting its half. Peered traffic is
+          routed natively (no NAT), so the two VPCs' CIDRs must not overlap.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VPCPeeringSpec declares one half of a peering between two
+              VPCs.
+            properties:
+              peerRef:
+                description: PeerRef is the remote VPC (owner namespace + name).
+                properties:
+                  name:
+                    description: Name is the VPC name within that namespace.
+                    type: string
+                  namespace:
+                    description: Namespace is the namespace that owns the VPC.
+                    type: string
+                required:
+                - name
+                - namespace
+                type: object
+              vpcRef:
+                description: VPCRef is the local VPC — it lives in the same namespace
+                  as this object.
+                properties:
+                  name:
+                    description: Name is the VPC name within the referring object's
+                      namespace.
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - peerRef
+            - vpcRef
+            type: object
+            x-kubernetes-validations:
+            - message: spec is immutable
+              rule: self == oldSelf
+          status:
+            description: VPCPeeringStatus is the observed state of a VPCPeering.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              peerVNI:
+                description: PeerVNI is the VNI of the peer VPC, once known.
+                format: int32
+                type: integer
+              phase:
+                description: Phase is the current lifecycle phase of the peering.
+                enum:
+                - Pending
+                - Ready
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.19.0
+  name: vpcs.sdn.cozystack.io
+spec:
+  group: sdn.cozystack.io
+  names:
+    kind: VPC
+    listKind: VPCList
+    plural: vpcs
+    singular: vpc
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.vni
+      name: VNI
+      type: integer
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          VPC is a tenant overlay network. It is namespaced: the namespace expresses
+          ownership. A pod's *use* of a VPC is granted separately by a VPCBinding, even
+          within the owner's own namespace.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: VPCSpec is the specification of a VPC — a tenant overlay
+              network.
+            properties:
+              cidrs:
+                description: |-
+                  CIDRs are the address ranges (IPv4 and/or IPv6) of the VPC. These may
+                  overlap with other VPCs; isolation is by overlay, not address space.
+                items:
+                  type: string
+                type: array
+              egress:
+                description: |-
+                  Egress configures how workloads in this VPC reach destinations outside
+                  it. Absent means no egress: the VPC is a closed island for outbound
+                  traffic (inbound north-south via the fabric IP still works).
+                properties:
+                  natGateway:
+                    description: |-
+                      NATGateway runs a per-VPC gateway pod that forwards off-VPC traffic to
+                      the outside world (masqueraded to the gateway's address) and to cluster
+                      DNS; other cluster-internal destinations stay denied.
+                    type: boolean
+                type: object
+              mtu:
+                description: |-
+                  MTU is the MTU advertised to ports in this VPC. Zero selects the
+                  controller default.
+                format: int32
+                type: integer
+            type: object
+          status:
+            description: VPCStatus is the observed state of a VPC.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              phase:
+                description: Phase is the current lifecycle phase of the VPC.
+                enum:
+                - Pending
+                - Ready
+                type: string
+              vni:
+                description: |-
+                  VNI is the overlay network identifier allocated to this VPC by the
+                  controller. Zero means unallocated.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+{{- end }}

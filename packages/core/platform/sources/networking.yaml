@@ -146,3 +146,37 @@ spec:
         releaseName: kubeovn
         dependsOn:
         - cilium
+  # cozyplane eBPF CNI + cozyplane-kpr (kube-proxy replacement) for Talos
+  # clusters — NO Cilium and NO kube-proxy. cozyplane owns the datapath and the
+  # CNI conflist; cozyplane-kpr provides in-cluster Services via socket-LB
+  # (importing Cilium's LB control plane, no Cilium agent). One IPAM authority
+  # (cozyplane) over the podCIDR — the coexistence hazard that Cilium's
+  # standalone IPAM created is gone. See docs/kube-proxy-replacement.md.
+  # NOTE: host-firewall and default-network NetworkPolicy that Cilium provided
+  # are not yet replaced (follow-ups); external NodePort + VM-guest ClusterIP
+  # need the increment-3 per-packet fallback.
+  - name: cozyplane
+    dependsOn:
+    - cozystack.gateway-api-crds
+    components:
+    - name: cozyplane
+      path: system/cozyplane
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-cozyplane
+        releaseName: cozyplane
+        dependsOn: []
+    - name: cozyplane-kpr
+      path: system/cozyplane-kpr
+      valuesFiles:
+      - values.yaml
+      - values-talos.yaml
+      install:
+        privileged: true
+        namespace: cozy-cozyplane
+        releaseName: cozyplane-kpr
+        dependsOn:
+        - cozyplane

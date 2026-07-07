@@ -1,0 +1,197 @@
+{{- /* Operator-managed etcd for the aggregated apiserver: replicated,
+       PVC-backed, TLS end to end (the cozyportal shape). Requires the aenix
+       etcd-operator (Cozystack ships it) and cert-manager. The self-signed
+       root issuer comes from templates/apiserver.yaml. */ -}}
+{{- if and .Values.apiserver.enabled .Values.apiserver.etcd.operator.enabled }}
+{{- $ns := .Release.Namespace -}}
+{{- $replicas := int .Values.apiserver.etcd.operator.replicas -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-peer-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  usages: ["signing", "key encipherment", "cert sign"]
+  commonName: cozyplane-etcd-peer-ca
+  duration: 87600h
+  secretName: cozyplane-etcd-peer-ca-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-apiserver-selfsign
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  usages: ["signing", "key encipherment", "cert sign"]
+  commonName: cozyplane-etcd-ca
+  duration: 87600h
+  secretName: cozyplane-etcd-ca-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-apiserver-selfsign
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozyplane-etcd-peer-issuer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: cozyplane-etcd-peer-ca-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozyplane-etcd-issuer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: cozyplane-etcd-ca-tls
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-server
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  commonName: cozyplane-etcd-server
+  secretName: cozyplane-etcd-server-tls
+  isCA: false
+  usages: ["server auth", "client auth", "signing", "key encipherment"]
+  dnsNames:
+    - cozyplane-etcd
+    - cozyplane-etcd.{{ $ns }}.svc
+    {{- range $i := until $replicas }}
+    - cozyplane-etcd-{{ $i }}
+    - cozyplane-etcd-{{ $i }}.cozyplane-etcd-headless
+    - cozyplane-etcd-{{ $i }}.cozyplane-etcd-headless.{{ $ns }}.svc
+    {{- end }}
+    - localhost
+  ipAddresses: ["127.0.0.1"]
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-etcd-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-peer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  commonName: cozyplane-etcd-peer
+  secretName: cozyplane-etcd-peer-tls
+  isCA: false
+  usages: ["server auth", "client auth", "signing", "key encipherment"]
+  dnsNames:
+    - cozyplane-etcd
+    - cozyplane-etcd.{{ $ns }}.svc
+    {{- range $i := until $replicas }}
+    - cozyplane-etcd-{{ $i }}
+    - cozyplane-etcd-{{ $i }}.cozyplane-etcd-headless
+    - cozyplane-etcd-{{ $i }}.cozyplane-etcd-headless.{{ $ns }}.svc
+    {{- end }}
+    - localhost
+  ipAddresses: ["127.0.0.1"]
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-etcd-peer-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+# The apiserver's client identity; its secret also carries ca.crt (the etcd
+# server CA) for --etcd-cafile.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-client
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  commonName: root
+  secretName: cozyplane-etcd-client-tls
+  usages: ["client auth", "signing", "key encipherment"]
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-etcd-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: etcd.aenix.io/v1alpha1
+kind: EtcdCluster
+metadata:
+  name: cozyplane-etcd
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  options:
+    auto-compaction-mode: "periodic"
+    auto-compaction-retention: "5m"
+    snapshot-count: "10000"
+    # Keep apiserver watch streams advancing on idle resources (see
+    # etcd-io/etcd#15402 and the cozyportal notes this shape is borrowed from).
+    experimental-watch-progress-notify-interval: "10s"
+  replicas: {{ $replicas }}
+  storage:
+    volumeClaimTemplate:
+      spec:
+        resources:
+          requests:
+            storage: {{ .Values.apiserver.etcd.operator.size }}
+        {{- with .Values.apiserver.etcd.operator.storageClass }}
+        storageClassName: {{ . }}
+        {{- end }}
+  security:
+    tls:
+      peerTrustedCASecret: cozyplane-etcd-peer-ca-tls
+      peerSecret: cozyplane-etcd-peer-tls
+      serverSecret: cozyplane-etcd-server-tls
+      clientTrustedCASecret: cozyplane-etcd-ca-tls
+      clientSecret: cozyplane-etcd-client-tls
+  podTemplate:
+    spec:
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: "kubernetes.io/hostname"
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/instance: cozyplane-etcd
+{{- end }}

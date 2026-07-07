@@ -1,0 +1,317 @@
+{{- if .Values.apiserver.enabled }}
+{{- $ns := .Release.Namespace -}}
+# The sdn.cozystack.io group served by a real aggregated API server (backed by a
+# dedicated etcd) instead of CRDs — enabling custom validation and subresources
+# beyond CRD ergonomics. Requires cert-manager for the serving certificate.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cozyplane-apiserver
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+---
+# Delegated authn/authz: the aggregated apiserver verifies incoming tokens and
+# permissions via the kube-apiserver (TokenReview / SubjectAccessReview).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozyplane-apiserver:system:auth-delegator
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-apiserver
+    namespace: {{ $ns }}
+---
+# Read the requestheader/front-proxy CA config the aggregation layer uses.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: cozyplane-apiserver-auth-reader
+  namespace: kube-system
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-apiserver
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-apiserver
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+rules:
+  # Namespace-lifecycle admission reads namespaces.
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  # Admission (webhook + policy) informers.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - "validatingwebhookconfigurations"
+      - "mutatingwebhookconfigurations"
+      - "validatingadmissionpolicies"
+      - "validatingadmissionpolicybindings"
+    verbs: ["get", "list", "watch"]
+  # API Priority and Fairness informers.
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources: ["flowschemas", "prioritylevelconfigurations"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cozyplane-apiserver
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cozyplane-apiserver
+subjects:
+  - kind: ServiceAccount
+    name: cozyplane-apiserver
+    namespace: {{ $ns }}
+---
+{{- if not .Values.apiserver.etcd.operator.enabled }}
+# Built-in single-pod etcd (dev/evaluation; ephemeral by default). Production
+# uses the operator-managed EtcdCluster instead — see templates/etcd-cluster.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cozyplane-etcd
+  namespace: {{ $ns }}
+  labels:
+    app: cozyplane-etcd
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: cozyplane-etcd
+  template:
+    metadata:
+      labels:
+        app: cozyplane-etcd
+    spec:
+      {{- include "cozyplane.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: etcd
+          image: {{ .Values.apiserver.etcd.image }}
+          command:
+            - etcd
+            - --data-dir=/var/run/etcd/default.etcd
+            - --listen-client-urls=http://0.0.0.0:2379
+            - --advertise-client-urls=http://cozyplane-etcd.{{ $ns }}.svc:2379
+          ports:
+            - containerPort: 2379
+              name: client
+          resources:
+            {{- toYaml .Values.apiserver.etcd.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/run/etcd
+      volumes:
+        - name: data
+          {{- toYaml .Values.apiserver.etcd.storage | nindent 10 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozyplane-etcd
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: cozyplane-etcd
+  ports:
+    - port: 2379
+      targetPort: 2379
+      name: client
+{{- end }}
+---
+# Self-signed CA + serving certificate (cert-manager).
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozyplane-apiserver-selfsign
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-apiserver-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  commonName: cozyplane-apiserver-ca
+  secretName: cozyplane-apiserver-ca
+  duration: 87600h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-apiserver-selfsign
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozyplane-apiserver-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: cozyplane-apiserver-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-apiserver-serving
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  secretName: cozyplane-apiserver-serving
+  duration: 8760h
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-apiserver-ca
+    kind: Issuer
+    group: cert-manager.io
+  dnsNames:
+    - cozyplane-apiserver
+    - cozyplane-apiserver.{{ $ns }}
+    - cozyplane-apiserver.{{ $ns }}.svc
+    - cozyplane-apiserver.{{ $ns }}.svc.cluster.local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cozyplane-apiserver
+  namespace: {{ $ns }}
+  labels:
+    app: cozyplane-apiserver
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.apiserver.replicas }}
+  selector:
+    matchLabels:
+      app: cozyplane-apiserver
+  template:
+    metadata:
+      labels:
+        app: cozyplane-apiserver
+    spec:
+      serviceAccountName: cozyplane-apiserver
+      {{- include "cozyplane.imagePullSecrets" . | nindent 6 }}
+      containers:
+        - name: apiserver
+          image: {{ .Values.image }}
+          imagePullPolicy: {{ .Values.imagePullPolicy }}
+          command: ["/usr/local/bin/cozyplane-apiserver"]
+          args:
+            - --serve-sdn
+            {{- if .Values.apiserver.etcd.operator.enabled }}
+            {{- $eps := list }}
+            {{- range $i := until (int .Values.apiserver.etcd.operator.replicas) }}
+            {{- $eps = append $eps (printf "https://cozyplane-etcd-%d.cozyplane-etcd-headless.%s.svc:2379" $i $ns) }}
+            {{- end }}
+            - --etcd-servers={{ join "," $eps }}
+            - --etcd-cafile=/etc/etcd-certs/ca.crt
+            - --etcd-certfile=/etc/etcd-certs/tls.crt
+            - --etcd-keyfile=/etc/etcd-certs/tls.key
+            {{- else }}
+            - --etcd-servers=http://cozyplane-etcd.{{ $ns }}.svc:2379
+            {{- end }}
+            - --secure-port=6443
+            - --tls-cert-file=/etc/apiserver-certs/tls.crt
+            - --tls-private-key-file=/etc/apiserver-certs/tls.key
+            - --audit-log-path=-
+          ports:
+            - containerPort: 6443
+              name: https
+          livenessProbe:
+            httpGet: { path: /livez, port: 6443, scheme: HTTPS }
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: 6443, scheme: HTTPS }
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.apiserver.resources | nindent 12 }}
+          volumeMounts:
+            - name: certs
+              mountPath: /etc/apiserver-certs
+              readOnly: true
+            {{- if .Values.apiserver.etcd.operator.enabled }}
+            - name: etcd-client-certs
+              mountPath: /etc/etcd-certs
+              readOnly: true
+            {{- end }}
+      volumes:
+        - name: certs
+          secret:
+            secretName: cozyplane-apiserver-serving
+        {{- if .Values.apiserver.etcd.operator.enabled }}
+        - name: etcd-client-certs
+          secret:
+            secretName: cozyplane-etcd-client-tls
+        {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cozyplane-apiserver
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: cozyplane-apiserver
+  ports:
+    - port: 443
+      targetPort: 6443
+      name: https
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.sdn.cozystack.io
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+  annotations:
+    cert-manager.io/inject-ca-from: {{ $ns }}/cozyplane-apiserver-serving
+spec:
+  group: sdn.cozystack.io
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    name: cozyplane-apiserver
+    namespace: {{ $ns }}
+    port: 443
+{{- end }}
