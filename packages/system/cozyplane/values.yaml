@@ -86,16 +86,23 @@ apiserver:
     limits:
       memory: 256Mi
   etcd:
-    # Operator-managed etcd (aenix etcd-operator; Cozystack ships it):
-    # replicated, PVC-backed, TLS end to end. The production path — without it
-    # the built-in single-pod etcd below is used, and with its default
-    # emptyDir storage a single pod reschedule erases every sdn.cozystack.io
-    # object in the cluster.
+    # Operator-managed etcd (etcd-operator.cozystack.io/v1alpha2; Cozystack
+    # ships it): replicated, TLS end to end via the operator's cert-manager
+    # integration. MEMORY-BACKED by default (no PVC/storageClass) so the API's
+    # etcd needs no storage layer to bootstrap — the CNI installs first, before
+    # storage. Trade-off: not durable across a full-cluster restart; a
+    # persistent (storageClassName) mode is a follow-up once storage is
+    # sequenced after the CNI. Without the operator, the built-in single-pod
+    # etcd below is used (also ephemeral by default).
     operator:
       enabled: false
+      version: "3.6.11"
       replicas: 3
-      size: 4Gi
-      # StorageClass for the members' PVCs ("" = cluster default).
+      # Memory-backed: `size` is the tmpfs cap (not a reservation), so keep it
+      # modest — the sdn.cozystack.io object set is small.
+      size: 1Gi
+      # StorageClass for a future PVC-backed mode ("" = cluster default);
+      # ignored while storage.medium=Memory.
       storageClass: ""
     # Built-in single-pod etcd (dev/evaluation only).
     image: registry.k8s.io/etcd:3.5.16-0
