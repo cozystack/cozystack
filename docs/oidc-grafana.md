@@ -78,11 +78,25 @@ CR:
    fallback, same pattern as `packages/system/dashboard`), preserved
    across upgrades.
 4. The Grafana CR's `spec.config.auth.generic_oauth` section wired to
-   the cozy realm issuer + the per-instance audience scope, with
-   `skip_org_role_sync = true` so a login never overwrites the
-   app-side role assignments made by the users-Job, and
-   `oauth_allow_insecure_email_lookup = true` so the OIDC identity
-   binds to the pre-provisioned local account by email.
+   the cozy realm issuer + the per-instance audience scope. When
+   `spec.oidc.users` is non-empty the chart also merges three
+   isolation keys on top so the users-Job's app-side role
+   assignments survive login:
+   - `skip_org_role_sync = true` — a login never overwrites the Job's
+     assignments;
+   - `oauth_allow_insecure_email_lookup = true` — the OIDC identity
+     binds to the pre-provisioned local account by email;
+   - `allow_sign_up = false` — a cozy-realm identity whose email is
+     NOT in `spec.oidc.users` is rejected at login instead of being
+     admitted as `auto_assign_org_role` (Viewer by default) and
+     waiting for the next helm-upgrade prune pass to clean them up.
+
+   When `spec.oidc.users` is empty (or unset) the three keys are NOT
+   forced — the chart owns nothing app-side, so there is nothing to
+   protect. Everyone in the `cozy` realm can log in and lands at
+   Grafana's `auto_assign_org_role` default (`Viewer`). Operators
+   who want stricter behaviour without using the users-map should
+   set the three keys themselves through `CustomConfig` mode.
 5. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
    Deployment sourced from the Secret in step 3.
 6. A post-install/post-upgrade **users-Job** — see the "Users and
@@ -129,17 +143,32 @@ spec:
         name: acme-byo-grafana-auth
 ```
 
-The chart merges two settings on top of the operator's inline map so
-the users-Job contract holds in `CustomConfig` mode too:
+When `spec.oidc.users` is non-empty the chart merges three settings
+on top of the operator's inline map so the users-Job contract holds
+in `CustomConfig` mode too:
 
 - `skip_org_role_sync = true` — a login never overwrites the Job's
   org-role assignments;
 - `oauth_allow_insecure_email_lookup = true` — the OIDC identity
-  binds to the pre-provisioned local account by email.
+  binds to the pre-provisioned local account by email;
+- `allow_sign_up = false` — an OIDC identity whose email is not in
+  the users-map is rejected at login instead of being admitted with
+  the default `auto_assign_org_role`.
 
-Both keys are chart-forced (`merge` semantics, chart wins) — setting
-them in the operator's map is a no-op, and `role_attribute_path` would
-just be dead config since the Job manages roles.
+All three keys are chart-forced (`merge` semantics, chart wins) —
+setting them in the operator's map is a no-op, and
+`role_attribute_path` would just be dead config since the Job
+manages roles.
+
+When `spec.oidc.users` is empty (or unset) the chart forces none of
+the three keys — a BYO-IdP operator who does not use the users-map
+gets their inline `auth.generic_oauth` applied verbatim. This
+matters because `oauth_allow_insecure_email_lookup` against a BYO
+issuer that does not verify emails is a needless account-linking
+surface, and `allow_sign_up = false` with no pre-provisioned
+accounts would lock everyone out. If you want the isolation
+posture without the users-map, set the keys explicitly in your
+inline map.
 
 **`secretRef.name` mode disables the users-map.** The chart mounts the
 operator's `auth.ini` fragment verbatim via `GF_PATHS_CUSTOM_INI` and
@@ -191,21 +220,41 @@ API:
    break-glass `grafana-admin-password` login is removed. Removing
    an entry from `users:` and re-reconciling revokes access.
 
-The Job is only rendered when `mode: System` or `mode: CustomConfig`
-— **in `mode: None` the chart deliberately owns nothing in Grafana
-orgs**. This matters on upgrade: existing tenants who ran the
-pre-PR Monitoring chart may have added users to Grafana manually
-through the UI; if the Job ran in `mode: None` its prune pass would
-silently delete those accounts on the next Flux reconcile. Operators
-who want to clean up OIDC-provisioned accounts after switching
-`System | CustomConfig → None` do it themselves through the Grafana
-UI or admin API. The `activeDeadlineSeconds` and `ttlSecondsAfterFinished`
-notes below only apply when the Job actually renders.
+The Job renders only when **both** `mode != None` and
+`spec.oidc.users` is non-empty. Three empty-users states all resolve
+to the same hands-off contract — the chart owns nothing in Grafana
+orgs:
 
-Users not listed in `spec.oidc.users` who log in through OIDC get
-nothing — no default `Viewer` role, no cross-tenant read access.
-`skip_org_role_sync = true` in the Grafana config makes sure the
-Job's assignments outlive the next login.
+- `mode: None` — OIDC is off, no chart-managed org membership at
+  all. This matters on upgrade: existing tenants who ran the
+  pre-PR Monitoring chart may have added users to Grafana manually
+  through the UI; if the Job ran in `mode: None` its prune pass
+  would silently delete those accounts on the next Flux reconcile.
+- `customConfig.secretRef` — the users-map is forbidden by the
+  render-time assert; the operator's mounted `auth.ini` fragment is
+  authoritative.
+- `mode: System | CustomConfig-inline` with `users:` unset — the
+  operator opted into OIDC but not into the chart-managed users-map;
+  they manage org membership themselves.
+
+Setting `users: [...]` on the CR means the chart owns Main-Org
+membership — anything added by hand (Grafana UI, admin API, other
+tooling) gets pruned on the next reconcile. The reverse edge is
+worth calling out: taking `users:` back to `[]` (or unsetting it)
+does NOT prune the last entry — the chart stops managing membership
+and any accounts the Job provisioned are left in place. Operators
+who want to clean up OIDC-provisioned accounts after switching
+`System | CustomConfig → None` (or after emptying `users:`) do it
+themselves through the Grafana UI or admin API. The
+`activeDeadlineSeconds` and `ttlSecondsAfterFinished` notes below
+only apply when the Job actually renders.
+
+While the users-map is active, users NOT listed in `spec.oidc.users`
+who try to log in through OIDC are rejected at the door
+(`allow_sign_up = false`) — no account is minted, no default
+`Viewer` role is assigned. `skip_org_role_sync = true` in the
+Grafana config additionally makes sure the Job's assignments
+outlive the next login for users who ARE listed.
 
 For `System` mode, the operator provisions the corresponding
 Keycloak user in `cozy` in whatever way they already do (Keycloak
@@ -224,10 +273,15 @@ and — if the user's email is in `spec.oidc.users` — binds the OIDC
 identity to the pre-provisioned local account with the role the Job
 already set.
 
-If the user's email is not in `spec.oidc.users` the login succeeds
-authentication-wise but they land with no org membership and no role.
-Add them to `spec.oidc.users` and re-apply the CR; the Job will run
-on the next helm-upgrade and pull them in.
+If the user's email is not in `spec.oidc.users` (and the users-map
+is active — `mode != None` and the list is non-empty) the login is
+refused by Grafana at the OAuth callback — `allow_sign_up = false`
+does not mint an account for them. Add them to `spec.oidc.users`
+and re-apply the CR; the Job will run on the next helm-upgrade,
+pre-provision their local account, and the next login attempt will
+succeed. When the users-map is inactive Grafana's default
+`allow_sign_up = true` applies and any authenticated cozy-realm
+identity lands with `auto_assign_org_role` (Viewer).
 
 The break-glass `admin_user` / `admin_password` field on the form
 stays wired to the `grafana-admin-password` Secret and continues to

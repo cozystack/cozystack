@@ -22,13 +22,27 @@
       (see grafana.yaml) makes sure a later login never overwrites the
       role this Job sets.
 
-  NOT rendered when `mode: None`. The chart deliberately treats
-  `mode: None` as "OIDC is off, chart owns nothing in Grafana orgs";
-  a prune pass in `None` would silently delete every non-admin
-  Main-Org member on any monitoring upgrade — clobbering users added
-  manually through the Grafana UI on an installation that predates
-  this PR. Operators who need to clean up OIDC-provisioned accounts
-  after switching System/CustomConfig → None do it themselves.
+  Renders only when `spec.oidc.users` is non-empty. `users: []` (or
+  unset) is the switch that says "the chart owns nothing in Grafana
+  orgs" — a prune pass with an empty desired list would silently
+  delete every non-admin Main-Org member on every helm upgrade. That
+  covers three empty-users states that all resolve to the same
+  hands-off contract:
+    * mode=None                          → OIDC off, no chart-managed
+                                           org membership at all.
+    * customConfig.secretRef mode        → users[] is forbidden by
+                                           the assertion helper; the
+                                           operator's ini fragment is
+                                           authoritative.
+    * System / CustomConfig-inline with
+      users[] unset                      → the operator opted into
+                                           OIDC but not into the
+                                           chart-managed users-map;
+                                           they own org membership
+                                           themselves.
+  Removing the last `users:` entry therefore no longer prunes it —
+  the operator cleans up any leftover OIDC-provisioned accounts by
+  hand, matching the already-documented `System → None` posture.
 
   Lifecycle:
     - The Job itself is a Helm hook (post-install,post-upgrade) with
@@ -51,7 +65,17 @@
   Job itself is not emitted (mode=None).
 */}}
 {{- include "monitoring.oidc.assertUsersPrologue" . }}
-{{- if ne $mode "None" }}
+{{- /*
+  Render gate — two independent guards ANDed together:
+    * mode != None    keeps pre-OIDC installs safe on `monitoring`
+                      HR reconciles (empty users but no OIDC at all).
+    * users non-empty covers `customConfig.secretRef` (users forbidden
+                      by assertion) and System / CustomConfig-inline
+                      with `users:` unset — both cases where the
+                      operator opted into OIDC but not into the
+                      chart-managed users-map.
+*/}}
+{{- if and (ne $mode "None") (gt (len $users) 0) }}
 ---
 apiVersion: batch/v1
 kind: Job
