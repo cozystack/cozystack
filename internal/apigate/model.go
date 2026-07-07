@@ -62,6 +62,12 @@ const (
 	// schema, so they participate only in new-group / new-resource
 	// detection.
 	SourceAPIServer Source = "apiserver"
+	// SourceAPIService is a group/version registered via a kind: APIService
+	// manifest, delegating to an aggregated apiserver that may be built
+	// entirely outside this repository (no vendored Go types, no CRD). Like
+	// SourceAPIServer, these carry no checked-in schema, so they participate
+	// only in new-group / new-resource / removal detection.
+	SourceAPIService Source = "apiservice"
 )
 
 // Resource is the normalized identity + schema of one API resource, keyed

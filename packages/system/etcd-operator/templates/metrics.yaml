@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-operator-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd-operator
+spec:
+  selector:
+    app.kubernetes.io/name: etcd-operator
+    control-plane: controller-manager
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: metrics
+    protocol: TCP
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: etcd-operator
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: etcd-operator
+  endpoints:
+  - port: metrics
+    scheme: http

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package etcdtypes declares the minimum subset of the
-// etcd.aenix.io/v1alpha1 CRD shape that the backupstrategy controller
-// operates on. We avoid pulling the full upstream etcd-operator Go API
-// (which transitively imports a large surface area we do not need) while
-// letting us drop unstructured.Unstructured from the controller and
+// etcd-operator.cozystack.io/v1alpha2 CRD shape that the backupstrategy
+// controller operates on. We avoid pulling the full upstream etcd-operator
+// Go API (which transitively imports a large surface area we do not need)
+// while letting us drop unstructured.Unstructured from the controller and
 // tests.
 //
 // MergeFrom-style patches preserve unknown fields. Get + Patch builds two
@@ -13,8 +13,8 @@
 // server applies that patch to the full stored object on the server side,
 // leaving everything else untouched.
 //
-// +groupName=etcd.aenix.io
-// +versionName=v1alpha1
+// +groupName=etcd-operator.cozystack.io
+// +versionName=v1alpha2
 package etcdtypes
 
 import (
@@ -24,11 +24,11 @@ import (
 )
 
 const (
-	GroupName = "etcd.aenix.io"
-	Version   = "v1alpha1"
+	GroupName = "etcd-operator.cozystack.io"
+	Version   = "v1alpha2"
 
-	// BackupPhase* mirror etcd.aenix.io/v1alpha1
-	// EtcdBackup.status.phase. The upstream controller emits these
+	// BackupPhase* mirror etcd-operator.cozystack.io/v1alpha2
+	// EtcdSnapshot.status.phase. The upstream controller emits these
 	// literal strings; the driver reads them to decide when a
 	// BackupJob is done.
 	//
@@ -43,11 +43,12 @@ const (
 	BackupPhaseComplete = "Complete"
 	BackupPhaseFailed   = "Failed"
 
-	// ClusterConditionReady is the condition type the etcd-operator
-	// raises once an EtcdCluster has finished bootstrapping (every
-	// member elected, peer/client TLS materialised). The driver gates
-	// restore success on it.
-	ClusterConditionReady = "Ready"
+	// ClusterConditionAvailable is the condition type the etcd-operator
+	// raises once an EtcdCluster has a healthy quorum (every member
+	// elected, peer/client TLS materialised). The driver gates backup and
+	// restore readiness on it. The v1alpha2 operator reports
+	// Available/Progressing/Degraded — there is no "Ready" condition.
+	ClusterConditionAvailable = "Available"
 )
 
 var (
@@ -59,7 +60,7 @@ var (
 func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(GroupVersion,
 		&EtcdCluster{}, &EtcdClusterList{},
-		&EtcdBackup{}, &EtcdBackupList{},
+		&EtcdSnapshot{}, &EtcdSnapshotList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil
@@ -84,14 +85,14 @@ type EtcdClusterList struct {
 	Items           []EtcdCluster `json:"items"`
 }
 
-// EtcdClusterSpec mirrors the subset of etcd.aenix.io/v1alpha1
+// EtcdClusterSpec mirrors the subset of etcd-operator.cozystack.io/v1alpha2
 // EtcdCluster.spec the driver writes during restore. Unknown fields are
 // preserved on the server side; everything we don't set falls back to
 // chart/operator defaults.
 type EtcdClusterSpec struct {
 	// Bootstrap configures initial-cluster initialization from an existing
 	// data source. The operator only consults this on first reconcile of
-	// the EtcdCluster - mutating it after the cluster is Ready has no
+	// the EtcdCluster - mutating it after the cluster is Available has no
 	// effect. The driver therefore stamps it onto the freshly-created
 	// EtcdCluster during the in-place restore flow (suspend HR, snapshot
 	// live spec, delete + recreate with bootstrap.restore.source set).
@@ -118,106 +119,100 @@ type EtcdClusterRestore struct {
 // reads as a readiness gate.
 type EtcdClusterStatus struct {
 	// Conditions reflects the latest observations. The driver checks the
-	// "Ready" entry.
+	// "Available" entry.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
-// EtcdBackup (one-shot snapshot Job)
+// EtcdSnapshot (one-shot snapshot Job)
 // ---------------------------------------------------------------------------
 
 // +kubebuilder:object:root=true
-type EtcdBackup struct {
+type EtcdSnapshot struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
-	Spec              EtcdBackupSpec   `json:"spec,omitempty"`
-	Status            EtcdBackupStatus `json:"status,omitempty"`
+	Spec              EtcdSnapshotSpec   `json:"spec,omitempty"`
+	Status            EtcdSnapshotStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
-type EtcdBackupList struct {
+type EtcdSnapshotList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []EtcdBackup `json:"items"`
+	Items           []EtcdSnapshot `json:"items"`
 }
 
-// EtcdBackupSpec mirrors etcd.aenix.io/v1alpha1 EtcdBackup.spec. The
-// driver materialises one of these per Cozystack BackupJob so each
-// snapshot lives in a deterministic location keyed off the BackupJob
-// name; the operator handles the Job and writes back status.phase.
-type EtcdBackupSpec struct {
-	// ClusterRef references the EtcdCluster to snapshot.
+// EtcdSnapshotSpec mirrors etcd-operator.cozystack.io/v1alpha2
+// EtcdSnapshot.spec. The driver materialises one of these per Cozystack
+// BackupJob so each snapshot lives in a deterministic location keyed off
+// the BackupJob name; the operator handles the Job and writes back
+// status.phase.
+type EtcdSnapshotSpec struct {
+	// ClusterRef references the EtcdCluster to snapshot. Upstream types it
+	// as corev1.LocalObjectReference; the bare {name: ""} shape our mirror
+	// emits is JSON-identical.
 	ClusterRef EtcdLocalObjectReference `json:"clusterRef"`
 
 	// Destination is where the snapshot will be uploaded.
 	Destination EtcdBackupDestination `json:"destination"`
 }
 
-// EtcdBackupStatus mirrors etcd.aenix.io/v1alpha1 EtcdBackup.status. The
-// driver reads Phase to decide when the snapshot is done, and Snapshot
-// to populate the cozystack Backup artefact pass-through.
-type EtcdBackupStatus struct {
+// EtcdSnapshotStatus mirrors etcd-operator.cozystack.io/v1alpha2
+// EtcdSnapshot.status. The driver reads Phase to decide when the snapshot
+// is done, and Artifact to populate the cozystack Backup artefact
+// pass-through.
+type EtcdSnapshotStatus struct {
 	// Phase is one of Pending / Started / Complete / Failed.
 	Phase string `json:"phase,omitempty"`
 
-	// Conditions reflects per-aspect state (e.g. the upload condition).
-	// The driver surfaces the latest message back onto the Cozystack
-	// BackupJob on failure.
+	// Conditions reflects per-aspect state (the "Ready" condition is True
+	// only in the terminal Complete phase). The driver surfaces the latest
+	// message back onto the Cozystack BackupJob on failure.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
-	// Snapshot is the URI/size/checksum trio populated by the
-	// etcd-operator's EtcdBackup controller after the backup Job
-	// reaches phase=Complete. Restore-friendly contract: the URI is
-	// the FULL S3 key (or file path) including rev/timestamp suffix
-	// the backup-agent injects at write time, which the spec
-	// destination alone doesn't carry.
+	// Artifact is the URI/size/checksum trio populated by the
+	// etcd-operator's EtcdSnapshot controller after the snapshot Job
+	// reaches phase=Complete. Restore-friendly contract: the URI is the
+	// FULL S3 key (or file path) including the "<snapshot-name>.db" suffix
+	// the operator appends at write time, which the spec destination alone
+	// doesn't carry.
 	//
-	// Available from etcd-operator v0.4.4 onward (upstream PR
-	// aenix-io/etcd-operator#316). The bundled chart at
-	// packages/system/etcd-operator pins v0.4.4+, so the driver can
-	// rely on this field being populated on every Complete EtcdBackup.
-	// The defensive nil-check in the pass-through path stays to
-	// handle pre-Complete reconciles and a forensic downgrade.
+	// The defensive nil-check in the pass-through path stays to handle
+	// pre-Complete reconciles.
 	// +optional
-	Snapshot *EtcdBackupSnapshot `json:"snapshot,omitempty"`
+	Artifact *EtcdSnapshotArtifact `json:"artifact,omitempty"`
 }
 
-// EtcdBackupSnapshot mirrors etcd.aenix.io/v1alpha1
-// BackupSnapshot. Field tags match upstream
-// (api/v1alpha1/etcdbackup_types.go) including the required URI; see
-// internal/controller/etcdbackup_controller.go in aenix-io/etcd-operator
-// for the marker-scan parser that populates this struct.
-type EtcdBackupSnapshot struct {
+// EtcdSnapshotArtifact mirrors etcd-operator.cozystack.io/v1alpha2
+// SnapshotArtifact (api/v1alpha2/etcdsnapshot_types.go).
+type EtcdSnapshotArtifact struct {
 	// URI is the canonical location of the snapshot, e.g.
-	// "s3://<bucket>/<key>" or "file://<abs-path>". Required upstream
-	// (no omitempty) so the schema rejects empty values; we mirror
-	// the omission for consistency with the source-of-truth shape.
+	// "s3://<bucket>/<key>" or "file:///<abs-path>". Required upstream
+	// (no omitempty) so the schema rejects empty values; we mirror the
+	// omission for consistency with the source-of-truth shape.
 	URI string `json:"uri"`
 
-	// SizeBytes is the snapshot size as observed by the agent at
-	// write time. Zero only when the upstream agent's emit overflows
-	// int64 — that branch deliberately keeps the URI/Checksum landed
-	// so a reviewer sees the snapshot exists.
+	// SizeBytes is the snapshot size as observed by the agent at write
+	// time.
 	// +optional
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 
-	// Checksum is "<algo>:<hex>" of the snapshot bytes. Currently
-	// always "sha256:<hex>" when set; consumers MUST tolerate other
-	// algorithms via the prefix (upstream admits sha3-256, blake2b-256,
-	// blake3-256 by pattern).
+	// Checksum is "<algo>:<hex>" of the snapshot bytes. Currently always
+	// "sha256:<hex>" when set; consumers MUST tolerate other algorithms
+	// via the prefix.
 	// +optional
 	Checksum string `json:"checksum,omitempty"`
 }
 
 // ---------------------------------------------------------------------------
-// Shared types (destination shape is identical for EtcdBackup.spec and
+// Shared types (destination shape is identical for EtcdSnapshot.spec and
 // EtcdCluster.spec.bootstrap.restore.source)
 // ---------------------------------------------------------------------------
 
-// EtcdBackupDestination mirrors etcd.aenix.io/v1alpha1
-// EtcdBackup.spec.destination AND
+// EtcdBackupDestination mirrors etcd-operator.cozystack.io/v1alpha2
+// SnapshotLocation (EtcdSnapshot.spec.destination) AND
 // EtcdCluster.spec.bootstrap.restore.source. The upstream CRDs share the
 // same shape; one Go type lets the driver render the same destination
 // onto both code paths.
@@ -231,7 +226,10 @@ type EtcdBackupDestination struct {
 	PVC *EtcdBackupPVC `json:"pvc,omitempty"`
 }
 
-// EtcdBackupS3 mirrors etcd.aenix.io/v1alpha1 EtcdBackup.spec.destination.s3.
+// EtcdBackupS3 mirrors etcd-operator.cozystack.io/v1alpha2
+// S3SnapshotLocation. ForcePathStyle is kept as *bool (rather than the
+// upstream bool) so an unset value is omitted from the rendered JSON and
+// the operator applies its own default.
 type EtcdBackupS3 struct {
 	Bucket               string                   `json:"bucket"`
 	Endpoint             string                   `json:"endpoint"`
@@ -241,15 +239,16 @@ type EtcdBackupS3 struct {
 	CredentialsSecretRef EtcdLocalObjectReference `json:"credentialsSecretRef"`
 }
 
-// EtcdBackupPVC mirrors etcd.aenix.io/v1alpha1
-// EtcdBackup.spec.destination.pvc.
+// EtcdBackupPVC mirrors etcd-operator.cozystack.io/v1alpha2
+// PVCSnapshotLocation.
 type EtcdBackupPVC struct {
 	ClaimName string `json:"claimName"`
 	SubPath   string `json:"subPath,omitempty"`
 }
 
 // EtcdLocalObjectReference is a minimal local Secret/EtcdCluster
-// reference. Mirrors the upstream operator's bare {name: ""} shape.
+// reference. JSON-identical to corev1.LocalObjectReference's {name: ""}
+// shape.
 type EtcdLocalObjectReference struct {
 	Name string `json:"name"`
 }

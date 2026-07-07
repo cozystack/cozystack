@@ -4,9 +4,11 @@ kind: VerticalPodAutoscaler
 metadata:
   name: etcd
 spec:
+  # The v1alpha2 operator manages member Pods directly (no StatefulSet); the
+  # EtcdCluster exposes a /scale subresource with status.selector for HPA/VPA.
   targetRef:
-    apiVersion: apps/v1
-    kind: StatefulSet
+    apiVersion: etcd-operator.cozystack.io/v1alpha2
+    kind: EtcdCluster
     name: etcd
   updatePolicy:
     # Initial, not Auto: Auto evicts running etcd members to apply new

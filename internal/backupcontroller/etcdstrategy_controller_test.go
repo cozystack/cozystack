@@ -54,7 +54,7 @@ func newEtcdTestClient(t *testing.T, objs ...client.Object) client.Client {
 			&backupsv1alpha1.RestoreJob{},
 			&backupsv1alpha1.Backup{},
 			&etcdtypes.EtcdCluster{},
-			&etcdtypes.EtcdBackup{},
+			&etcdtypes.EtcdSnapshot{},
 		).
 		Build()
 }
@@ -660,11 +660,11 @@ func TestEnsureEtcdBackup_LabelIdempotency(t *testing.T) {
 		},
 	}
 
-	first, err := r.ensureEtcdBackup(context.Background(), bj, rendered)
+	first, err := r.ensureEtcdSnapshot(context.Background(), bj, rendered)
 	if err != nil {
 		t.Fatalf("first ensure: %v", err)
 	}
-	second, err := r.ensureEtcdBackup(context.Background(), bj, rendered)
+	second, err := r.ensureEtcdSnapshot(context.Background(), bj, rendered)
 	if err != nil {
 		t.Fatalf("second ensure: %v", err)
 	}
@@ -673,7 +673,7 @@ func TestEnsureEtcdBackup_LabelIdempotency(t *testing.T) {
 	}
 
 	// And there's exactly one EtcdBackup in the namespace.
-	list := &etcdtypes.EtcdBackupList{}
+	list := &etcdtypes.EtcdSnapshotList{}
 	if err := c.List(context.Background(), list, client.InNamespace(bj.Namespace)); err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -704,7 +704,7 @@ func TestEnsureEtcdBackup_NoOwnerReference(t *testing.T) {
 			},
 		},
 	}
-	eb, err := r.ensureEtcdBackup(context.Background(), bj, rendered)
+	eb, err := r.ensureEtcdSnapshot(context.Background(), bj, rendered)
 	if err != nil {
 		t.Fatalf("ensure: %v", err)
 	}
@@ -735,11 +735,11 @@ func TestCreateEtcdBackupArtifact_PassesSnapshotThrough(t *testing.T) {
 	c := newEtcdTestClient(t, bj)
 	r := &BackupJobReconciler{Client: c, Scheme: newEtcdTestScheme(t)}
 
-	eb := &etcdtypes.EtcdBackup{
+	eb := &etcdtypes.EtcdSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-root", Name: "bj-1-abcde"},
-		Status: etcdtypes.EtcdBackupStatus{
+		Status: etcdtypes.EtcdSnapshotStatus{
 			Phase: etcdtypes.BackupPhaseComplete,
-			Snapshot: &etcdtypes.EtcdBackupSnapshot{
+			Artifact: &etcdtypes.EtcdSnapshotArtifact{
 				URI:       "s3://my-bucket/etcd/bj-1-abcde-rev42.db",
 				SizeBytes: 20512,
 				Checksum:  "sha256:abcd1234",
@@ -767,14 +767,14 @@ func TestCreateEtcdBackupArtifact_PassesSnapshotThrough(t *testing.T) {
 	if backup.Status.Artifact == nil {
 		t.Fatal("status.artifact: got nil, want pass-through")
 	}
-	if backup.Status.Artifact.URI != eb.Status.Snapshot.URI {
-		t.Errorf("artifact.URI: got %q want %q", backup.Status.Artifact.URI, eb.Status.Snapshot.URI)
+	if backup.Status.Artifact.URI != eb.Status.Artifact.URI {
+		t.Errorf("artifact.URI: got %q want %q", backup.Status.Artifact.URI, eb.Status.Artifact.URI)
 	}
-	if backup.Status.Artifact.SizeBytes != eb.Status.Snapshot.SizeBytes {
-		t.Errorf("artifact.SizeBytes: got %d want %d", backup.Status.Artifact.SizeBytes, eb.Status.Snapshot.SizeBytes)
+	if backup.Status.Artifact.SizeBytes != eb.Status.Artifact.SizeBytes {
+		t.Errorf("artifact.SizeBytes: got %d want %d", backup.Status.Artifact.SizeBytes, eb.Status.Artifact.SizeBytes)
 	}
-	if backup.Status.Artifact.Checksum != eb.Status.Snapshot.Checksum {
-		t.Errorf("artifact.Checksum: got %q want %q", backup.Status.Artifact.Checksum, eb.Status.Snapshot.Checksum)
+	if backup.Status.Artifact.Checksum != eb.Status.Artifact.Checksum {
+		t.Errorf("artifact.Checksum: got %q want %q", backup.Status.Artifact.Checksum, eb.Status.Artifact.Checksum)
 	}
 }
 
@@ -795,9 +795,9 @@ func TestCreateEtcdBackupArtifact_NoSnapshotLeavesArtifactNil(t *testing.T) {
 	c := newEtcdTestClient(t, bj)
 	r := &BackupJobReconciler{Client: c, Scheme: newEtcdTestScheme(t)}
 
-	eb := &etcdtypes.EtcdBackup{
+	eb := &etcdtypes.EtcdSnapshot{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant-root", Name: "bj-2-xyz"},
-		Status: etcdtypes.EtcdBackupStatus{
+		Status: etcdtypes.EtcdSnapshotStatus{
 			Phase: etcdtypes.BackupPhaseComplete,
 			// Snapshot is nil — older operator version.
 		},
@@ -956,7 +956,7 @@ func TestEtcdClusterReady(t *testing.T) {
 	t.Run("Ready=False is not ready", func(t *testing.T) {
 		c := &etcdtypes.EtcdCluster{}
 		apimeta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
-			Type: etcdtypes.ClusterConditionReady, Status: metav1.ConditionFalse, Reason: "Bootstrapping",
+			Type: etcdtypes.ClusterConditionAvailable, Status: metav1.ConditionFalse, Reason: "Bootstrapping",
 		})
 		if etcdClusterReady(c) {
 			t.Error("Ready=False reported ready")
@@ -965,7 +965,7 @@ func TestEtcdClusterReady(t *testing.T) {
 	t.Run("Ready=True is ready", func(t *testing.T) {
 		c := &etcdtypes.EtcdCluster{}
 		apimeta.SetStatusCondition(&c.Status.Conditions, metav1.Condition{
-			Type: etcdtypes.ClusterConditionReady, Status: metav1.ConditionTrue, Reason: "Ok",
+			Type: etcdtypes.ClusterConditionAvailable, Status: metav1.ConditionTrue, Reason: "Ok",
 		})
 		if !etcdClusterReady(c) {
 			t.Error("Ready=True not reported ready")
@@ -1117,13 +1117,13 @@ func TestReconcileEtcd_BackupJobDeadlineWhileWaitingForCluster(t *testing.T) {
 		}
 	})
 
-	t.Run("EtcdCluster present but Ready=False -> Failed past deadline", func(t *testing.T) {
+	t.Run("EtcdCluster present but Available=False -> Failed past deadline", func(t *testing.T) {
 		bj := mkBJ(time.Now().Add(-2 * etcdDefaultBackupDeadline))
 		notReady := &etcdtypes.EtcdCluster{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: etcdClusterName},
 		}
 		apimeta.SetStatusCondition(&notReady.Status.Conditions, metav1.Condition{
-			Type:    etcdtypes.ClusterConditionReady,
+			Type:    etcdtypes.ClusterConditionAvailable,
 			Status:  metav1.ConditionFalse,
 			Reason:  "Bootstrapping",
 			Message: "waiting for first quorum",
@@ -1140,12 +1140,12 @@ func TestReconcileEtcd_BackupJobDeadlineWhileWaitingForCluster(t *testing.T) {
 		if got.Status.Phase != backupsv1alpha1.BackupJobPhaseFailed {
 			t.Fatalf("expected Failed phase, got %q (msg=%q)", got.Status.Phase, got.Status.Message)
 		}
-		if !strings.Contains(got.Status.Message, "did not reach Ready within") {
-			t.Errorf("failure message should mention Ready-deadline; got %q", got.Status.Message)
+		if !strings.Contains(got.Status.Message, "did not become Available within") {
+			t.Errorf("failure message should mention Available-deadline; got %q", got.Status.Message)
 		}
 		// And the operator-side condition reason/message must be surfaced
 		// so an operator inspecting the failed BackupJob can see WHY the
-		// cluster never became Ready.
+		// cluster never became Available.
 		if !strings.Contains(got.Status.Message, "waiting for first quorum") {
 			t.Errorf("failure message should surface operator Ready condition; got %q", got.Status.Message)
 		}
@@ -1173,7 +1173,7 @@ func TestReconcileEtcd_BackupJobDeadlineWhileWaitingForCluster(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// latestEtcdBackupConditionMessage prefers failure-shaped conditions
+// latestEtcdSnapshotConditionMessage prefers failure-shaped conditions
 // ---------------------------------------------------------------------------
 
 // TestLatestEtcdBackupConditionMessage_PrefersFailedCondition pins the
@@ -1187,8 +1187,8 @@ func TestLatestEtcdBackupConditionMessage_PrefersFailedCondition(t *testing.T) {
 	laterAt := metav1.NewTime(failedAt.Add(5 * time.Minute))
 
 	t.Run("Failed condition wins over later housekeeping", func(t *testing.T) {
-		eb := &etcdtypes.EtcdBackup{
-			Status: etcdtypes.EtcdBackupStatus{
+		eb := &etcdtypes.EtcdSnapshot{
+			Status: etcdtypes.EtcdSnapshotStatus{
 				Conditions: []metav1.Condition{
 					{Type: "Failed", Status: metav1.ConditionTrue, Reason: "UploadFailed",
 						Message: "upload to s3://x failed: AccessDenied", LastTransitionTime: failedAt},
@@ -1197,32 +1197,32 @@ func TestLatestEtcdBackupConditionMessage_PrefersFailedCondition(t *testing.T) {
 				},
 			},
 		}
-		got := latestEtcdBackupConditionMessage(eb)
+		got := latestEtcdSnapshotConditionMessage(eb)
 		if !strings.Contains(got, "AccessDenied") {
 			t.Errorf("expected failure message, got %q", got)
 		}
 	})
 
 	t.Run("Ready=False also counts as failure-shaped", func(t *testing.T) {
-		eb := &etcdtypes.EtcdBackup{
-			Status: etcdtypes.EtcdBackupStatus{
+		eb := &etcdtypes.EtcdSnapshot{
+			Status: etcdtypes.EtcdSnapshotStatus{
 				Conditions: []metav1.Condition{
-					{Type: etcdtypes.ClusterConditionReady, Status: metav1.ConditionFalse, Reason: "Backoff",
+					{Type: etcdtypes.ClusterConditionAvailable, Status: metav1.ConditionFalse, Reason: "Backoff",
 						Message: "etcdctl exited 1: tls handshake timeout", LastTransitionTime: failedAt},
 					{Type: "Started", Status: metav1.ConditionFalse, Reason: "Idle",
 						Message: "idle", LastTransitionTime: laterAt},
 				},
 			},
 		}
-		got := latestEtcdBackupConditionMessage(eb)
+		got := latestEtcdSnapshotConditionMessage(eb)
 		if !strings.Contains(got, "tls handshake") {
 			t.Errorf("expected Ready=False message to be preferred, got %q", got)
 		}
 	})
 
 	t.Run("falls back to latest when no failure-shaped condition exists", func(t *testing.T) {
-		eb := &etcdtypes.EtcdBackup{
-			Status: etcdtypes.EtcdBackupStatus{
+		eb := &etcdtypes.EtcdSnapshot{
+			Status: etcdtypes.EtcdSnapshotStatus{
 				Conditions: []metav1.Condition{
 					{Type: "Started", Status: metav1.ConditionTrue, Reason: "Started",
 						Message: "snapshot in progress", LastTransitionTime: failedAt},
@@ -1231,17 +1231,17 @@ func TestLatestEtcdBackupConditionMessage_PrefersFailedCondition(t *testing.T) {
 				},
 			},
 		}
-		got := latestEtcdBackupConditionMessage(eb)
+		got := latestEtcdSnapshotConditionMessage(eb)
 		if !strings.Contains(got, "uploaded") {
 			t.Errorf("expected latest-by-time fallback, got %q", got)
 		}
 	})
 
 	t.Run("nil and empty are empty string", func(t *testing.T) {
-		if latestEtcdBackupConditionMessage(nil) != "" {
+		if latestEtcdSnapshotConditionMessage(nil) != "" {
 			t.Error("nil should produce empty string")
 		}
-		if latestEtcdBackupConditionMessage(&etcdtypes.EtcdBackup{}) != "" {
+		if latestEtcdSnapshotConditionMessage(&etcdtypes.EtcdSnapshot{}) != "" {
 			t.Error("empty conditions should produce empty string")
 		}
 	})
@@ -1262,7 +1262,7 @@ func TestRequeueBackupJobWithReason_SetsRunningPhase(t *testing.T) {
 	}
 	c := newEtcdTestClient(t, bj)
 	r := &BackupJobReconciler{Client: c, Scheme: newEtcdTestScheme(t)}
-	if _, err := r.requeueBackupJobWithReason(context.Background(), bj, "EtcdClusterNotReady", "waiting"); err != nil {
+	if _, err := r.requeueBackupJobWithReason(context.Background(), bj, "EtcdClusterNotAvailable", "waiting"); err != nil {
 		t.Fatalf("requeue: %v", err)
 	}
 	got := &backupsv1alpha1.BackupJob{}
@@ -1273,8 +1273,8 @@ func TestRequeueBackupJobWithReason_SetsRunningPhase(t *testing.T) {
 		t.Errorf("expected phase=Running on first observable iteration, got %q", got.Status.Phase)
 	}
 	cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
-	if cond == nil || cond.Reason != "EtcdClusterNotReady" {
-		t.Errorf("expected Ready=False/EtcdClusterNotReady condition, got %+v", cond)
+	if cond == nil || cond.Reason != "EtcdClusterNotAvailable" {
+		t.Errorf("expected Ready=False/EtcdClusterNotAvailable condition, got %+v", cond)
 	}
 }
 
@@ -1550,23 +1550,25 @@ func hrSuspended(t *testing.T, dyn dynamic.Interface, namespace, name string) bo
 	return got
 }
 
-// TestReconcileEtcdRestore_ReadyDeadlineResumesHR pins the most likely
-// production failure path: the recreated EtcdCluster does NOT reach
-// Ready within restoreTimeoutSeconds (e.g. snapshot download stuck, S3
+// TestReconcileEtcdRestore_AvailableDeadlineResumesHR pins the most likely
+// production failure path: the recreated EtcdCluster does NOT become
+// Available within restoreTimeoutSeconds (e.g. snapshot download stuck, S3
 // creds wrong, PVC provisioner slow). Without this gate, the driver
 // flips the RestoreJob Failed and leaves spec.suspend=true on the
 // HelmRelease, freezing helm-controller on the Etcd app indefinitely —
 // the only manual recovery is `kubectl patch hr/etcd -p
-// '{"spec":{"suspend":false}}'`.
+// '{"spec":{"suspend":false}}'`. It also pins the failure wording to the
+// operator's actual condition (Available); the v1alpha2 operator emits no
+// "Ready" condition.
 //
-// Setup walks the state machine to the Ready-poll branch:
-//   - EtcdCluster exists (bootstrap.restore stamped, not Ready),
+// Setup walks the state machine to the Available-poll branch:
+//   - EtcdCluster exists (bootstrap.restore stamped, not Available),
 //   - pre-seeded TargetPurged AND EtcdClusterSpecCaptured so the
 //     destructive path is skipped on this reconcile,
 //   - HR is already suspended (simulating that a prior reconcile ran
 //     the destructive window),
 //   - StartedAt is far enough in the past that the deadline trips.
-func TestReconcileEtcdRestore_ReadyDeadlineResumesHR(t *testing.T) {
+func TestReconcileEtcdRestore_AvailableDeadlineResumesHR(t *testing.T) {
 	const ns = "tenant"
 	apps := etcdapp.GroupName
 	backup := &backupsv1alpha1.Backup{
@@ -1604,7 +1606,7 @@ func TestReconcileEtcdRestore_ReadyDeadlineResumesHR(t *testing.T) {
 	hr := suspendedHelmRelease(ns, etcdClusterName, true)
 	dyn := dynamicfake.NewSimpleDynamicClient(testEtcdDynamicScheme(t), cluster, hr)
 
-	// typed-client EtcdCluster (no Ready=True condition) so the Ready-poll branch trips the deadline.
+	// typed-client EtcdCluster (no Available=True condition) so the Available-poll branch trips the deadline.
 	typedCluster := &etcdtypes.EtcdCluster{ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: etcdClusterName}}
 	c := newEtcdTestClient(t, backup, rj, typedCluster)
 	r := &RestoreJobReconciler{Client: c, Interface: dyn, Scheme: newEtcdTestScheme(t), Recorder: record.NewFakeRecorder(10)}
@@ -1617,13 +1619,19 @@ func TestReconcileEtcdRestore_ReadyDeadlineResumesHR(t *testing.T) {
 		t.Fatalf("refetch: %v", err)
 	}
 	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
-		t.Fatalf("expected Failed phase on Ready deadline; got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+		t.Fatalf("expected Failed phase on Available deadline; got %q (msg=%q)", got.Status.Phase, got.Status.Message)
 	}
-	if !strings.Contains(got.Status.Message, "did not reach Ready") {
-		t.Errorf("failure message should name the Ready deadline; got %q", got.Status.Message)
+	// The v1alpha2 operator emits no "Ready" condition; the restore-deadline
+	// message must report the actual gate (Available), not a condition that
+	// does not exist, or it misleads an operator debugging a stuck restore.
+	if !strings.Contains(got.Status.Message, "did not become Available within") {
+		t.Errorf("failure message should name the Available deadline; got %q", got.Status.Message)
+	}
+	if strings.Contains(got.Status.Message, "Ready") {
+		t.Errorf("failure message must not mention the nonexistent Ready condition; got %q", got.Status.Message)
 	}
 	if hrSuspended(t, dyn, ns, etcdClusterName) {
-		t.Fatalf("HelmRelease must NOT remain suspended after terminal Ready-deadline failure - helm-controller would be frozen on the Etcd app")
+		t.Fatalf("HelmRelease must NOT remain suspended after terminal Available-deadline failure - helm-controller would be frozen on the Etcd app")
 	}
 }
 

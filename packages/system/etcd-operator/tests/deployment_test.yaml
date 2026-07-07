@@ -1,0 +1,91 @@
+suite: controller-manager Deployment — image, args, and security context
+
+# The etcd-operator chart is cozystack-authored (only the manager ClusterRole is
+# vendored), so these pin the contracts that are easy to break on an operator
+# bump or a values rename: the image ref the agent Job also runs, the manager
+# CLI args (leader-election, probe/metrics binds, cluster domain), and the
+# locked-down pod/container security context.
+
+templates:
+  - templates/deployment.yaml
+
+release:
+  name: etcd-operator
+  namespace: cozy-etcd-operator
+
+tests:
+  - it: "image defaults to repository:appVersion and the agent OPERATOR_IMAGE env matches it"
+    # OPERATOR_IMAGE MUST equal the manager image: the snapshot Job and restore
+    # init container run this same image as the agent.
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cozystack/etcd-operator:v0.5.2
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_IMAGE
+            value: ghcr.io/cozystack/etcd-operator:v0.5.2
+          any: true
+
+  - it: "image.tag overrides the appVersion default for both the container and the agent env"
+    set:
+      image.tag: v9.9.9
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cozystack/etcd-operator:v9.9.9
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: OPERATOR_IMAGE
+            value: ghcr.io/cozystack/etcd-operator:v9.9.9
+          any: true
+
+  - it: "manager args carry leader-election, the probe/metrics binds, and the default cluster domain"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --health-probe-bind-address=:8081
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --metrics-bind-address=:8080
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-domain=cozy.local
+
+  - it: "clusterDomain value threads into --cluster-domain"
+    set:
+      clusterDomain: example.internal
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --cluster-domain=example.internal
+
+  - it: "pod and container security contexts are locked down (runAsNonRoot, RuntimeDefault seccomp, no privilege escalation, drop ALL)"
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: "the named metrics port is exposed for the VMServiceScrape to target"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            name: metrics
+            containerPort: 8080
+            protocol: TCP
+          any: true

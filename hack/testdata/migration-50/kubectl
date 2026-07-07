@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Fake kubectl for hack/migration-50-etcd-adopt.bats. It serves only the calls
+# migration 50 makes; behaviour is driven by FAKE_* env and every invocation is
+# appended to $FAKE_CMDLOG so the test can assert on order and content.
+#
+#   FAKE_CMDLOG       file to append a one-line record of each call to
+#   FAKE_STAGE_DIR    if set, staged Secret YAML is written to <dir>/<ns>.json
+#   FAKE_LEGACY_CRD   "1" => the etcd.aenix.io CRD exists (default 1)
+#   FAKE_CLUSTERS     newline list of "<ns> <name>" legacy clusters
+#   FAKE_STRATEGY     "1" => the cozy-default-etcd Strategy CR resolves (default 1)
+#   FAKE_CREDS        "1" => cozy-backups-creds (with AWS_* keys) exists (default 1)
+#   FAKE_CERTS        "1" => server/peer cert-manager Certificates exist and
+#                            initially LACK the native wildcard SAN (default 0,
+#                            i.e. no Certificate -> ensure_wildcard_sans skips)
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+state_dir="${FAKE_CMDLOG%/*}"
+# arg_after KEY -- echoes the token following KEY in the argument vector.
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+# Strategy CR JSON (rendered with real S3 coordinates by the backupstrategy-
+# controller; forcePathStyle true => the script must add --backup-s3-force-path-style).
+strategy_json='{"spec":{"template":{"destination":{"s3":{"endpoint":"http://seaweedfs-s3.tenant-root.svc.cozy.local:8333","bucket":"cozy-backups-7f3a","region":"us-east-1","forcePathStyle":true}}}}}'
+# cozy-backups-creds as eagerly projected into cozy-velero (carries owner/anno
+# metadata the stage copy must strip, plus the AWS_* keys). It also carries a
+# tenantresource label here so the test can prove the stage copy strips it.
+creds_json='{"apiVersion":"v1","kind":"Secret","metadata":{"name":"cozy-backups-creds","namespace":"cozy-velero","resourceVersion":"123","uid":"abc","ownerReferences":[{"name":"projector"}],"labels":{"internal.cozystack.io/tenantresource":"true"},"annotations":{"reconcile.io/x":"y"}},"data":{"AWS_ACCESS_KEY_ID":"QUtJQUVYQU1QTEU=","AWS_SECRET_ACCESS_KEY":"c2VjcmV0a2V5"}}'
+
+emit_clusters_name() { printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns name; do [ -n "$ns" ] && printf 'etcdcluster.etcd.aenix.io/%s\n' "$name"; done; }
+emit_clusters_jsonpath() { printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns name; do [ -n "$ns" ] && printf '%s %s\n' "$ns" "$name"; done; }
+
+case "$args" in
+  # version stamp (kubectl apply --filename -) and creds copy
+  # (kubectl -n ns apply --server-side --force-conflicts -f -)
+  *"apply --filename -"*) cat >/dev/null 2>&1 || true; log "STAMP"; exit 0 ;;
+  *"apply"*" -f -"*)
+    ns=""; prev=""; for a in "$@"; do [ "$prev" = "-n" ] && ns="$a"; prev="$a"; done
+    if [ -n "${FAKE_STAGE_DIR:-}" ]; then cat > "$FAKE_STAGE_DIR/$ns.json" 2>/dev/null || true; else cat >/dev/null 2>&1 || true; fi
+    log "STAGE $ns"; exit 0 ;;
+
+  *"get crd etcdclusters.etcd.aenix.io"*)
+    [ "${FAKE_LEGACY_CRD:-1}" = "1" ] && exit 0 || exit 1 ;;
+  *"get crd etcdclusters.etcd-operator.cozystack.io"*)
+    [ "${FAKE_V2_CRD:-0}" = "1" ] && exit 0 || exit 1 ;;
+  *"get crd etcdbackup"*) exit 1 ;;  # no orphaned schedule/backup CRDs
+  *"apply"*"etcd-operator-crds"*) log "APPLY-CRDS"; exit 0 ;;  # baked v1alpha2 CRDs
+  *" wait "*"established"*) exit 0 ;;  # crd established wait
+
+  *"etcds.strategy.backups.cozystack.io"*)
+    [ "${FAKE_STRATEGY:-1}" = "1" ] || exit 1
+    printf '%s\n' "$strategy_json"; exit 0 ;;
+
+  *"get secret cozy-backups-creds"*)   # both-keys validation probe AND stage source
+    [ "${FAKE_CREDS:-1}" = "1" ] || exit 1
+    printf '%s\n' "$creds_json"; exit 0 ;;
+
+  *"etcdclusters.etcd.aenix.io"*"-o name"*)  emit_clusters_name; exit 0 ;;
+  *"etcdclusters.etcd.aenix.io"*"jsonpath"*) emit_clusters_jsonpath; exit 0 ;;
+
+  # --- ensure_wildcard_sans path (only when FAKE_CERTS=1) -------------------
+  # cert-manager re-issue is modelled statefully: a Certificate initially lacks
+  # the native wildcard; after the script patches it, the Secret's alt-names
+  # annotation reports the wildcard (a per-secret flag file marks the re-issue).
+  *"patch certificate.cert-manager.io"*)
+    cert="$(arg_after certificate.cert-manager.io "$@")"
+    : > "$state_dir/reissued-${cert}-tls"
+    log "PATCH-CERT $cert"; exit 0 ;;
+  *"get certificate.cert-manager.io"*"-o json"*)
+    ns="$(arg_after -n "$@")"
+    printf '{"spec":{"dnsNames":["etcd","etcd.%s.svc"]}}\n' "$ns"; exit 0 ;;
+  *"get certificate.cert-manager.io"*)
+    [ "${FAKE_CERTS:-0}" = "1" ] && exit 0 || exit 1 ;;
+  *"get secret"*"alt-names"*)
+    ns="$(arg_after -n "$@")"; secret="$(arg_after secret "$@")"
+    if [ -f "$state_dir/reissued-$secret" ]; then
+      printf 'etcd,etcd.%s.svc,*.etcd.%s.svc\n' "$ns" "$ns"
+    else
+      printf 'etcd,etcd.%s.svc\n' "$ns"
+    fi
+    exit 0 ;;
+
+  *"scale deploy"*)
+    case "$args" in
+      *"--replicas=0"*) log "SCALE 0" ;;
+      *"--replicas=1"*) log "SCALE 1" ;;
+    esac
+    exit 0 ;;
+  *"rollout status"*) exit 0 ;;
+
+  *) exit 0 ;;
+esac

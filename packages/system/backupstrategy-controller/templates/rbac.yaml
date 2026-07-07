@@ -140,18 +140,18 @@ rules:
 - apiGroups: ["apps.foundationdb.org"]
   resources: ["foundationdbrestores"]
   verbs: ["get", "list", "watch", "create"]
-# Etcd strategy: read the operator-side EtcdCluster CR (existence + Ready
-# gate before snapshotting; live spec on the restore path) and create
-# per-BackupJob etcd.aenix.io/EtcdBackup CRs. Restore is in-place only:
-# the driver deletes the chart-rendered EtcdCluster, then creates a new
-# one with spec.bootstrap.restore.source populated from the artifact -
-# so delete + create on etcdclusters are both required. The PVCs the
-# operator generates for member volumes get listed (etcdClusterFullyGone
+# Etcd strategy: read the operator-side EtcdCluster CR (existence +
+# Available gate before snapshotting; live spec on the restore path) and
+# create per-BackupJob etcd-operator.cozystack.io/EtcdSnapshot CRs. Restore
+# is in-place only: the driver deletes the chart-rendered EtcdCluster, then
+# creates a new one with spec.bootstrap.restore.source populated from the
+# artifact - so delete + create on etcdclusters are both required. The PVCs
+# the operator generates for member volumes get listed (etcdClusterFullyGone
 # gate) but never directly mutated; cleanup is owned by the operator's
 # finalizers + the EtcdCluster ownerRef cascade.
-- apiGroups: ["etcd.aenix.io"]
+- apiGroups: ["etcd-operator.cozystack.io"]
   resources: ["etcdclusters"]
   verbs: ["get", "list", "watch", "create", "delete"]
-- apiGroups: ["etcd.aenix.io"]
-  resources: ["etcdbackups"]
+- apiGroups: ["etcd-operator.cozystack.io"]
+  resources: ["etcdsnapshots"]
   verbs: ["get", "list", "watch", "create"]

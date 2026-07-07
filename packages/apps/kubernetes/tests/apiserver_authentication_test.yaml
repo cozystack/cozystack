@@ -19,7 +19,10 @@ tests:
   # default: opt-in fields render nothing       #
   ###############################################
 
-  - it: omits extraArgs and extraVolumeMounts on apiServer by default
+  - it: emits empty extraArgs and extraVolumeMounts arrays by default
+    # The chart ALWAYS emits both fields (empty arrays when nothing to inject)
+    # so a mode=System → mode=None transition sends a JSON-merge-patch that
+    # REPLACES the live array — otherwise the CRD keeps the stale flag.
     release:
       name: test-k8s
       namespace: tenant-test
@@ -27,11 +30,13 @@ tests:
       - isKind:
           of: KamajiControlPlane
         documentIndex: 1
-      - notExists:
+      - equal:
           path: spec.apiServer.extraArgs
+          value: []
         documentIndex: 1
-      - notExists:
+      - equal:
           path: spec.apiServer.extraVolumeMounts
+          value: []
         documentIndex: 1
 
   - it: keeps only the two talos control-plane volumes by default
@@ -84,7 +89,7 @@ tests:
       namespace: tenant-test
     set:
       controlPlane.apiServer.extraVolumes:
-        - name: authentication-config
+        - name: tenant-byo-mount
           configMap:
             name: tenant-authentication-config
     asserts:
@@ -104,7 +109,7 @@ tests:
       # user-supplied volume is appended
       - equal:
           path: spec.deployment.extraVolumes[2].name
-          value: authentication-config
+          value: tenant-byo-mount
         documentIndex: 1
       - equal:
           path: spec.deployment.extraVolumes[2].configMap.name
@@ -117,17 +122,17 @@ tests:
       namespace: tenant-test
     set:
       controlPlane.apiServer.extraVolumes:
-        - name: authentication-config
+        - name: tenant-byo-mount
           secret:
             secretName: tenant-authentication-config
       controlPlane.apiServer.extraVolumeMounts:
-        - name: authentication-config
+        - name: tenant-byo-mount
           mountPath: /etc/kubernetes/authentication
           readOnly: true
     asserts:
       - equal:
           path: spec.apiServer.extraVolumeMounts[0].name
-          value: authentication-config
+          value: tenant-byo-mount
         documentIndex: 1
       - equal:
           path: spec.apiServer.extraVolumeMounts[0].mountPath
@@ -210,13 +215,13 @@ tests:
       namespace: tenant-test
     set:
       controlPlane.apiServer.extraVolumes:
-        - name: authentication-config
+        - name: tenant-byo-mount
           secret:
             secretName: tenant-authentication-config
     asserts:
       - equal:
           path: spec.deployment.extraVolumes[2].name
-          value: authentication-config
+          value: tenant-byo-mount
         documentIndex: 1
       - equal:
           path: spec.deployment.extraVolumes[2].secret.secretName

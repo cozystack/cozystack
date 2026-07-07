@@ -14,9 +14,19 @@ spec:
       backoffLimit: 2
       template:
         spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+            seccompProfile:
+              type: RuntimeDefault
           containers:
           - name: etcd-defrag
             image: ghcr.io/ahrtr/etcd-defrag:v0.13.0
+            securityContext:
+              allowPrivilegeEscalation: false
+              readOnlyRootFilesystem: true
+              capabilities:
+                drop: ["ALL"]
             resources:
               requests:
                 cpu: 200m
@@ -25,7 +35,11 @@ spec:
                 cpu: 500m
                 memory: 512Mi
             args:
-            - --endpoints={{ range $i, $e := until (int .Values.replicas) }}{{ if $i }},{{ end }}https://{{ $.Release.Name }}-{{ $i }}.{{ $.Release.Name }}-headless.{{ $.Release.Namespace }}.svc:2379{{ end }}
+            # The v1alpha2 operator names the headless Service after the
+            # cluster ({{ $.Release.Name }}) and does not use StatefulSet
+            # ordinal pod names. Point at the headless Service and let
+            # --cluster fan the defrag out to every member via member-list.
+            - --endpoints=https://{{ $.Release.Name }}.{{ $.Release.Namespace }}.svc:2379
             - --cacert=/etc/etcd/pki/client/cert/ca.crt
             - --cert=/etc/etcd/pki/client/cert/tls.crt
             - --key=/etc/etcd/pki/client/cert/tls.key

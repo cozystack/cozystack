@@ -1,3 +1,11 @@
+# This file encodes the area-scoped Reviewer role from the Contributor Ladder
+# (CONTRIBUTOR_LADDER.md): the handles below have review authority over the
+# matching paths. This is intentionally a different set from the governance
+# roster in MAINTAINERS.md — a Reviewer owns a specific code area, while a
+# Maintainer is responsible for the whole project. The two overlap but are not
+# identical by design. Security reports are NOT routed through this file; see
+# SECURITY.md (GitHub Private Vulnerability Reporting + MAINTAINERS.md).
+
 * @kvaps @lllamnyp @lexfrei @androndo @IvanHunters @sircthulhu @myasnikovdaniil
 
 # The API review gate must not be editable without an API-owner review, or a

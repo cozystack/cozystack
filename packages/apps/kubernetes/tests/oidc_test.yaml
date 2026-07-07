@@ -1,0 +1,553 @@
+suite: tenant kube-apiserver OIDC (Phase 1)
+
+values:
+  - values/common.yaml
+
+# In cluster.yaml the KamajiControlPlane is document index 1
+# (0: Cluster, 1: KamajiControlPlane, 2: WorkloadMonitor, 3: KubevirtCluster, ...).
+# Documents at higher indices are KubevirtMachineTemplate, MachineDeployment,
+# MachineHealthCheck, WorkloadMonitor per node group.
+
+tests:
+  ###############################################
+  # default: oidc.mode=None renders nothing     #
+  ###############################################
+
+  - it: emits no OIDC apiserver flag when oidc.mode is None
+    # extraArgs is always rendered (see apiserver_authentication_test — the
+    # explicit `[]` is required so a mode=System → mode=None upgrade REPLACES
+    # the previously-set `--authentication-config` flag on the CRD).
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/cluster.yaml
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value: []
+        documentIndex: 1
+
+  - it: emits no chart-managed OIDC volume on the KamajiControlPlane when oidc.mode is None
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/cluster.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.deployment.extraVolumes
+          count: 2
+        documentIndex: 1
+
+  - it: emits no Keycloak objects when oidc.mode is None
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/oidc-keycloak.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: emits no AuthenticationConfiguration Secret when oidc.mode is None
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/oidc-authn-config.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders bootstrap Job + KCP-normalizer scaffolding even when oidc.mode is None
+    # The Job is always rendered (SA + Role + RoleBinding + Job) so the mode=None
+    # branch of the script can force-clean the KamajiControlPlane's stale
+    # `authentication-config` volume that Kamaji's SSA field-ownership prevents
+    # Helm from removing. When mode=None the script skips the CRB+Secret
+    # branches after issuing the normalizing `kubectl patch`.
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/oidc-rbac-job.yaml
+    asserts:
+      - hasDocuments:
+          count: 4
+      - equal:
+          path: kind
+          value: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: kind
+          value: Job
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ "\$OIDC_MODE" = "None" \]'
+        documentIndex: 3
+
+  - it: emits no OIDC kubeconfig placeholder Secret when oidc.mode is None
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/oidc-kubeconfig-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###############################################
+  # existing customer upgrade — vestigial fields #
+  ###############################################
+
+  - it: mode=None emits empty extraArgs so a System→None downgrade replaces the live array
+    # Guards against the Helm+CRD JSON-merge-patch pitfall — see cluster.yaml.
+    # If a customer previously set oidc.mode=System, the KCP got
+    # `--authentication-config` in extraArgs. Toggling mode=None must emit an
+    # empty `extraArgs: []` so the patch REPLACES the stale value. Silently
+    # omitting extraArgs would leave the live CRD unchanged and the tenant
+    # apiserver would keep the dangling flag.
+    release:
+      name: test
+      namespace: tenant-test
+    template: templates/cluster.yaml
+    set:
+      oidc.mode: None
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs
+          value: []
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraVolumeMounts
+          value: []
+        documentIndex: 1
+      # deployment.extraVolumes always has the two chart-owned Talos volumes;
+      # the OIDC volume must NOT be there in mode=None.
+      - lengthEqual:
+          path: spec.deployment.extraVolumes
+          count: 2
+        documentIndex: 1
+
+  - it: unknown fields under oidc are silently ignored (existing customer upgrade path)
+    release:
+      name: test-legacy
+      namespace: tenant-test
+    template: templates/oidc-rbac-job.yaml
+    set:
+      # An existing CR carried over from an earlier OIDC API surface may still
+      # have the old `oidc.enabled: bool` field. The Phase-1 chart only reads
+      # `oidc.mode`; the vestigial field is silently ignored and mode defaults
+      # to None — the Job renders in normalize-only mode (no CRBs, no Secret
+      # patch, KCP volume cleanup only).
+      oidc.enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'if \[ "\$OIDC_MODE" = "None" \]'
+        documentIndex: 3
+
+  ###############################################
+  # mode: System — happy path                   #
+  ###############################################
+
+  - it: System mode renders the per-cluster KeycloakClient
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    asserts:
+      - isKind:
+          of: KeycloakClient
+        documentIndex: 1
+      - equal:
+          path: spec.clientId
+          value: tenant-foo-kubernetes-app
+        documentIndex: 1
+      - equal:
+          path: spec.public
+          value: true
+        documentIndex: 1
+      - equal:
+          path: spec.realmRef.name
+          value: keycloakrealm-cozy
+        documentIndex: 1
+      - equal:
+          path: spec.realmRef.kind
+          value: ClusterKeycloakRealm
+        documentIndex: 1
+      - equal:
+          path: spec.attributes["pkce.code.challenge.method"]
+          value: S256
+        documentIndex: 1
+      - contains:
+          path: spec.redirectUris
+          content: "http://localhost:8000"
+        documentIndex: 1
+      - contains:
+          path: spec.redirectUris
+          content: "http://localhost:18000"
+        documentIndex: 1
+
+  - it: System mode renders the per-cluster KeycloakClientScope with audience mapper
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    asserts:
+      - isKind:
+          of: KeycloakClientScope
+        documentIndex: 0
+      - equal:
+          path: spec.name
+          value: tenant-foo-kubernetes-app-audience
+        documentIndex: 0
+      - equal:
+          path: spec.protocolMappers[0].protocolMapper
+          value: oidc-audience-mapper
+        documentIndex: 0
+      - equal:
+          path: spec.protocolMappers[0].config["included.client.audience"]
+          value: tenant-foo-kubernetes-app
+        documentIndex: 0
+
+  - it: System mode skips Keycloak objects when the operator CRDs are absent
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: System mode renders the AuthenticationConfiguration Secret with the cozy issuer
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: kubernetes-app-oidc-authn-config
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "url: https://keycloak.example.org/realms/cozy"
+      # Verified end-to-end on dev3: cozy realm's preferred_username is the
+      # Keycloak *username* (not the email), so a CRB subject sourced from
+      # users[].email would silently mis-authenticate. Lock the claim name.
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "claim: email"
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "- tenant-foo-kubernetes-app"
+
+  - it: System mode injects --authentication-config and the chart-owned volume into the KCP
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: "--authentication-config=/etc/kubernetes/authentication-config/config.yaml"
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraVolumeMounts
+          content:
+            name: authentication-config
+            mountPath: /etc/kubernetes/authentication-config
+            readOnly: true
+        documentIndex: 1
+      - lengthEqual:
+          path: spec.deployment.extraVolumes
+          count: 3
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[2].name
+          value: authentication-config
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[2].secret.secretName
+          value: kubernetes-app-oidc-authn-config
+        documentIndex: 1
+
+  - it: System mode pre-renders the OIDC kubeconfig Secret as a release-owned placeholder
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-kubeconfig-secret.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: kubernetes-app-oidc-kubeconfig
+      - equal:
+          path: metadata.labels["app.kubernetes.io/managed-by"]
+          value: Helm
+      - matchRegex:
+          path: stringData.kubeconfig
+          pattern: "awaiting OIDC bootstrap Job"
+
+  - it: System mode hard-fails when platform OIDC is off
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      _cluster.oidc-enabled: "false"
+      _cluster.root-host: example.org
+      oidc.mode: System
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer."
+
+  - it: System mode hard-fails cleanly when _cluster map has no oidc-enabled key
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      _cluster: {}
+      oidc.mode: System
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: System requires the platform-level OIDC feature (authentication.oidc.enabled) — enable it in cozystack-values, or use mode: CustomConfig for a tenant-supplied issuer."
+
+  - it: fails when legacy --oidc-* flag collides with spec.oidc.mode
+    # Regression guard: kube-apiserver refuses to boot when both
+    # `--authentication-config` (chart-injected) and legacy `--oidc-*` flags
+    # are set. Existing customers who configured OIDC by hand through the
+    # `controlPlane.apiServer.extraArgs` passthrough would BOOT-FAIL on
+    # upgrade the moment they toggle spec.oidc.mode. Fail render instead.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      controlPlane.apiServer.extraArgs:
+        - "--oidc-issuer-url=https://legacy.example/realms/x"
+        - "--oidc-client-id=legacy"
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraArgs contains "--oidc-issuer-url=https://legacy.example/realms/x" while spec.oidc.mode is "System" — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default.'
+
+  - it: allows legacy --oidc-* flags to remain when spec.oidc.mode is None
+    # No collision when the chart is NOT injecting --authentication-config —
+    # existing customers who manage OIDC by hand keep working until they
+    # explicitly opt in to the new selector.
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      oidc.mode: None
+      controlPlane.apiServer.extraArgs:
+        - "--oidc-issuer-url=https://legacy.example/realms/x"
+    asserts:
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: "--oidc-issuer-url=https://legacy.example/realms/x"
+        documentIndex: 1
+
+  ###############################################
+  # mode: System — bootstrap Job + users[]      #
+  ###############################################
+
+  - it: System mode renders the bootstrap Job with the policy.cozystack label
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+    asserts:
+      # ServiceAccount (0), Role (1), RoleBinding (2), Job bootstrap (3), Job cleanup (4)
+      - isKind:
+          of: Job
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: kubernetes-app-oidc-bootstrap
+        documentIndex: 3
+      - equal:
+          path: spec.template.metadata.labels["policy.cozystack.io/allow-to-apiserver"]
+          value: "true"
+        documentIndex: 3
+
+  - it: bootstrap Job command builds a CRB for each users[] entry
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-rbac-job.yaml
+    set:
+      _cluster.oidc-enabled: "true"
+      _cluster.root-host: example.org
+      oidc.mode: System
+      oidc.users:
+        - email: alice@example.org
+          role: admin
+        - email: bob@example.org
+          role: view
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: "alice@example.org"'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: "bob@example.org"'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: cluster-admin'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: view'
+        documentIndex: 3
+
+  ###############################################
+  # mode: CustomConfig                          #
+  ###############################################
+
+  - it: CustomConfig mode writes the operator-supplied AuthenticationConfiguration verbatim
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      _cluster.oidc-enabled: "false"
+      oidc.mode: CustomConfig
+      oidc.customConfig.config: |
+        apiVersion: apiserver.config.k8s.io/v1beta1
+        kind: AuthenticationConfiguration
+        jwt:
+        - issuer:
+            url: https://idp.example.com
+            audiences: [my-cluster]
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: kubernetes-app-oidc-authn-config
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "url: https://idp.example.com"
+
+  - it: CustomConfig mode with secretRef does not emit a chart-owned Secret
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      _cluster.oidc-enabled: "false"
+      oidc.mode: CustomConfig
+      oidc.customConfig.secretRef.name: my-byo-authn
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: CustomConfig mode with secretRef mounts the tenant-supplied Secret on the KCP
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/cluster.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.secretRef.name: my-byo-authn
+    asserts:
+      - equal:
+          path: spec.deployment.extraVolumes[2].secret.secretName
+          value: my-byo-authn
+        documentIndex: 1
+
+  - it: CustomConfig mode does not pre-render the OIDC kubeconfig Secret
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-kubeconfig-secret.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config: "..."
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: CustomConfig mode does not render any Keycloak objects
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-keycloak.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config: "..."
+    capabilities:
+      apiVersions:
+        - v1.edp.epam.com/v1
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: CustomConfig mode fails when neither config nor secretRef is supplied
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      oidc.mode: CustomConfig
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.mode: CustomConfig requires either spec.oidc.customConfig.config (inline AuthenticationConfiguration) or spec.oidc.customConfig.secretRef.name (Secret with config.yaml key)."
+
+  - it: CustomConfig mode rejects setting both config and secretRef
+    release:
+      name: kubernetes-app
+      namespace: tenant-foo
+    template: templates/oidc-authn-config.yaml
+    set:
+      oidc.mode: CustomConfig
+      oidc.customConfig.config: "..."
+      oidc.customConfig.secretRef.name: my-byo
+    asserts:
+      - failedTemplate:
+          errorMessage: "spec.oidc.customConfig: set exactly one of `config` (inline) or `secretRef.name` — they are mutually exclusive."
