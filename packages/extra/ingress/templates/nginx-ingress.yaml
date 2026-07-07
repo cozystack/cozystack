@@ -82,8 +82,12 @@ spec:
           {{- else }}
           type: LoadBalancer
           externalTrafficPolicy: Local
-          {{- with $loadBalancerClass }}
-          loadBalancerClass: {{ . }}
+          {{- /* loadBalancerClass is a host-publishing setting: apply it only to
+                 the external-facing ingress (the namespace named by expose-ingress),
+                 host-scoped like expose-external-ips and proxy-protocol above.
+                 Tenant ingress Services keep the cluster's default LB controller. */}}
+          {{- if and $loadBalancerClass (eq $exposeIngress .Release.Namespace) }}
+          loadBalancerClass: {{ $loadBalancerClass }}
           {{- end }}
           {{- end }}
         {{- if or .Values.whitelist .Values.cloudflareProxy $proxyProtocol }}
