@@ -14,3 +14,22 @@ linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
     tag: v1.10.6@sha256:eb264710d3593778825a09a0cef94fb7774d72b55dd597a1e3282428990c42a2
+controller:
+  # Resource requests for the linstor-controller JVM. Requests (not limits) are
+  # set on purpose: a CPU request guarantees CPU shares so the JVM can answer its
+  # GET /health liveness probe under node CPU contention, while omitting limits
+  # avoids throttling the JVM (CPU limit) or OOM-killing it (memory limit). The
+  # memory value is a conservative starting estimate for the JVM heap + overhead;
+  # tune it to observed RSS.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 700Mi
+  # Liveness-probe timing for the linstor-controller container. Only these timing
+  # fields are overridden; the httpGet target (GET /health on the api port) is
+  # supplied by piraeus-operator and intentionally left untouched. Relaxed from
+  # the operator defaults (timeoutSeconds 1, failureThreshold 3) so a JVM GC
+  # pause or CPU contention does not trip a kubelet liveness kill.
+  livenessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6
