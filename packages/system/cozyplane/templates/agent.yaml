@@ -155,6 +155,16 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if .Values.kubeApiServer.host }}
+            # Reach the kube-apiserver directly (not via the kubernetes.default
+            # ClusterIP): with no kube-proxy, that VIP is unserved until
+            # cozyplane-kpr is up — which needs the agent — so the agent must
+            # bootstrap against a real endpoint (Talos: KubePrism localhost:7445).
+            - name: KUBERNETES_SERVICE_HOST
+              value: {{ .Values.kubeApiServer.host | quote }}
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ .Values.kubeApiServer.port | quote }}
+            {{- end }}
           securityContext:
             privileged: true
           resources:
@@ -181,6 +191,12 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            {{- if .Values.kubeApiServer.host }}
+            - name: KUBERNETES_SERVICE_HOST
+              value: {{ .Values.kubeApiServer.host | quote }}
+            - name: KUBERNETES_SERVICE_PORT
+              value: {{ .Values.kubeApiServer.port | quote }}
+            {{- end }}
             {{- if .Values.clusterDomain }}
             # Explicit override; unset, the resolver autodetects the domain
             # from its own kubelet-written search path.
