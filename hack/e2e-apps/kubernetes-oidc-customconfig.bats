@@ -49,17 +49,13 @@ spec:
       resources: {}
       resourcesPreset: small
     replicas: 1
-  nodeGroups:
-    md0:
-      diskSize: 20Gi
-      gpus: []
-      instanceType: u1.micro
-      maxReplicas: 1
-      minReplicas: 0
-      resources: {}
-      roles:
-      - worker
-  storageClass: replicated
+  # nodeGroups intentionally omitted — this is a render-side test that
+  # only asserts on the KamajiControlPlane + the tenant-supplied issuer
+  # AuthenticationConfiguration Secret. Combined with the chart change
+  # that makes `MachineDeployment.spec.replicas` honour `minReplicas`,
+  # dropping the field means zero MachineDeployments render and no
+  # worker DataVolumes are touched, keeping the render-side test from
+  # churning DRBD storage between CI runs (see #3231).
   version: v1.35
   oidc:
     mode: CustomConfig

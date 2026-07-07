@@ -57,17 +57,16 @@ spec:
       resources: {}
       resourcesPreset: small
     replicas: 1
-  nodeGroups:
-    md0:
-      diskSize: 20Gi
-      gpus: []
-      instanceType: u1.micro
-      maxReplicas: 1
-      minReplicas: 0
-      resources: {}
-      roles:
-      - worker
-  storageClass: replicated
+  # nodeGroups intentionally omitted — this is a render-side test that
+  # only asserts on the KamajiControlPlane + the cozy-realm Keycloak
+  # objects. The chart's MachineDeployment hardcodes spec.replicas: 2
+  # even when a nodeGroup declares minReplicas: 0 (see #3231), so
+  # keeping a worker nodeGroup here provisions two 20 GiB DRBD
+  # DataVolumes on each `kubectl apply` and their churn overlaps
+  # kubernetes-previous, flaking that test with LINSTOR pool pressure.
+  # Dropping the field lets the schema default `{}` apply — zero
+  # MachineDeployments rendered, zero worker DataVolumes touched,
+  # test still exercises everything it claimed to.
   version: v1.35
   oidc:
     mode: System

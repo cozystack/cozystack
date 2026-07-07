@@ -743,7 +743,14 @@ metadata:
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
-  replicas: 2
+  # Honour the nodeGroup's minReplicas so `minReplicas: 0` scales from
+  # zero and does not silently provision two DRBD DataVolumes per
+  # render (see cozystack/cozystack#3231). If the cluster-autoscaler
+  # is enabled it will scale up on demand via the annotation-driven
+  # min/max range above; existing installs with `minReplicas >= 2`
+  # render byte-identical to before, so the previous default is
+  # preserved for the common case.
+  replicas: {{ $group.minReplicas }}
   strategy:
     rollingUpdate:
       maxSurge: {{ $group.maxReplicas }}
