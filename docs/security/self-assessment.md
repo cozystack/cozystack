@@ -140,7 +140,7 @@ Cozystack does not currently claim compliance with, or certification against, an
 ### Development Pipeline
 
 - **Source control and review.** All changes land through GitHub pull requests. `.github/CODEOWNERS` requires maintainer review; the project deliberately requires a single approving review rather than two, to keep contribution velocity acceptable (branch protection requiring multiple reviews was considered and intentionally not adopted).
-- **Commit sign-off (DCO).** Contributor guidance requires `--signoff` on every commit (`docs/agents/contributing.md`, `.gemini/styleguide.md`). Note honestly: DCO is documented but **not yet enforced by an automated check**, and the sign-off requirement is not yet reflected in the top-level `CONTRIBUTING.md`. Adding a DCO check is a planned improvement.
+- **Commit sign-off (DCO).** Contributor guidance requires `--signoff` on every commit (`docs/agents/contributing.md`, `.gemini/styleguide.md`), and DCO is **enforced by an automated DCO check on every pull request**. Remaining refinements are to surface the sign-off requirement in the top-level `CONTRIBUTING.md` and to add the DCO check to the branch-protection required-checks list so it is a hard merge gate as well as a reported check.
 - **Automated checks on pull requests.** A pre-commit workflow validates generated-code/schema freshness; unit and end-to-end tests run in CI.
 - **Static analysis (SAST).** CodeQL runs on pull requests, on push to `main`, and weekly (Go, manual build mode), intended as a required check that blocks merge on new error-severity alerts. Additional Go linters (`gosec`, `govulncheck`, `golangci-lint`) are not yet wired into CI and are a planned improvement.
 - **Dependency updates.** Renovate manages Go modules, Dockerfiles, and GitHub Actions, with OpenSSF OSV vulnerability alerts enabled and automerge disabled. There is no Dependabot configuration; Renovate is the dependency-update tool.
@@ -163,7 +163,7 @@ Cozystack is a CNCF Sandbox project. It is built on and integrates a broad set o
 
 The vulnerability reporting process is documented in [`SECURITY.md`](https://github.com/cozystack/cozystack/blob/main/SECURITY.md). Reporters are asked not to use public issues, discussions, pull requests, or chat channels for vulnerabilities.
 
-Honest note on the current reporting channel: the repository **does not yet publish a dedicated private security mailbox in-tree**, and GitHub Private Vulnerability Reporting is not wired as the intake channel. Instead, reporters are asked to contact a maintainer listed in `CODEOWNERS` through an existing private channel, or to use a public channel only to request a private contact path without disclosing details. Standing up a dedicated private intake (a security mailbox and/or GitHub Private Vulnerability Reporting) is a recognized improvement. There is also a minor inconsistency to reconcile: `SECURITY.md` routes reports to "maintainers listed in `CODEOWNERS`", but the `CODEOWNERS` and `MAINTAINERS.md` lists have diverged.
+The private intake channel is **GitHub Private Vulnerability Reporting** (repository → **Security → Advisories → Report a vulnerability**), the CNCF-recommended path for confidential disclosure; it is enabled on the repository. As a fallback, reporters may contact a maintainer listed in [`MAINTAINERS.md`](https://github.com/cozystack/cozystack/blob/main/MAINTAINERS.md) through an existing private channel, or use a public channel only to request a private contact path without disclosing details. A dedicated security mailing list may be added later but is not required given Private Vulnerability Reporting is available. `SECURITY.md` and the code-ownership model are aligned: it routes reporters to Private Vulnerability Reporting and `MAINTAINERS.md` (the governance roster), while `CODEOWNERS` separately encodes the area-scoped **Reviewer** role from the Contributor Ladder.
 
 #### Vulnerability Response Process
 
@@ -173,21 +173,21 @@ Per `SECURITY.md`, the maintainers commit to:
 - Perform initial triage and severity assessment within **7 business days**.
 - Keep the reporter informed as a fix and disclosure plan are developed.
 
-Resolution follows a coordinated-disclosure model: reporters are asked to keep details private until a fix or mitigation is available and users have had a reasonable opportunity to upgrade. The project may request or publish a GHSA and/or CVE. Reporters are credited unless anonymity is requested. A specific embargo window / maximum-disclosure timeline is not currently committed to and could be added.
+Resolution follows a coordinated-disclosure model: reporters are asked to keep details private until a fix or mitigation is available and users have had a reasonable opportunity to upgrade. The project commits to a coordinated-disclosure window of **up to 90 days** from acknowledgement, after which the advisory may be published (via GHSA) with available details and workarounds even if a complete fix is not yet ready; extensions apply only by mutual agreement, typically for issues requiring upstream coordination. Target remediation timelines track CVSS v3.1 severity (Critical ~14 days, High ~30, Medium ~90, Low next scheduled release). The project may request or publish a GHSA and/or CVE. Reporters are credited unless anonymity is requested. See [`SECURITY.md`](https://github.com/cozystack/cozystack/blob/main/SECURITY.md) for the authoritative statement.
 
 ### Incident Response
 
-Cozystack does not maintain a standalone incident-response runbook, and this is a gap to close. Partial coverage exists today: the release process supports patch releases and backports with priority handling of security fixes, and `CONTRIBUTOR_LADDER.md` defines a concrete offboarding procedure (completed within five business days) that removes GitHub team access, downgrades org roles, updates `CODEOWNERS`, and audits and rotates GitHub Actions secrets, registry tokens, and App keys — the access-revocation and credential-rotation half of incident response. Public disclosure of a resolved incident would follow the outbound channels above (release notes, changelog, GHSA).
+Detailed operational incident-response procedures are maintained by the maintainers in a private security pipeline, and a public summary is published at [`docs/security/incident-response.md`](https://github.com/cozystack/cozystack/blob/main/docs/security/incident-response.md). The public runbook stitches the existing mechanisms into a single incident lifecycle: intake and triage via `SECURITY.md`, private fix development under a GitHub Security Advisory, coordinated patch releases and backports across supported lines, GHSA/CVE publication, public disclosure through the outbound channels (release notes, changelog, GHSA), and the access-revocation and credential-rotation steps defined in `CONTRIBUTOR_LADDER.md` (completed within five business days).
 
 ## Appendix
 
 ### Known Issues Over Time
 
-Cozystack has not yet published a history of security issues or advisories. As the project formalizes GHSA usage and (once available) a dedicated intake channel, resolved vulnerabilities will be tracked as GitHub Security Advisories on the repository.
+Cozystack uses GitHub Security Advisories (GHSA) to track vulnerabilities and GitHub Private Vulnerability Reporting for confidential intake. No advisories have been published to date; as issues are resolved under coordinated disclosure they will be published as GitHub Security Advisories on the repository, building the public history over time.
 
 ### OpenSSF Best Practices
 
-Cozystack participates in the OpenSSF Best Practices Badge program as project [#10177](https://www.bestpractices.dev/projects/10177) (the badge is shown in the repository README). The project is working through the passing-level criteria; the live status is reflected on the badge page. Cozystack also runs OpenSSF Scorecard weekly with published results.
+Cozystack participates in the OpenSSF Best Practices Badge program as project [#10177](https://www.bestpractices.dev/projects/10177) (the badge is shown in the repository README). The project **achieved the passing-level badge on 2026-04-01** and is now working toward the silver tier; the live status is reflected on the badge page. Cozystack also runs OpenSSF Scorecard weekly with published results.
 
 ### Case Studies
 
