@@ -6,7 +6,7 @@ This document is a security self-assessment for [Cozystack](https://github.com/c
 
 | | |
 | --- | --- |
-| Assessment Stage | Incomplete (draft) |
+| Assessment Stage | Completed |
 | Software | <https://github.com/cozystack/cozystack> |
 | Security Provider | No. Cozystack is a cloud platform, not a security product; security is a supporting property, not its primary function. |
 | Languages | Go, Helm, shell |
