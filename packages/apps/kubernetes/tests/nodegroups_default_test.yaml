@@ -127,14 +127,22 @@ tests:
           value: MachineDeployment
           matchMany: true
 
-  # Regression guard for cozystack/cozystack#3231 — spec.replicas MUST reflect
-  # the nodeGroup's minReplicas, not a hardcoded 2. Two matched cases so a
-  # future refactor to a literal cannot silently regress both sides:
-  #   * minReplicas: 0 renders spec.replicas: 0 (the render-side OIDC test
-  #     path — no worker DataVolumes provisioned).
-  #   * minReplicas: 2 renders spec.replicas: 2 (the kubernetes-latest /
-  #     kubernetes-previous bats path — byte-identical to pre-PR behaviour).
-  - it: MachineDeployment.spec.replicas equals nodeGroup.minReplicas — zero case
+  # Regression guard for cozystack/cozystack#3231. The chart intentionally
+  # OMITS `MachineDeployment.spec.replicas` so the cluster-autoscaler owns
+  # the field alone: CAPI's defaulting webhook seeds it from the
+  # `cluster-api-autoscaler-node-group-min-size` annotation on Create, and
+  # SSA field-manager ownership keeps chart upgrades from overwriting
+  # whatever value the autoscaler patched in the meantime. Two matched
+  # cases so a future refactor cannot silently re-hardcode the field nor
+  # break the annotation-driven min/max wiring:
+  #   * minReplicas: 0 (the render-side OIDC bats path — MachineDeployment
+  #     emitted with the min-size annotation "0", no chart-owned replicas
+  #     field, no worker DataVolumes provisioned until scale-out).
+  #   * minReplicas: 2 (the kubernetes-latest / kubernetes-previous bats
+  #     path — MachineDeployment emitted with the min-size annotation "2",
+  #     no chart-owned replicas field, defaulting webhook fills it to 2 on
+  #     Create).
+  - it: MachineDeployment omits chart-managed spec.replicas — zero-minReplicas case
     release:
       name: test-k8s
       namespace: tenant-test
@@ -158,15 +166,31 @@ tests:
           gpus: []
           kubelet: {}
     asserts:
-      - equal:
+      # spec.replicas must not appear in the rendered manifest — CAPI's
+      # defaulting webhook will seed it from the annotation on Create.
+      - notExists:
           path: spec.replicas
-          value: 0
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      # Autoscaler annotation wiring stays intact.
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "0"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"]
+          value: "10"
         documentSelector:
           path: kind
           value: MachineDeployment
           matchMany: true
 
-  - it: MachineDeployment.spec.replicas equals nodeGroup.minReplicas — nonzero case
+  - it: MachineDeployment omits chart-managed spec.replicas — nonzero-minReplicas case
     release:
       name: test-k8s
       namespace: tenant-test
@@ -190,9 +214,15 @@ tests:
           gpus: []
           kubelet: {}
     asserts:
-      - equal:
+      - notExists:
           path: spec.replicas
-          value: 2
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "2"
         documentSelector:
           path: kind
           value: MachineDeployment

@@ -743,14 +743,18 @@ metadata:
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
-  # Honour the nodeGroup's minReplicas so `minReplicas: 0` scales from
-  # zero and does not silently provision two DRBD DataVolumes per
-  # render (see cozystack/cozystack#3231). If the cluster-autoscaler
-  # is enabled it will scale up on demand via the annotation-driven
-  # min/max range above; existing installs with `minReplicas >= 2`
-  # render byte-identical to before, so the previous default is
-  # preserved for the common case.
-  replicas: {{ $group.minReplicas }}
+  # `spec.replicas` is intentionally omitted so the field is owned by
+  # the cluster-autoscaler alone. CAPI's MachineDeployment defaulting
+  # webhook seeds `spec.replicas` from the `cluster-api-autoscaler-node-
+  # group-min-size` annotation on Create (see
+  # https://cluster-api.sigs.k8s.io/tasks/automated-machine-management/autoscaling),
+  # and Server-Side-Apply field-manager ownership then keeps chart
+  # upgrades from overwriting whatever value the autoscaler patched in
+  # the meantime. Emitting a chart-managed `replicas: N` here (as this
+  # chart did before cozystack/cozystack#3231) drains workers on every
+  # `helm upgrade` action until the autoscaler notices unschedulable
+  # Pods and scales back up — a real disruption window on every routine
+  # platform bump.
   strategy:
     rollingUpdate:
       maxSurge: {{ $group.maxReplicas }}
