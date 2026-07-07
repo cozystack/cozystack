@@ -235,11 +235,9 @@ spec:
           args:
             - --serve-sdn
             {{- if .Values.apiserver.etcd.operator.enabled }}
-            {{- $eps := list }}
-            {{- range $i := until (int .Values.apiserver.etcd.operator.replicas) }}
-            {{- $eps = append $eps (printf "https://cozyplane-etcd-%d.cozyplane-etcd-headless.%s.svc:2379" $i $ns) }}
-            {{- end }}
-            - --etcd-servers={{ join "," $eps }}
+            # The v1alpha2 operator's client Service (members carry
+            # operator-assigned names, so dial the Service, not per-member DNS).
+            - --etcd-servers=https://cozyplane-etcd.{{ $ns }}.svc:2379
             - --etcd-cafile=/etc/etcd-certs/ca.crt
             - --etcd-certfile=/etc/etcd-certs/tls.crt
             - --etcd-keyfile=/etc/etcd-certs/tls.key
