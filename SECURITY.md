@@ -26,10 +26,11 @@ Supported versions may change over time as new release lines are cut. The author
 
 Please do **not** report security vulnerabilities through public GitHub issues, discussions, pull requests, Telegram, Slack, or other public community channels.
 
-At the moment, this repository does not publish a dedicated private security mailbox in-tree. If you need to report a vulnerability:
+Please report vulnerabilities privately through one of the following channels, in order of preference:
 
-1. Contact one of the project maintainers listed in `CODEOWNERS` using an existing private channel you already have.
-2. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
+1. **GitHub Private Vulnerability Reporting** — the preferred channel. Open the repository's **Security** tab, then **Advisories** → **Report a vulnerability** (<https://github.com/cozystack/cozystack/security/advisories/new>). This creates a confidential advisory visible only to you and the maintainers, and is the CNCF-recommended path for coordinated disclosure.
+2. **Contact a maintainer** listed in [`MAINTAINERS.md`](MAINTAINERS.md) through an existing private channel you already have.
+3. If you have neither, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
 
 Please do not include exploit details, credentials, tokens, private keys, customer data, or other sensitive material in any public message.
 
@@ -53,6 +54,21 @@ The maintainers will aim to:
 - keep the reporter informed as the fix and disclosure plan are developed
 
 Resolution timelines depend on severity, complexity, release branch applicability, and whether coordination with upstream projects is required.
+
+### Disclosure timeline
+
+The project follows a coordinated-disclosure window of **up to 90 days** from acknowledgement. If a fix or mitigation is not available within that window, the maintainers may publish the advisory (via GitHub Security Advisories) with the available details and any known workarounds, so that users are not left uninformed indefinitely. The window may be extended only by mutual agreement with the reporter, typically for issues that require coordination with upstream projects.
+
+Target remediation timelines are guided by CVSS v3.1 severity:
+
+| Severity (CVSS v3.1) | Target time to fix or mitigation |
+| --- | --- |
+| Critical (9.0–10.0) | ~14 days |
+| High (7.0–8.9) | ~30 days |
+| Medium (4.0–6.9) | ~90 days |
+| Low (0.1–3.9) | next scheduled release |
+
+These are targets, not guarantees; complex or upstream-coordinated issues may take longer.
 
 ## Disclosure Process
 
