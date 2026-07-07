@@ -133,6 +133,10 @@ machine:
     - name: zfs
     - name: spl
   install:
+    # On Talos >1.11 the base defaults grubUseUKICmdline: true (UKI cmdline),
+    # which Talos rejects together with extraKernelArgs and which ignores them
+    # anyway; pin false so the kvm args land on the Talos-built cmdline.
+    grubUseUKICmdline: false
     extraKernelArgs:
     # CVE-2026-53359: disable KVM nested virtualization (guest-to-host escape mitigation)
     - kvm_intel.nested=0
