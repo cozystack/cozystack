@@ -129,12 +129,19 @@ tests:
 
   # Regression guard for cozystack/cozystack#3231. The chart intentionally
   # OMITS `MachineDeployment.spec.replicas` so the cluster-autoscaler owns
-  # the field alone: CAPI's defaulting webhook seeds it from the
+  # the field alone. Two independent CAPI mechanisms carry the guarantee:
+  # the defaulting webhook seeds `spec.replicas` from the
   # `cluster-api-autoscaler-node-group-min-size` annotation on Create, and
-  # SSA field-manager ownership keeps chart upgrades from overwriting
-  # whatever value the autoscaler patched in the meantime. Two matched
-  # cases so a future refactor cannot silently re-hardcode the field nor
-  # break the annotation-driven min/max wiring:
+  # `calculateMachineDeploymentReplicas` preserves the existing live
+  # value on Update when the incoming spec has `replicas: nil` — so a
+  # `helm upgrade` re-rendering this template does not drain workers the
+  # autoscaler has scaled above min-size. Flux helm-controller applies
+  # this chart through the Helm SDK three-way merge (not SSA), so field-
+  # manager ownership is not the mechanism at play; the guarantee is
+  # purely "field absent from the rendered manifest → CAPI's update-time
+  # defaulting preserves the live value". Two matched cases so a future
+  # refactor cannot silently re-hardcode the field nor break the
+  # annotation-driven min/max wiring:
   #   * minReplicas: 0 (the render-side OIDC bats path — MachineDeployment
   #     emitted with the min-size annotation "0", no chart-owned replicas
   #     field, no worker DataVolumes provisioned until scale-out).
