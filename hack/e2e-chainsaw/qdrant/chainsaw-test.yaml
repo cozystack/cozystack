@@ -62,3 +62,29 @@ spec:
             name: qdrant-storage-qdrant-test-0
           status:
             phase: Bound
+
+  - name: verify-pvc-reclaim-on-delete
+    try:
+    # Issue #3059: Kubernetes never GCs StatefulSet-templated PVCs; the
+    # chart's post-delete cleanup hook Job must reclaim the data PVC
+    # asynchronously during uninstall (ordinal-anchored so a sibling's PVC is
+    # never deleted, 2587458bd/ae7c23240). The `error` op polls for absence
+    # and retries transient API errors internally, so a blip is never misread
+    # as "reclaimed" (2m mirrors the bats ~120s budget).
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Qdrant
+          name: test
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: qdrant-storage-qdrant-test-0
+    catch:
+    - script:
+        content: |
+          kubectl -n "$NAMESPACE" get pvc -o wide
+          kubectl -n "$NAMESPACE" get jobs,pods -l app.kubernetes.io/instance=qdrant-test -o wide

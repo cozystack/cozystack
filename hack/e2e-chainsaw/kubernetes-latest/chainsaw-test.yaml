@@ -48,3 +48,35 @@ spec:
           cd ../../..
           . hack/e2e-chainsaw/_lib/run-kubernetes.sh
           cozy_cleanup
+---
+# Version-independent regression guard for PR #2872 B1 (runs once, here, not
+# in kubernetes-previous): with the `replicated` StorageClass absent on the
+# management cluster, the chart's fallback default must be a real management
+# SC (nvme/ssd probes) and never the `kubevirt` alias. A separate Test doc,
+# not a step of the bringup Test above, because it provisions no tenant
+# cluster and must run regardless of that heavy test's outcome (Chainsaw
+# skips a Test's remaining steps after a failure).
+#
+# The helper temporarily deletes the cluster-scoped `replicated` SC and
+# restores it inline before any assertion exit; safe only because the global
+# .chainsaw.yaml runs suites sequentially (execution.parallel: 1) — nothing
+# else can schedule against the mutated SC set mid-probe.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-sc-fallback-default
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: fallback-default-storageclass
+    try:
+    - script:
+        timeout: 15m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          verify_storageclass_fallback_default
+        check:
+          ($error == null): true

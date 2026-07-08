@@ -161,8 +161,17 @@ spec:
           # The default-prefix probe sees only the public hostname; the internal-
           # prefix probe sees only the internal hostname.
           echo "$pub_logs" | grep -Fq "$pub_host"
-          ! echo "$pub_logs" | grep -Fq "$int_host"
+          # Fail-loud negations: under `set -e` a pipeline beginning with `!`
+          # suppresses errexit, so `! ... | grep` silently passes when the
+          # leak occurs (the vacuous-negation bug 12fe3256f fixed in bats).
+          if echo "$pub_logs" | grep -Fq "$int_host"; then
+            echo "FAIL: public-prefix probe must NOT see the internal hostname $int_host" >&2
+            exit 1
+          fi
           echo "$int_logs" | grep -Fq "$int_host"
-          ! echo "$int_logs" | grep -Fq "$pub_host"
+          if echo "$int_logs" | grep -Fq "$pub_host"; then
+            echo "FAIL: internal-prefix probe must NOT see the public hostname $pub_host" >&2
+            exit 1
+          fi
         check:
           ($error == null): true

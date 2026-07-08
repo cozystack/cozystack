@@ -117,7 +117,15 @@ spec:
             sleep 5
           done
           fdb '{.status.desiredProcessGroups}' | grep -qE '^[0-9]+$'
-          fdb '{.status.generations.reconciled}' | grep -qE '^[0-9]+$'
+          # generations.reconciled is stamped by the operator after the
+          # post-bounce uptime gate and can trail the fdbcli-derived health
+          # fields the previous assert converged on; retry briefly instead of
+          # a one-shot read (mirrors main's widened budgets, a79f8009f).
+          deadline=$(( $(date +%s) + 120 ))
+          until fdb '{.status.generations.reconciled}' | grep -qE '^[0-9]+$'; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "generations.reconciled not stamped" >&2; fdb '{.status.generations}' >&2; exit 1; }
+            sleep 5
+          done
         check:
           ($error == null): true
 
