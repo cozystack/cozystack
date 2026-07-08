@@ -743,7 +743,29 @@ metadata:
     {{- end }}
 spec:
   clusterName: {{ $.Release.Name }}
-  replicas: 2
+  # `spec.replicas` is intentionally omitted so the field is owned by
+  # the cluster-autoscaler alone. Two independent CAPI mechanisms —
+  # not Server-Side-Apply field managers — carry the guarantee:
+  #   1. Create: the MachineDeployment defaulting webhook seeds
+  #      `spec.replicas` from the `cluster-api-autoscaler-node-group-
+  #      min-size` annotation (see
+  #      https://cluster-api.sigs.k8s.io/tasks/automated-machine-management/autoscaling).
+  #   2. Update: `calculateMachineDeploymentReplicas` preserves the
+  #      existing live value (`oldMD.Spec.Replicas`) whenever the
+  #      incoming spec has `replicas: nil`, clamping into
+  #      `[min, max]` if it drifts outside — so a cluster the
+  #      autoscaler holds above min-size is not drained by a
+  #      `helm upgrade` that would otherwise re-render this field.
+  # Flux helm-controller applies this chart through the Helm SDK
+  # three-way merge (not SSA), so field-manager ownership is not the
+  # mechanism at play. The chart guarantee reduces to "leave the
+  # field out of the rendered manifest and let CAPI's update-time
+  # defaulting keep the live value stable". Emitting a chart-managed
+  # `replicas: N` here (as this chart did before
+  # cozystack/cozystack#3231) drains workers on every `helm upgrade`
+  # action until the autoscaler notices unschedulable Pods and
+  # scales back up — a real disruption window on every routine
+  # platform bump.
   strategy:
     rollingUpdate:
       maxSurge: {{ $group.maxReplicas }}

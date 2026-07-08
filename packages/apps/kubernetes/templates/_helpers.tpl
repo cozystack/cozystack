@@ -124,6 +124,16 @@ re-add a baked-in default md0 on top of the user's groups, and because
 Kubernetes strips null values the default could never be removed. With the
 default applied only when the map is empty, users can freely choose their own
 node groups (and omit md0).
+
+The default carries `minReplicas: 0`, which now propagates through to
+`MachineDeployment.spec.replicas: 0` (see the templates/cluster.yaml comment
+next to that field). Consequence: an empty-`nodeGroups` install provisions
+NO workers until either the cluster-autoscaler responds to an unschedulable
+Pod or an operator explicitly scales the group up. If the operator plans to
+enable the ingress-nginx addon, either supply an explicit nodeGroup with
+`roles: [ingress-nginx]` and `minReplicas >= 1`, or accept that the
+autoscaler will bring the default md0 up in response to the ingress-nginx
+controller Pods becoming Pending on install.
 */}}
 {{- define "kubernetes.nodeGroups" -}}
 {{- if .Values.nodeGroups -}}

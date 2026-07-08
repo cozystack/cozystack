@@ -37,7 +37,7 @@ tests:
                 name: keycloak-db-app
                 key: "host"
 
-  - it: renders three documents (KEK Secret + Deployment + Service) when enabled
+  - it: renders four documents (KEK Secret + ServiceAccount + Deployment + Service) when enabled
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
@@ -46,7 +46,7 @@ tests:
         cluster-domain: cozy.local
     asserts:
       - hasDocuments:
-          count: 3
+          count: 4
 
   - it: deploys the proxy wired to the static KEK and the CNPG backend
     template: templates/proxy.yaml
@@ -151,6 +151,13 @@ tests:
           content:
             name: KKP_VAULT_ADDR
             value: https://vault.vault.svc:8200
+      # Token auth must not leak AppRole env vars. any:true matches on the
+      # element name alone (helm-unittest otherwise deep-equals whole elements).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_ROLE_ID
 
   - it: does not generate a static KEK Secret for the Vault backend
     template: templates/proxy.yaml
@@ -164,8 +171,9 @@ tests:
         root-host: example.org
         cluster-domain: cozy.local
     asserts:
+      # ServiceAccount + Deployment + Service (no KEK Secret for Vault).
       - hasDocuments:
-          count: 2
+          count: 3
 
   - it: rejects an unsupported kms backend at render time
     template: templates/proxy.yaml
@@ -220,3 +228,305 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "encryption.kms.vault.tokenSecretName is required"
+
+  - it: authenticates via AppRole when vault.auth=approle
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_APPROLE_MOUNT
+            value: approle
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_ROLE_ID
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-vault-approle
+                key: role-id
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_SECRET_ID
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-vault-approle
+                key: secret-id
+      # AppRole must not store a long-lived token. any:true matches on the
+      # element name alone (helm-unittest otherwise deep-equals whole elements,
+      # so a name-only content would never match the valueFrom entry).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_TOKEN
+
+  - it: requires appRole.secretName when vault.auth=approle
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.appRole.secretName is required"
+
+  - it: authenticates via Kubernetes when vault.auth=kubernetes
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      encryption.kms.vault.kubernetes.role: keycloak-proxy
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_KUBERNETES_ROLE
+            value: keycloak-proxy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_KUBERNETES_MOUNT
+            value: kubernetes
+      # No credential env vars for the other modes must leak in.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_TOKEN
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_ROLE_ID
+
+  - it: requires kubernetes.role when vault.auth=kubernetes
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.kubernetes.role is required"
+
+  - it: rejects an unsupported vault auth method
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: bogus
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes'"
+
+  - it: creates a dedicated proxy ServiceAccount with the token off by default
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-kms-proxy
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: enables the ServiceAccount token on the SA object for Kubernetes auth
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      encryption.kms.vault.kubernetes.role: keycloak-proxy
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: automountServiceAccountToken
+          value: true
+
+  - it: runs the proxy under its ServiceAccount with the token off by default
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: keycloak-kms-proxy
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: mounts the ServiceAccount token only for Kubernetes auth
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      encryption.kms.vault.kubernetes.role: keycloak-proxy
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
+
+  - it: mints an ephemeral DEK (no dekset) by default
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_DEKSET_FILE
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: mounts the wrapped DEK set when deksetSecretName is set
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_DEKSET_FILE
+            value: /etc/kkp/dekset/dekset.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: dekset
+            mountPath: /etc/kkp/dekset
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: dekset
+            secret:
+              secretName: keycloak-kms-proxy-dekset
+
+  - it: rejects HA (replicas > 1) without a dekset
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.replicas: 2
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.replicas > 1 requires encryption.deksetSecretName"
+
+  - it: allows HA when a shared dekset is provided
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.replicas: 2
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: honors a custom deksetSecretKey
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      encryption.deksetSecretKey: custom.json
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_DEKSET_FILE
+            value: /etc/kkp/dekset/custom.json
