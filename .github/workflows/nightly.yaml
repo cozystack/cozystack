@@ -294,27 +294,37 @@ jobs:
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
 
       # Always the FULL app suite — a nightly has no diff to scope against, so
-      # Test Impact Analysis does not apply.
+      # Test Impact Analysis does not apply (empty CHAINSAW_SUITES = whole suite).
       - name: Run E2E tests (full suite)
         run: |
           cd "/tmp/$SANDBOX_NAME"
-          apps_list=$(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1)
-          failed_tests=""
-          for app in $apps_list; do
-            echo "::group::Testing $app"
-            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
-              echo "::endgroup::"; echo "✅ $app passed"
-            else
-              echo "::endgroup::"; echo "❌ $app failed"
-              failed_tests="$failed_tests $app"
-              echo "::group::Diagnostics for $app"
-              docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
-              docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
-              echo "::endgroup::"
-            fi
-          done
-          if [ -n "$failed_tests" ]; then echo "❌ Failed:$failed_tests"; exit 1; fi
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES=""; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            exit 1
+          fi
           echo "✅ All E2E tests passed"
+
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          if-no-files-found: ignore
 
       - name: Collect report
         if: always()

@@ -597,7 +597,7 @@ jobs:
           fi
 
       # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
-      # diff and select only the bats files affected. Runs by default; opt
+      # diff and select only the Chainsaw suites affected. Runs by default; opt
       # out via the `full-e2e` label to run the full suite.
       # `skip=true` means nothing to test (docs-only PR).
       - name: Select E2E tests
@@ -681,7 +681,7 @@ jobs:
 
       - name: Upload chainsaw report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: chainsaw-report
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml

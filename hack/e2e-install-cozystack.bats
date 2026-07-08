@@ -211,7 +211,7 @@ EOF
 
   # etcd cluster. The v1alpha2 operator manages member Pods directly and creates
   # NO StatefulSet, so gate on the EtcdCluster readiness signal (mirrors
-  # hack/e2e-apps/etcd.bats and the examples) plus the member Pods themselves.
+  # hack/e2e-chainsaw/etcd and the examples) plus the member Pods themselves.
   timeout 60 sh -ec 'until kubectl -n tenant-root get etcdcluster.etcd-operator.cozystack.io/etcd >/dev/null 2>&1; do sleep 2; done'
   kubectl -n tenant-root wait etcdcluster.etcd-operator.cozystack.io/etcd \
     --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True --timeout=10m

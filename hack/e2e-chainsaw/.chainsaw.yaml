@@ -64,6 +64,13 @@ spec:
           # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills a
           # collect that ignores the SIGTERM.
           timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "${snap}/host" >/dev/null 2>&1 || true
+          # Host->pod data-plane capture for NotReady pods — parity with the
+          # equivalent block in hack/cozytest.sh's fail handler. The catch
+          # script's cwd is the failing test's suite dir, so ../../ is hack/.
+          if [ -x ../../e2e-capture-dataplane.sh ]; then
+            echo "» capturing host->pod data-plane for NotReady pods -> ${snap}/dataplane"
+            timeout -k 30 600 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1 || true
+          fi
   report:
     format: XML
     name: chainsaw-report

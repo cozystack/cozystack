@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for cozy_tenant_drained in hack/e2e-apps/run-kubernetes.sh
+# Unit tests for cozy_tenant_drained in hack/e2e-chainsaw/_lib/run-kubernetes.sh
 #
 # cozy_tenant_drained is the pure exit-condition of the inter-test drain loop
 # (cozy_wait_tenant_drained). Each argument is one resource-probe capture: the
@@ -17,7 +17,7 @@
 # -----------------------------------------------------------------------------
 
 @test "all-empty captures report drained" {
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if ! cozy_tenant_drained "" "" ""; then
         echo "expected drained when every capture is empty" >&2
         exit 1
@@ -25,7 +25,7 @@
 }
 
 @test "no arguments reports drained" {
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if ! cozy_tenant_drained; then
         echo "expected drained when there are no captures" >&2
         exit 1
@@ -33,7 +33,7 @@
 }
 
 @test "a remaining VirtualMachine reports not-drained" {
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if cozy_tenant_drained "virtualmachine.kubevirt.io/kubernetes-test-latest-version-md0-abcde" "" ""; then
         echo "expected not-drained while a VirtualMachine is still present" >&2
         exit 1
@@ -41,7 +41,7 @@
 }
 
 @test "a remaining PVC in the last capture reports not-drained" {
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if cozy_tenant_drained "" "" "persistentvolumeclaim/disk-system-kubernetes-test-latest-version-md0-abcde"; then
         echo "expected not-drained while a worker-disk PVC is still present" >&2
         exit 1
@@ -49,7 +49,7 @@
 }
 
 @test "a multi-line resource list reports not-drained" {
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     vms=$(printf 'virtualmachine.kubevirt.io/a\nvirtualmachine.kubevirt.io/b\n')
     if cozy_tenant_drained "$vms" "" ""; then
         echo "expected not-drained for a multi-line VirtualMachine list" >&2
@@ -62,7 +62,7 @@
     # when every other capture is empty, an err capture MUST count as
     # not-drained so the loop keeps polling instead of declaring victory on a
     # blip and letting the next tenant schedule onto an un-vacated sandbox.
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if cozy_tenant_drained "" "err" ""; then
         echo "expected not-drained when a probe returned the err sentinel" >&2
         exit 1
@@ -72,7 +72,7 @@
 @test "whitespace-only captures are treated as drained" {
     # `kubectl get -o name` against an empty result set yields no resource
     # names; a stray newline must not be mistaken for a live resource.
-    . hack/e2e-apps/run-kubernetes.sh
+    . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     blank=$(printf '\n')
     if ! cozy_tenant_drained "$blank" "" "  "; then
         echo "expected drained when captures hold only whitespace" >&2
