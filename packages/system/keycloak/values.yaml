@@ -108,13 +108,21 @@ encryption:
       address: ""       # e.g. https://vault.vault.svc:8200
       keyName: ""       # Transit key name
       mount: transit    # Transit mount path
-      # Vault authentication: "token" (a long-lived token in a Secret) or
-      # "approle" (the proxy logs in via AppRole and re-authenticates on demand,
-      # so no long-lived token is stored). AppRole requires a keycloak-kms-proxy
-      # image that supports it (> v0.1.0); bump encryption.image accordingly.
+      # Vault authentication mode:
+      #   "kubernetes" — the proxy logs in with its own ServiceAccount token
+      #     (RECOMMENDED: no credential is stored; the kubelet rotates the token).
+      #   "approle" — the proxy logs in via AppRole and re-authenticates on demand.
+      #   "token" — a long-lived Vault token in a Secret.
+      # "kubernetes"/"approle" require a keycloak-kms-proxy image that supports
+      # them (> v0.1.0); bump encryption.image accordingly.
       auth: token
       # token auth: existing Secret holding the Vault token under key "token".
       tokenSecretName: ""
+      # kubernetes auth: the Vault role bound to this pod's ServiceAccount +
+      # namespace. The SA token is auto-mounted, so no Secret is needed.
+      kubernetes:
+        role: ""                # Vault Kubernetes auth role
+        mount: kubernetes       # Kubernetes auth mount path
       # approle auth: existing Secret holding the AppRole role id and secret id.
       appRole:
         mount: approle          # AppRole auth mount path

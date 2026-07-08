@@ -114,8 +114,8 @@ spec:
             {{- if eq $backend "vault-transit" }}
             {{- $vault := $kms.vault | default dict }}
             {{- $auth := $vault.auth | default "token" }}
-            {{- if and (ne $auth "token") (ne $auth "approle") }}
-            {{- fail (printf "encryption.kms.vault.auth must be 'token' or 'approle', got %q" $auth) }}
+            {{- if and (ne $auth "token") (ne $auth "approle") (ne $auth "kubernetes") }}
+            {{- fail (printf "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes', got %q" $auth) }}
             {{- end }}
             - name: KKP_VAULT_ADDR
               value: {{ required "encryption.kms.vault.address is required when kms.backend=vault-transit" $vault.address | quote }}
@@ -138,6 +138,15 @@ spec:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: {{ $appRole.secretIdKey | default "secret-id" }}
+            {{- else if eq $auth "kubernetes" }}
+            {{- $k8s := $vault.kubernetes | default dict }}
+            # The proxy logs in with its own ServiceAccount token (auto-mounted
+            # at the standard in-pod path); bind the Vault role to this pod's
+            # ServiceAccount + namespace. No credential is stored in a Secret.
+            - name: KKP_VAULT_KUBERNETES_ROLE
+              value: {{ required "encryption.kms.vault.kubernetes.role is required when vault.auth=kubernetes" $k8s.role | quote }}
+            - name: KKP_VAULT_KUBERNETES_MOUNT
+              value: {{ $k8s.mount | default "kubernetes" | quote }}
             {{- else }}
             - name: KKP_VAULT_TOKEN
               valueFrom:

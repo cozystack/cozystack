@@ -289,6 +289,59 @@ tests:
       - failedTemplate:
           errorPattern: "encryption.kms.vault.appRole.secretName is required"
 
+  - it: authenticates via Kubernetes when vault.auth=kubernetes
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      encryption.kms.vault.kubernetes.role: keycloak-proxy
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_KUBERNETES_ROLE
+            value: keycloak-proxy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_KUBERNETES_MOUNT
+            value: kubernetes
+      # No credential env vars for the other modes must leak in.
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_TOKEN
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_ROLE_ID
+
+  - it: requires kubernetes.role when vault.auth=kubernetes
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.kubernetes.role is required"
+
   - it: rejects an unsupported vault auth method
     template: templates/proxy.yaml
     set:
@@ -296,10 +349,10 @@ tests:
       encryption.kms.backend: vault-transit
       encryption.kms.vault.address: https://vault.vault.svc:8200
       encryption.kms.vault.keyName: keycloak
-      encryption.kms.vault.auth: k8s
+      encryption.kms.vault.auth: bogus
       _cluster:
         root-host: example.org
         cluster-domain: cozy.local
     asserts:
       - failedTemplate:
-          errorPattern: "encryption.kms.vault.auth must be 'token' or 'approle'"
+          errorPattern: "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes'"
