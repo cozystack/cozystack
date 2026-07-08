@@ -227,3 +227,13 @@ tests:
           path: kind
           value: MachineDeployment
           matchMany: true
+      # Symmetric with the zero-minReplicas case above — both annotations
+      # must land, because CAPI's calculateMachineDeploymentReplicas
+      # defaults to 1 (not to minSize) if either annotation is missing.
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"]
+          value: "10"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
