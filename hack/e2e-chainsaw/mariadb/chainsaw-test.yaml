@@ -1,4 +1,5 @@
-# Chainsaw port of hack/e2e-apps/mariadb.bats ("Create DB MariaDB").
+# Chainsaw port of hack/e2e-apps/mariadb.bats
+# ("Create DB MariaDB" + "Create single-replica MariaDB").
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -85,5 +86,104 @@ spec:
           kind: Deployment
           metadata:
             name: mariadb-test-metrics
+          status:
+            replicas: 1
+---
+# Guard for the operator-webhook regression fixed in c7e8f4d97: replication is
+# guarded on replicas>1, so replicas=1 must render a CR the mariadb-operator's
+# validating webhook admits. With one replica the operator provisions the bare
+# <name> Service (no -primary/-secondary split).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mariadb-single
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mariadb-single
+  # The rendered operator CR makes a webhook rejection (the regression this
+  # guards against) legible in the log.
+  - describe:
+      apiVersion: k8s.mariadb.com/v1alpha1
+      kind: MariaDB
+      name: mariadb-single
+  - podLogs:
+      selector: app.kubernetes.io/instance=mariadb-single
+      tail: 50
+  steps:
+  - name: create-mariadb-single
+    try:
+    - apply:
+        file: mariadb-single.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mariadb-single
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-service-and-statefulset
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-single
+          spec:
+            (ports[0].port): 3306
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-single
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: mariadb-single
+          status:
+            replicas: 1
+
+  - name: verify-metrics
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-single-metrics
+          spec:
+            (ports[0].port): 9104
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-single-metrics
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mariadb-single-metrics
           status:
             replicas: 1
