@@ -220,3 +220,75 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "encryption.kms.vault.tokenSecretName is required"
+
+  - it: authenticates via AppRole when vault.auth=approle
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      encryption.kms.vault.appRole.secretName: keycloak-vault-approle
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_APPROLE_MOUNT
+            value: approle
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_ROLE_ID
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-vault-approle
+                key: role-id
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_SECRET_ID
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-vault-approle
+                key: secret-id
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_TOKEN
+
+  - it: requires appRole.secretName when vault.auth=approle
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: approle
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.appRole.secretName is required"
+
+  - it: rejects an unsupported vault auth method
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: k8s
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.auth must be 'token' or 'approle'"

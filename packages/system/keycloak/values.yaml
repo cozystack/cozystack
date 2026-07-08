@@ -108,8 +108,19 @@ encryption:
       address: ""       # e.g. https://vault.vault.svc:8200
       keyName: ""       # Transit key name
       mount: transit    # Transit mount path
-      # Existing Secret holding the Vault token under key "token".
+      # Vault authentication: "token" (a long-lived token in a Secret) or
+      # "approle" (the proxy logs in via AppRole and re-authenticates on demand,
+      # so no long-lived token is stored). AppRole requires a keycloak-kms-proxy
+      # image that supports it (> v0.1.0); bump encryption.image accordingly.
+      auth: token
+      # token auth: existing Secret holding the Vault token under key "token".
       tokenSecretName: ""
+      # approle auth: existing Secret holding the AppRole role id and secret id.
+      appRole:
+        mount: approle          # AppRole auth mount path
+        secretName: ""          # Secret with the role id / secret id
+        roleIdKey: role-id      # key in secretName holding the role id
+        secretIdKey: secret-id  # key in secretName holding the secret id
   resources:
     requests:
       memory: 128Mi

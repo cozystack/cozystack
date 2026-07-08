@@ -113,17 +113,38 @@ spec:
               value: {{ .Values.encryption.lenient | quote }}
             {{- if eq $backend "vault-transit" }}
             {{- $vault := $kms.vault | default dict }}
+            {{- $auth := $vault.auth | default "token" }}
+            {{- if and (ne $auth "token") (ne $auth "approle") }}
+            {{- fail (printf "encryption.kms.vault.auth must be 'token' or 'approle', got %q" $auth) }}
+            {{- end }}
             - name: KKP_VAULT_ADDR
               value: {{ required "encryption.kms.vault.address is required when kms.backend=vault-transit" $vault.address | quote }}
             - name: KKP_VAULT_KEY_NAME
               value: {{ required "encryption.kms.vault.keyName is required when kms.backend=vault-transit" $vault.keyName | quote }}
             - name: KKP_VAULT_MOUNT
               value: {{ $vault.mount | default "transit" | quote }}
+            {{- if eq $auth "approle" }}
+            {{- $appRole := $vault.appRole | default dict }}
+            {{- $secretName := required "encryption.kms.vault.appRole.secretName is required when vault.auth=approle" $appRole.secretName }}
+            - name: KKP_VAULT_APPROLE_MOUNT
+              value: {{ $appRole.mount | default "approle" | quote }}
+            - name: KKP_VAULT_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $appRole.roleIdKey | default "role-id" }}
+            - name: KKP_VAULT_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $appRole.secretIdKey | default "secret-id" }}
+            {{- else }}
             - name: KKP_VAULT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "encryption.kms.vault.tokenSecretName is required when kms.backend=vault-transit" $vault.tokenSecretName }}
+                  name: {{ required "encryption.kms.vault.tokenSecretName is required when vault.auth=token" $vault.tokenSecretName }}
                   key: token
+            {{- end }}
             {{- else }}
             - name: KKP_KEK
               valueFrom:
