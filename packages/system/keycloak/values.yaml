@@ -92,13 +92,23 @@ extraEnv: []
 #     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
 encryption:
   enabled: false
-  image: ghcr.io/cozystack/keycloak-kms-proxy:v0.1.0
+  image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.1
   # Encrypted field set: "" = full default set (username, email, names,
   # PII attributes, credentials), "email-only", or "disabled" (passthrough).
   fields: ""
   # Bootstrap window only: downgrades fail-loud rules to passthrough so the
   # Keycloak Liquibase migrations can complete. MUST be false in steady state.
   lenient: false
+  # Number of proxy replicas. >1 requires deksetSecretName (a shared wrapped
+  # DEK set) so every replica encrypts deterministic columns under one key.
+  replicas: 1
+  # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
+  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED to migrate
+  # an existing populated database — the proxy must reuse the DEK the backfill
+  # encrypted rows with — and to run more than one replica. When empty the proxy
+  # mints an ephemeral DEK at startup, which is only safe on a fresh, empty DB.
+  deksetSecretName: ""
+  deksetSecretKey: dekset.json
   kms:
     # "static" — a self-generated 32-byte KEK kept in a Secret (works on any
     # cluster, suitable for evaluation). "vault-transit" — the KEK lives in
@@ -108,8 +118,27 @@ encryption:
       address: ""       # e.g. https://vault.vault.svc:8200
       keyName: ""       # Transit key name
       mount: transit    # Transit mount path
-      # Existing Secret holding the Vault token under key "token".
+      # Vault authentication mode:
+      #   "kubernetes" — the proxy logs in with its own ServiceAccount token
+      #     (RECOMMENDED: no credential is stored; the kubelet rotates the token).
+      #   "approle" — the proxy logs in via AppRole and re-authenticates on demand.
+      #   "token" — a long-lived Vault token in a Secret.
+      auth: token
+      # token auth: existing Secret holding the Vault token under key "token".
       tokenSecretName: ""
+      # kubernetes auth: bind the Vault role to the proxy's dedicated
+      # ServiceAccount — system:serviceaccount:<namespace>:keycloak-kms-proxy
+      # (created by this chart). No Secret is needed; the SA token is mounted
+      # into the proxy pod only in this mode.
+      kubernetes:
+        role: ""                # Vault Kubernetes auth role
+        mount: kubernetes       # Kubernetes auth mount path
+      # approle auth: existing Secret holding the AppRole role id and secret id.
+      appRole:
+        mount: approle          # AppRole auth mount path
+        secretName: ""          # Secret with the role id / secret id
+        roleIdKey: role-id      # key in secretName holding the role id
+        secretIdKey: secret-id  # key in secretName holding the secret id
   resources:
     requests:
       memory: 128Mi
