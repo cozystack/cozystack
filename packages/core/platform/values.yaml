@@ -371,6 +371,23 @@ gateway:
     - cozy-monitoring
     - cozy-linstor-gui
     - default
+# Platform monitoring configuration.
+monitoring:
+  # Whether the root tenant (tenant-root) hosts the platform
+  # VictoriaMetrics/VictoriaLogs stack, i.e. Tenant/root spec.monitoring=true.
+  # The platform centralises metrics and logs in tenant-root, and
+  # cozystack-basics publishes vlinsert-generic / vminsert-* ExternalName
+  # Services in cozy-monitoring that redirect there. When the root tenant has
+  # monitoring disabled those redirects dead-end and fluent-bit silently drops
+  # logs (issue #3181), so the ExternalNames are only created when this is
+  # true. This is the single render-time source of truth for that gate:
+  # changing it re-renders cozystack-basics (helm-controller watches the
+  # cozystack-values Secret it flows into). Nothing in the charts sets
+  # Tenant/root spec.monitoring — it is a runtime choice on the Tenant CR
+  # (default false; the standard install enables it out-of-band). The default
+  # here is true only to preserve the historical always-create behaviour;
+  # operators MUST set it to match their actual Tenant/root spec.monitoring.
+  rootEnabled: true
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

@@ -1,3 +1,29 @@
+{{- /*
+  These ExternalName Services live in cozy-monitoring and redirect
+  vlinsert-generic / vminsert-* to the platform monitoring stack the root
+  tenant hosts in tenant-root. They only make sense when tenant-root actually
+  runs that stack (Tenant/root spec.monitoring=true). When it does not, the
+  redirects resolve to nothing: fluent-bit ships to vlinsert-generic and its
+  chunks dead-end at a non-existent tenant-root VictoriaLogs, dropping logs
+  silently (issue #3181).
+
+  Gate on _cluster.monitoring-enabled, fed from the platform
+  monitoring.rootEnabled value. This is the single source of truth: it lands in
+  the cozystack-values Secret, and changing it re-renders this chart (helm-
+  controller watches the Secret referenced by valuesFrom). Do NOT read the live
+  Tenant/root spec.monitoring here: cozystack-basics is an operator-generated
+  HelmRelease with drift detection off, so helm-controller re-renders only on
+  install/upgrade/values-change — never on a reconcile tick or when a `lookup`
+  result changes. A lookup would therefore go stale in both directions when the
+  Tenant CR is toggled out-of-band. Operators must keep monitoring.rootEnabled
+  in sync with Tenant/root spec.monitoring; flipping monitoring.rootEnabled is
+  what refreshes these redirects.
+
+  `default dict` guards a null/absent _cluster (missing Secret / dry-run); the
+  "true" default preserves the historical always-create behaviour for
+  cozystack-values Secrets written before this key existed.
+*/ -}}
+{{- if eq (toString (index (.Values._cluster | default dict) "monitoring-enabled" | default "true")) "true" }}
 ---
 apiVersion: v1
 kind: Service
@@ -25,3 +51,4 @@ metadata:
 spec:
   type: ExternalName
   externalName: vminsert-longterm.tenant-root.svc.cluster.local
+{{- end }}

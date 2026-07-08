@@ -126,6 +126,18 @@ stringData:
       proxy-protocol: {{ .Values.publishing.proxyProtocol | default false | quote }}
       gateway-enabled: {{ .Values.gateway.enabled | default false | quote }}
       gateway-attached-namespaces: {{ .Values.gateway.attachedNamespaces | default (list) | join "," | quote }}
+      {{- /* Whether the root tenant hosts the platform monitoring stack
+             (Tenant/root spec.monitoring). cozystack-basics gates the
+             cozy-monitoring -> tenant-root vlinsert/vminsert ExternalName
+             redirects on this: when the root tenant has no monitoring, those
+             redirects dead-end and fluent-bit silently drops logs (#3181).
+             `dig` (not `default`) is used deliberately: it keys on presence,
+             so an explicit rootEnabled=false is preserved (Go's `default`
+             would treat the boolean false as empty and flip it back to true),
+             while `| default dict` guards against `.Values.monitoring` being
+             null/omitted in custom values. Missing key -> the true default,
+             matching the chart values.yaml. */}}
+      monitoring-enabled: {{ dig "rootEnabled" true (.Values.monitoring | default dict) | quote }}
       cluster-domain: {{ .Values.networking.clusterDomain | quote }}
       api-server-endpoint: {{ .Values.publishing.apiServerEndpoint | quote }}
       {{- with .Values.branding }}
