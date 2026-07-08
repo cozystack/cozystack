@@ -2,7 +2,7 @@
 # github.com/lllamnyp/cozyplane (kpr/); digest-pinned (no floating tag).
 # It imports Cilium's LB control plane, so it is a large image and a SEPARATE
 # component from the cozyplane agent — never co-mingled.
-image: ghcr.io/lllamnyp/cozyplane-kpr@sha256:34b54bb3fddc11e0ef4165733552c90ee469f09d205c86ab80e087532dc6ae51
+image: ghcr.io/lllamnyp/cozyplane-kpr@sha256:f75bb0e4f351623920f4e46da3227bb04d308e93ff171eb35ad1b4f88f7fd8c6
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
