@@ -65,6 +65,32 @@ tests:
           value: 20Gi
         documentIndex: 4
 
+  - it: honours talos.imageFactoryURL override on the worker disk source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.diskSize: 20Gi
+      talos.imageFactoryURL: http://talos-image-cache.cozy-e2e.svc
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          pattern: "^http://talos-image-cache\\.cozy-e2e\\.svc/image/[a-f0-9]+/v[0-9.]+/openstack-amd64\\.raw\\.xz$"
+        documentIndex: 4
+
+  - it: strips a trailing slash from talos.imageFactoryURL
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      nodeGroups.md0.diskSize: 20Gi
+      talos.imageFactoryURL: https://mirror.example.com/talos/
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          pattern: "^https://mirror\\.example\\.com/talos/image/[a-f0-9]+/"
+        documentIndex: 4
+
   ###############################################
   # dataVolumeTemplates — custom disk size      #
   ###############################################

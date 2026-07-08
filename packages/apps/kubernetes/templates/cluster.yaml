@@ -95,7 +95,7 @@ spec:
                 ignores configdrive and never applies the machineconfig. */}}
           source:
             http:
-              url: https://factory.talos.dev/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
+              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}

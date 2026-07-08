@@ -930,10 +930,22 @@
       "type": "object",
       "default": {},
       "required": [
+        "imageFactoryURL",
+        "installerRepository",
         "schematicID",
         "version"
       ],
       "properties": {
+        "imageFactoryURL": {
+          "description": "Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.",
+          "type": "string",
+          "default": "https://factory.talos.dev"
+        },
+        "installerRepository": {
+          "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.",
+          "type": "string",
+          "default": "factory.talos.dev/installer"
+        },
         "schematicID": {
           "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
           "type": "string",
