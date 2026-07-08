@@ -92,7 +92,7 @@ extraEnv: []
 #     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
 encryption:
   enabled: false
-  image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.0
+  image: ghcr.io/cozystack/keycloak-kms-proxy:0.2.1
   # Encrypted field set: "" = full default set (username, email, names,
   # PII attributes, credentials), "email-only", or "disabled" (passthrough).
   fields: ""
