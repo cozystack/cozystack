@@ -358,7 +358,7 @@ tests:
       - failedTemplate:
           errorPattern: "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes'"
 
-  - it: creates a dedicated proxy ServiceAccount
+  - it: creates a dedicated proxy ServiceAccount with the token off by default
     template: templates/proxy.yaml
     documentSelector:
       path: kind
@@ -372,6 +372,29 @@ tests:
       - equal:
           path: metadata.name
           value: keycloak-kms-proxy
+      - equal:
+          path: automountServiceAccountToken
+          value: false
+
+  - it: enables the ServiceAccount token on the SA object for Kubernetes auth
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      encryption.kms.vault.kubernetes.role: keycloak-proxy
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: automountServiceAccountToken
+          value: true
 
   - it: runs the proxy under its ServiceAccount with the token off by default
     template: templates/proxy.yaml
