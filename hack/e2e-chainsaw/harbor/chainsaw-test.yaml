@@ -26,6 +26,13 @@ spec:
       apiVersion: objectstorage.k8s.io/v1alpha1
       kind: BucketAccess
       name: harbor-test-registry
+  # The backend view: cluster-scoped Buckets plus the COSI controller pods,
+  # where a frozen-claim readiness propagation failure actually surfaces.
+  - get:
+      apiVersion: objectstorage.k8s.io/v1alpha1
+      kind: Bucket
+  - script:
+      content: kubectl -n cozy-objectstorage-controller get pods
   - podLogs:
       selector: app.kubernetes.io/instance=harbor-test
       tail: 50
@@ -50,12 +57,13 @@ spec:
 
   - name: wait-cosi-bucket
     try:
-    # 10m, not the default 5m: readiness on the namespaced BucketClaim can lag
-    # several minutes on a loaded runner (seaweedfs/COSI provisioning is the slow
-    # path), so allow the same budget the dependent harbor-test-system HR gets.
-    # Matches the BATS original (--timeout=600s); see docs/agents/e2e-testing.md §6.
+    # 2m, not the default 5m: the objectstorage-controller requeues the
+    # BucketClaim until the backend Bucket is ready, so readiness converges
+    # within tens of seconds; a claim still not ready after 2m is frozen
+    # (readiness-propagation regression), and the tight bound surfaces that
+    # instead of masking it (mirrors the bats 120s budget from 63d14e748).
     - assert:
-        timeout: 10m
+        timeout: 2m
         resource:
           apiVersion: objectstorage.k8s.io/v1alpha1
           kind: BucketClaim
