@@ -92,7 +92,7 @@ extraEnv: []
 #     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
 encryption:
   enabled: false
-  image: ghcr.io/cozystack/keycloak-kms-proxy:v0.1.0
+  image: ghcr.io/cozystack/keycloak-kms-proxy:v0.2.0
   # Encrypted field set: "" = full default set (username, email, names,
   # PII attributes, credentials), "email-only", or "disabled" (passthrough).
   fields: ""
@@ -113,8 +113,6 @@ encryption:
       #     (RECOMMENDED: no credential is stored; the kubelet rotates the token).
       #   "approle" — the proxy logs in via AppRole and re-authenticates on demand.
       #   "token" — a long-lived Vault token in a Secret.
-      # "kubernetes"/"approle" require a keycloak-kms-proxy image that supports
-      # them (> v0.1.0); bump encryption.image accordingly.
       auth: token
       # token auth: existing Secret holding the Vault token under key "token".
       tokenSecretName: ""
