@@ -126,3 +126,121 @@ tests:
           path: kind
           value: MachineDeployment
           matchMany: true
+
+  # Regression guard for cozystack/cozystack#3231. The chart intentionally
+  # OMITS `MachineDeployment.spec.replicas` so the cluster-autoscaler owns
+  # the field alone. Two independent CAPI mechanisms carry the guarantee:
+  # the defaulting webhook seeds `spec.replicas` from the
+  # `cluster-api-autoscaler-node-group-min-size` annotation on Create, and
+  # `calculateMachineDeploymentReplicas` preserves the existing live
+  # value on Update when the incoming spec has `replicas: nil` — so a
+  # `helm upgrade` re-rendering this template does not drain workers the
+  # autoscaler has scaled above min-size. Flux helm-controller applies
+  # this chart through the Helm SDK three-way merge (not SSA), so field-
+  # manager ownership is not the mechanism at play; the guarantee is
+  # purely "field absent from the rendered manifest → CAPI's update-time
+  # defaulting preserves the live value". Two matched cases so a future
+  # refactor cannot silently re-hardcode the field nor break the
+  # annotation-driven min/max wiring:
+  #   * minReplicas: 0 (the render-side OIDC bats path — MachineDeployment
+  #     emitted with the min-size annotation "0", no chart-owned replicas
+  #     field, no worker DataVolumes provisioned until scale-out).
+  #   * minReplicas: 2 (the kubernetes-latest / kubernetes-previous bats
+  #     path — MachineDeployment emitted with the min-size annotation "2",
+  #     no chart-owned replicas field, defaulting webhook fills it to 2 on
+  #     Create).
+  - it: MachineDeployment omits chart-managed spec.replicas — zero-minReplicas case
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          storageClass: ""
+          roles:
+          - worker
+          resources: {}
+          gpus: []
+          kubelet: {}
+    asserts:
+      # spec.replicas must not appear in the rendered manifest — CAPI's
+      # defaulting webhook will seed it from the annotation on Create.
+      - notExists:
+          path: spec.replicas
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      # Autoscaler annotation wiring stays intact.
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "0"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"]
+          value: "10"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+
+  - it: MachineDeployment omits chart-managed spec.replicas — nonzero-minReplicas case
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        worker0:
+          minReplicas: 2
+          maxReplicas: 10
+          instanceType: "u1.medium"
+          diskSize: 20Gi
+          storageClass: ""
+          roles:
+          - worker
+          resources: {}
+          gpus: []
+          kubelet: {}
+    asserts:
+      - notExists:
+          path: spec.replicas
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size"]
+          value: "2"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
+      # Symmetric with the zero-minReplicas case above — both annotations
+      # must land, because CAPI's calculateMachineDeploymentReplicas
+      # defaults to 1 (not to minSize) if either annotation is missing.
+      - equal:
+          path: metadata.annotations["cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size"]
+          value: "10"
+        documentSelector:
+          path: kind
+          value: MachineDeployment
+          matchMany: true
