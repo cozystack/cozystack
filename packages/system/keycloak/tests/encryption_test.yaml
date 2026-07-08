@@ -151,6 +151,13 @@ tests:
           content:
             name: KKP_VAULT_ADDR
             value: https://vault.vault.svc:8200
+      # Token auth must not leak AppRole env vars. any:true matches on the
+      # element name alone (helm-unittest otherwise deep-equals whole elements).
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_VAULT_ROLE_ID
 
   - it: does not generate a static KEK Secret for the Vault backend
     template: templates/proxy.yaml
@@ -258,8 +265,12 @@ tests:
               secretKeyRef:
                 name: keycloak-vault-approle
                 key: secret-id
+      # AppRole must not store a long-lived token. any:true matches on the
+      # element name alone (helm-unittest otherwise deep-equals whole elements,
+      # so a name-only content would never match the valueFrom entry).
       - notContains:
           path: spec.template.spec.containers[0].env
+          any: true
           content:
             name: KKP_VAULT_TOKEN
 
