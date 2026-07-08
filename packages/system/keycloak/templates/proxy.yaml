@@ -11,6 +11,9 @@
 {{- if and (ne $backend "static") (ne $backend "vault-transit") }}
 {{- fail (printf "encryption.kms.backend must be 'static' or 'vault-transit', got %q" $backend) }}
 {{- end }}
+{{- /* The proxy needs its ServiceAccount token only for Vault Kubernetes auth. */}}
+{{- $vaultAuth := (($kms.vault | default dict).auth | default "token") }}
+{{- $k8sAuth := and (eq $backend "vault-transit") (eq $vaultAuth "kubernetes") }}
 {{- if eq $backend "static" }}
 {{- /*
   Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
@@ -32,6 +35,16 @@ data:
   kek: {{ $kek | quote }}
 ---
 {{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+# Dedicated identity for the proxy (never the namespace default SA). Its token
+# is only mounted for Vault Kubernetes auth; other modes don't need it.
+automountServiceAccountToken: {{ $k8sAuth }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -51,6 +64,8 @@ spec:
       labels:
         app: keycloak-kms-proxy
     spec:
+      serviceAccountName: keycloak-kms-proxy
+      automountServiceAccountToken: {{ $k8sAuth }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -140,9 +155,9 @@ spec:
                   key: {{ $appRole.secretIdKey | default "secret-id" }}
             {{- else if eq $auth "kubernetes" }}
             {{- $k8s := $vault.kubernetes | default dict }}
-            # The proxy logs in with its own ServiceAccount token (auto-mounted
-            # at the standard in-pod path); bind the Vault role to this pod's
-            # ServiceAccount + namespace. No credential is stored in a Secret.
+            # The proxy logs in with its own ServiceAccount token; bind the
+            # Vault role to system:serviceaccount:<namespace>:keycloak-kms-proxy.
+            # No credential is stored in a Secret.
             - name: KKP_VAULT_KUBERNETES_ROLE
               value: {{ required "encryption.kms.vault.kubernetes.role is required when vault.auth=kubernetes" $k8s.role | quote }}
             - name: KKP_VAULT_KUBERNETES_MOUNT

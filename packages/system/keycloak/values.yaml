@@ -118,8 +118,10 @@ encryption:
       auth: token
       # token auth: existing Secret holding the Vault token under key "token".
       tokenSecretName: ""
-      # kubernetes auth: the Vault role bound to this pod's ServiceAccount +
-      # namespace. The SA token is auto-mounted, so no Secret is needed.
+      # kubernetes auth: bind the Vault role to the proxy's dedicated
+      # ServiceAccount — system:serviceaccount:<namespace>:keycloak-kms-proxy
+      # (created by this chart). No Secret is needed; the SA token is mounted
+      # into the proxy pod only in this mode.
       kubernetes:
         role: ""                # Vault Kubernetes auth role
         mount: kubernetes       # Kubernetes auth mount path

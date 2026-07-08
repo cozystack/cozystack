@@ -37,7 +37,7 @@ tests:
                 name: keycloak-db-app
                 key: "host"
 
-  - it: renders three documents (KEK Secret + Deployment + Service) when enabled
+  - it: renders four documents (KEK Secret + ServiceAccount + Deployment + Service) when enabled
     template: templates/proxy.yaml
     set:
       encryption.enabled: true
@@ -46,7 +46,7 @@ tests:
         cluster-domain: cozy.local
     asserts:
       - hasDocuments:
-          count: 3
+          count: 4
 
   - it: deploys the proxy wired to the static KEK and the CNPG backend
     template: templates/proxy.yaml
@@ -171,8 +171,9 @@ tests:
         root-host: example.org
         cluster-domain: cozy.local
     asserts:
+      # ServiceAccount + Deployment + Service (no KEK Secret for Vault).
       - hasDocuments:
-          count: 2
+          count: 3
 
   - it: rejects an unsupported kms backend at render time
     template: templates/proxy.yaml
@@ -356,3 +357,56 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes'"
+
+  - it: creates a dedicated proxy ServiceAccount
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: ServiceAccount
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-kms-proxy
+
+  - it: runs the proxy under its ServiceAccount with the token off by default
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: keycloak-kms-proxy
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: false
+
+  - it: mounts the ServiceAccount token only for Kubernetes auth
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.auth: kubernetes
+      encryption.kms.vault.kubernetes.role: keycloak-proxy
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.template.spec.automountServiceAccountToken
+          value: true
