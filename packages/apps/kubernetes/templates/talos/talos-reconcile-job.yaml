@@ -417,7 +417,7 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: factory.talos.dev/installer/{{ $.Values.talos.schematicID }}:{{ .talosVersion }}
+                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" }}/{{ $.Values.talos.schematicID }}:{{ .talosVersion }}
                           wipe: false
                         features:
                           rbac: true

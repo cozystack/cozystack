@@ -1,4 +1,5 @@
 . hack/e2e-apps/remediation-guard.sh
+. hack/e2e-apps/talos-image-cache.sh
 
 # kubectl_wait_retry: wraps `kubectl wait` with retries against transient
 # management-cluster apiserver/etcd errors.
@@ -244,6 +245,12 @@ YAML
 )
   fi
 
+  # Point worker DataVolume imports at the in-sandbox Talos image cache when it
+  # is up (falls back to the public factory otherwise). Emitted right under spec:
+  # as `talos: { imageFactoryURL: ... }`, or an empty line when the default applies.
+  local talos_block
+  talos_block=$(talos_image_factory_spec_block)
+
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -251,6 +258,7 @@ metadata:
   name: "${test_name}"
   namespace: tenant-test
 spec:
+${talos_block}
   addons:
     certManager:
       enabled: false
