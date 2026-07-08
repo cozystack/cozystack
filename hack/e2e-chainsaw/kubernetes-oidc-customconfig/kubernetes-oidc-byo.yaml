@@ -1,3 +1,12 @@
+# nodeGroups (and storageClass) intentionally omitted — this is a render-side
+# test that only asserts on the KamajiControlPlane + the tenant-supplied
+# issuer AuthenticationConfiguration Secret. With the schema default `{}`,
+# the chart helper emits the default `md0` group with `minReplicas: 0` —
+# exactly one MachineDeployment renders (API-surface completeness) but the
+# chart no longer manages `spec.replicas`, so CAPI's defaulting webhook seeds
+# it to 0 from the autoscaler min-size annotation. Result: zero
+# KubevirtMachines, zero worker DataVolumes, no DRBD churn between CI runs
+# (see #3231).
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:
@@ -13,17 +22,6 @@ spec:
       resources: {}
       resourcesPreset: small
     replicas: 1
-  nodeGroups:
-    md0:
-      diskSize: 20Gi
-      gpus: []
-      instanceType: u1.micro
-      maxReplicas: 1
-      minReplicas: 0
-      resources: {}
-      roles:
-      - worker
-  storageClass: replicated
   version: v1.35
   oidc:
     mode: CustomConfig
