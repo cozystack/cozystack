@@ -59,14 +59,17 @@ spec:
     replicas: 1
   # nodeGroups intentionally omitted — this is a render-side test that
   # only asserts on the KamajiControlPlane + the cozy-realm Keycloak
-  # objects. The chart's MachineDeployment hardcodes spec.replicas: 2
-  # even when a nodeGroup declares minReplicas: 0 (see #3231), so
-  # keeping a worker nodeGroup here provisions two 20 GiB DRBD
-  # DataVolumes on each `kubectl apply` and their churn overlaps
-  # kubernetes-previous, flaking that test with LINSTOR pool pressure.
-  # Dropping the field lets the schema default `{}` apply — zero
-  # MachineDeployments rendered, zero worker DataVolumes touched,
-  # test still exercises everything it claimed to.
+  # objects. With the schema default `{}`, the chart helper emits the
+  # default `md0` group with `minReplicas: 0` — exactly one
+  # MachineDeployment renders (API-surface completeness) but the chart
+  # no longer manages `spec.replicas`, so CAPI's defaulting webhook
+  # seeds it to 0 from the autoscaler min-size annotation. Result:
+  # zero KubevirtMachines, zero worker DataVolumes, no DRBD churn
+  # overlapping `kubernetes-previous` (see #3231). Keeping an
+  # explicit nodeGroup here would previously provision two 20 GiB
+  # DRBD DataVolumes per `kubectl apply` because the chart hardcoded
+  # `spec.replicas: 2`; the paired chart edit in this PR removes
+  # that hardcoding.
   version: v1.35
   oidc:
     mode: System

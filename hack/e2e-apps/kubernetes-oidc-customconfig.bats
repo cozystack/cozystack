@@ -51,11 +51,14 @@ spec:
     replicas: 1
   # nodeGroups intentionally omitted — this is a render-side test that
   # only asserts on the KamajiControlPlane + the tenant-supplied issuer
-  # AuthenticationConfiguration Secret. Combined with the chart change
-  # that makes `MachineDeployment.spec.replicas` honour `minReplicas`,
-  # dropping the field means zero MachineDeployments render and no
-  # worker DataVolumes are touched, keeping the render-side test from
-  # churning DRBD storage between CI runs (see #3231).
+  # AuthenticationConfiguration Secret. With the schema default `{}`,
+  # the chart helper emits the default `md0` group with
+  # `minReplicas: 0` — exactly one MachineDeployment renders
+  # (API-surface completeness) but the chart no longer manages
+  # `spec.replicas`, so CAPI's defaulting webhook seeds it to 0
+  # from the autoscaler min-size annotation. Result: zero
+  # KubevirtMachines, zero worker DataVolumes, no DRBD churn between
+  # CI runs (see #3231).
   version: v1.35
   oidc:
     mode: CustomConfig
