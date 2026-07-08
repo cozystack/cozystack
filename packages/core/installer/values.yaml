@@ -14,9 +14,9 @@ cozystackOperator:
   # to the value baked at build time. The Makefile sets this for the
   # kubectl-apply release artifacts (_out/assets/cozystack-operator-*.yaml).
   platformVersion: ""
-  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.5.0@sha256:05027a381a8a97276ec426dabb87e1b7df753d4d76925b68e2dd8819f7eb22df
+  image: ghcr.io/cozystack/cozystack/cozystack-operator:v1.6.0-rc.1@sha256:02a6da3647d1baabebf3633d1ced5a647df45eb8759c1cecf58fcf5e982c74a7
   platformSourceUrl: 'oci://ghcr.io/cozystack/cozystack/cozystack-packages'
-  platformSourceRef: 'digest=sha256:e2e7bc7664a9799332dc8d59ae312879ba3675929edfc0fd6ce005ec41cbeb7b'
+  platformSourceRef: 'digest=sha256:f41d1ff3d753af3972f8a531b222a0db560f86154b155223f2532e3406777408'
   # When non-empty, overrides the operator's --helmrelease-interval flag
   # (operator default: 5m). E2E sets this to 30s; production should leave empty.
   helmReleaseInterval: ""

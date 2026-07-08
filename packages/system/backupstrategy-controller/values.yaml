@@ -1,5 +1,5 @@
 backupStrategyController:
-  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.5.0@sha256:d965283f935e4b24b655bc76e37dcb3b731bec832bb5c2e3e407b0284c7526a3"
+  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.0-rc.1@sha256:674624dce45ee419c538e9f01eec070be5a591a39d5bb1a8332b336a544775c1"
   # chBackupClientImage is the image rendered into the Altinity strategy
   # Pod: it drives clickhouse-backup's HTTP API via curl + jq. We reuse
   # platform-migrations (already pre-built and digested by release CI in

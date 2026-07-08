@@ -30,7 +30,7 @@ kamaji:
             topologyKey: kubernetes.io/hostname
   image:
     pullPolicy: IfNotPresent
-    tag: v1.5.0@sha256:130d5013a9b35be0013b96efefc656210cc30c6fe92a8c39c9d2ab8d47f791e0
+    tag: v1.6.0-rc.1@sha256:91e853c41c1501ef329c7d250b603ddd3cdddda18b5891add98d7286976cadda
     repository: ghcr.io/cozystack/cozystack/kamaji
   resources:
     limits:
@@ -63,4 +63,4 @@ kamaji:
     periodSeconds: 10
     timeoutSeconds: 1
   extraArgs:
-    - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v1.5.0@sha256:130d5013a9b35be0013b96efefc656210cc30c6fe92a8c39c9d2ab8d47f791e0
+    - --migrate-image=ghcr.io/cozystack/cozystack/kamaji:v1.6.0-rc.1@sha256:91e853c41c1501ef329c7d250b603ddd3cdddda18b5891add98d7286976cadda
