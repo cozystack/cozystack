@@ -21,6 +21,10 @@
 # inline at the top of each @test.
 TEST_NAME="oidc-byo"
 
+# Point worker DataVolume imports at the in-sandbox Talos image cache when it is
+# up (falls back to the public factory otherwise) — see run-kubernetes.sh.
+. hack/e2e-apps/talos-image-cache.sh
+
 cleanup_kr() {
   kubectl -n tenant-test delete kubernetes.apps.cozystack.io "${TEST_NAME}" \
     --ignore-not-found --wait=false 2>/dev/null || true
@@ -32,6 +36,8 @@ cozy_cleanup() { cleanup_kr; }
 
 @test "Kubernetes CR accepts spec.oidc.mode=CustomConfig with inline config" {
   cleanup_kr
+  local talos_block
+  talos_block=$(talos_image_factory_spec_block)
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -39,6 +45,7 @@ metadata:
   name: ${TEST_NAME}
   namespace: tenant-test
 spec:
+${talos_block}
   addons:
     ingressNginx:
       enabled: false

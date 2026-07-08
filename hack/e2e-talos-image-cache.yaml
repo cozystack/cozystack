@@ -1,0 +1,121 @@
+# In-sandbox caching mirror for the Talos Image Factory worker OS disk image.
+#
+# Why this exists: tenant Kubernetes worker VMs boot from a Talos raw disk image
+# that CDI streams over HTTP from the PUBLIC Talos Image Factory
+# (https://factory.talos.dev/image/<schematicID>/<version>/openstack-amd64.raw.xz).
+# That endpoint does not support byte-range requests (so CDI falls back to a full
+# sequential copy-to-scratch) and its egress is intermittently flaky from the CI
+# runner — a mid-transfer HTTP/2 stream reset or a stalled download makes the
+# worker DataVolume import never finish, the worker VM never boots, no tenant
+# node joins within the chart's 12-minute node-join deadline, and the
+# `kubernetes-*` e2e tests fail (and, even when they pass, take 18-22 minutes
+# each dominated by these downloads). See cozystack/cozystack#3231.
+#
+# This Deployment fetches the image ONCE at e2e-install time with an aggressive
+# curl retry loop (decoupling the one flaky external fetch from the many
+# per-worker imports), then serves it locally over plain HTTP with range support.
+# Tenant `Kubernetes` CRs point `spec.talos.imageFactoryURL` at this Service
+# (see hack/e2e-apps/run-kubernetes.sh) so every worker imports from the warm
+# local copy instead of the public internet. If this Deployment never becomes
+# Available the e2e harness falls back to the public factory (status quo), so the
+# mirror can only help, never make CI worse.
+#
+# The __SCHEMATIC_ID__ / __TALOS_VERSION__ placeholders are substituted at apply
+# time by hack/e2e-install-cozystack.bats from packages/apps/kubernetes/values.yaml.
+#
+# CI band-aid, not a product artifact. The durable fix is the overridable
+# `talos.imageFactoryURL` chart value this manifest exercises; a self-hosted
+# Talos Image Factory or an operator's own mirror is the production path.
+apiVersion: v1
+kind: Service
+metadata:
+  name: talos-image-cache
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: talos-image-cache
+spec:
+  selector:
+    app.kubernetes.io/name: talos-image-cache
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: talos-image-cache
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: talos-image-cache
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: talos-image-cache
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: talos-image-cache
+    spec:
+      # The seed fetch and static serving use ordinary pod networking — the same
+      # egress path the CDI importer pods already use to reach factory.talos.dev.
+      initContainers:
+        # Fetch the compressed raw disk image ONCE, retrying hard against the
+        # flaky upstream. The Deployment only becomes Available after this
+        # succeeds, so "Available" is the e2e harness's signal that the mirror is
+        # warm and safe to point tenants at.
+        - name: seed
+          # Reuse the in-tree, digest-pinned image already shipped by the
+          # installer and pre-pulled for the cilium-leak-healer watchdog, so this
+          # pod does not add a fresh external image pull of its own.
+          image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              dest="/data/image/__SCHEMATIC_ID__/__TALOS_VERSION__/openstack-amd64.raw.xz"
+              url="https://factory.talos.dev/image/__SCHEMATIC_ID__/__TALOS_VERSION__/openstack-amd64.raw.xz"
+              mkdir -p "$(dirname "$dest")"
+              echo "seeding $dest from $url"
+              # --retry-all-errors + a long retry budget rides out the mid-transfer
+              # stream resets / stalls that break the CDI importer's single attempt.
+              curl --fail --location --show-error \
+                   --retry 30 --retry-all-errors --retry-delay 15 \
+                   --connect-timeout 30 \
+                   --output "$dest" \
+                   "$url"
+              ls -la "$dest"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      containers:
+        - name: serve
+          image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
+          # busybox httpd serves static files with HTTP range support, so a warm
+          # mirror also lets CDI use its faster range path instead of the
+          # copy-to-scratch fallback the range-less public factory forces.
+          command: [/bin/sh, -ec]
+          args:
+            - exec busybox httpd -f -v -p 8080 -h /data
+          ports:
+            - name: http
+              containerPort: 8080
+          readinessProbe:
+            tcpSocket:
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
