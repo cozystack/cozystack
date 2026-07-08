@@ -193,7 +193,7 @@ spec:
         content: |
           set -eu
           workdir=$(mktemp -d)
-          trap 'kill $pf_pid 2>/dev/null || true; rm -rf "$workdir"' EXIT
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
 
           # Bucket S3 credentials for the verification client.
           kubectl -n "$NAMESPACE" get secret bucket-test-backup-bucket \

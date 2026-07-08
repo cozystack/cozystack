@@ -34,6 +34,7 @@ spec:
 
   - name: verify-storage-and-workloads
     try:
+    # replicas: 2 provisions two StatefulSet-templated PVCs — verify both.
     - assert:
         timeout: 2m
         resource:
@@ -41,6 +42,15 @@ spec:
           kind: PersistentVolumeClaim
           metadata:
             name: redisfailover-persistent-data-rfr-redis-test-0
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-redis-test-1
           status:
             phase: Bound
     - assert:

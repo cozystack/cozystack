@@ -222,9 +222,11 @@ spec:
             namespace: ${ns}
           EOF
           cleanup() {
-            kubectl -n "$ns" delete rolebinding vap-probe-tenant-create --ignore-not-found
-            kubectl -n "$ns" delete role vap-probe-tenant-create --ignore-not-found
-            kubectl -n "$ns" delete tenants.apps.cozystack.io vaphostprobe --ignore-not-found
+            # || true each delete: the trap runs under set -eu, and one
+            # transient delete failure must not skip the remaining cleanup.
+            kubectl -n "$ns" delete rolebinding vap-probe-tenant-create --ignore-not-found || true
+            kubectl -n "$ns" delete role vap-probe-tenant-create --ignore-not-found || true
+            kubectl -n "$ns" delete tenants.apps.cozystack.io vaphostprobe --ignore-not-found || true
           }
           trap cleanup EXIT
           out=$(kubectl --as="system:serviceaccount:${ns}:default" \
@@ -285,9 +287,11 @@ spec:
           EOF
           cleanup() {
             # Restore the original host label in case admission let it through.
+            # || true each command: the trap runs under set -eu, and one
+            # transient failure must not skip the remaining cleanup.
             kubectl label namespace "$ns" "namespace.cozystack.io/host=${host}" --overwrite >/dev/null 2>&1 || true
-            kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found
-            kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found
+            kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found || true
+            kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found || true
           }
           trap cleanup EXIT
           out=$(kubectl --as="system:serviceaccount:${ns}:default" \
@@ -330,9 +334,11 @@ spec:
             namespace: ${ns}
           EOF
           cleanup() {
-            kubectl delete namespace vap-host-label-probe --ignore-not-found --wait=false
-            kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found
-            kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found
+            # || true each delete: the trap runs under set -eu, and one
+            # transient delete failure must not skip the remaining cleanup.
+            kubectl delete namespace vap-host-label-probe --ignore-not-found --wait=false || true
+            kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found || true
+            kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found || true
           }
           trap cleanup EXIT
           out=$(kubectl --as="system:serviceaccount:${ns}:default" \

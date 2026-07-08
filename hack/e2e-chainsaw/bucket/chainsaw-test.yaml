@@ -83,7 +83,7 @@ spec:
         content: |
           set -eu
           workdir=$(mktemp -d)
-          trap 'kill $pf_pid 2>/dev/null || true; rm -rf "$workdir"' EXIT
+          trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
 
           # Extract credentials for both users
           kubectl -n "$NAMESPACE" get secret bucket-test-admin \
