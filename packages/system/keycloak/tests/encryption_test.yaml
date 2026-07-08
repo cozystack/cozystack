@@ -1,0 +1,222 @@
+suite: keycloak optional KMS-encrypting DB proxy
+templates:
+  - templates/proxy.yaml
+  - templates/sts.yaml
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+tests:
+  - it: does not render the proxy when encryption is disabled (default)
+    template: templates/proxy.yaml
+    set:
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: keeps Keycloak pointed at the CNPG secret when encryption is disabled
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_URL_HOST
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-db-app
+                key: "host"
+
+  - it: renders three documents (KEK Secret + Deployment + Service) when enabled
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: deploys the proxy wired to the static KEK and the CNPG backend
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-kms-proxy
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_KEK
+            valueFrom:
+              secretKeyRef:
+                name: keycloak-kms-proxy-kek
+                key: kek
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_BACKEND_ADDR
+            value: keycloak-db-rw.cozy-keycloak.svc.cozy.local:5432
+
+  - it: generates the static KEK Secret
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Secret
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-kms-proxy-kek
+
+  - it: exposes the proxy on a postgres Service
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Service
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-kms-proxy
+      - equal:
+          path: spec.ports[0].port
+          value: 5432
+
+  - it: repoints Keycloak at the proxy Service when encryption is enabled
+    template: templates/sts.yaml
+    documentSelector:
+      path: kind
+      value: StatefulSet
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_URL_HOST
+            value: keycloak-kms-proxy.cozy-keycloak.svc.cozy.local
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_DB_URL_PORT
+            value: "5432"
+
+  - it: uses the Vault Transit backend when selected
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.tokenSecretName: keycloak-vault-token
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_VAULT_ADDR
+            value: https://vault.vault.svc:8200
+
+  - it: does not generate a static KEK Secret for the Vault backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.tokenSecretName: keycloak-vault-token
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: rejects an unsupported kms backend at render time
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.backend must be 'static' or 'vault-transit'"
+
+  - it: requires vault.address for the vault-transit backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.keyName: keycloak
+      encryption.kms.vault.tokenSecretName: keycloak-vault-token
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.address is required"
+
+  - it: requires vault.keyName for the vault-transit backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.tokenSecretName: keycloak-vault-token
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.keyName is required"
+
+  - it: requires vault.tokenSecretName for the vault-transit backend
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.kms.backend: vault-transit
+      encryption.kms.vault.address: https://vault.vault.svc:8200
+      encryption.kms.vault.keyName: keycloak
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.kms.vault.tokenSecretName is required"

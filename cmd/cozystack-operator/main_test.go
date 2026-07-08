@@ -487,7 +487,7 @@ func TestValidateGitRef(t *testing.T) {
 
 func TestGenerateOCIRepository(t *testing.T) {
 	refMap := map[string]string{"tag": "v1.0", "digest": "sha256:abc123"}
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", refMap)
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", refMap, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -510,10 +510,13 @@ func TestGenerateOCIRepository(t *testing.T) {
 	if obj.Spec.Reference.Digest != "sha256:abc123" {
 		t.Errorf("expected digest %q, got %q", "sha256:abc123", obj.Spec.Reference.Digest)
 	}
+	if obj.Spec.SecretRef != nil {
+		t.Errorf("expected SecretRef to be nil when secretName is empty, got %+v", obj.Spec.SecretRef)
+	}
 }
 
 func TestGenerateOCIRepository_NoRef(t *testing.T) {
-	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{})
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -523,15 +526,28 @@ func TestGenerateOCIRepository_NoRef(t *testing.T) {
 }
 
 func TestGenerateOCIRepository_InvalidRef(t *testing.T) {
-	_, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"branch": "main"})
+	_, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"branch": "main"}, "")
 	if err == nil {
 		t.Fatal("expected error for invalid OCI ref key, got nil")
 	}
 }
 
+func TestGenerateOCIRepository_WithSecret(t *testing.T) {
+	obj, err := generateOCIRepository("my-repo", "oci://registry.example.com/repo", map[string]string{"tag": "v1.0"}, "my-registry-creds")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if obj.Spec.SecretRef == nil {
+		t.Fatal("expected SecretRef to be set when secretName is non-empty")
+	}
+	if obj.Spec.SecretRef.Name != "my-registry-creds" {
+		t.Errorf("expected SecretRef.Name %q, got %q", "my-registry-creds", obj.Spec.SecretRef.Name)
+	}
+}
+
 func TestGenerateGitRepository(t *testing.T) {
 	refMap := map[string]string{"branch": "main", "commit": "abc1234def5678"}
-	obj, err := generateGitRepository("my-repo", "https://github.com/user/repo", refMap)
+	obj, err := generateGitRepository("my-repo", "https://github.com/user/repo", refMap, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -554,10 +570,13 @@ func TestGenerateGitRepository(t *testing.T) {
 	if obj.Spec.Reference.Commit != "abc1234def5678" {
 		t.Errorf("expected commit %q, got %q", "abc1234def5678", obj.Spec.Reference.Commit)
 	}
+	if obj.Spec.SecretRef != nil {
+		t.Errorf("expected SecretRef to be nil when secretName is empty, got %+v", obj.Spec.SecretRef)
+	}
 }
 
 func TestGenerateGitRepository_NoRef(t *testing.T) {
-	obj, err := generateGitRepository("my-repo", "https://github.com/user/repo", map[string]string{})
+	obj, err := generateGitRepository("my-repo", "https://github.com/user/repo", map[string]string{}, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -567,8 +586,21 @@ func TestGenerateGitRepository_NoRef(t *testing.T) {
 }
 
 func TestGenerateGitRepository_InvalidRef(t *testing.T) {
-	_, err := generateGitRepository("my-repo", "https://github.com/user/repo", map[string]string{"digest": "sha256:abc"})
+	_, err := generateGitRepository("my-repo", "https://github.com/user/repo", map[string]string{"digest": "sha256:abc"}, "")
 	if err == nil {
 		t.Fatal("expected error for invalid Git ref key, got nil")
+	}
+}
+
+func TestGenerateGitRepository_WithSecret(t *testing.T) {
+	obj, err := generateGitRepository("my-repo", "https://github.com/user/repo", map[string]string{"branch": "main"}, "my-git-creds")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if obj.Spec.SecretRef == nil {
+		t.Fatal("expected SecretRef to be set when secretName is non-empty")
+	}
+	if obj.Spec.SecretRef.Name != "my-git-creds" {
+		t.Errorf("expected SecretRef.Name %q, got %q", "my-git-creds", obj.Spec.SecretRef.Name)
 	}
 }

@@ -1,0 +1,82 @@
+suite: controller-manager RBAC — ServiceAccount, manager ClusterRole, and bindings
+
+# The manager ClusterRole is vendored by hand from the operator's
+# config/rbac/role.yaml (see Makefile `update`), so a stale re-vendor could drop
+# a rule the operator needs and only surface as a runtime RBAC-forbidden error.
+# Pin the ServiceAccount, a couple of load-bearing ClusterRole rules, and that
+# the binding actually wires the role to the controller ServiceAccount.
+
+templates:
+  - templates/rbac.yaml
+
+release:
+  name: etcd-operator
+  namespace: cozy-etcd-operator
+
+tests:
+  - it: "renders the controller ServiceAccount in the release namespace"
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: ServiceAccount
+      - equal:
+          path: metadata.name
+          value: etcd-operator-controller-manager
+      - equal:
+          path: metadata.namespace
+          value: cozy-etcd-operator
+
+  - it: "manager ClusterRole grants the etcdmember/snapshot and certificate verbs the operator needs"
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ClusterRole
+      - equal:
+          path: metadata.name
+          value: etcd-operator-manager-role
+      - contains:
+          path: rules
+          content:
+            apiGroups: [etcd-operator.cozystack.io]
+            resources: [etcdmembers, etcdsnapshots]
+            verbs: [create, delete, get, list, patch, update, watch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [cert-manager.io]
+            resources: [certificates]
+            verbs: [create, get, list, patch, update, watch]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: [pods]
+            verbs: [create, delete, get, list, patch, watch]
+
+  - it: "manager ClusterRoleBinding wires the manager role to the controller ServiceAccount"
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: ClusterRoleBinding
+      - equal:
+          path: roleRef.name
+          value: etcd-operator-manager-role
+      - contains:
+          path: subjects
+          content:
+            kind: ServiceAccount
+            name: etcd-operator-controller-manager
+            namespace: cozy-etcd-operator
+          any: true
+
+  - it: "leader-election Role and its binding are namespaced to the release namespace"
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Role
+      - equal:
+          path: metadata.name
+          value: etcd-operator-leader-election-role
+      - equal:
+          path: metadata.namespace
+          value: cozy-etcd-operator

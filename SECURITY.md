@@ -26,10 +26,11 @@ Supported versions may change over time as new release lines are cut. The author
 
 Please do **not** report security vulnerabilities through public GitHub issues, discussions, pull requests, Telegram, Slack, or other public community channels.
 
-At the moment, this repository does not publish a dedicated private security mailbox in-tree. If you need to report a vulnerability:
+Please report vulnerabilities privately through one of the following channels, in order of preference:
 
-1. Contact one of the project maintainers listed in `CODEOWNERS` using an existing private channel you already have.
-2. If you do not already have a private maintainer contact, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
+1. **GitHub Private Vulnerability Reporting** — the preferred channel. Open the repository's **Security** tab, then **Advisories** → **Report a vulnerability** (<https://github.com/cozystack/cozystack/security/advisories/new>). This creates a confidential advisory visible only to you and the maintainers, and is the CNCF-recommended path for coordinated disclosure.
+2. **Contact a maintainer** listed in [`MAINTAINERS.md`](MAINTAINERS.md) through an existing private channel you already have.
+3. If you have neither, use a public community channel only to request a private contact path, without disclosing any vulnerability details.
 
 Please do not include exploit details, credentials, tokens, private keys, customer data, or other sensitive material in any public message.
 
@@ -54,6 +55,21 @@ The maintainers will aim to:
 
 Resolution timelines depend on severity, complexity, release branch applicability, and whether coordination with upstream projects is required.
 
+### Disclosure timeline
+
+The project follows a coordinated-disclosure window of **up to 90 days** from acknowledgement. If a fix or mitigation is not available within that window, the maintainers may publish the advisory (via GitHub Security Advisories) with the available details and any known workarounds, so that users are not left uninformed indefinitely. The window may be extended only by mutual agreement with the reporter, typically for issues that require coordination with upstream projects.
+
+Target remediation timelines are guided by CVSS v3.1 severity:
+
+| Severity (CVSS v3.1) | Target time to fix or mitigation |
+| --- | --- |
+| Critical (9.0–10.0) | ~14 days |
+| High (7.0–8.9) | ~30 days |
+| Medium (4.0–6.9) | ~90 days |
+| Low (0.1–3.9) | next scheduled release |
+
+These are targets, not guarantees; complex or upstream-coordinated issues may take longer.
+
 ## Disclosure Process
 
 The Cozystack project follows a coordinated disclosure model.
@@ -74,11 +90,20 @@ Public disclosure will typically happen through one or more of the following:
 Security is part of the normal Cozystack development and release process. Current project practices include:
 
 - maintainer-owned review through pull requests and `CODEOWNERS`
-- automated pull request checks, including pre-commit validation, unit tests, builds, and end-to-end testing
+- automated pull request checks, including pre-commit validation, unit tests, builds, end-to-end testing, and static application security testing (CodeQL)
 - release automation with patch releases, release branches, and backport workflows
 - ongoing maintenance of packaged dependencies and platform integrations across supported release lines
 
 Because Cozystack is an integration-heavy platform, some vulnerabilities may require coordination across multiple repositories or with upstream maintainers before a public fix can be released.
+
+### Automated security analysis
+
+Two scanners run continuously against this repository:
+
+- **CodeQL** (static analysis). Runs on every pull request to `main`, on push to `main`, and on a weekly schedule. The Go database is built with CodeQL's `manual` build mode — each first-party module is compiled explicitly, so the analysis does not depend on the project `Makefile` (which fetches upstream tags) and stays reproducible. On a pull request CodeQL reports only alerts that are *new relative to `main`* and annotates them on the changed lines. New findings are expected to be resolved before merge — either by fixing the code, or, for a false positive or accepted risk, by dismissing the alert in the **Security → Code scanning** tab with a recorded reason (`False positive`, `Won't fix`, or `Used in tests`).
+- **OpenSSF Scorecard** (supply-chain posture). Runs weekly and on branch-protection changes, and publishes results to the public Scorecard API at <https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack>. Scorecard results are intentionally **not** uploaded to GitHub code scanning: it posts one alert per check, which would bury CodeQL's first-party findings. The scorecard.dev badge is the canonical view.
+
+CodeQL is intended to run as a required pull-request check, so that a newly introduced alert at error severity blocks merge until it is fixed or dismissed.
 
 ## Security Fixes and Announcements
 

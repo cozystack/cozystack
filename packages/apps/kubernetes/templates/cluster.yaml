@@ -1,3 +1,23 @@
+{{- /*
+  Talos -> Kubernetes support matrix. Each Talos minor release supports a
+  bounded window of Kubernetes minor versions; running a kubelet outside
+  that window produces a silently broken Talos+kubelet combination that
+  HelmRelease cannot detect. Fail the chart render instead, so the operator
+  sees the mismatch in Flux/dashboards before workers roll over.
+
+  The matrix only fires for Talos versions it knows about; operators who
+  override talos.version to something outside this list take responsibility
+  for compatibility themselves (extend the dict or upstream a PR).
+  Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
+*/}}
+{{- $talosK8sSupportMatrix := dict
+      "v1.13.0" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
+}}
+{{- with index $talosK8sSupportMatrix .Values.talos.version }}
+{{-   if not (has $.Values.version .) }}
+{{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
+{{-   end }}
+{{- end }}
 {{- $etcd := .Values._namespace.etcd }}
 {{- /*
   When $etcd is empty, the parent Tenant application has not populated
@@ -10,13 +30,38 @@
   flux marks the HelmRelease Ready and retries its 5m reconcile loop until
   the Tenant chart catches up.
 */}}
+{{- /* The TalosConfigTemplate and the apiserver-Service ClusterIP-SAN
+       used to be rendered in this template behind a lookup gate that
+       races every fresh install: Service / Talos CA / K8s CA do not
+       exist on first Helm render, so the gate fails, the TCT is
+       skipped, and Helm's release-storage three-way merge then refuses
+       to upgrade because no values changed. Both objects are now
+       produced by the main-phase Job in
+       templates/talos/talos-reconcile-job.yaml, which blocks until the
+       four dependencies exist and then `kubectl apply`s deterministic
+       results. The Job owns the TCT through an ownerReference to the
+       KamajiControlPlane so K8s garbage-collects it naturally on
+       release uninstall. */}}
+{{- /*
+  Cluster pod/service CIDRs MUST match between the CAPI Cluster
+  spec.clusterNetwork below and the Talos worker machineconfig's
+  cluster.network — Talos surfaces overlaps against the host pod CIDR
+  as a diagnostic at boot, and divergence between CAPI and Talos would
+  manifest as silently broken kube-proxy / Cilium routing. Keep them
+  in one place here.
+*/}}
+{{- $podCIDR := "10.243.0.0/16" }}
+{{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $ingress := .Values._namespace.ingress }}
 {{- $host := .Values._namespace.host }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
+  {{- /* Talos has no SSH; use 'none' so CAPK does not block Machine.Ready
+        on an SSH probe that will never succeed. The Machine reaches Ready
+        once kubelet registers with the tenant apiserver via standard CSR. */}}
   virtualMachineBootstrapCheck:
-    checkStrategy: ssh
+    checkStrategy: none
   virtualMachineTemplate:
     metadata:
       namespace: {{ $.Release.Namespace }}
@@ -25,29 +70,51 @@ spec:
         node-role.kubernetes.io/{{ . }}: ""
         {{- end }}
     spec:
-      {{- with .group.instanceType }}
+      {{- /* Explicit resources take precedence over instanceType. When a node
+             group is sized by resources (both cpu and memory set), the
+             instancetype is omitted from the VM: KubeVirt rejects a
+             VirtualMachine that references an instancetype and also overrides
+             either domain.cpu or domain.memory. */}}
+      {{- $sizedByResources := and .group.resources .group.resources.cpu .group.resources.memory }}
+      {{- if and .group.instanceType (not $sizedByResources) }}
       instancetype:
         kind: VirtualMachineClusterInstancetype
-        name: {{ . }}
+        name: {{ .group.instanceType }}
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
       - metadata:
-          name: disk-kubelet
+          name: disk-system
           annotations:
-            {{/* Populator creates intermediate PVC + PV rebind that causes ClaimMisbound with LINSTOR CSI */}}
             cdi.kubevirt.io/storage.usePopulator: "false"
         spec:
+          {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
+                injects bootstrap data via cloudInitConfigDrive (OpenStack
+                metadata service shape), and the openstack platform image
+                is the one that reads it. The nocloud-amd64 image silently
+                ignores configdrive and never applies the machineconfig. */}}
+          source:
+            http:
+              url: https://factory.talos.dev/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}
-          source:
-            blank: {}
           storage:
             resources:
               requests:
                 storage: {{ .group.diskSize | default "20Gi" | quote }}
-            {{- with .group.storageClass }}
+            {{- /*
+              Worker VMs live-migrate, so their disks need ReadWriteMany. The
+              RWX access mode is supplied by the chosen StorageClass's CDI
+              StorageProfile — it is not set on the DataVolume here. linstor-csi
+              rejects RWX volumes that are not on a DRBD-backed StorageClass, so
+              an empty nodeGroup storageClass falls back to the application-level
+              storageClass (a replicated/DRBD class) instead of the cluster
+              default, which may be a non-DRBD class that the CSI driver would
+              reject. Both empty still omits the field so the cluster default
+              applies.
+            */}}
+            {{- with .group.storageClass | default $.Values.storageClass }}
             storageClassName: {{ . | quote }}
             {{- end }}
       template:
@@ -92,13 +159,10 @@ spec:
                 disk:
                   bus: virtio
                   pciAddress: 0000:07:00.0
-              - name: disk-kubelet
-                disk:
-                  bus: virtio
-                  pciAddress: 0000:08:00.0
                 blockSize:
-                  matchVolume:
-                    enabled: true
+                  custom:
+                    logical: 512
+                    physical: 4096
               interfaces:
               - name: default
                 bridge: {}
@@ -112,11 +176,8 @@ spec:
           evictionStrategy: External
           volumes:
           - name: system
-            containerDisk:
-              image: "{{ $.Files.Get (printf "images/ubuntu-container-disk-%s.tag" $.Values.version) | trim }}"
-          - name: disk-kubelet
             dataVolume:
-              name: disk-kubelet
+              name: disk-system
           networks:
           - name: default
             pod: {}
@@ -141,6 +202,60 @@ data:
     to reconcile - this HelmRelease will pick up the DataStore on its next
     5m reconcile loop and provision the cluster.
 {{- else }}
+{{- /* Validate user-supplied apiServer.extraVolumes / extraVolumeMounts before
+       they are wired into the control-plane Deployment and apiserver container.
+
+       The KamajiControlPlane -> TenantControlPlane Deployment runs on the
+       MANAGEMENT cluster (in the tenant namespace), so volumes declared here
+       land on a management-cluster pod. To preserve tenant<->management
+       isolation we deny by default and allow only the ConfigMap/Secret sources
+       that satisfy the intended use case (mounting an AuthenticationConfiguration
+       file). Host-reaching sources (hostPath, csi, nfs, persistentVolumeClaim)
+       and token-projection sources (projected) are rejected — a tenant with
+       self-service access to the Kubernetes CR must not be able to mount
+       management-node paths or project arbitrary service-account tokens into
+       the apiserver pod.
+
+       Names must be unique and non-empty: the chart injects two reserved
+       volumes (talos-ca, talos-tls-cert), and a duplicate or empty volume name
+       would render an invalid podspec the apiserver rejects with an opaque,
+       apply-time error invisible to GitOps. Mounts may only reference a volume
+       the user declared in extraVolumes — the chart-managed talos secret
+       volumes are deliberately not mountable. */}}
+{{- $allowedVolumeSources := list "configMap" "secret" }}
+{{- $reservedVolumeNames := list "talos-ca" "talos-tls-cert" }}
+{{- $userVolumeNames := list }}
+{{- range $i, $vol := .Values.controlPlane.apiServer.extraVolumes }}
+{{-   $volName := $vol.name | default "" | toString }}
+{{-   if eq $volName "" }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes[%d]: every volume must set a non-empty name" $i) }}
+{{-   end }}
+{{-   if has $volName $reservedVolumeNames }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes: volume name %q is reserved by the chart for the talos control-plane secrets — rename your volume to avoid a duplicate volume name in the control-plane Deployment" $volName) }}
+{{-   end }}
+{{-   if has $volName $userVolumeNames }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes: duplicate volume name %q — each extra volume must have a unique name" $volName) }}
+{{-   end }}
+{{-   $userVolumeNames = append $userVolumeNames $volName }}
+{{-   $sources := without (keys $vol) "name" | sortAlpha }}
+{{-   if ne (len $sources) 1 }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumes: volume %q must declare exactly one volume source, got %d (%v)" $volName (len $sources) $sources) }}
+{{-   end }}
+{{-   range $source := $sources }}
+{{-     if not (has $source $allowedVolumeSources) }}
+{{-       fail (printf "controlPlane.apiServer.extraVolumes: volume %q uses a %q source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed" $volName $source) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
+{{- range $i, $mount := .Values.controlPlane.apiServer.extraVolumeMounts }}
+{{-   $mountName := $mount.name | default "" | toString }}
+{{-   if eq $mountName "" }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumeMounts[%d]: every mount must set a non-empty name" $i) }}
+{{-   end }}
+{{-   if not (has $mountName $userVolumeNames) }}
+{{-     fail (printf "controlPlane.apiServer.extraVolumeMounts: mount %q references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted" $mountName) }}
+{{-   end }}
+{{- end }}
 ---
 apiVersion: cluster.x-k8s.io/v1beta1
 kind: Cluster
@@ -151,10 +266,10 @@ spec:
   clusterNetwork:
     pods:
       cidrBlocks:
-      - 10.243.0.0/16
+      - {{ $podCIDR }}
     services:
       cidrBlocks:
-      - 10.95.0.0/16
+      - {{ $serviceCIDR }}
   controlPlaneRef:
     namespace: {{ .Release.Namespace }}
     apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
@@ -175,9 +290,90 @@ metadata:
     cluster.x-k8s.io/role: control-plane
   annotations:
     kamaji.clastix.io/kubeconfig-secret-key: "super-admin.svc"
+{{- /*
+  OIDC wiring for `spec.oidc.mode` ≠ None:
+    - Inject `--authentication-config=/etc/kubernetes/authentication-config/config.yaml`
+      into the kube-apiserver extraArgs.
+    - Mount the per-release Secret carrying the structured
+      AuthenticationConfiguration at that path.
+    - Add the Secret as an extraVolume on the KCP Deployment.
+
+  The OIDC-managed flag and volume are kept ORTHOGONAL to the
+  user-supplied controlPlane.apiServer.extraArgs / extraVolumes /
+  extraVolumeMounts knobs — the user fields are preserved verbatim
+  and the OIDC additions are appended. The OIDC mount name
+  `authentication-config` is reserved by the chart; a user-supplied
+  volume reusing it would conflict in the rendered podSpec.
+
+  For mode=CustomConfig+secretRef, the user-owned Secret is mounted
+  directly (the chart does not copy the contents). Otherwise the
+  chart-owned `<release>-oidc-authn-config` Secret is mounted.
+*/}}
+{{- $oidcEnabled := ne .Values.oidc.mode "None" }}
+{{- $oidcAuthnSecret := printf "%s-oidc-authn-config" .Release.Name }}
+{{- $customSecretRefName := dig "customConfig" "secretRef" "name" "" .Values.oidc }}
+{{- if and (eq .Values.oidc.mode "CustomConfig") (ne $customSecretRefName "") }}
+{{-   $oidcAuthnSecret = $customSecretRefName }}
+{{- end }}
+{{- if and $oidcEnabled (has "authentication-config" $userVolumeNames) }}
+{{-   fail "controlPlane.apiServer.extraVolumes: volume name \"authentication-config\" is reserved by the chart for OIDC AuthenticationConfiguration when spec.oidc.mode is not None — rename your volume." }}
+{{- end }}
+{{- /*
+  Legacy `--oidc-*` flags in the user-supplied extraArgs are mutually
+  exclusive with `--authentication-config`. The kube-apiserver refuses
+  to boot when both are set (`--authentication-config cannot be used with
+  any of --oidc-*`), so an existing cluster that previously configured
+  OIDC by hand via the user extra*-passthrough would BOOT-FAIL on upgrade
+  as soon as `spec.oidc.mode` is toggled to `System` or `CustomConfig`.
+  Fail the chart render with an actionable message instead.
+
+  When `spec.oidc.mode: None`, the user is free to keep --oidc-* flags
+  in their extraArgs (the chart does not touch them) — that path is
+  preserved for backward compatibility.
+*/}}
+{{- if $oidcEnabled }}
+{{-   range $arg := (.Values.controlPlane.apiServer.extraArgs | default list) }}
+{{-     if hasPrefix "--oidc-" $arg }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the kube-apiserver refuses to boot with both --authentication-config (injected by spec.oidc) and legacy --oidc-* flags. Remove the --oidc-* flags from controlPlane.apiServer.extraArgs and use spec.oidc.mode: CustomConfig with a customConfig.config carrying the same issuer/audience if you need to override, or spec.oidc.mode: System for the platform cozy default." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-     if hasPrefix "--authentication-config" $arg }}
+{{-       fail (printf "controlPlane.apiServer.extraArgs contains %q while spec.oidc.mode is %q — the chart already injects --authentication-config= for OIDC. Drop your explicit flag and let spec.oidc.mode: CustomConfig own the AuthenticationConfiguration (customConfig.config or customConfig.secretRef.name), or leave spec.oidc.mode: None and keep managing the flag yourself." $arg $.Values.oidc.mode) }}
+{{-     end }}
+{{-   end }}
+{{- end }}
 spec:
   apiServer:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.apiServer.resourcesPreset .Values.controlPlane.apiServer.resources $) | nindent 6 }}
+    {{- /*
+      extraArgs and extraVolumeMounts are ALWAYS emitted (empty array when
+      nothing to inject). Kamaji's KamajiControlPlane is a CRD and Helm
+      applies JSON-merge-patch to CRDs, which for arrays REPLACES the whole
+      value. If we omitted the field for `oidc.mode: None` after previously
+      rendering it under `System`, JSON-merge-patch would leave the live
+      array untouched — the tenant apiserver would keep the stale
+      --authentication-config flag pointing at a Secret that no longer
+      exists, and would refuse to start on the next kubelet restart.
+      Rendering the empty array on the "off" path forces Helm to send a
+      REPLACE patch that clears the stale value.
+    */}}
+    extraArgs:
+      {{- with .Values.controlPlane.apiServer.extraArgs }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - --authentication-config=/etc/kubernetes/authentication-config/config.yaml
+      {{- end }}
+      {{- if not (or .Values.controlPlane.apiServer.extraArgs $oidcEnabled) }} []{{ end }}
+    extraVolumeMounts:
+      {{- with .Values.controlPlane.apiServer.extraVolumeMounts }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - name: authentication-config
+        mountPath: /etc/kubernetes/authentication-config
+        readOnly: true
+      {{- end }}
+      {{- if not (or .Values.controlPlane.apiServer.extraVolumeMounts $oidcEnabled) }} []{{ end }}
   controllerManager:
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.controlPlane.controllerManager.resourcesPreset .Values.controlPlane.controllerManager.resources $) | nindent 6 }}
   scheduler:
@@ -208,10 +404,79 @@ spec:
         nginx.ingress.kubernetes.io/ssl-passthrough: "true"
       hostname: {{ .Values.host | default (printf "%s.%s" .Release.Name $host) }}:443
       className: "{{ $ingress }}"
+    additionalServicePorts:
+      - name: talos-trustd
+        port: 50001
+        targetPort: 50001
+        protocol: TCP
+    {{- /* Initial render lists only the DNS SANs because the apiserver
+           Service ClusterIP is not yet allocated when Helm executes the
+           template. The talos-reconcile main-phase Job re-patches certSANs
+           with the live ClusterIP once Kamaji emits the Service, and
+           Kamaji then re-issues the apiserver TLS cert to cover it. */}}
+    certSANs:
+      - {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
+      - {{ printf "%s.%s.svc.%s" .Release.Name .Release.Namespace (include "kubernetes.tenantClusterDomain" .) }}
   deployment:
     podAdditionalMetadata:
       labels:
         policy.cozystack.io/allow-to-etcd: "true"
+    extraContainers:
+      - name: talos-csr-signer
+        image: "{{ default (.Files.Get "images/talos-csr-signer.tag" | trim) .Values.images.talosCsrSigner }}"
+        imagePullPolicy: IfNotPresent
+        ports:
+          - name: trustd
+            containerPort: 50001
+            protocol: TCP
+        env:
+          - name: TALOS_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: {{ .Release.Name }}-talos-secrets
+                key: token
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 200m
+            memory: 128Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532
+          capabilities:
+            drop:
+              - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+          - name: talos-ca
+            mountPath: /etc/talos-ca
+            readOnly: true
+          - name: talos-tls-cert
+            mountPath: /etc/talos-server-crt
+            readOnly: true
+    extraVolumes:
+      - name: talos-ca
+        secret:
+          secretName: {{ .Release.Name }}-talos-ca
+      - name: talos-tls-cert
+        secret:
+          secretName: {{ .Release.Name }}-talos-tls-cert
+      {{- with .Values.controlPlane.apiServer.extraVolumes }}
+      {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- if $oidcEnabled }}
+      - name: authentication-config
+        secret:
+          secretName: {{ $oidcAuthnSecret }}
+          items:
+          - key: config.yaml
+            path: config.yaml
+      {{- end }}
   replicas: {{ .Values.controlPlane.replicas }}
   version: {{ include "kubernetes.versionMap" $ }}
 ---
@@ -237,10 +502,25 @@ metadata:
     cluster.x-k8s.io/managed-by: kamaji
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
-{{- range $groupName, $group := .Values.nodeGroups }}
+{{- range $groupName, $group := (include "kubernetes.nodeGroups" $ | fromYaml) }}
+{{- /* instanceType and explicit resources are alternative sizing sources, and
+       explicit resources win. KubeVirt rejects a VirtualMachine that references
+       an instancetype while also overriding either domain.cpu or domain.memory,
+       so when a group is sized by resources (both cpu and memory set) the
+       instancetype is omitted from the VM (see the VM spec above) and the lookup
+       below is skipped — a stale instancetype name cannot fail an otherwise
+       valid, resource-sized group. Explicit resources are all-or-nothing: a
+       partial spec (only one of cpu/memory) would emit one domain override
+       alongside the instancetype, which KubeVirt rejects, so it fails here with
+       a clear render-time error instead of a late admission rejection. */}}
+{{- $hasCpu := and $group.resources $group.resources.cpu }}
+{{- $hasMem := and $group.resources $group.resources.memory }}
+{{- if and $group.instanceType (or (and $hasCpu (not $hasMem)) (and $hasMem (not $hasCpu))) }}
+{{-   fail (printf "nodeGroup %s: set both resources.cpu and resources.memory, or neither" $groupName) }}
+{{- end }}
 {{/* Resolve instanceType once per group — reused for kubelet reservations and capacity annotations. */}}
 {{- $instanceType := dict }}
-{{- if $group.instanceType }}
+{{- if and $group.instanceType (not (and $hasCpu $hasMem)) }}
 {{-   $instanceType = (lookup "instancetype.kubevirt.io/v1beta1" "VirtualMachineClusterInstancetype" "" $group.instanceType) }}
 {{-   if not $instanceType }}
 {{-     fail (printf "nodeGroup %s: specified instanceType %q not found in cluster" $groupName $group.instanceType) }}
@@ -406,104 +686,19 @@ metadata:
 {{-   end }}
 {{- end }}
 ---
-apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-kind: KubeadmConfigTemplate
-metadata:
-  name: {{ $.Release.Name }}-{{ $groupName }}
-  namespace: {{ $.Release.Namespace }}
-spec:
-  template:
-    spec:
-      files:
-      - path: /usr/bin/update-k8s.sh
-        owner: root:root
-        permissions: "0755"
-        content: |
-          #!/usr/bin/env bash
-          set -euo pipefail
-
-          # Expected to be passed in via preKubeadmCommands
-          : "${KUBELET_VERSION:?KUBELET_VERSION must be set, e.g. v1.31.0}"
-
-          ARCH="$(uname -m)"
-          case "${ARCH}" in
-            x86_64) ARCH=amd64 ;;
-            aarch64) ARCH=arm64 ;;
-          esac
-
-          # Use your internal mirror here for real-world use.
-          BASE_URL="https://dl.k8s.io/release/${KUBELET_VERSION}/bin/linux/${ARCH}"
-
-          echo "Installing kubelet and kubeadm  ${KUBELET_VERSION} for ${ARCH}..."
-          curl -fsSL "${BASE_URL}/kubelet" -o /root/kubelet
-          curl -fsSL "${BASE_URL}/kubeadm" -o /root/kubeadm
-          chmod 0755 /root/kubelet
-          chmod 0755 /root/kubeadm
-          if /root/kubelet --version ; then mv /root/kubelet /usr/bin/kubelet ; fi
-          if /root/kubeadm version ; then mv /root/kubeadm /usr/bin/kubeadm ; fi
-      {{- $sec := lookup "v1" "Secret" $.Release.Namespace (printf "%s-patch-containerd" $.Release.Name) }}
-      {{- if $sec }}
-        {{- range $key, $_ := $sec.data }}
-      - path: /etc/containerd/certs.d/{{ trimSuffix ".toml" $key }}/hosts.toml
-        contentFrom:
-          secret:
-            name: {{ $.Release.Name }}-patch-containerd
-            key: {{ $key }}
-        permissions: "0400"
-        {{- end }}
-      {{- end }}
-      diskSetup:
-        filesystems:
-        - device: /dev/vdb
-          filesystem: xfs
-          label: persistent
-          partition: "none"
-          {{/* overwrite must stay false: XFS on /dev/vdb is created on first boot; subsequent reboots of the same VM must reuse the existing filesystem via LABEL=persistent */}}
-          overwrite: false
-      mounts:
-      - ["LABEL=persistent", "/persistent"]
-      - ["/persistent/kubelet", "/var/lib/kubelet", "none", "bind,nofail"]
-      - ["/persistent/containerd", "/var/lib/containerd", "none", "bind,nofail"]
-      preKubeadmCommands:
-      - KUBELET_VERSION={{ include "kubernetes.versionMap" $}} /usr/bin/update-k8s.sh || true
-      - sed -i 's|root:x:|root::|' /etc/passwd
-      - systemctl stop containerd.service
-      - mkdir -p /persistent/kubelet /persistent/containerd /var/lib/kubelet /var/lib/containerd
-      - mountpoint -q /var/lib/kubelet || mount -o bind /persistent/kubelet /var/lib/kubelet
-      - mountpoint -q /var/lib/containerd || mount -o bind /persistent/containerd /var/lib/containerd
-      {{/* containerd 2.x renamed the CRI plugin from io.containerd.grpc.v1.cri to io.containerd.cri.v1.images; both seds run unconditionally and the wrong-version one is a no-op */}}
-      - sed -i '/\[plugins\.[^]]*grpc\.v1\.cri[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
-      - sed -i '/\[plugins\.[^]]*io\.containerd\.cri\.v1\.images[^]]*registry\]/,/^\[/ s|^\(\s*config_path\s*=\s*\).*|\1"/etc/containerd/certs.d"|' /etc/containerd/config.toml
-      - systemctl start containerd.service
-      joinConfiguration:
-        nodeRegistration:
-          kubeletExtraArgs:
-            {{- /*
-              GPU node-groups: label every node `gpu=on` so HAMi's
-              hami-device-plugin DaemonSet (nodeSelector gpu=on) schedules
-              and advertises nvidia.com/gpu. Without the label the plugin
-              stays at DESIRED=0 and no GPUs are exposed to the tenant.
-            */}}
-            {{- if $group.gpus }}
-            node-labels: "gpu=on"
-            {{- end }}
-            system-reserved: "memory={{ $systemReservedMemory }},cpu={{ $systemReservedCpu }}"
-            kube-reserved: "memory={{ $kubeReservedMemory }},cpu={{ $kubeReservedCpu }}"
-            eviction-hard: "memory.available<{{ $evictionHardMemory }},nodefs.available<10%,imagefs.available<15%,nodefs.inodesFree<5%"
-            eviction-soft: "memory.available<{{ $evictionSoftMemory }},nodefs.available<15%,imagefs.available<20%"
-            eviction-soft-grace-period: "memory.available=1m30s,nodefs.available=1m30s,imagefs.available=1m30s"
-            # 256Mi ensures meaningful reclamation per eviction cycle while being
-            # proportional to the 256Mi-1Gi auto-computed reservation range.
-            eviction-minimum-reclaim: "memory.available=256Mi"
-            enforce-node-allocatable: "pods"
-          ignorePreflightErrors:
-          - FileExisting-conntrack
-        discovery:
-          bootstrapToken:
-            apiServerEndpoint: {{ $.Release.Name }}.{{ $.Release.Namespace }}.svc:6443
-      initConfiguration:
-        skipPhases:
-        - addon/kube-proxy
+{{- /* TalosConfigTemplate is no longer rendered here — the chart cannot
+       produce a valid Talos worker machineconfig at Helm template time
+       because three of the inputs (apiserver Service ClusterIP, Talos
+       CA from cert-manager, Kamaji-issued tenant CA) are created
+       asynchronously after Helm applies this manifest. The main-phase
+       Job in templates/talos/talos-reconcile-job.yaml waits for those
+       inputs and produces the TalosConfigTemplate with a
+       KamajiControlPlane ownerReference for natural GC. That Job runs in
+       the main install phase, so it applies the template as soon as the
+       inputs appear — in parallel with the rest of the install. The
+       MachineDeployment below still references the TCT name; CAPI's
+       Machine controller blocks on its absence and unblocks the moment
+       the Job applies it. */}}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
@@ -569,8 +764,8 @@ spec:
     spec:
       bootstrap:
         configRef:
-          apiVersion: bootstrap.cluster.x-k8s.io/v1beta1
-          kind: KubeadmConfigTemplate
+          apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+          kind: TalosConfigTemplate
           name: {{ $.Release.Name }}-{{ $groupName }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $.Release.Name }}
@@ -588,8 +783,23 @@ metadata:
   namespace: {{ $.Release.Namespace }}
 spec:
   clusterName: {{ $.Release.Name }}
-  maxUnhealthy: 0
-  nodeStartupTimeout: 10m
+  {{- /* MHC spec.maxUnhealthy is an IntOrString. CAPI admission accepts a
+         bare integer (0, 1, ...) or a percentage string ("0%", "50%"), but
+         rejects a quoted plain integer ("0"). Quote only when the operator
+         supplied a percentage; otherwise render the value as a bare int so
+         the admission webhook is happy with the chart-default "0". */}}
+  {{- $maxUnhealthy := toString $.Values.nodeHealthCheck.maxUnhealthy }}
+  {{- if hasSuffix "%" $maxUnhealthy }}
+  {{-   if not (regexMatch "^[0-9]+%$" $maxUnhealthy) }}
+  {{-     fail (printf "nodeHealthCheck.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
+  {{-   end }}
+  maxUnhealthy: {{ $maxUnhealthy | quote }}
+  {{- else if regexMatch "^[0-9]+$" $maxUnhealthy }}
+  maxUnhealthy: {{ $maxUnhealthy | int }}
+  {{- else }}
+  {{-   fail (printf "nodeHealthCheck.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
+  {{- end }}
+  nodeStartupTimeout: {{ $.Values.nodeHealthCheck.nodeStartupTimeout }}
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}

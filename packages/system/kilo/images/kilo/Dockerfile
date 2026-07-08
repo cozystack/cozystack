@@ -1,5 +1,5 @@
 # Build the kg binary
-FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 
 ARG VERSION=944dff5745d747c06555a964c2137b9a986ff6ec
 ARG TARGETOS

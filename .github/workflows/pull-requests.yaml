@@ -17,118 +17,408 @@ permissions:
   contents: read
 
 jobs:
-  detect-changes:
-    name: Detect changes
+  # Compute the docs-only gate and the per-package build matrix from the PR
+  # diff. hack/build-matrix.sh parses the root Makefile `build:` target (the
+  # single source of truth) and emits only the units whose package dir changed,
+  # escalating to the full set on a shared-dependency change. talos + installer
+  # are handled by dedicated jobs (see build-matrix.sh for why).
+  plan:
+    name: Plan build
     runs-on: ubuntu-latest
-    outputs:
-      code: ${{ steps.filter.outputs.code }}
     permissions:
       contents: read
-      pull-requests: read
+    outputs:
+      code: ${{ steps.p.outputs.code }}
+      matrix: ${{ steps.p.outputs.matrix }}
+      any: ${{ steps.p.outputs.any }}
+      touched: ${{ steps.p.outputs.touched }}
     steps:
-      - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
-        id: filter
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
-          filters: |
-            code:
-              - '!docs/**'
+          fetch-depth: 0
+      - name: Compute changed files and build matrix
+        id: p
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
+          echo "Changed files:"; sed 's/^/  /' /tmp/changed.txt
+          if grep -qvE '^docs/' /tmp/changed.txt; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
+          echo "Build matrix: $matrix"
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          # Package dirs the PR edited (packages/<area>/<name>). Their committed
+          # refs are the PR's intent and must survive the current-main overlay —
+          # otherwise an upstream image bump in a non-build-unit package would be
+          # silently reverted in e2e/the installer artifact (see
+          # hack/overlay-main-images.sh). Whitespace-separated, no trailing slash.
+          touched="$(sed -nE 's#^(packages/[^/]+/[^/]+)/.*#\1#p' /tmp/changed.txt | sort -u | tr '\n' ' ')"
+          echo "Touched packages: $touched"
+          echo "touched=$touched" >> "$GITHUB_OUTPUT"
+          if [ "$matrix" = "[]" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
 
+  # Helm-unittest + Go controller tests. Decoupled from the image build and from
+  # e2e so they give fast, independent signal; they gate the PR as their own
+  # required check rather than blocking e2e from starting.
+  checks:
+    name: Unit & controller tests
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+      # Ephemeral runners don't carry the helm-unittest plugin the persistent
+      # self-hosted runner accreted. Install if absent (idempotent).
+      - name: Set up test toolchain
+        run: |
+          helm plugin list 2>/dev/null | grep -q unittest \
+            || helm plugin install https://github.com/helm-unittest/helm-unittest
+      - name: Run unit tests
+        run: make unit-tests
+      - name: Run controller Go tests
+        run: make test-controllers
+
+  # One image (package) per job, fanned out across the ephemeral pool. Each job
+  # gets its own buildx (docker-container driver) so the shared-buildkit
+  # contention that wedged the old single Build job (#2937) is severed by
+  # construction. Each job patches only its own package's values.yaml/.tag files
+  # and uploads that diff as a patch fragment; `finalize` reassembles them.
   build:
-    name: Build
-    # Run each Build on its own ephemeral VM instead of the shared self-hosted
-    # runner. The shared host runs 4 runner agents against one dockerd-embedded
-    # buildkit; concurrent build jobs serialize on buildkit's single-writer bbolt
-    # cache lock + exporter mutex and stall to the 30-min timeout (proven via a
-    # live SIGUSR1 goroutine dump). One VM per job => one buildkit per job => that
-    # contention is severed by construction. `make build` is serial (one image at
-    # a time), so a small shape suffices -- 4cpu/16gb, not the 24cpu the e2e job
-    # uses -- and it leans on the warm mode=max cache (#2938) to stay under the
-    # 30-min wall. The `debug` label still routes to self-hosted for the
-    # breakpoint path. Phase 0.5 of #2937.
+    name: Build ${{ matrix.pkg }}
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && needs.plan.outputs.any == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
     timeout-minutes: 30
     permissions:
       contents: read
       packages: write
-
-    needs: ["detect-changes"]
-    # Never run when the PR carries the "release" label or only docs changed.
-    if: |
-      needs.detect-changes.outputs.code == 'true'
-      && !contains(github.event.pull_request.labels.*.name, 'release')
-
+    strategy:
+      fail-fast: false
+      matrix:
+        pkg: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           fetch-tags: true
-
-      # Ephemeral runners don't carry two tools the persistent self-hosted
-      # runner accreted: the helm-unittest plugin (make unit-tests) and the
-      # flux CLI (the installer's `flux push artifact` publishes the
-      # cozystack-packages OCI artifact the operator pulls). Install if absent
-      # (idempotent; the debug/self-hosted path already has them). Durable fix:
-      # bake both into the oracle-vm runner image, then drop this step.
+      # installer is built in finalize, but some package image targets shell out
+      # to flux; install it if absent (idempotent, cheap).
       - name: Set up build toolchain
         run: |
-          helm plugin list 2>/dev/null | grep -q unittest \
-            || helm plugin install https://github.com/helm-unittest/helm-unittest
-          command -v flux >/dev/null \
-            || curl -s https://fluxcd.io/install.sh | sudo bash
-
-      - name: Run unit tests
-        run: make unit-tests
-
-      - name: Run controller Go tests
-        run: make test-controllers
-
+          if ! command -v flux >/dev/null; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo bash "$install_script"
+            rm -f "$install_script"
+          fi
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then
             cp -r ~/.docker "${{ runner.temp }}/.docker"
           fi
-
       - name: Login to GitHub Container Registry
         if: ${{ !github.event.pull_request.head.repo.fork }}
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
-          username: ${{ secrets.OCIR_USER}}
+          username: ${{ secrets.OCIR_USER }}
           password: ${{ secrets.OCIR_TOKEN }}
           registry: iad.ocir.io
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-
-      - name: Build
-        run: make build
+      # docker-container driver: isolated buildkit per job (no shared-buildkit
+      # contention) and a prerequisite for the mode=max cache reads (#2938).
+      # Its buildkitd also routes docker.io base-image pulls through
+      # mirror.gcr.io (hack/buildkitd.toml): the Build step authenticates only
+      # to the push registry (OCIR), so base images (golang/ubuntu/nginx/...)
+      # would otherwise be pulled from Docker Hub anonymously and intermittently
+      # trip its anonymous-pull rate limit; the mirror sidesteps that and falls
+      # back to Docker Hub on a miss/outage. Create the builder under the SAME
+      # DOCKER_CONFIG the Build step reads (runner.temp/.docker, holding the
+      # OCIR auth) so buildx forwards push/cache auth to the container builder.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Build ${{ matrix.pkg }}
+        run: make -C "$PKG" image
+        env:
+          PKG: ${{ matrix.pkg }}
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          # Build on the docker-container builder created above so base-image
+          # pulls go through the docker.io mirror (BUILDX_ARGS adds
+          # --builder=$(BUILDER)).
+          BUILDER: ${{ steps.buildx.outputs.name }}
           # Unique per (PR, commit) so concurrent PR builds never push the same
-          # tag. PUBLISH_VERSIONED/PUBLISH_FLOATING stay off — PR images are
-          # consumed by digest, and :latest belongs to release builds.
+          # tag. PR images are consumed by digest; :latest belongs to releases.
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
-
-      - name: Build Talos image
-        run: make -C packages/core/talos talos-nocloud
-
-      - name: Save git diff as patch
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        run: git diff HEAD > _out/assets/pr.patch
-
-      - name: Upload git diff patch
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+      - name: Capture digest patch fragment
+        id: frag
+        env:
+          PKG: ${{ matrix.pkg }}
+        run: |
+          safe="$(echo "$PKG" | tr '/' '-')"
+          mkdir -p _out/fragments
+          # --binary so vendored binary provider bundles (components*.gz),
+          # which some package image targets regenerate, survive reassembly
+          # in finalize (a plain "Binary files differ" stub is unappliable).
+          git diff --binary HEAD > "_out/fragments/${safe}.patch"
+          echo "safe=${safe}" >> "$GITHUB_OUTPUT"
+          echo "Fragment for ${PKG}:"; git --no-pager diff --stat HEAD
+      - name: Upload patch fragment
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: pr-patch
-          path: _out/assets/pr.patch
-     
+          name: pr-patch-fragment-${{ steps.frag.outputs.safe }}
+          path: _out/fragments/${{ steps.frag.outputs.safe }}.patch
+          if-no-files-found: error
+
+  # Talos is its own leg: the nocloud disk and the installer tarball are heavy
+  # and shared through _out/assets, so the talos image and the disk are built in
+  # one job. Always runs on non-docs PRs — e2e needs the disk regardless of the
+  # per-package matrix scope.
+  build-talos:
+    name: Build Talos
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+      - name: Login to GitHub Container Registry
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      # buildkitd-config routes docker.io base-image pulls through mirror.gcr.io
+      # (hack/buildkitd.toml) so the talos image build dodges Docker Hub's
+      # anonymous-pull rate limit; see the build job for the full rationale.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Build Talos image (matchbox + installer tarball)
+        run: make -C packages/core/talos image
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+      - name: Build Talos nocloud disk
+        run: make -C packages/core/talos talos-nocloud
+      - name: Capture Talos patch fragment
+        run: |
+          mkdir -p _out/fragments
+          git diff --binary HEAD > _out/fragments/talos.patch
+          echo "Talos fragment:"; git --no-pager diff --stat HEAD
+      - name: Upload Talos patch fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-patch-fragment-talos
+          path: _out/fragments/talos.patch
+          if-no-files-found: error
       - name: Upload Talos image
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: talos-image
           path: _out/assets/nocloud-amd64.raw.xz
+          if-no-files-found: error
+
+  # Reassemble the unified pr.patch from every fragment, then build the installer
+  # LAST: `make -C packages/core/installer image` runs `flux push artifact
+  # --path=packages`, which bundles the WHOLE digest-patched tree into the OCI
+  # artifact the operator pulls — so every other package's digest edit must
+  # already be applied here. e2e consumes the resulting pr.patch unchanged.
+  finalize:
+    name: Finalize (merge patches + installer)
+    # Depends on `checks` too: gating finalize on unit/controller tests cascades
+    # to e2e (which needs finalize), so a red unit test skips the expensive
+    # install+e2e path instead of wasting ~1h on it. Restores the gating the old
+    # in-build-job tests gave, without re-coupling the cheap parallel builds.
+    needs: ["plan", "checks", "build", "build-talos"]
+    if: |
+      always()
+      && needs.plan.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+      && needs.checks.result == 'success'
+      && (needs.build.result == 'success' || needs.build.result == 'skipped')
+      && needs.build-talos.result == 'success'
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up build toolchain
+        run: |
+          if ! command -v flux >/dev/null; then
+            install_script="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$install_script"
+            sudo bash "$install_script"
+            rm -f "$install_script"
+          fi
+      - name: Download patch fragments
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: pr-patch-fragment-*
+          merge-multiple: true
+          path: _out/fragments
+      - name: Apply digest fragments
+        run: |
+          applied=0
+          # Each fragment patches only its own package's files; --3way lets two
+          # fragments that touch adjacent lines of a shared file (e.g. a package
+          # Makefile that writes a sibling package's values.yaml) merge cleanly
+          # instead of the second apply aborting the whole finalize.
+          for f in _out/fragments/*.patch; do
+            [ -s "$f" ] || continue
+            echo "Applying $f"
+            git apply --3way "$f"
+            applied=$((applied + 1))
+          done
+          echo "Applied $applied fragment(s)"
+          git --no-pager diff --stat HEAD
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+      - name: Login to GitHub Container Registry
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      # Overlay current-main image refs onto every package this PR did NOT
+      # rebuild. Without it, unbuilt packages fall back to the last-release refs
+      # committed in the tree (e.g. v1.5.0) even when main is hundreds of commits
+      # ahead — so e2e and the installer's packages artifact would ship stale
+      # images for everything outside this PR's build matrix. Source of truth is
+      # the cozystack-packages:main OCI artifact build-main.yaml already
+      # publishes (the whole current-main packages tree, refs digest-pinned to
+      # main's images). Runs after login (creds available) and before the
+      # installer build below so the flux-pushed packages tree — and the
+      # pr.patch e2e applies — already reflect the overlay. A missing artifact
+      # (build-main not yet green) is a no-op: packages keep their committed
+      # refs (prior behaviour). See hack/overlay-main-images.sh.
+      - name: Pull current-main packages tree
+        run: |
+          rm -rf _out/mainpkgs
+          mkdir -p _out/mainpkgs
+          flux pull artifact "oci://${REGISTRY}/cozystack-packages:main" \
+            --output _out/mainpkgs \
+            || { echo "cozystack-packages:main pull failed — keeping committed refs"; rm -rf _out/mainpkgs; }
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Overlay current-main refs for unbuilt packages
+        # Best-effort: this only improves WHICH images e2e and the installer use,
+        # so an unexpected failure must degrade to the committed refs (prior
+        # behaviour), never block the PR. overlay-main-images.sh already handles
+        # the expected paths (missing artifact, drift, absent unit) internally.
+        run: |
+          hack/overlay-main-images.sh _out/mainpkgs "$BUILD_MATRIX" "$PR_TOUCHED" \
+            || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"
+        env:
+          # The set of packages THIS PR rebuilt; their pr-<N>-<sha> refs are
+          # authoritative, so overlay-main-images.sh skips them. Computed by the
+          # plan job from the Makefile (a JSON array of package dirs), not from
+          # untrusted PR input — passed via env per workflow-injection hygiene.
+          BUILD_MATRIX: ${{ needs.plan.outputs.matrix }}
+          # Packages THIS PR edited (changed-file dirs from the plan job's git
+          # diff). Their committed refs are the PR's intent — an upstream image
+          # bump in a non-build-unit package would otherwise be silently reverted
+          # by the overlay — so overlay-main-images.sh preserves them. Also
+          # env-passed, derived from the diff, not from untrusted PR input.
+          PR_TOUCHED: ${{ needs.plan.outputs.touched }}
+      # buildkitd-config routes docker.io base-image pulls through mirror.gcr.io
+      # (hack/buildkitd.toml) so the installer build dodges Docker Hub's
+      # anonymous-pull rate limit; see the build job for the full rationale.
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      # Builds the operator image AND flux-pushes the now-fully-patched packages
+      # tree, then patches the installer's platformSourceRef to that artifact.
+      - name: Build installer (operator + packages artifact)
+        run: make -C packages/core/installer image
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+      - name: Assemble pr.patch
+        run: |
+          mkdir -p _out/assets
+          # --binary so regenerated provider bundles (components*.gz) stay in
+          # the patch e2e applies; mirrors main's pr.patch binary fix (#e566992).
+          git diff --binary HEAD > _out/assets/pr.patch
+          echo "Final pr.patch:"; git --no-pager diff --stat HEAD
+      - name: Upload git diff patch
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-patch
+          path: _out/assets/pr.patch
+          if-no-files-found: error
 
   resolve_assets:
     name: "Resolve assets"
@@ -147,6 +437,8 @@ jobs:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
 
       - name: Checkout code
         if: contains(github.event.pull_request.labels.*.name, 'release')
@@ -205,8 +497,8 @@ jobs:
       contents: read
       packages: read
       checks: write
-    needs: ["build", "resolve_assets"]
-    if: ${{ always() && (needs.build.result == 'success' || needs.resolve_assets.result == 'success') }}
+    needs: ["finalize", "build-talos", "resolve_assets"]
+    if: ${{ always() && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success') }}
 
     steps:
       - name: Generate GitHub App token
@@ -217,6 +509,8 @@ jobs:
           app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
           private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
           owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
 
       # ▸ Checkout and prepare the codebase
       # fetch-depth: 0 is required by the "Select E2E tests" step so that
@@ -226,7 +520,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ▸ Regular PR path – download artefacts produced by the *build* job
+      # ▸ Regular PR path – download the Talos disk from build-talos and pr.patch from finalize
       - name: "Download Talos image (regular PR)"
         if: "!contains(github.event.pull_request.labels.*.name, 'release')"
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4

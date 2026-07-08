@@ -1,0 +1,99 @@
+suite: ExposureClass rendering
+templates:
+  - templates/exposureclass.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# Pins the operator-facing knob that renders a cluster-scoped ExposureClass
+# from platform values. The default (empty name) must render nothing so the
+# externalIPs path stays untouched on upgrade.
+
+tests:
+  - it: renders nothing by default (empty name keeps the externalIPs path)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a metallb ExposureClass with addresses and default annotation
+    set:
+      publishing.exposureClass.name: prod-lb
+      publishing.exposureClass.backend: metallb
+      publishing.exposureClass.addresses:
+        - 192.0.2.0/24
+      publishing.exposureClass.l2: true
+      publishing.exposureClass.isDefault: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: ExposureClass
+      - equal:
+          path: metadata.name
+          value: prod-lb
+      - equal:
+          path: metadata.annotations["exposureclass.network.cozystack.io/is-default-class"]
+          value: "true"
+      - equal:
+          path: spec.backend
+          value: metallb
+      - equal:
+          path: spec.addresses[0]
+          value: 192.0.2.0/24
+
+  - it: omits the default annotation when isDefault is false
+    set:
+      publishing.exposureClass.name: prod-lb
+      publishing.exposureClass.isDefault: false
+    asserts:
+      - notExists:
+          path: metadata.annotations["exposureclass.network.cozystack.io/is-default-class"]
+
+  - it: honours backend and l2 overrides
+    set:
+      publishing.exposureClass.name: cilium-lb
+      publishing.exposureClass.backend: cilium
+      publishing.exposureClass.l2: false
+      publishing.exposureClass.addresses:
+        - 198.51.100.10-198.51.100.20
+    asserts:
+      - equal:
+          path: spec.backend
+          value: cilium
+      - equal:
+          path: spec.l2
+          value: false
+
+  - it: defaults l2 to true when omitted from a trimmed values file
+    set:
+      publishing.exposureClass.name: prod-lb
+      publishing.exposureClass.l2: null
+    asserts:
+      - equal:
+          path: spec.l2
+          value: true
+
+  - it: fails when a pool backend is combined with publishing.externalIPs
+    set:
+      publishing.externalIPs:
+        - 203.0.113.10
+      publishing.exposureClass.name: prod-lb
+      publishing.exposureClass.backend: metallb
+    asserts:
+      - failedTemplate:
+          errorPattern: mutually exclusive with publishing.externalIPs
+
+  - it: allows externalIPs backend alongside publishing.externalIPs
+    set:
+      publishing.externalIPs:
+        - 203.0.113.10
+      publishing.exposureClass.name: pin
+      publishing.exposureClass.backend: externalIPs
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.backend
+          value: externalIPs

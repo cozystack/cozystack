@@ -29,6 +29,7 @@ import (
 	v1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	corev1alpha1 "github.com/cozystack/cozystack/pkg/apis/core/v1alpha1"
+	sdnv1alpha1 "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apiserver"
 	"github.com/cozystack/cozystack/pkg/config"
 	"github.com/spf13/cobra"
@@ -78,6 +79,7 @@ func NewCozyServerOptions(out, errOut io.Writer) *CozyServerOptions {
 			apiserver.Codecs.LegacyCodec(
 				corev1alpha1.SchemeGroupVersion,
 				appsv1alpha1.SchemeGroupVersion,
+				sdnv1alpha1.SchemeGroupVersion,
 			),
 		),
 		StdOut: out,
@@ -297,6 +299,16 @@ func (o *CozyServerOptions) Complete() error {
 			)
 		}
 		release.HelmUpgradeTimeout = upgradeTimeout
+		disableWait, err := config.ParseHelmInstallDisableWaitAnnotation(
+			crd.Annotations[config.HelmInstallDisableWaitAnnotation],
+		)
+		if err != nil {
+			return fmt.Errorf(
+				"ApplicationDefinition %q has invalid %s annotation: %w",
+				crd.Name, config.HelmInstallDisableWaitAnnotation, err,
+			)
+		}
+		release.HelmInstallDisableWait = disableWait
 		resource := config.Resource{
 			Application: config.ApplicationConfig{
 				Kind:          crd.Spec.Application.Kind,

@@ -46,8 +46,21 @@ build_owners_index() {
 }
 
 # yq: PackageSource name -> sources that depend on it (reverse of dependsOn)
+#
+# Exclude cozystack.cozystack-engine as a propagation hub. Every *-application
+# source declares `dependsOn: cozystack.cozystack-engine` purely as an INSTALL
+# ORDERING edge — the app's *-rd HelmRelease must wait for the engine to
+# register the ApplicationDefinition CRD before it can reconcile. That is a
+# universal lifecycle dependency, NOT a behavioral one: a change to an engine
+# dependency (postgres-operator, keycloak, cert-manager, ...) does not alter any
+# app's runtime behavior, so it must not fan test selection out to every app.
+# Without this filter, postgres-operator -> keycloak -> cozystack-engine -> EVERY
+# app, defeating test-impact analysis. Dropping the engine reverse edges keeps
+# the engine reachable but stops it propagating selection downstream. A change to
+# the engine itself still triggers the full suite via the no-app-descendants
+# safety-net at the bottom of this script.
 build_reverse_deps() {
-  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
+  yq -rN '.metadata.name as $n | .spec.variants[]?.dependsOn[]? | select(. != null and . != "" and . != "cozystack.cozystack-engine") | . + "\t" + $n' "$SOURCES_DIR"/*.yaml
 }
 
 OWNERS=$(build_owners_index | sort -u)

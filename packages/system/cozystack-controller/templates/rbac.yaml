@@ -3,9 +3,19 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: cozystack-controller
 rules:
-- apiGroups: ['cozystack.io', 'gateway.cozystack.io']
+- apiGroups: ['cozystack.io', 'gateway.cozystack.io', 'network.cozystack.io']
   resources: ['*']
   verbs: ['*']
+# ServiceExposureReconciler renders the backend LoadBalancer pool /
+# announcer CRs (MetalLB IPAddressPool + L2Advertisement, Cilium
+# CiliumLoadBalancerIPPool + CiliumL2AnnouncementPolicy). The catch-all
+# read rule below covers get/list/watch; these add the write verbs.
+- apiGroups: ["metallb.io"]
+  resources: ["ipaddresspools", "l2advertisements"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: ["cilium.io"]
+  resources: ["ciliumloadbalancerippools", "ciliuml2announcementpolicies"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 # TenantGatewayReconciler renders Gateway / HTTPRoute / TLSRoute and
 # reads back their status to populate TenantGateway.Status.
 - apiGroups: ["gateway.networking.k8s.io"]
@@ -25,6 +35,15 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "patch", "update"]
+# TenantQuotaReconciler manages the per-namespace "tenant-quota-allocated"
+# ResourceQuota that enforces each tenant's share of its parent pool, and emits
+# events on the tenant namespace when sub-tenant quotas overcommit the budget.
+- apiGroups: [""]
+  resources: ["resourcequotas"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]

@@ -5,6 +5,22 @@ ingress:
   # If set, this value will be used as the Ingress hostname (e.g., "auth.example.com").
   # If left empty, defaults to "keycloak.<root-host>" based on the cluster root-host setting.
   host: ""
+  # Optional separate hostname for the Keycloak admin console (opt-in).
+  # When set (e.g., "keycloak-admin.example.com"):
+  #   - KC_HOSTNAME_ADMIN is configured so the admin console generates its
+  #     URLs on this hostname;
+  #   - the main `host` (login) route is narrowed to the public OIDC paths
+  #     (/realms, /resources, /.well-known) only, so the admin console and
+  #     Administration REST API (/admin) are NOT served on the login hostname;
+  #   - a dedicated Ingress/HTTPRoute for this hostname routes /  to Keycloak.
+  # The admin route attaches to the Gateway/ingressClass selected by the
+  # cluster-level expose-ingress-admin (defaults to expose-ingress). Point
+  # that at a separate, e.g. private-IP, Gateway to keep the admin console off
+  # the public internet. Note: KC_HOSTNAME_ADMIN alone is NOT a security
+  # boundary (admin REST stays reachable on any hostname routed to Keycloak);
+  # the network/path separation here is what restricts access.
+  # If left empty, the admin console stays on the main hostname (default).
+  adminHost: ""
   annotations:
     nginx.ingress.kubernetes.io/affinity: "cookie"
     nginx.ingress.kubernetes.io/session-cookie-expires: "86400"
@@ -21,6 +37,12 @@ themes: []
 # Theme images must contain theme files under /themes/ directory.
 # Each theme is copied into Keycloak's /opt/keycloak/themes/ via init container.
 # If multiple themes contain files with the same path, later entries take precedence.
+#
+# In addition to this explicit list, a single login theme can be shipped through
+# platform branding values: setting branding.loginTheme (the theme name) together
+# with branding.loginThemeImage (the OCI image carrying it under /themes/) appends
+# an entry here automatically and selects it as the realm login theme. branding
+# arrives via _cluster.branding, so no per-package values plumbing is required.
 
 imagePullSecrets: []
 # - name: my-registry-secret
@@ -39,3 +61,58 @@ extraEnv: []
 #     secretKeyRef:
 #       name: my-secret
 #       key: my-key
+
+# Transparent column-level PII encryption for the Keycloak database.
+# When enabled, a keycloak-kms-proxy Deployment is placed on the wire
+# between Keycloak and its CloudNativePG database: Keycloak's DB endpoint
+# is repointed at the proxy, which encrypts designated PII columns on
+# writes and decrypts them on reads. The data-encryption key is wrapped by
+# a KMS, so it never lives inside PostgreSQL.
+# Project: https://github.com/cozystack/keycloak-kms-proxy
+#
+# OPERATIONAL CAVEATS — read before enabling:
+#   * Availability downgrade. The proxy runs as a single replica (HA needs a
+#     shared wrapped DEK set, tracked as a follow-up). Keycloak itself runs HA
+#     (2 replicas); with encryption on, both replicas funnel their DB traffic
+#     through this one pod, so any proxy restart — node drain, rollout, image
+#     pull, OOM — briefly drops the database connection for the entire IdP.
+#   * Existing data is NOT migrated automatically. Flipping enabled:true on a
+#     populated database leaves the pre-existing PII as plaintext; logins that
+#     match on the deterministic columns (username/email) then fail until the
+#     offline backfill has run. Disabling later is just as unsafe — Keycloak
+#     would point back at CNPG and read ciphertext directly. Off-by-default only
+#     protects FRESH installs. To enable on an existing install, run the backfill
+#     procedure first:
+#     https://github.com/cozystack/keycloak-kms-proxy/blob/main/docs/migration-existing-keycloak.md
+#   * Static KEK = single point of permanent data loss. With kms.backend=static
+#     the KEK is generated once and kept in the keycloak-kms-proxy-kek Secret
+#     (in etcd, next to the DB credentials — "static" trades some at-rest
+#     protection for zero external dependencies). If that Secret is ever lost,
+#     every previously-encrypted value becomes permanently undecryptable, so it
+#     MUST be part of the backup set. For production prefer kms.backend=vault-transit.
+encryption:
+  enabled: false
+  image: ghcr.io/cozystack/keycloak-kms-proxy:v0.1.0
+  # Encrypted field set: "" = full default set (username, email, names,
+  # PII attributes, credentials), "email-only", or "disabled" (passthrough).
+  fields: ""
+  # Bootstrap window only: downgrades fail-loud rules to passthrough so the
+  # Keycloak Liquibase migrations can complete. MUST be false in steady state.
+  lenient: false
+  kms:
+    # "static" — a self-generated 32-byte KEK kept in a Secret (works on any
+    # cluster, suitable for evaluation). "vault-transit" — the KEK lives in
+    # HashiCorp Vault (recommended for production; supports KEK rotation).
+    backend: static
+    vault:
+      address: ""       # e.g. https://vault.vault.svc:8200
+      keyName: ""       # Transit key name
+      mount: transit    # Transit mount path
+      # Existing Secret holding the Vault token under key "token".
+      tokenSecretName: ""
+  resources:
+    requests:
+      memory: 128Mi
+      cpu: 50m
+    limits:
+      memory: 256Mi

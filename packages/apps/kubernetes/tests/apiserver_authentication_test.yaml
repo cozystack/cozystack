@@ -1,0 +1,376 @@
+suite: tenant apiserver authentication passthrough
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+# The KamajiControlPlane is document index 1 in the cluster.yaml render
+# (0: Cluster, 1: KamajiControlPlane, 2: WorkloadMonitor, 3: KubevirtCluster, ...).
+# These tests cover the apiServer authentication passthrough:
+#   controlPlane.apiServer.extraArgs         -> spec.apiServer.extraArgs
+#   controlPlane.apiServer.extraVolumeMounts -> spec.apiServer.extraVolumeMounts
+#   controlPlane.apiServer.extraVolumes      -> spec.deployment.extraVolumes (appended)
+# plus the validation guards on extraVolumes / extraVolumeMounts.
+
+tests:
+  ###############################################
+  # default: opt-in fields render nothing       #
+  ###############################################
+
+  - it: emits empty extraArgs and extraVolumeMounts arrays by default
+    # The chart ALWAYS emits both fields (empty arrays when nothing to inject)
+    # so a mode=System → mode=None transition sends a JSON-merge-patch that
+    # REPLACES the live array — otherwise the CRD keeps the stale flag.
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - isKind:
+          of: KamajiControlPlane
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraArgs
+          value: []
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraVolumeMounts
+          value: []
+        documentIndex: 1
+
+  - it: keeps only the two talos control-plane volumes by default
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - lengthEqual:
+          path: spec.deployment.extraVolumes
+          count: 2
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[0].name
+          value: talos-ca
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[1].name
+          value: talos-tls-cert
+        documentIndex: 1
+
+  ###############################################
+  # extraArgs passthrough                       #
+  ###############################################
+
+  - it: passes apiServer extraArgs through to the KamajiControlPlane
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraArgs:
+        - "--authentication-config=/etc/kubernetes/authentication/config.yaml"
+        - "--requestheader-uid-headers=X-Remote-Uid"
+    asserts:
+      - equal:
+          path: spec.apiServer.extraArgs[0]
+          value: "--authentication-config=/etc/kubernetes/authentication/config.yaml"
+        documentIndex: 1
+      - contains:
+          path: spec.apiServer.extraArgs
+          content: "--requestheader-uid-headers=X-Remote-Uid"
+        documentIndex: 1
+
+  ###############################################
+  # extraVolumes + extraVolumeMounts passthrough #
+  ###############################################
+
+  - it: appends apiServer extraVolumes after the talos control-plane volumes
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: tenant-byo-mount
+          configMap:
+            name: tenant-authentication-config
+    asserts:
+      - lengthEqual:
+          path: spec.deployment.extraVolumes
+          count: 3
+        documentIndex: 1
+      # talos volumes are preserved at the head of the list
+      - equal:
+          path: spec.deployment.extraVolumes[0].name
+          value: talos-ca
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[1].name
+          value: talos-tls-cert
+        documentIndex: 1
+      # user-supplied volume is appended
+      - equal:
+          path: spec.deployment.extraVolumes[2].name
+          value: tenant-byo-mount
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[2].configMap.name
+          value: tenant-authentication-config
+        documentIndex: 1
+
+  - it: passes a mount that references a declared extraVolume
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: tenant-byo-mount
+          secret:
+            secretName: tenant-authentication-config
+      controlPlane.apiServer.extraVolumeMounts:
+        - name: tenant-byo-mount
+          mountPath: /etc/kubernetes/authentication
+          readOnly: true
+    asserts:
+      - equal:
+          path: spec.apiServer.extraVolumeMounts[0].name
+          value: tenant-byo-mount
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraVolumeMounts[0].mountPath
+          value: /etc/kubernetes/authentication
+        documentIndex: 1
+      - equal:
+          path: spec.apiServer.extraVolumeMounts[0].readOnly
+          value: true
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[2].secret.secretName
+          value: tenant-authentication-config
+        documentIndex: 1
+
+  ###############################################
+  # volume name guards                          #
+  ###############################################
+
+  - it: fails when an extraVolume reuses the reserved talos-ca name
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: talos-ca
+          configMap:
+            name: oops
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume name "talos-ca" is reserved by the chart for the talos control-plane secrets — rename your volume to avoid a duplicate volume name in the control-plane Deployment'
+
+  - it: fails when an extraVolume reuses the reserved talos-tls-cert name
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: talos-tls-cert
+          secret:
+            secretName: oops
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume name "talos-tls-cert" is reserved by the chart for the talos control-plane secrets — rename your volume to avoid a duplicate volume name in the control-plane Deployment'
+
+  - it: fails when an extraVolume has no name
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - configMap:
+            name: tenant-authentication-config
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes[0]: every volume must set a non-empty name'
+
+  - it: fails when two extraVolumes share a name
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: dup
+          configMap:
+            name: a
+        - name: dup
+          secret:
+            secretName: b
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: duplicate volume name "dup" — each extra volume must have a unique name'
+
+  ###############################################
+  # volume source allow-list (tenant isolation) #
+  ###############################################
+
+  - it: accepts a secret extraVolume source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: tenant-byo-mount
+          secret:
+            secretName: tenant-authentication-config
+    asserts:
+      - equal:
+          path: spec.deployment.extraVolumes[2].name
+          value: tenant-byo-mount
+        documentIndex: 1
+      - equal:
+          path: spec.deployment.extraVolumes[2].secret.secretName
+          value: tenant-authentication-config
+        documentIndex: 1
+
+  - it: rejects a hostPath extraVolume source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: host-escape
+          hostPath:
+            path: /etc/kubernetes
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "host-escape" uses a "hostPath" source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed'
+
+  - it: rejects a csi extraVolume source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: csi-vol
+          csi:
+            driver: some.csi.driver
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "csi-vol" uses a "csi" source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed'
+
+  - it: rejects an nfs extraVolume source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: nfs-vol
+          nfs:
+            server: 192.0.2.1
+            path: /exports
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "nfs-vol" uses a "nfs" source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed'
+
+  - it: rejects a persistentVolumeClaim extraVolume source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: pvc-vol
+          persistentVolumeClaim:
+            claimName: some-claim
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "pvc-vol" uses a "persistentVolumeClaim" source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed'
+
+  - it: rejects a projected extraVolume source (no token projection)
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: token-vol
+          projected:
+            sources: []
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "token-vol" uses a "projected" source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed'
+
+  - it: rejects an emptyDir extraVolume source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: scratch
+          emptyDir: {}
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "scratch" uses a "emptyDir" source, which is not permitted on a management-cluster control-plane pod — only configMap and secret sources are allowed'
+
+  ###############################################
+  # exactly-one-source guard                    #
+  ###############################################
+
+  - it: rejects an extraVolume that declares no source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: sourceless
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "sourceless" must declare exactly one volume source, got 0 ([])'
+
+  - it: rejects an extraVolume that declares more than one source
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumes:
+        - name: two-sources
+          configMap:
+            name: a
+          secret:
+            secretName: b
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumes: volume "two-sources" must declare exactly one volume source, got 2 ([configMap secret])'
+
+  ###############################################
+  # extraVolumeMounts guards                     #
+  ###############################################
+
+  - it: rejects a mount that references no declared volume
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumeMounts:
+        - name: orphan
+          mountPath: /etc/kubernetes/authentication
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumeMounts: mount "orphan" references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted'
+
+  - it: rejects a mount that targets the reserved talos-ca volume
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumeMounts:
+        - name: talos-ca
+          mountPath: /exfil
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumeMounts: mount "talos-ca" references no volume declared in controlPlane.apiServer.extraVolumes — the chart-managed talos volumes cannot be mounted'
+
+  - it: fails when a mount has no name
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      controlPlane.apiServer.extraVolumeMounts:
+        - mountPath: /etc/kubernetes/authentication
+    asserts:
+      - failedTemplate:
+          errorMessage: 'controlPlane.apiServer.extraVolumeMounts[0]: every mount must set a non-empty name'

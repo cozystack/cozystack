@@ -2,7 +2,7 @@
 ## @section Common Parameters
 ##
 
-## @param {string} storageClass - StorageClass used to store the data.
+## @param {string} storageClass - Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.
 ## @immutable
 ## @x-cozystack-options {source: storageclass}
 storageClass: replicated
@@ -81,27 +81,16 @@ storageClass: replicated
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
 ## @field {string} instanceType="u1.medium" - Virtual machine instance type.
 ## @x-cozystack-options {source: instancetype}
-## @field {quantity} diskSize="20Gi" - Persistent disk size for kubelet and containerd data.
-## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
+## @field {quantity} diskSize="20Gi" - System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
+## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 ## @x-cozystack-options {source: storageclass}
 ## @field {[]string} roles - List of node roles.
-## @field {Resources} resources - CPU and memory resources for each worker node.
+## @field {Resources} [resources] - Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
 ## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 ## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
 
-## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map.
-nodeGroups:
-  md0:
-    minReplicas: 0
-    maxReplicas: 10
-    instanceType: "u1.medium"
-    diskSize: 20Gi
-    storageClass: ""
-    roles:
-    - ingress-nginx
-    resources: {}
-    gpus: []
-    kubelet: {}
+## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map. When left empty, a single default node group `md0` (one `ingress-nginx` worker) is provisioned. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
+nodeGroups: {}
 
 ##
 ## @enum {string} Version
@@ -110,7 +99,6 @@ nodeGroups:
 ## @value v1.33
 ## @value v1.32
 ## @value v1.31
-## @value v1.30
 
 ## @param {Version} version - Kubernetes major.minor version to deploy
 version: "v1.35"
@@ -231,6 +219,9 @@ addons:
 ## @typedef {struct} APIServer - API Server configuration.
 ## @field {Resources} resources - CPU and memory resources for API Server.
 ## @field {ResourcesPreset} resourcesPreset="c1.medium" - Preset if `resources` omitted.
+## @field {[]string} extraArgs - Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
+## @field {[]object} extraVolumes - Extra volumes added to the control-plane Deployment, passed through to KamajiControlPlane `spec.deployment.extraVolumes`. Use to mount a ConfigMap or Secret holding an AuthenticationConfiguration file referenced by `extraArgs`. Each item is a core/v1 Volume, but because the control-plane pod runs on the management cluster only `configMap` and `secret` sources are allowed (host-reaching sources like `hostPath`/`csi` and token-projection via `projected` are rejected); each volume must have a unique, non-empty name and exactly one source. The names `talos-ca` and `talos-tls-cert` are reserved by the chart. Empty by default.
+## @field {[]object} extraVolumeMounts - Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
 
 ## @typedef {struct} ControllerManager - Controller Manager configuration.
 ## @field {Resources} resources - CPU and memory resources for Controller Manager.
@@ -260,6 +251,9 @@ controlPlane:
   apiServer:
     resources: {}
     resourcesPreset: "c1.medium"
+    extraArgs: []
+    extraVolumes: []
+    extraVolumeMounts: []
   controllerManager:
     resources: {}
     resourcesPreset: "t1.micro"
@@ -273,7 +267,75 @@ controlPlane:
 
 ## @typedef {struct} Images - Optional image overrides for chart-internal helpers.
 ## @field {string} [waitForKubeconfig] - Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
+## @field {string} [kubectl] - Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+## @field {string} [talosCsrSigner] - Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
 
 ## @param {Images} images - Optional image overrides for air-gapped or rate-limited registries.
 images:
   waitForKubeconfig: ""
+  kubectl: ""
+  talosCsrSigner: ""
+
+##
+## @section Talos Worker Image
+##
+
+## @typedef {struct} Talos - Talos worker image configuration.
+## @field {string} version - Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+
+## @param {Talos} talos - Talos worker image configuration.
+talos:
+  version: "v1.13.0"
+  schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+
+##
+## @section Node Health Check
+##
+
+## @typedef {struct} NodeHealthCheck - MachineHealthCheck configuration for worker node groups.
+## @field {string} maxUnhealthy="50%" - Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
+## @field {string} nodeStartupTimeout="10m" - Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
+
+## @param {NodeHealthCheck} nodeHealthCheck - MachineHealthCheck tuning for worker node groups.
+nodeHealthCheck:
+  maxUnhealthy: "50%"
+  nodeStartupTimeout: "10m"
+
+##
+## @section OIDC
+##
+
+## @enum {string} OIDCMode - Identity mode for the tenant kube-apiserver.
+## @value None
+## @value System
+## @value CustomConfig
+
+## @enum {string} OIDCRole - RBAC role bound to a listed user inside the tenant cluster.
+## @value admin
+## @value view
+
+## @typedef {struct} OIDCUser - One user entry; produces one ClusterRoleBinding inside the tenant cluster.
+## @field {string} email - Email address matched against the `email` claim from the issuer. Used verbatim as the `User:` subject in the ClusterRoleBinding inside the tenant cluster. The `email` claim is a built-in OIDC scope requested explicitly by the chart-generated `kubectl oidc-login` kubeconfig; every conformant OIDC provider (cozy realm included) emits it.
+## @field {OIDCRole} role - Role to bind: `admin` maps to `ClusterRole/cluster-admin`, `view` maps to `ClusterRole/view`.
+
+## @typedef {struct} OIDCSecretRef - Reference to a Secret carrying an inline AuthenticationConfiguration.
+## @field {string} [name] - Name of an existing Secret in the tenant (release) namespace whose `config.yaml` key holds an `apiserver.config.k8s.io/v1beta1` `AuthenticationConfiguration`. Mutually exclusive with `customConfig.config`.
+
+## @typedef {struct} OIDCCustomConfig - Tenant-provided AuthenticationConfiguration; consumed only when `mode: CustomConfig`. Exactly one of `config` or `secretRef.name` must be set.
+## @field {string} [config] - Inline AuthenticationConfiguration YAML (`apiserver.config.k8s.io/v1beta1`). The chart writes the value verbatim into a Secret mounted at `/etc/kubernetes/authentication-config/config.yaml` on the kube-apiserver. Mutually exclusive with `secretRef.name`.
+## @field {OIDCSecretRef} [secretRef] - Reference to an existing Secret in the tenant namespace carrying the `AuthenticationConfiguration`.
+
+## @typedef {struct} OIDC - OIDC selector for the tenant cluster (Phase 1 — per-cluster audience binding; no per-tenant Keycloak realm).
+## @field {OIDCMode} mode - Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+## @field {OIDCCustomConfig} [customConfig] - Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
+## @field {[]OIDCUser} [users] - Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.
+
+## @param {OIDC} oidc - OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
+oidc:
+  mode: "None"
+  customConfig:
+    config: ""
+    secretRef:
+      name: ""
+  users: []

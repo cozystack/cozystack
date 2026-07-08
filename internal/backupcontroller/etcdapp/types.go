@@ -3,9 +3,9 @@
 // Package etcdapp declares the typed shape of the
 // apps.cozystack.io/v1alpha1 Etcd CR that the Etcd backup driver reads.
 // It carries only fields the driver touches (currently nothing under
-// spec - the driver materialises etcd.aenix.io EtcdBackup CRs against the
-// operator API and writes back through the typed EtcdCluster handle in
-// etcdtypes), but the type still serves as a typed application-side
+// spec - the driver materialises etcd-operator.cozystack.io EtcdSnapshot CRs
+// against the operator API and writes back through the typed EtcdCluster
+// handle in etcdtypes), but the type still serves as a typed application-side
 // handle so the driver can fetch the CR via the typed client and surface
 // NotFound semantics cleanly.
 //
@@ -57,9 +57,9 @@ type EtcdList struct {
 
 // EtcdSpec is intentionally empty: the driver does not currently read or
 // patch any apps.cozystack.io/Etcd spec fields. It uses the downstream
-// etcd.aenix.io/EtcdCluster CR (rendered by the chart's HelmRelease) as
-// the operational handle and materialises etcd.aenix.io/EtcdBackup CRs
-// through etcdtypes.
+// etcd-operator.cozystack.io/EtcdCluster CR (rendered by the chart's
+// HelmRelease) as the operational handle and materialises
+// etcd-operator.cozystack.io/EtcdSnapshot CRs through etcdtypes.
 //
 // Reserved for future fields the driver might need to read. Add fields
 // here only when the driver genuinely needs them.

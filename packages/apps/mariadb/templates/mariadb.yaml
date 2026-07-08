@@ -29,11 +29,13 @@ spec:
             - {{ .Release.Name }}
         topologyKey: "kubernetes.io/hostname"
 
+  {{- if gt (int .Values.replicas) 1 }}
   replication:
     enabled: true
     #primary:
     #  podIndex: 0
     #  automaticFailover: true
+  {{- end }}
 
   podMetadata:
     labels:
@@ -43,6 +45,14 @@ spec:
     enabled: true
     exporter:
       image: prom/mysqld-exporter:v0.15.1
+      # The mariadb-operator hardcodes the exporter's liveness/readiness probe
+      # as an httpGet on port 9104, which kubelet dials over the pod's IPv4
+      # address. Bind the exporter to the IPv4 wildcard so the probe connects
+      # deterministically; the default [::] listener intermittently refuses the
+      # IPv4 connect on single-stack-IPv4 data planes, flapping the pod to
+      # NotReady and leaving the metrics Service endpoint unpopulated.
+      args:
+      - --web.listen-address=0.0.0.0:9104
       resources:
         requests:
           cpu: 50m
@@ -63,6 +73,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/instance: {{ $.Release.Name }}
+    {{- if and .Values.external (eq (int .Values.replicas) 1) }}
+    type: LoadBalancer
+    {{- end }}
   storage:
     size: {{ .Values.size }}
     resizeInUseVolumes: true
@@ -71,7 +84,7 @@ spec:
     storageClassName: {{ . }}
     {{- end }}
 
-  {{- if .Values.external }}
+  {{- if and .Values.external (gt (int .Values.replicas) 1) }}
   primaryService:
     type: LoadBalancer
   {{- end }}

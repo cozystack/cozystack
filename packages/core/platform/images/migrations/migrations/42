@@ -14,29 +14,20 @@
 # the next chart-driven apply sees no diff.
 #
 # 3-way-merge note: this apply records the no-delete label in the kubectl
-# last-applied-configuration annotation under the default field manager.
-# Any future migration that re-stamps cozystack-version via the same field
-# manager MUST include the label inline (matching the chart template at
-# templates/cozystack-version.yaml) — a label-less apply by the same field
-# manager would strip it.
+# last-applied-configuration annotation under the default field manager. A
+# label-less apply by the same field manager would strip it, so the manifest
+# is rendered by the shared helper (lib/cozystack-version.sh) that every
+# migration sources rather than a hand-copied heredoc.
 
 set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
 
 NAMESPACE="${NAMESPACE:-cozy-system}"
 DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 
-MANIFEST=$(cat <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cozystack-version
-  namespace: ${NAMESPACE}
-  labels:
-    platform.cozystack.io/no-delete: "true"
-data:
-  version: "43"
-EOF
-)
+MANIFEST=$(render_cozystack_version_manifest 43)
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "[dry-run] would apply:"

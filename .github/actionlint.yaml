@@ -1,0 +1,8 @@
+# Custom self-hosted runner labels (Oracle Cloud ephemeral ARC scale sets) so
+# actionlint doesn't flag them as unknown. Keep in sync with the labels used in
+# .github/workflows/*.yaml.
+self-hosted-runner:
+  labels:
+    - oracle-vm-4cpu-16gb-x86-64
+    - oracle-vm-24cpu-96gb-x86-64
+    - oracle-vm-32cpu-128gb-x86-64

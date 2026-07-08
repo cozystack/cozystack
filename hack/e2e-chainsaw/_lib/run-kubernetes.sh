@@ -1,6 +1,169 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 
+# kubectl_wait_retry: wraps `kubectl wait` with retries against transient
+# management-cluster apiserver/etcd errors.
+#
+# The e2e sandbox is a 3-node kind cluster on Talos VMs; the 3-instance
+# etcd HA cluster can shed a leader under the accumulated CDI+DRBD IO +
+# multiple back-to-back Kamaji tenant control-plane bringups this suite
+# stacks. kubectl's watch-based `wait` exits non-zero on the FIRST server
+# error it sees on the channel, even when the target is on the cusp of
+# becoming Ready. Concretely, we have seen:
+#   Error from server: etcdserver: leader changed
+# fire mid-wait for `kubernetes-<test>-{cluster-autoscaler,kccm,kcsi-controller,base}`
+# with 3 of 4 deployments already `condition met` and the 4th ~200ms
+# from Ready. The snapshot-on-fail collector then showed all four at
+# `readyReplicas: 2` — the wait exited early, not the target's fault.
+#
+# This wrapper retries a small number of times against a curated allowlist
+# of transient server-side signatures. It does NOT swallow legitimate
+# timeouts (`--timeout=... expired`) or NotFound; those still surface.
+kubectl_wait_retry() {
+  local _attempts=3
+  local _i _out _rc
+  for _i in $(seq 1 "${_attempts}"); do
+    _out=$(kubectl wait "$@" 2>&1)
+    _rc=$?
+    if [ "${_rc}" = 0 ]; then
+      printf '%s\n' "${_out}"
+      return 0
+    fi
+    # Transient server-side signatures: etcd leader flap, etcd request
+    # timeout, or apiserver watch channel closed without a clear reason.
+    # Anything else (target NotFound, --timeout expired, permission
+    # denied, etc.) is a real failure.
+    if printf '%s' "${_out}" | grep --quiet --extended-regexp "etcdserver: leader changed|etcdserver: request timed out|the server was unable to return a response in the time allotted"; then
+      printf 'kubectl_wait_retry: attempt %d/%d hit transient server error, retrying in 5s: %s\n' "${_i}" "${_attempts}" "${_out}" >&2
+      sleep 5
+      continue
+    fi
+    printf '%s\n' "${_out}"
+    return "${_rc}"
+  done
+  printf 'kubectl_wait_retry: exhausted %d attempts on transient errors\n' "${_attempts}" >&2
+  return 1
+}
+
+# Pure exit-condition for the inter-test drain loop (cozy_wait_tenant_drained).
+# Each argument is one resource-probe capture: the stdout of a
+# `kubectl get -o name` (empty once the resource is gone) or the literal "err"
+# the loop substitutes when a probe itself fails. Returns 0 (drained) only when
+# every capture holds nothing but whitespace; any capture with a non-whitespace
+# character -- a resource name, or the "err" sentinel the loop injects on a
+# probe failure -- yields non-zero, so a transient API blip is never misread as
+# "the tenant has drained" (same guard as etcd_drain). Pure text logic,
+# unit-tested in hack/run-kubernetes-drain_test.bats.
+cozy_tenant_drained() {
+  for _capture in "$@"; do
+    case "$_capture" in
+      *[![:space:]]*) return 1 ;;
+    esac
+  done
+  return 0
+}
+
+# Block until the tenant cluster's KubeVirt compute and storage are actually
+# released, not merely triggered for deletion. Deleting the Kubernetes CR
+# returns as soon as its finalizers clear, but that only TRIGGERS teardown of
+# the CAPK worker VMs and their DataVolume-backed disk PVCs. The virt-launcher
+# pods keep their guest RAM reserved until the VMIs are gone, so without this
+# barrier the next tenant test's worker VMs begin scheduling against a sandbox
+# the previous tenant has not yet vacated -> memory starvation -> a worker VM
+# misses the node-join budget and the test flakes on worker-node-join.
+#
+# Bounded and best-effort: cozytest runs cozy_cleanup wrapped in `|| true`, and
+# this returns (loudly) on timeout, so a stuck teardown can never hang the job
+# past the deadline -- it just leaves the sandbox no worse than before this
+# wait existed. tenant-test is provisioned with etcd/monitoring/seaweedfs
+# disabled (see the Tenant in hack/e2e-install-cozystack.bats), so it carries no
+# baseline PVCs, and the e2e apps run sequentially each cleaning up after
+# itself; at cleanup time the only VMs/VMIs/PVCs in the namespace belong to the
+# tenant cluster being torn down, so a plain namespace-scoped probe is both safe
+# and accurate (the worker-disk PVCs carry no cluster-scoping label to select on).
+cozy_wait_tenant_drained() {
+  _ns=tenant-test
+  _timeout="${1:-300}"
+  _deadline=$(( $(date +%s) + _timeout ))
+  while :; do
+    _vm=$(kubectl -n "$_ns" get virtualmachines.kubevirt.io -o name 2>/dev/null) || _vm=err
+    _vmi=$(kubectl -n "$_ns" get virtualmachineinstances.kubevirt.io -o name 2>/dev/null) || _vmi=err
+    _pvc=$(kubectl -n "$_ns" get pvc -o name 2>/dev/null) || _pvc=err
+    if cozy_tenant_drained "$_vm" "$_vmi" "$_pvc"; then
+      echo "» tenant VMs/VMIs/PVCs drained from $_ns"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» WARNING: tenant teardown did not drain within ${_timeout}s; continuing (next test may face memory/storage pressure)" >&2
+      kubectl -n "$_ns" get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io,pvc 2>&1 | sed 's/^/  drain-leftover: /' >&2 || true
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+# Block until every ZFS storage pool on every LINSTOR satellite reports at
+# least _min_free_gib of FreeCapacity. Motivation is proven from a
+# cozyreport artefact captured by hack/cozyreport.sh (see PR #3044 run
+# 28751310913, LINSTOR satellite ErrorReport 6A4AADFD-349B2-000000):
+# tearing down a tenant Kubernetes worker with a `replicated` (autoPlace=3,
+# DRBD) 20 GiB root disk removes the PVC from the API within seconds, but
+# the ZFS `zvol destroy` on each satellite lags behind by tens of seconds
+# as DRBD adjusts, unref counts drain and ZFS batch-destroys the datasets.
+# cozy_wait_tenant_drained above only waits on the API-level PVC delete,
+# not on the physical satellite space return; if the next tenant test
+# starts inside that window it hits `zfs create -V ...` failing with
+# `cannot create '...': out of space`, LINSTOR-CSI then retries autoplace,
+# each retry racing the still-being-torn-down previous placement and
+# stretching worker-Machine bringup past the MHC nodeStartupTimeout.
+#
+# Two 20 GiB replicated worker targets (60 GiB total per satellite, since
+# autoPlace=3 places one replica per node) plus two 21 GiB CDI scratch
+# PVCs (worst case both landing on the same node via the local
+# storageClass) yields a ~82 GiB per-satellite peak footprint; 90 GiB
+# default threshold covers that with margin. Bounded and best-effort like
+# cozy_wait_tenant_drained: caller wraps in `|| true`, timeout returns
+# loudly.
+cozy_wait_linstor_pool_free() {
+  _min_free_gib="${1:-90}"
+  _timeout="${2:-300}"
+  _min_free_kib=$(( _min_free_gib * 1024 * 1024 ))
+  _deadline=$(( $(date +%s) + _timeout ))
+  while :; do
+    # jq lives inside the controller pod (Debian-bookworm base, `sh` is
+    # dash — keep the heredoc POSIX-safe). LINSTOR's `--machine-readable`
+    # output for `sp l` on LINSTOR 1.33.x is a one-element outer array
+    # whose sole element is a flat array of storage-pool objects; each
+    # pool object exposes free_capacity at the top level in KiB. Filter
+    # to ZFS variants (both `ZFS` and `ZFS_THIN`) so DISKLESS
+    # placeholders (whose free_capacity is a Long.MAX_VALUE sentinel)
+    # and any future non-ZFS driver are skipped. Also guard against
+    # OFFLINE satellites, whose pool objects omit free_capacity entirely
+    # (StoragePool schema marks it optional) — without the null guard
+    # `sort -n` would rank the string "null" ahead of real numbers and
+    # the loop would silently poll to timeout. Emit
+    # `<free_capacity_kib>:<node>` lines so a single sort yields the
+    # smallest pool and its owner in one round-trip.
+    _min_line=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
+      linstor --machine-readable sp l 2>/dev/null |
+      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.free_capacity):\(.node_name)\"" |
+      sort -n | head -n 1
+    ' 2>/dev/null) || _min_line=""
+    _min_kib="${_min_line%%:*}"
+    _min_node="${_min_line#*:}"
+    if [ -n "$_min_kib" ] && [ "$_min_kib" -ge "$_min_free_kib" ] 2>/dev/null; then
+      echo "» LINSTOR ZFS pool free: smallest satellite ${_min_node} has $(( _min_kib / 1024 / 1024 )) GiB (>= ${_min_free_gib} GiB threshold)"
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» WARNING: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown}); continuing (next test may face zfs create out-of-space)" >&2
+      kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1 | sed 's/^/  linstor-pool: /' >&2 || true
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 # Unconditional cleanup hook, invoked from the kubernetes-* tests' Chainsaw
 # `finally` block (which always runs, after any crust-gather `catch`). The tenant
 # Kubernetes CR is applied imperatively (kubectl) inside run_kubernetes_test, so
@@ -16,6 +179,15 @@ cozy_cleanup() {
   kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
+  # The CR delete above finalizes once the Kubernetes CR is gone, which only
+  # TRIGGERS KubeVirt VM teardown + PVC release. Block until the worker VMs,
+  # VMIs (guest RAM) and disk PVCs are actually gone so the next tenant test
+  # starts on a freed sandbox -- the root cause of the node-join flake.
+  cozy_wait_tenant_drained 300 || true
+  # PVC removal at the API level does not imply the satellite ZFS pool has
+  # reclaimed the space (see comment on cozy_wait_linstor_pool_free above);
+  # wait for FreeCapacity to return before yielding to the next tenant test.
+  cozy_wait_linstor_pool_free 90 300 || true
 }
 
 # Snapshot the tenant cluster (its cilium/CSI/coredns internals) on a failed run.
@@ -133,6 +305,7 @@ ${ouroboros_addon}
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 2
+      resources: {}
       roles:
       - ingress-nginx
   storageClass: replicated
@@ -147,17 +320,33 @@ EOF
   # old 10s budget was tight on v2.7 and consistently fails on v2.8.
   timeout 2m sh -ec 'until kubectl get kamajicontrolplane -n tenant-test kubernetes-'"${test_name}"'; do sleep 1; done'
 
-  # Wait for the tenant control plane to be fully created (timeout after 4 minutes)
-  kubectl wait --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=4m
+  # Wait for the tenant control plane to be fully created. Pre-Talos this
+  # only spun up Kamaji core; after PR #2610 the apiserver pod also pulls
+  # and starts the talos-csr-signer sidecar and cert-manager has to issue
+  # the Talos PKI Certificates that gate the wait-for-kubeconfig init
+  # container, so cold-start times in a fresh sandbox crossed the original
+  # 4m budget. The 10m wait below sits well inside the
+  # helm-install-timeout: 20m annotation that cozystack-api copies from
+  # cozyrds onto the HR.
+  kubectl_wait_retry --for=condition=TenantControlPlaneCreated kamajicontrolplane -n tenant-test kubernetes-${test_name} --timeout=10m
 
-  # Wait for Kubernetes resources to be ready (timeout after 2 minutes)
-  kubectl wait tcp -n tenant-test kubernetes-${test_name} --timeout=5m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+  # Wait for Kubernetes resources to be ready. Same rationale as the
+  # TenantControlPlaneCreated wait above — Talos PKI issuing + sidecar
+  # readiness probes shift the steady-state Ready point.
+  kubectl_wait_retry tcp -n tenant-test kubernetes-${test_name} --timeout=10m --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
 
   # Wait for all required deployments to be available (timeout after 4 minutes)
-  kubectl wait deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
+  kubectl_wait_retry deploy --timeout=4m --for=condition=available -n tenant-test kubernetes-${test_name} kubernetes-${test_name}-cluster-autoscaler kubernetes-${test_name}-kccm kubernetes-${test_name}-kcsi-controller
 
-  # Wait for the machine deployment to scale to 2 replicas (timeout after 1 minute)
-  kubectl wait machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=1m --for=jsonpath='{.status.replicas}'=2
+  # Wait for the machine deployment to scale to 2 replicas. Pre-Talos this
+  # was effectively instant because KubeadmConfigTemplate had no async
+  # dependencies and CAPI/CAPK could create Machine + KubevirtMachine
+  # immediately. Post-Talos the MD bootstrap.configRef gates on the
+  # TalosConfigTemplate, which only renders once the lookup-gated Talos PKI
+  # Secrets (talos-secrets, talos-ca, k8s ca, apiserver Service ClusterIP)
+  # all exist; cold-start in a fresh CI sandbox pushes the time to first
+  # MachineSet scale-up past the old 1m budget.
+  kubectl_wait_retry machinedeployment kubernetes-${test_name}-md0 -n tenant-test --timeout=5m --for=jsonpath='{.status.replicas}'=2
   # Get the admin kubeconfig and save it to a file
   kubectl get secret kubernetes-${test_name}-admin-kubeconfig -ojsonpath='{.data.super-admin\.conf}' -n tenant-test | base64 -d > "tenantkubeconfig-${test_name}"
 
@@ -229,9 +418,54 @@ EOF
       sleep 5
     done
   '; then
-    # Dump debug info and fail fast — no point running LB/NFS tests without Ready nodes
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes
-    kubectl -n tenant-test get hr
+    # Node-join failed: fewer than 2 tenant nodes became Ready inside the 12m
+    # deadline. Dump scoped diagnostics that split the failure sub-modes, then
+    # fail fast — no point running LB/NFS tests without Ready nodes.
+    #
+    # The tenant's cilium-operator HR reports "InProgress" here purely because
+    # zero worker Nodes joined, so the HelmRelease condition alone cannot tell
+    # apart (2a) the worker VM never booted (virt-launcher Pending/OOMKilled)
+    # from (2b) the VM booted fine but its kubelet never registered a Node
+    # (Talos/CSR/DNS/routing). The captures below make that distinction legible;
+    # (2b) is the failure mode a follow-up fix has to target, and it cannot be
+    # designed without this artifact. Every capture is guarded with `|| true`
+    # so a capture failure never masks the real `exit 1`.
+    echo "=== node-join failed: fewer than 2 tenant nodes Ready within 12m — diagnostics follow ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
+    kubectl -n tenant-test get hr || true
+
+    # (a) Worker VM / VMI / virt-launcher state on the MANAGEMENT cluster. A VMI
+    # stuck Pending or a virt-launcher pod OOMKilled/Pending is mode 2a; a
+    # Running+Ready VMI with a healthy virt-launcher is mode 2b. This is the key
+    # split. Full resource names (not the `vm` alias) to avoid short-name
+    # ambiguity, matching cozy_wait_tenant_drained above.
+    echo "=== (a) tenant worker VM/VMI/virt-launcher state (management cluster, ns tenant-test) ==="
+    kubectl -n tenant-test get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io -o wide || true
+    kubectl -n tenant-test describe virtualmachineinstances.kubevirt.io || true
+    kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
+    kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
+
+    # (c) Tenant kubelet CSRs + the talos-csr-signer sidecar log. A mode-2b node
+    # boots but blocks on a kubelet-serving/-client CSR that is never submitted
+    # or never approved; the pending CSR list (tenant cluster) plus the signer
+    # sidecar log (in the Kamaji apiserver pod on the management cluster) show
+    # which side stalled.
+    echo "=== (c) tenant CSRs + talos-csr-signer sidecar log ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get csr || true
+    kubectl -n tenant-test logs -l kamaji.clastix.io/name="kubernetes-${test_name}" \
+      -c talos-csr-signer --tail=200 --prefix || true
+
+    # (b) In-guest Talos/kubelet state from the worker VMs is intentionally NOT
+    # captured here. talosctl needs a client talosconfig for the TENANT cluster,
+    # and the runner has none: the tenant workers are provisioned with their own
+    # Talos PKI whose CA differs from the sandbox's /workspace/talosconfig (which
+    # cozyreport.sh uses to reach the MANAGEMENT nodes only), and the chart
+    # materialises no tenant client talosconfig Secret. Pointing talosctl at the
+    # worker IPs with the management talosconfig would just fail mTLS and capture
+    # nothing, so it is skipped rather than shipped as a misleading no-op. (a) +
+    # (c) carry the 2a-vs-2b split; adding real in-guest capture later requires
+    # wiring a tenant talosconfig into the runner first.
+    echo "=== (b) in-guest Talos/kubelet capture skipped: no tenant talosconfig on the runner (a/c cover the 2a-vs-2b split) ==="
     exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
@@ -373,6 +607,50 @@ EOF
   # still rolling out, eats ~1m on FailedAttachVolume retries, and trips
   # the 5m pod-Succeeded budget when containerd's CreateContainer stalls.
   kubectl wait hr -n tenant-test "kubernetes-${test_name}-csi" --timeout=10m --for=condition=ready
+
+  # ----------------------------------------------------------------------
+  # StorageClass propagation (issue #2094). Remote-accessible LINSTOR infra
+  # classes propagate to the tenant under the same name; node-local classes
+  # ("local", allowRemoteVolumeAccess=false) are filtered out; the legacy
+  # "kubevirt" alias is retained for backward compatibility. The e2e infra
+  # cluster ships both "replicated" (remote) and "local" (node-local).
+  # ----------------------------------------------------------------------
+  echo "Verifying StorageClass propagation to tenant..."
+  timeout 2m bash -c '
+    until kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get sc replicated >/dev/null 2>&1; do
+      sleep 5
+    done
+  '
+
+  rep_prov=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc replicated -o jsonpath='{.provisioner}')
+  rep_infra=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc replicated -o jsonpath='{.parameters.infraStorageClassName}')
+  if [ "$rep_prov" != "csi.kubevirt.io" ] || [ "$rep_infra" != "replicated" ]; then
+    echo "replicated SC misconfigured: provisioner=$rep_prov infraStorageClassName=$rep_infra" >&2
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc >&2
+    exit 1
+  fi
+
+  # Legacy kubevirt alias must still exist (existing PVCs depend on it).
+  if ! kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc kubevirt >/dev/null 2>&1; then
+    echo "legacy kubevirt StorageClass alias is missing" >&2
+    exit 1
+  fi
+
+  # Node-local "local" class must NOT be propagated (allowRemoteVolumeAccess=false).
+  if kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc local >/dev/null 2>&1; then
+    echo "node-local StorageClass 'local' should not be propagated to the tenant" >&2
+    exit 1
+  fi
+
+  # Exactly one default StorageClass, and it must be "replicated".
+  default_scs=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" get sc \
+    -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}')
+  default_count=$(printf '%s' "$default_scs" | grep -c .)
+  if [ "$default_count" -ne 1 ] || [ "$default_scs" != "replicated" ]; then
+    echo "expected exactly one default StorageClass 'replicated', got: ${default_scs:-<none>} (count=$default_count)" >&2
+    exit 1
+  fi
+  echo "StorageClass propagation OK (replicated default, kubevirt alias present, local filtered)"
 
   # Clean up NFS test resources from any previous failed attempt
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" delete pod nfs-test-pod \
@@ -611,4 +889,130 @@ EOF
   rm -f "tenantkubeconfig-${test_name}"
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
+}
+
+# B1 regression coverage (PR #2872 review). The tenant's default StorageClass
+# must be chosen among the *propagated* classes and must never be the legacy
+# "kubevirt" alias -- even when the management cluster exposes only remote
+# LINSTOR classes whose names sort alphabetically after "kubevirt" and none is
+# named the configured storageClass (default "replicated"). That is the
+# feature's own multi-tier target configuration. A regressed `sortAlpha | first`
+# over a candidate set that still contained the inserted "kubevirt" alias would
+# pick it, pointing the tenant default at an infra class absent on the
+# management cluster -> default PVCs stay Pending with no error surfaced.
+#
+# helm-unittest cannot reach this branch: with no live cluster Helm `lookup`
+# returns empty, so the storageClasses map always collapses to the "replicated"
+# fallback (see packages/apps/kubernetes/tests/csi_test.yaml). It is therefore
+# exercised here against the live management cluster with a single server-side
+# dry-run render (helm v4 executes `lookup` against the API): add two remote
+# LINSTOR classes that sort after "kubevirt", remove "replicated" for the one
+# render, restore it immediately, then assert on the rendered -csi HelmRelease's
+# storageClasses map.
+verify_storageclass_fallback_default() {
+  echo "Verifying tenant default StorageClass selection with no 'replicated' class (PR #2872 B1 regression)..."
+
+  # Pre-cleanup: drop probe classes leaked by a previous failed run.
+  kubectl delete sc nvme ssd --ignore-not-found
+
+  # Two remote-accessible LINSTOR classes whose names sort AFTER "kubevirt".
+  kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: nvme
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: ssd
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+
+  # Remove "replicated" only for the duration of the render below, so that
+  # neither the configured storageClass (default "replicated") nor "replicated"
+  # is in the propagated set -- forcing the `sortAlpha | first` selection branch.
+  kubectl delete sc replicated --ignore-not-found
+
+  # Server-side dry-run executes Helm `lookup` against the live cluster and
+  # renders the real storageClasses map. rc is captured separately (no pipe) so
+  # the management-cluster state is always restored before any assertion exits.
+  # The release namespace must be a valid tenant identifier (the chart's
+  # dashboard-resourcemap template enforces this), so render under tenant-test.
+  local raw rc
+  raw=$(timeout 120 helm install scprobe packages/apps/kubernetes \
+    --dry-run=server -n tenant-test \
+    -f packages/apps/kubernetes/tests/values/common.yaml -o json 2>/tmp/sc-fallback-render.err)
+  rc=$?
+
+  # Restore management-cluster StorageClasses (inline, unconditional). This MUST
+  # run before any assertion `exit 1` below, so no EXIT/RETURN trap is used
+  # (per docs/agents/e2e-testing.md). The "replicated" manifest mirrors
+  # hack/e2e-post-install-prep.sh.
+  kubectl apply -f - <<'EOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: replicated
+provisioner: linstor.csi.linbit.com
+parameters:
+  linstor.csi.linbit.com/storagePool: "data"
+  linstor.csi.linbit.com/autoPlace: "3"
+  linstor.csi.linbit.com/layerList: "drbd storage"
+  linstor.csi.linbit.com/allowRemoteVolumeAccess: "true"
+  property.linstor.csi.linbit.com/DrbdOptions/auto-quorum: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-no-data-accessible: suspend-io
+  property.linstor.csi.linbit.com/DrbdOptions/Resource/on-suspended-primary-outdated: force-secondary
+  property.linstor.csi.linbit.com/DrbdOptions/Net/rr-conflict: retry-connect
+volumeBindingMode: Immediate
+allowVolumeExpansion: true
+EOF
+  kubectl delete sc nvme ssd --ignore-not-found
+
+  if [ "$rc" -ne 0 ] || [ -z "$raw" ]; then
+    echo "server-side dry-run render of the kubernetes chart failed (rc=$rc)" >&2
+    cat /tmp/sc-fallback-render.err >&2 || true
+    exit 1
+  fi
+
+  # Isolate the rendered -csi HelmRelease's storageClasses map.
+  local sc
+  sc=$(printf '%s' "$raw" | yq -p=json '.manifest' \
+    | yq 'select(.kind == "HelmRelease" and .metadata.name == "scprobe-csi") | .spec.values.storageClasses')
+  if [ -z "$sc" ] || [ "$sc" = "null" ]; then
+    echo "rendered scprobe-csi HelmRelease carries no storageClasses map" >&2
+    printf '%s' "$raw" | yq -p=json '.manifest' >&2
+    exit 1
+  fi
+
+  local default_count default_key kubevirt_present kubevirt_default
+  default_count=$(printf '%s' "$sc" | yq '[to_entries | .[] | select(.value.default == true)] | length')
+  default_key=$(printf '%s' "$sc" | yq 'to_entries | map(select(.value.default == true)) | .[0].key')
+  kubevirt_present=$(printf '%s' "$sc" | yq 'has("kubevirt")')
+  kubevirt_default=$(printf '%s' "$sc" | yq '.kubevirt.default')
+
+  # 1. Exactly one default. 2. The default is a propagated class (nvme/ssd),
+  # never the kubevirt alias. 3. The kubevirt alias still exists, non-default.
+  if [ "$default_count" != "1" ] \
+    || { [ "$default_key" != "nvme" ] && [ "$default_key" != "ssd" ]; } \
+    || [ "$kubevirt_present" != "true" ] \
+    || [ "$kubevirt_default" != "false" ]; then
+    echo "tenant default StorageClass selection regressed (PR #2872 B1):" >&2
+    echo "  default_count=$default_count default_key=$default_key kubevirt_present=$kubevirt_present kubevirt_default=$kubevirt_default" >&2
+    echo "  expected exactly one default among {nvme,ssd}; kubevirt present and non-default" >&2
+    printf 'rendered storageClasses:\n%s\n' "$sc" >&2
+    exit 1
+  fi
+  echo "StorageClass fallback-default OK (default='$default_key' among propagated classes; kubevirt alias non-default)"
 }

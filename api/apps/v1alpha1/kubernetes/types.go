@@ -18,12 +18,12 @@ type Config struct {
 }
 
 type ConfigSpec struct {
-	// StorageClass used to store the data.
+	// Default StorageClass inside the tenant cluster. Remote-accessible LINSTOR classes are auto-propagated to the tenant under the same name.
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Worker nodes configuration map.
-	// +kubebuilder:default:={"md0":{"diskSize":"20Gi","gpus":{},"instanceType":"u1.medium","kubelet":{},"maxReplicas":10,"minReplicas":0,"resources":{},"roles":{"ingress-nginx"},"storageClass":""}}
+	// Worker nodes configuration map. When left empty, a single default node group `md0` (one `ingress-nginx` worker) is provisioned. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
+	// +kubebuilder:default:={}
 	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
@@ -40,9 +40,27 @@ type ConfigSpec struct {
 	// Optional image overrides for air-gapped or rate-limited registries.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
+	// Talos worker image configuration.
+	// +kubebuilder:default:={}
+	Talos Talos `json:"talos"`
+	// MachineHealthCheck tuning for worker node groups.
+	// +kubebuilder:default:={}
+	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
+	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
+	// +kubebuilder:default:={}
+	Oidc OIDC `json:"oidc"`
 }
 
 type APIServer struct {
+	// Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).
+	// +kubebuilder:default:={}
+	ExtraArgs []string `json:"extraArgs,omitempty"`
+	// Extra volume mounts added to the tenant kube-apiserver container, passed through to KamajiControlPlane `spec.apiServer.extraVolumeMounts`. Each `name` must reference a volume declared in `extraVolumes`; the chart-managed talos secret volumes cannot be mounted. Each item is a core/v1 VolumeMount. Empty by default.
+	// +kubebuilder:default:={}
+	ExtraVolumeMounts []k8sRuntime.RawExtension `json:"extraVolumeMounts,omitempty"`
+	// Extra volumes added to the control-plane Deployment, passed through to KamajiControlPlane `spec.deployment.extraVolumes`. Use to mount a ConfigMap or Secret holding an AuthenticationConfiguration file referenced by `extraArgs`. Each item is a core/v1 Volume, but because the control-plane pod runs on the management cluster only `configMap` and `secret` sources are allowed (host-reaching sources like `hostPath`/`csi` and token-projection via `projected` are rejected); each volume must have a unique, non-empty name and exactly one source. The names `talos-ca` and `talos-tls-cert` are reserved by the chart. Empty by default.
+	// +kubebuilder:default:={}
+	ExtraVolumes []k8sRuntime.RawExtension `json:"extraVolumes,omitempty"`
 	// CPU and memory resources for API Server.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
@@ -177,6 +195,12 @@ type HAMiAddon struct {
 }
 
 type Images struct {
+	// Image used by the bootstrap-token tenant Job (kubectl). Empty falls back to images/kubectl.tag.
+	// +kubebuilder:default:=""
+	Kubectl string `json:"kubectl,omitempty"`
+	// Image used by the talos-csr-signer sidecar in the Kamaji control plane. Empty falls back to images/talos-csr-signer.tag.
+	// +kubebuilder:default:=""
+	TalosCsrSigner string `json:"talosCsrSigner,omitempty"`
 	// Image used by the wait-for-kubeconfig init container. Empty falls back to images/busybox.tag.
 	// +kubebuilder:default:=""
 	WaitForKubeconfig string `json:"waitForKubeconfig,omitempty"`
@@ -239,7 +263,7 @@ type MonitoringAgentsAddon struct {
 }
 
 type NodeGroup struct {
-	// Persistent disk size for kubelet and containerd data.
+	// System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
 	// +kubebuilder:default:="20Gi"
 	DiskSize resource.Quantity `json:"diskSize"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
@@ -255,12 +279,55 @@ type NodeGroup struct {
 	// Minimum number of replicas.
 	// +kubebuilder:default:=0
 	MinReplicas int `json:"minReplicas"`
-	// CPU and memory resources for each worker node.
-	Resources Resources `json:"resources"`
+	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
+	Resources Resources `json:"resources,omitempty"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
-	// StorageClass for worker node persistent disks. When empty, uses the management cluster default StorageClass (the one annotated storageclass.kubernetes.io/is-default-class: true). NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
+	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 	StorageClass string `json:"storageClass,omitempty"`
+}
+
+type NodeHealthCheck struct {
+	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
+	// +kubebuilder:default:="50%"
+	MaxUnhealthy string `json:"maxUnhealthy"`
+	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
+	// +kubebuilder:default:="10m"
+	NodeStartupTimeout string `json:"nodeStartupTimeout"`
+}
+
+type OIDC struct {
+	// Tenant-supplied AuthenticationConfiguration; consumed only when `mode: CustomConfig`.
+	// +kubebuilder:default:={}
+	CustomConfig OIDCCustomConfig `json:"customConfig,omitempty"`
+	// Identity mode. `None`: no OIDC, only the static admin kubeconfig works. `System`: trust the platform `cozy` realm via a per-cluster public client with audience binding; zero-config default. `CustomConfig`: trust a tenant-supplied issuer directly (BYO); `cozy` is not in the path.
+	// +kubebuilder:default:="None"
+	Mode OIDCMode `json:"mode"`
+	// Users granted access to the tenant cluster; each entry produces one ClusterRoleBinding inside the tenant cluster. Works for both `System` and `CustomConfig` modes.
+	// +kubebuilder:default:={}
+	Users []OIDCUser `json:"users,omitempty"`
+}
+
+type OIDCCustomConfig struct {
+	// Inline AuthenticationConfiguration YAML (`apiserver.config.k8s.io/v1beta1`). The chart writes the value verbatim into a Secret mounted at `/etc/kubernetes/authentication-config/config.yaml` on the kube-apiserver. Mutually exclusive with `secretRef.name`.
+	// +kubebuilder:default:=""
+	Config string `json:"config,omitempty"`
+	// Reference to an existing Secret in the tenant namespace carrying the `AuthenticationConfiguration`.
+	// +kubebuilder:default:={}
+	SecretRef OIDCSecretRef `json:"secretRef,omitempty"`
+}
+
+type OIDCSecretRef struct {
+	// Name of an existing Secret in the tenant (release) namespace whose `config.yaml` key holds an `apiserver.config.k8s.io/v1beta1` `AuthenticationConfiguration`. Mutually exclusive with `customConfig.config`.
+	// +kubebuilder:default:=""
+	Name string `json:"name,omitempty"`
+}
+
+type OIDCUser struct {
+	// Email address matched against the `email` claim from the issuer. Used verbatim as the `User:` subject in the ClusterRoleBinding inside the tenant cluster. The `email` claim is a built-in OIDC scope requested explicitly by the chart-generated `kubectl oidc-login` kubeconfig; every conformant OIDC provider (cozy realm included) emits it.
+	Email string `json:"email"`
+	// Role to bind: `admin` maps to `ClusterRole/cluster-admin`, `view` maps to `ClusterRole/view`.
+	Role OIDCRole `json:"role"`
 }
 
 type OuroborosAddon struct {
@@ -288,6 +355,15 @@ type Scheduler struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
+type Talos struct {
+	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+	SchematicID string `json:"schematicID"`
+	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+	// +kubebuilder:default:="v1.13.0"
+	Version string `json:"version"`
+}
+
 type VeleroAddon struct {
 	// Enable Velero.
 	// +kubebuilder:default:=false
@@ -306,8 +382,14 @@ type VerticalPodAutoscalerAddon struct {
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"
 type IngressNginxExposeMethod string
 
+// +kubebuilder:validation:Enum="None";"System";"CustomConfig"
+type OIDCMode string
+
+// +kubebuilder:validation:Enum="admin";"view"
+type OIDCRole string
+
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
 
-// +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31";"v1.30"
+// +kubebuilder:validation:Enum="v1.35";"v1.34";"v1.33";"v1.32";"v1.31"
 type Version string

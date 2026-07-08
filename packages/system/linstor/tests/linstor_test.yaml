@@ -1,0 +1,27 @@
+suite: cozy-linstor image pins
+release:
+  name: linstor
+  namespace: cozy-linstor
+tests:
+  - it: pins the controller and CSI to the cozystack-built images
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: LinstorCluster
+    asserts:
+      - matchRegex:
+          path: spec.controller.podTemplate.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/cozystack/piraeus-server:[^@]+@sha256:[0-9a-f]{64}$'
+      - matchRegex:
+          path: spec.csiController.podTemplate.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/cozystack/linstor-csi:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: pins the satellite to the cozystack-built piraeus-server image
+    template: templates/satellites-cozy.yaml
+    documentSelector:
+      path: kind
+      value: LinstorSatelliteConfiguration
+    asserts:
+      - matchRegex:
+          path: spec.podTemplate.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/cozystack/piraeus-server:[^@]+@sha256:[0-9a-f]{64}$'

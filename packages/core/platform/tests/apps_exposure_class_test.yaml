@@ -1,0 +1,26 @@
+suite: apps.yaml exposure-class platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# The host ingress (extra/ingress) reads _cluster.exposure-class to decide
+# whether to render a ServiceExposure. The default must be an empty string
+# so the externalIPs path is unchanged.
+
+tests:
+  - it: writes an empty exposure-class by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'exposure-class:\s*""'
+
+  - it: writes the configured class name into cozystack-values
+    set:
+      publishing.exposureClass.name: prod-lb
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'exposure-class:\s*"prod-lb"'

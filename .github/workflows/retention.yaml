@@ -1,0 +1,110 @@
+name: Nightly Retention
+
+# Prune old nightly artifacts from GHCR: keep the newest KEEP dated versions of
+# each cozystack package, delete older ones. Nightlies are GHCR OCI tags
+# (0.0.0-nightly.<date>.<run-id>.<attempt> on every component image plus
+# cozystack-packages, cozy-installer and cozystack-nocloud) — not git tags or
+# releases — so this prunes container-package versions via the GitHub Packages
+# API.
+#
+# Strictly scoped: only versions whose tags are ALL of the form
+# 0.0.0-nightly.<YYYYMMDD>.<run-id>.<attempt> are eligible. A version that also
+# carries the floating `nightly` tag (the newest) or any release tag (vX.Y.Z,
+# latest, rc, main) is never touched, so stable/rc/main artifacts can never be
+# pruned.
+#
+# Dry-run by default; flip the input or the RETENTION_APPLY repo variable to
+# actually delete. Deletion is irreversible.
+#
+# NOTE (admin): deleting org container-package versions requires the
+# cozystack-ci app installation to carry the `packages: write` permission. If
+# the delete step 403s, grant it there — this workflow cannot.
+
+on:
+  schedule:
+    - cron: '30 4 * * *'   # daily 04:30 UTC, after the nightly has published
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: "Actually delete (false = dry-run, the default)"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  ORG: cozystack
+  KEEP: '14'
+
+concurrency:
+  group: nightly-retention
+  cancel-in-progress: false
+
+jobs:
+  prune:
+    name: Prune old GHCR nightlies
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+
+      - name: Prune
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          # workflow_dispatch input wins; otherwise the repo variable; else dry-run.
+          APPLY: ${{ github.event.inputs.apply || vars.RETENTION_APPLY || 'false' }}
+        run: |
+          set -eu
+          if [ "$APPLY" = "true" ]; then echo "MODE: APPLY (deleting)"; else echo "MODE: dry-run"; fi
+
+          # All container packages under the org that live in the cozystack/
+          # registry namespace (ghcr.io/cozystack/cozystack/<name>).
+          pkgs="$(gh api --paginate "/orgs/${ORG}/packages?package_type=container" \
+            --jq '.[].name' | grep '^cozystack/' || true)"
+          [ -n "$pkgs" ] || { echo "No cozystack/* container packages found."; exit 0; }
+
+          printf '%s\n' "$pkgs" | while IFS= read -r pkg; do
+            [ -n "$pkg" ] || continue
+            enc="$(jq -rn --arg p "$pkg" '$p|@uri')"
+
+            # Version ids whose tags are non-empty AND every tag is a dated
+            # nightly (so the floating `nightly` tag and any release tag exclude
+            # the version). API returns versions newest-first, so the dated
+            # nightlies are already in newest->oldest order.
+            # `gh api --paginate --jq` runs the filter per page and emits one
+            # array per page, so length/slicing break once a package spans
+            # multiple pages. Slurp the raw pages and merge with `jq -s add`
+            # first, then count and slice the combined array.
+            ids="$(gh api --paginate "/orgs/${ORG}/packages/container/${enc}/versions" \
+              | jq -s '[add[]
+                | select((.metadata.container.tags | length) > 0)
+                | select(.metadata.container.tags | all(test("^0\\.0\\.0-nightly\\.[0-9]{8}(\\.[0-9]+)*$")))
+                | .id]')"
+
+            total="$(printf '%s' "$ids" | jq 'length')"
+            [ "$total" -gt "$KEEP" ] || { echo "── ${pkg}: ${total} nightlies (<= ${KEEP}); nothing to prune"; continue; }
+            drop_ids="$(printf '%s' "$ids" | jq -r ".[${KEEP}:][]")"
+            echo "── ${pkg}: ${total} nightlies, keep ${KEEP}, drop $((total - KEEP))"
+
+            printf '%s\n' "$drop_ids" | while IFS= read -r id; do
+              [ -n "$id" ] || continue
+              if [ "$APPLY" = "true" ]; then
+                echo "  ✗ deleting ${pkg} version ${id}"
+                gh api -X DELETE "/orgs/${ORG}/packages/container/${enc}/versions/${id}" >/dev/null \
+                  || echo "::warning::failed to delete ${pkg} version ${id} (permissions?)"
+              else
+                echo "  • would delete ${pkg} version ${id}"
+              fi
+            done
+          done
+          echo "Done."

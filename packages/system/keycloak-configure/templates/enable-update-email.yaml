@@ -1,0 +1,109 @@
+{{/*
+  Enable the UPDATE_EMAIL required action in the `cozy` realm.
+
+  The portal user-settings page lets a user change their email via a
+  Keycloak `kc_action=UPDATE_EMAIL` redirect. That flow only works when
+  the UPDATE_EMAIL required action is enabled at the realm level
+  (per-realm opt-in — see keycloak/keycloak#41045).
+
+  `update-email` is a supported, default-on feature since Keycloak 26.4
+  (keycloak/keycloak#39722), so the provider is already loaded on the
+  26.x server this chart ships — no KC_FEATURES change (and no Keycloak
+  restart) is needed here. The edp-keycloak-operator has no CRD field for
+  required actions, so this one-shot Job flips it via the admin API using
+  the bundled kcadm.sh. It is idempotent and re-runs on every upgrade.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-enable-update-email
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: Never
+      tolerations:
+        - key: CriticalAddonsOnly
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: "NoSchedule"
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: kcadm
+          image: {{ .Values.image | default "quay.io/keycloak/keycloak:26.5.2" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # kcadm.sh / the JVM write to $HOME and java.io.tmpdir; point
+            # both at the writable emptyDir so readOnlyRootFilesystem holds.
+            - name: HOME
+              value: /tmp
+            - name: KC_URL
+              value: "http://keycloak-http.cozy-keycloak.svc:8080"
+            - name: KC_USER
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-credentials
+                  key: username
+            - name: KC_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: keycloak-credentials
+                  key: password
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -eu
+              KCADM=/opt/keycloak/bin/kcadm.sh
+              CFG=/tmp/kcadm.config
+              REALM=cozy
+
+              # The realm is reconciled asynchronously by the
+              # keycloak-operator, so wait for it before configuring it.
+              i=0
+              until "$KCADM" config credentials --config "$CFG" --server "$KC_URL" \
+                      --realm master --user "$KC_USER" --password "$KC_PASS" >/dev/null 2>&1 \
+                    && "$KCADM" get authentication/required-actions --config "$CFG" -r "$REALM" >/dev/null 2>&1; do
+                i=$((i + 1))
+                if [ "$i" -ge 30 ]; then
+                  echo "timed out waiting for keycloak realm '$REALM'" >&2
+                  exit 1
+                fi
+                echo "waiting for keycloak realm '$REALM' ... ($i)"
+                sleep 10
+              done
+
+              # Register the provider if it is somehow missing (defensive —
+              # on a supported, default-on feature it is normally already
+              # registered, so tolerate an "already exists" response).
+              if ! "$KCADM" get authentication/required-actions/UPDATE_EMAIL --config "$CFG" -r "$REALM" >/dev/null 2>&1; then
+                "$KCADM" create authentication/register-required-action --config "$CFG" -r "$REALM" \
+                  -b '{"providerId":"UPDATE_EMAIL","name":"Update Email"}' || true
+              fi
+
+              # Enable it (idempotent). kcadm merges onto the current
+              # representation, so other fields are preserved.
+              "$KCADM" update authentication/required-actions/UPDATE_EMAIL --config "$CFG" -r "$REALM" \
+                -s enabled=true
+
+              echo "UPDATE_EMAIL required action enabled in realm '$REALM'"
+      volumes:
+        - name: tmp
+          emptyDir: {}

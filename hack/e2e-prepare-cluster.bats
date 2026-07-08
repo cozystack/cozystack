@@ -261,8 +261,15 @@ EOF
   # ephemeral runners can take several attempts of ~5s each.
   timeout 60 sh -ec 'until talosctl bootstrap -n 192.168.123.11 -e 192.168.123.11; do sleep 2; done'
 
-  # Wait until etcd is healthy
-  if ! timeout 180 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
+  # Wait until etcd is healthy.
+  # Budget is 5m, not 3m: a 3-node etcd converges via Talos's serialized
+  # learner promotion (etcd admits one learner at a time), so the third member
+  # is only promoted after the second is fully caught up. On a loaded ephemeral
+  # runner this deterministic path can legitimately approach ~3m wall clock —
+  # a 180s ceiling photo-finishes against it and times out a cluster that is
+  # actually healthy. The wait itself is already event-driven (poll until
+  # members respond); only the ceiling needed widening.
+  if ! timeout 300 sh -ec 'until talosctl etcd members -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 >/dev/null 2>&1; do sleep 1; done'; then
     talosctl dmesg -n 192.168.123.11,192.168.123.12,192.168.123.13 -e 192.168.123.10 || true
     exit 1
   fi

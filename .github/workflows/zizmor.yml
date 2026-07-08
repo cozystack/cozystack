@@ -1,0 +1,49 @@
+name: zizmor
+
+# Tree-wide GitHub Actions security gate. Fails the PR when a workflow
+# reintroduces an unpinned action or a missing/overly-broad permissions block
+# (Scorecard's Pinned-Dependencies and Token-Permissions checks). The audit
+# scope is pinned in .github/zizmor.yml; the same tool also runs on the PR diff
+# via the pre-commit hook.
+#
+# Runs offline: the two gating audits are purely syntactic, so no GitHub token is
+# needed and no data leaves the runner. Findings are surfaced in the job log and
+# fail the step; the SARIF is intentionally NOT uploaded to code scanning, matching
+# scorecard.yml — the public signal is the failing check, not a Security-tab alert.
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+      - '.github/zizmor.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/**'
+      - '.github/zizmor.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zizmor-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  zizmor:
+    name: Audit workflows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+
+      - name: Install zizmor
+        run: pipx install zizmor==1.26.1
+
+      - name: Audit workflows
+        run: zizmor --offline .github/workflows/

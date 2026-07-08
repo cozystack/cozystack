@@ -3,6 +3,9 @@ MARIADB_BACKUP_TAG = $(shell awk '$$1 == "version:" {print $$2}' Chart.yaml)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 generate:
 	cozyvalues-gen -m 'mariadb' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/mariadb/types.go
 	../../../hack/update-crd.sh
@@ -10,6 +13,10 @@ generate:
 update:
 	hack/update-versions.sh
 	make generate
+
+.PHONY: test
+test:
+	helm unittest .
 
 image:
 	docker buildx build images/mariadb-backup \

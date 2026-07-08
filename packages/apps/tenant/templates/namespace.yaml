@@ -1,8 +1,14 @@
-{{/* Lookup for namespace uid (needed for ownerReferences) */}}
+{{/*
+  Lookup the parent namespace, used below to stamp the child namespace's
+  ownerReference uid. During a real helm-controller reconcile the parent
+  namespace (.Release.Namespace) always exists, so the ownerReference is
+  always emitted. The lookup returns empty only when rendering offline
+  (helm template / helm unittest), where the ownerReference is simply omitted
+  so the rest of the template — notably the ancestor labels below, which are
+  derived purely from the namespace name and need no cluster state — still
+  renders and can be unit-tested.
+*/}}
 {{- $existingNS := lookup "v1" "Namespace" "" .Release.Namespace }}
-{{- if not $existingNS }}
-{{- fail (printf "error lookup existing namespace: %s" .Release.Namespace) }}
-{{- end }}
 
 {{- if ne (include "tenant.name" .) "tenant-root" }}
 {{/* Compute namespace values once for use in both Secret and labels */}}
@@ -75,13 +81,7 @@ metadata:
   name: {{ $tenantName }}
   {{- if hasPrefix "tenant-" .Release.Namespace }}
   labels:
-    tenant.cozystack.io/{{ $tenantName }}: ""
-    {{- $parts := splitList "-" .Release.Namespace }}
-    {{- range $i, $v := $parts }}
-    {{- if ne $i 0 }}
-    tenant.cozystack.io/{{ join "-" (slice $parts 0 (add $i 1)) }}: ""
-    {{- end }}
-    {{- end }}
+    {{- include "tenant.ancestorTenantLabels" $tenantName | nindent 4 }}
     {{/* Labels for network policies */}}
     namespace.cozystack.io/etcd: {{ $etcd | quote }}
     namespace.cozystack.io/ingress: {{ $ingress | quote }}
@@ -93,6 +93,7 @@ metadata:
     scheduler.cozystack.io/scheduling-class: {{ . | quote }}
     {{- end }}
     alpha.kubevirt.io/auto-memory-limits-ratio: "1.0"
+  {{- if $existingNS }}
   ownerReferences:
   - apiVersion: v1
     blockOwnerDeletion: true
@@ -100,6 +101,7 @@ metadata:
     kind: Namespace
     name: {{ .Release.Namespace }}
     uid: {{ $existingNS.metadata.uid }}
+  {{- end }}
   {{- end }}
 ---
 apiVersion: v1

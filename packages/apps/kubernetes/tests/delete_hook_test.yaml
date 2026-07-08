@@ -1,0 +1,70 @@
+suite: pre-delete cleanup hook (issue #3062)
+
+# These tests pin the behaviour that prevents the Kamaji
+# <release>-datastore-config Secret from blocking namespace deletion:
+# the pre-delete Job must wait for the TenantControlPlane to be gone and
+# then strip the finalizer.kamaji.clastix.io/datastore-secret finalizer,
+# and the cleanup Role must be allowed to patch exactly that one Secret.
+
+templates:
+  - templates/delete.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+values:
+  - values-ci.yaml
+
+tests:
+  - it: cleanup Role can get/patch only the datastore-config Secret
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - secrets
+            resourceNames:
+              - test-k8s-datastore-config
+            verbs:
+              - get
+              - patch
+
+  - it: pre-delete Job waits for the TenantControlPlane before clearing the Secret
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # TCP deletion must wait so Kamaji can clear the finalizer itself first.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete tenantcontrolplanes\.kamaji\.clastix\.io test-k8s[\s\S]*--wait=true'
+
+  - it: pre-delete Job strips the leftover datastore-secret finalizer as a backstop
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'patch secret test-k8s-datastore-config'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '"finalizers":null'
+
+  - it: pre-delete Job clears the finalizer only after confirming the TenantControlPlane is gone
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # The finalizer patch must be gated on the TCP being absent (#3078): if the
+      # Step 4 delete timed out with the TCP still alive, we must not strip the
+      # finalizer Kamaji still legitimately owns.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'get tenantcontrolplanes\.kamaji\.clastix\.io test-k8s[\s\S]*still present[\s\S]*patch secret test-k8s-datastore-config'

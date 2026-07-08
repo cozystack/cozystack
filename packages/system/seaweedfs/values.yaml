@@ -32,6 +32,19 @@ seaweedfs:
       type: "emptyDir"
     logs:
       type: ""
+    # The master's /cluster/status handler calls topo.Leader(), which backs off
+    # up to ~20s (MaxElapsedTime=20s) while the node has no leader in view — e.g.
+    # a master that was briefly the initial raft leader then was demoted during
+    # bootstrap. The default 10s probe timeout is shorter than that worst case, so
+    # such a master is liveness-killed every ~137s into a permanent CrashLoop and
+    # the master StatefulSet never reaches full readiness, timing out the install.
+    # Both probes must allow more than the 20s backoff (the volume component in
+    # this chart already uses 30s). Override only timeoutSeconds; Helm deep-merges
+    # these onto the subchart defaults, keeping enabled/path/initialDelay/etc.
+    livenessProbe:
+      timeoutSeconds: 30
+    readinessProbe:
+      timeoutSeconds: 30
   volume:
     replicas: 2
     resizeHook:
@@ -57,6 +70,14 @@ seaweedfs:
     extraEnvironmentVars:
       WEED_LEVELDB2_ENABLED: "false"
       WEED_POSTGRES2_ENABLED: "true"
+      # Without explicit pool settings the Go sql pool keeps zero idle
+      # connections, so every filer metadata lookup opens a fresh PostgreSQL
+      # connection (TCP + TLS + SCRAM, ~300ms each), adding seconds of latency
+      # to every S3 operation. Keep max_open * filer.replicas below the
+      # database max_connections (CNPG default: 100).
+      WEED_POSTGRES2_CONNECTION_MAX_IDLE: "20"
+      WEED_POSTGRES2_CONNECTION_MAX_OPEN: "40"
+      WEED_POSTGRES2_CONNECTION_MAX_LIFETIME_SECONDS: "600"
       WEED_POSTGRES2_CREATETABLE: |
         CREATE TABLE IF NOT EXISTS "%s" (
           dirhash   BIGINT,
@@ -191,6 +212,11 @@ seaweedfs:
               topologyKey: kubernetes.io/hostname
   cosi:
     enabled: true
+    # Override the vendored chart default (v0.1.2), which hardcodes read-write
+    # S3 actions for every BucketAccess and ignores the accessPolicy parameter.
+    # v0.3.x honours accessPolicy: readonly, so a -readonly BucketAccessClass
+    # actually issues read-only (Read,List) credentials instead of read-write.
+    image: "ghcr.io/seaweedfs/seaweedfs-cosi-driver:v0.3.1"
     podLabels:
       policy.cozystack.io/allow-to-apiserver: "true"
     driverName: "seaweedfs.objectstorage.k8s.io"

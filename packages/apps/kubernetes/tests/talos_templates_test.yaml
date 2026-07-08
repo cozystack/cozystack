@@ -1,0 +1,366 @@
+suite: talos main-phase Job + secrets template render tests
+
+# Render-coverage for the talos/ templates. The TalosConfigTemplate embedded in
+# talos-reconcile-job.yaml is asserted separately by gpu_node_labels_test.yaml
+# (matchRegex against the Job's command literal); this suite covers the
+# surrounding RBAC/Job/Secret scaffolding so a future refactor breaking
+# ServiceAccount/Role wiring is caught locally before chart push. helm-unittest
+# sees documents in source-file order (not helm template's normalized render
+# order), so the documentIndex constants below follow the original template file
+# layout — update if a top-level object is added/removed/reordered.
+#
+# The talos-reconcile resources run in the MAIN install phase (no helm.sh/hook
+# annotations) so the Job applies the TalosConfigTemplate at t0, in parallel
+# with the MachineDeployment, instead of after the install nearly finishes. The
+# Job is immutable, so it carries a content-hash name suffix (mirrors the
+# KubevirtMachineTemplate idiom in cluster.yaml) to stay churn-free on upgrade.
+# The assertions below pin both properties.
+
+values:
+  - values/common.yaml
+
+tests:
+  - it: talos-reconcile-job renders the full RBAC stack + Job
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # Source order in templates/talos/talos-reconcile-job.yaml:
+      # 0 ServiceAccount, 1 Role, 2 CiliumNetworkPolicy, 3 RoleBinding,
+      # 4 ClusterRole, 5 ClusterRoleBinding, 6 Job (one per nodeGroup;
+      # common.yaml has md0 only -> 7 documents total).
+      - hasDocuments:
+          count: 7
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-reconcile
+        documentIndex: 0
+      # Main-phase, not a hook: NONE of the talos-reconcile resources may carry
+      # helm.sh/hook. The whole set must be main-phase together — a re-hooked
+      # Role/RoleBinding (hook-delete-policy: hook-succeeded) would be deleted
+      # after the hook ran, leaving the main-phase Job permanently without
+      # permissions. Pin the absence on every document (0 SA, 1 Role,
+      # 2 CiliumNetworkPolicy, 3 RoleBinding, 4 ClusterRole, 5 ClusterRoleBinding,
+      # 6 Job).
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 0
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 1
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 2
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 3
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 4
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 5
+      - isKind:
+          of: ClusterRole
+        documentIndex: 4
+      - equal:
+          path: metadata.name
+          value: tenant-test-test-k8s-talos-reconcile-coredns
+        documentIndex: 4
+      - isKind:
+          of: ClusterRoleBinding
+        documentIndex: 5
+      - equal:
+          path: subjects[0].name
+          value: test-k8s-talos-reconcile
+        documentIndex: 5
+      - equal:
+          path: subjects[0].namespace
+          value: tenant-test
+        documentIndex: 5
+      - isKind:
+          of: Job
+        documentIndex: 6
+      # Main-phase Job: no hook annotations, so it is applied at t0 alongside
+      # the MachineDeployment instead of after the install nearly finishes.
+      - notExists:
+          path: metadata.annotations["helm.sh/hook"]
+        documentIndex: 6
+      # Content-hash name suffix keeps the immutable Job churn-free on upgrade.
+      - matchRegex:
+          path: metadata.name
+          pattern: ^test-k8s-talos-reconcile-md0-[0-9a-f]{6}$
+        documentIndex: 6
+      # TTL clears a Complete or Failed Job so a later reconcile can recreate
+      # and retry it (the release disables Helm's wait, so a failed run is
+      # invisible to Flux and would otherwise stay Failed forever).
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 600
+        documentIndex: 6
+      # The Job still applies the TalosConfigTemplate with a KamajiControlPlane
+      # ownerReference (for GC) and the extraHostEntries that route workers to
+      # the apiserver Service by DNS name.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: TalosConfigTemplate'
+        documentIndex: 6
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kind: KamajiControlPlane'
+        documentIndex: 6
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'extraHostEntries:'
+        documentIndex: 6
+
+  # The two cases below pin the content-hash contract: a TCT-affecting change
+  # rotates the immutable Job's name (so Helm creates a fresh Job instead of
+  # failing on an immutable-field patch), while an unchanged render keeps the
+  # same name (so Helm no-ops). The two renders differ ONLY in nodeGroups.md0.gpus
+  # — everything else (release, namespace, resources, versions) is identical — so
+  # the differing suffix proves the hash tracks the rendered spec. These exact
+  # suffixes are expected to change whenever the Job spec changes; that is the
+  # signal that the Job will roll, and the fixtures are updated in lockstep.
+  - it: content-hash Job name is derived from the rendered spec (gpus unset)
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          kubelet: {}
+          gpus: []
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-reconcile-md0-6ddd7d
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: content-hash Job name rotates when a TCT-affecting value changes (gpus)
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          kubelet: {}
+          gpus:
+            - name: nvidia.com/GH200
+    asserts:
+      # Only gpus changed vs the case above, yet the suffix differs (ceb45e vs
+      # 6ddd7d) — the content hash tracks the rendered spec, and the TCT the Job
+      # applies is what changed (GPU nodeLabels).
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-reconcile-md0-ceb45e
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: content-hash Job name is truncated to stay within the 63-char DNS-label limit
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      # release + group chosen so "<release>-talos-reconcile-<group>" alone is 61
+      # chars; adding the "-<6hexhash>" suffix would push it to 68 without the
+      # trunc-56 prefix guard, and the API server would reject the over-limit
+      # Job name.
+      name: kubernetes-pretty-long-tenant-clustername
+      namespace: tenant-test
+    set:
+      _cluster:
+        cluster-domain: cozy.local
+      _namespace:
+        etcd: cozy-etcd
+        ingress: nginx
+        host: example.com
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          kubelet: {}
+          gpus: []
+    asserts:
+      # (a) within the 63-char metadata.name / job-name label limit.
+      - matchRegex:
+          path: metadata.name
+          pattern: ^.{1,63}$
+        documentSelector:
+          path: kind
+          value: Job
+      # (b) the 6-char content hash is never truncated — it is always the suffix,
+      #     so a changed spec still rotates the name.
+      - matchRegex:
+          path: metadata.name
+          pattern: -[0-9a-f]{6}$
+        documentSelector:
+          path: kind
+          value: Job
+      # (c) trimSuffix "-" guarantees no trailing/double dash before the hash even
+      #     when trunc lands on a dash.
+      - matchRegex:
+          path: metadata.name
+          pattern: '[^-]-[0-9a-f]{6}$'
+        documentSelector:
+          path: kind
+          value: Job
+      # (d) the prefix is genuinely truncated: the full "talos-reconcile-md0" infix
+      #     would be present if trunc-56 had not fired.
+      - notMatchRegex:
+          path: metadata.name
+          pattern: talos-reconcile-md0
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: bootstrap-token tenant Job renders ServiceAccount + Job
+    templates:
+      - templates/talos/bootstrap-token-tenant-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # Source order: 0 ServiceAccount, 1 Job (Role/RoleBinding/CNP are
+      # inside the Job's command literal as text, not separate top-level
+      # documents, so they do not contribute to hasDocuments count).
+      - hasDocuments:
+          count: 2
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-bootstrap-token-tenant
+        documentIndex: 0
+      - isKind:
+          of: Job
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: test-k8s-bootstrap-token-tenant
+        documentIndex: 1
+
+  - it: talos-pki emits two cert-manager Certificates and two Issuers
+    templates:
+      - templates/talos/talos-pki.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      # Source order in templates/talos/talos-pki.yaml:
+      # 0 Issuer test-k8s-talos-bootstrap (self-signed),
+      # 1 Certificate test-k8s-talos-ca (issued by talos-bootstrap),
+      # 2 Issuer test-k8s-talos-ca (issues tls-cert from talos-ca Secret),
+      # 3 Certificate test-k8s-talos-tls-cert (issued by talos-ca).
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Issuer
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-bootstrap
+        documentIndex: 0
+      - isKind:
+          of: Certificate
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-ca
+        documentIndex: 1
+      - equal:
+          path: spec.secretName
+          value: test-k8s-talos-ca
+        documentIndex: 1
+      - isKind:
+          of: Issuer
+        documentIndex: 2
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-ca
+        documentIndex: 2
+      - isKind:
+          of: Certificate
+        documentIndex: 3
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-tls-cert
+        documentIndex: 3
+
+  - it: talos-secrets Secret carries the four token-component keys the reconcile Job env binds from
+    templates:
+      - templates/talos/talos-secrets.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Secret
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-secrets
+        documentIndex: 0
+      - exists:
+          path: data.token
+        documentIndex: 0
+      - exists:
+          path: data.clusterId
+        documentIndex: 0
+      - exists:
+          path: data.clusterSecret
+        documentIndex: 0
+      - exists:
+          path: data.bootstrapToken
+        documentIndex: 0

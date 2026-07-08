@@ -5,7 +5,7 @@ include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
 .PHONY: image image-console image-token-proxy test test-go test-helm
-.PHONY: clone-console build-console update-values-console clean-console
+.PHONY: build-console update-values-console
 .NOTPARALLEL: image
 
 test: test-helm test-go
@@ -18,35 +18,28 @@ test-go:
 
 image: image-console image-token-proxy
 
-CONSOLE_REPO ?= https://github.com/cozystack/cozystack-ui.git
-CONSOLE_BRANCH ?= main
+image-console: build-console update-values-console
 
-image-console: clone-console build-console update-values-console clean-console
-
-clone-console:
-	rm -rf .tmp-cozystack-ui
-	git clone --depth 1 --branch $(CONSOLE_BRANCH) $(CONSOLE_REPO) .tmp-cozystack-ui
-
+# Console source lives in-tree under images/console (vendored from the former
+# cozystack-ui repo). Build from that context directly — no clone step.
 build-console:
-	docker buildx build .tmp-cozystack-ui \
-		--file .tmp-cozystack-ui/Containerfile \
+	docker buildx build images/console \
+		--file images/console/Containerfile \
 		--provenance false \
 		--builder=$(BUILDER) \
 		--platform=linux/amd64 \
 		$(call image-tags,cozystack-ui,v$(COZYSTACK_VERSION)) \
 		$(call cache-args,cozystack-ui) \
 		--metadata-file images/console.json \
-		--build-arg APP_VERSION=$(COZYSTACK_VERSION) \
+		--build-arg APP_VERSION=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--push=$(PUSH) \
-		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack-ui" \
+		--label "org.opencontainers.image.source=https://github.com/cozystack/cozystack" \
 		--load=$(LOAD)
 
 update-values-console:
 	IMAGE="$(REGISTRY)/cozystack-ui:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/console.json -r)" \
 		yq -i '.console.image = strenv(IMAGE)' values.yaml
-
-clean-console:
-	rm -rf .tmp-cozystack-ui images/console.json
+	rm -f images/console.json
 
 image-token-proxy:
 	docker buildx build images/token-proxy \

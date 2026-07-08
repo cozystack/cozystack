@@ -1,0 +1,48 @@
+suite: ingress ServiceExposure wiring
+templates:
+  - templates/serviceexposure.yaml
+release:
+  name: ingress
+tests:
+  - it: renders no ServiceExposure by default (externalIPs path)
+    set:
+      _cluster: {}
+    release:
+      namespace: tenant-root
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders a ServiceExposure for the host ingress when a class is set
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        exposure-class: prod-lb
+    release:
+      namespace: tenant-root
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: ServiceExposure
+      - equal:
+          path: metadata.name
+          value: root-ingress
+      - equal:
+          path: spec.serviceRef.name
+          value: root-ingress-controller
+      - equal:
+          path: spec.exposureClassName
+          value: prod-lb
+
+  - it: leaves a non-host ingress without a ServiceExposure
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        exposure-class: prod-lb
+    release:
+      namespace: tenant-foo
+    asserts:
+      - hasDocuments:
+          count: 0

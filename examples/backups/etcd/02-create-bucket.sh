@@ -45,7 +45,7 @@ for v in ETCD_ACCESS_KEY ETCD_SECRET_KEY ETCD_ENDPOINT ETCD_REGION ETCD_BUCKET; 
     [[ -n "${!v}" && "${!v}" != "null" ]] || { log_error "BucketInfo missing required field: ${v}"; exit 1; }
 done
 
-log_substep "Materialising the per-app credentials Secret consumed by the rendered EtcdBackup..."
+log_substep "Materialising the per-app credentials Secret consumed by the rendered EtcdSnapshot..."
 # The strategy template references this Secret by name:
 #   "{{ .Application.metadata.name }}-etcd-backup-creds"
 # The etcd-operator's snapshot Job mounts the Secret and exposes

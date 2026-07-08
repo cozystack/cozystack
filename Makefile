@@ -29,9 +29,11 @@ build: build-deps
 	make -C packages/system/dashboard image
 	make -C packages/system/metallb image
 	make -C packages/system/kamaji image
+	make -C packages/system/capi-providers-cpprovider image
 	make -C packages/system/multus image
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
+	make -C packages/system/securitygroup-controller image
 	make -C packages/system/grafana-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
@@ -47,9 +49,13 @@ manifests:
 	# identity labels (see packages/core/installer/templates/cozy-system-namespace.yaml).
 	# helm install/upgrade users keep the default (false) and use --create-namespace
 	# + the pre-install labeler hook.
+	# platformVersion is rendered into the COZYSTACK_VERSION env on the operator so
+	# the install artifacts carry the version as deploy-time data (not baked into
+	# the image). Promotion re-renders these with the stable version, no rebuild.
 	# Talos variant (default)
 	helm template installer packages/core/installer -n cozy-system \
 		--set bareNamespace=true \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-talos.yaml
@@ -57,6 +63,7 @@ manifests:
 	helm template installer packages/core/installer -n cozy-system \
 		--set bareNamespace=true \
 		--set cozystackOperator.variant=generic \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--set cozystack.apiServerHost=REPLACE_ME \
 		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
@@ -65,6 +72,7 @@ manifests:
 	helm template installer packages/core/installer -n cozy-system \
 		--set bareNamespace=true \
 		--set cozystackOperator.variant=hosted \
+		--set cozystackOperator.platformVersion=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),) \
 		--show-only templates/cozy-system-namespace.yaml \
 		--show-only templates/cozystack-operator.yaml \
 		> _out/assets/cozystack-operator-hosted.yaml
@@ -80,7 +88,7 @@ assets: assets-talos assets-cozypkg openapi-json
 
 openapi-json:
 	mkdir -p _out/assets
-	VERSION=$(shell git describe --tags --always 2>/dev/null || echo dev) go run ./tools/openapi-gen/ 2>/dev/null > _out/assets/openapi.json
+	VERSION=$(if $(COZYSTACK_VERSION),v$(COZYSTACK_VERSION),$(shell git describe --tags --always 2>/dev/null || echo dev)) go run ./tools/openapi-gen/ 2>/dev/null > _out/assets/openapi.json
 
 assets-talos:
 	make -C packages/core/talos assets

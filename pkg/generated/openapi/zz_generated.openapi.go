@@ -44,6 +44,15 @@ func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenA
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantNamespaceList":                  schema_pkg_apis_core_v1alpha1_TenantNamespaceList(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecret":                         schema_pkg_apis_core_v1alpha1_TenantSecret(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecretList":                     schema_pkg_apis_core_v1alpha1_TenantSecretList(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference":                  schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule":                            schema_pkg_apis_sdn_v1alpha1_EgressRule(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector":                          schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule":                           schema_pkg_apis_sdn_v1alpha1_IngressRule(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortProtocol":                          schema_pkg_apis_sdn_v1alpha1_PortProtocol(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule":                              schema_pkg_apis_sdn_v1alpha1_PortRule(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroup":                         schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupList":                     schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref),
+		"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec":                     schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref),
 		"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.ConversionRequest":                 schema_pkg_apis_apiextensions_v1_ConversionRequest(ref),
 		"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.ConversionResponse":                schema_pkg_apis_apiextensions_v1_ConversionResponse(ref),
 		"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1.ConversionReview":                  schema_pkg_apis_apiextensions_v1_ConversionReview(ref),
@@ -770,6 +779,434 @@ func schema_pkg_apis_core_v1alpha1_TenantSecretList(ref common.ReferenceCallback
 		},
 		Dependencies: []string{
 			"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.TenantSecret", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_ApplicationReference(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "ApplicationReference identifies a managed Cozystack application by its group, kind and name. It is used both for SecurityGroup attachments and for fromApp/toApp peers, and resolves to the application's lineage labels (apps.cozystack.io/application.{group,kind,name}).",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"apiGroup": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIGroup of the referenced application. Defaults to apps.cozystack.io when empty, the group under which Cozystack serves its managed applications.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind of the referenced application, e.g. \"Postgres\".",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"name": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Name of the referenced application.",
+							Default:     "",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+				Required: []string{"kind", "name"},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_EgressRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "EgressRule describes one set of allowed outbound destinations and ports.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"toApp": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToApp selects destination pods belonging to the referenced managed applications, by their lineage labels.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+									},
+								},
+							},
+						},
+					},
+					"toSG": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToSG selects destination pods that are members of the named SecurityGroups in the same namespace, by their membership label. The reference is live: it follows the other group's membership as attachments change.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"toCIDR": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToCIDR is a list of CIDR ranges allowed as traffic destinations.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"toFQDNs": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToFQDNs is a list of fully qualified domain name matchers allowed as traffic destinations.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector"),
+									},
+								},
+							},
+						},
+					},
+					"toPorts": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToPorts restricts the rule to the listed destination ports. An empty list allows traffic on all ports.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.FQDNSelector", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_FQDNSelector(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "FQDNSelector matches destination traffic by domain name.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"matchName": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MatchName matches a fully qualified domain name exactly.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"matchPattern": {
+						SchemaProps: spec.SchemaProps{
+							Description: "MatchPattern matches fully qualified domain names against a pattern, where \"*\" matches a single domain label.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_IngressRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "IngressRule describes one set of allowed inbound sources and ports.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"fromApp": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FromApp selects source pods belonging to the referenced managed applications, by their lineage labels.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+									},
+								},
+							},
+						},
+					},
+					"fromSG": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FromSG selects source pods that are members of the named SecurityGroups in the same namespace, by their membership label. The reference is live: it follows the other group's membership as attachments change.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"fromCIDR": {
+						SchemaProps: spec.SchemaProps{
+							Description: "FromCIDR is a list of CIDR ranges allowed as traffic sources.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: "",
+										Type:    []string{"string"},
+										Format:  "",
+									},
+								},
+							},
+						},
+					},
+					"toPorts": {
+						SchemaProps: spec.SchemaProps{
+							Description: "ToPorts restricts the rule to the listed destination ports. An empty list allows traffic on all ports.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortRule"},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_PortProtocol(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PortProtocol is a single port and protocol pair.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"port": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Port is the L4 port number as a string, or a named port. An empty value matches all ports.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"protocol": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Protocol is the L4 protocol. One of TCP, UDP, SCTP or ANY. Defaults to ANY when empty.",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_PortRule(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "PortRule is a set of ports a traffic rule applies to.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"ports": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Ports is the list of port/protocol pairs the rule applies to.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortProtocol"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.PortProtocol"},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_SecurityGroup(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SecurityGroup is a tenant-facing, namespace-scoped firewall object. It is a projection of a single CiliumNetworkPolicy served by the Cozystack aggregated API: tenants manage SecurityGroups while the platform translates each one 1:1 into a CiliumNetworkPolicy in the same namespace, without granting tenants direct access to the cilium.io API group.\n\nA SecurityGroup is a membership group: it owns a membership label (MembershipLabelPrefix + its name) that the securitygroup-controller stamps onto the pods of the applications listed in spec.attachments. The backing CiliumNetworkPolicy selects that membership label, so one SecurityGroup can apply to several applications at once.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"),
+						},
+					},
+					"spec": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Spec describes the applications this SecurityGroup attaches to and the traffic it allows.",
+							Default:     map[string]interface{}{},
+							Ref:         ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec"),
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroupSpec", "k8s.io/apimachinery/pkg/apis/meta/v1.ObjectMeta"},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_SecurityGroupList(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SecurityGroupList is a list of SecurityGroup objects.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"kind": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Kind is a string value representing the REST resource this object represents. Servers may infer this from the endpoint the client submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"apiVersion": {
+						SchemaProps: spec.SchemaProps{
+							Description: "APIVersion defines the versioned schema of this representation of an object. Servers should convert recognized schemas to the latest internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources",
+							Type:        []string{"string"},
+							Format:      "",
+						},
+					},
+					"metadata": {
+						SchemaProps: spec.SchemaProps{
+							Default: map[string]interface{}{},
+							Ref:     ref("k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"),
+						},
+					},
+					"items": {
+						SchemaProps: spec.SchemaProps{
+							Type: []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroup"),
+									},
+								},
+							},
+						},
+					},
+				},
+				Required: []string{"items"},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.SecurityGroup", "k8s.io/apimachinery/pkg/apis/meta/v1.ListMeta"},
+	}
+}
+
+func schema_pkg_apis_sdn_v1alpha1_SecurityGroupSpec(ref common.ReferenceCallback) common.OpenAPIDefinition {
+	return common.OpenAPIDefinition{
+		Schema: spec.Schema{
+			SchemaProps: spec.SchemaProps{
+				Description: "SecurityGroupSpec describes the managed applications a SecurityGroup attaches to and the traffic it allows. The backing CiliumNetworkPolicy's endpointSelector is the SecurityGroup's own membership label, which the securitygroup-controller maintains on the attached applications' pods — so a SecurityGroup can only ever apply to those applications' own pods in the same namespace.",
+				Type:        []string{"object"},
+				Properties: map[string]spec.Schema{
+					"attachments": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Attachments lists the managed applications whose pods join this group. The securitygroup-controller stamps the SecurityGroup's membership label (MembershipLabelPrefix + name) onto the pods of each referenced application in the same namespace, and removes it when the attachment is dropped. An empty list means the group selects no pods.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference"),
+									},
+								},
+							},
+						},
+					},
+					"ingress": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Ingress is the list of rules describing allowed inbound traffic. Each rule only ADDS allowed sources. An empty list adds no allow rules and does NOT isolate the member pods: effective connectivity is the union of every policy selecting a pod, including the platform's blanket-allow baseline, so an empty list leaves ingress open rather than denying it. Actual deny / default-deny enforcement depends on the default-deny baseline, tracked separately as future work.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule"),
+									},
+								},
+							},
+						},
+					},
+					"egress": {
+						SchemaProps: spec.SchemaProps{
+							Description: "Egress is the list of rules describing allowed outbound traffic. Each rule only ADDS allowed destinations. An empty list adds no allow rules and does NOT isolate the member pods: effective connectivity is the union of every policy selecting a pod, including the platform's blanket-allow baseline, so an empty list leaves egress open rather than denying it. Actual deny / default-deny enforcement depends on the default-deny baseline, tracked separately as future work.",
+							Type:        []string{"array"},
+							Items: &spec.SchemaOrArray{
+								Schema: &spec.Schema{
+									SchemaProps: spec.SchemaProps{
+										Default: map[string]interface{}{},
+										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule"),
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		Dependencies: []string{
+			"github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.ApplicationReference", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.EgressRule", "github.com/cozystack/cozystack/pkg/apis/sdn/v1alpha1.IngressRule"},
 	}
 }
 

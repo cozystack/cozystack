@@ -1,0 +1,11 @@
+securityGroupController:
+  image: "ghcr.io/cozystack/cozystack/securitygroup-controller:v0.0.0"
+  replicas: 2
+  debug: false
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi

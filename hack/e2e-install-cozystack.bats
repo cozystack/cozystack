@@ -5,8 +5,11 @@
   # class): a deleted pod's endpoint is orphaned in the agent's registry, IPAM
   # re-hands its IP to a new pod, and the agent then rejects the new sandbox with
   # "IP <X> is already in use" until an agent restart. The watchdog runs as an
-  # in-cluster Job that surgically evicts only the orphaned endpoint, covering
-  # install and (the Job outlives this file) the whole app suite.
+  # in-cluster Job that first surgically evicts only the orphaned endpoint and,
+  # if the leaked IP keeps recurring (the leak is in agent in-memory state that
+  # endpoint-disconnect/delete-reschedule cannot reach), escalates to restarting
+  # that node's cilium-agent — bounded by a per-node cap. It covers install and
+  # (the Job outlives this file) the whole app suite.
   #
   # This is a real @test, NOT a bats setup_file hook: the e2e runner
   # (hack/cozytest.sh) only executes @test functions — it never invokes
@@ -190,10 +193,13 @@ EOF
   # failure messages without redundant separate waits. seaweedfs now
   # installs as a serial chain seaweedfs-db (CNPG bootstrap) ->
   # seaweedfs-system (master raft quorum) -> seaweedfs wrapper, which
-  # pushes the parent's Ready flip to ~5-6 min; tenant-root HR.spec.timeout
-  # is 15m and this 10m wait stays inside it.
+  # pushes the parent's Ready flip to ~5-6 min on an idle runner. On a loaded
+  # runner the tenant stack only starts creating pods ~9-10 min in, so the
+  # parent's Ready can land past the HR's single 15m timeout window; the HR
+  # re-reconciles every 1m until it converges, so this wait is 20m to observe
+  # that eventual Ready rather than expiring first.
   kubectl wait hr/etcd hr/ingress hr/monitoring hr/seaweedfs hr/tenant-root \
-    -n tenant-root --timeout=10m --for=condition=ready
+    -n tenant-root --timeout=20m --for=condition=ready
 
 
   # Expose Cozystack services through ingress
@@ -201,26 +207,82 @@ EOF
 
   # NGINX ingress controller
   timeout 60 sh -ec 'until kubectl get deploy root-ingress-controller -n tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=5m --for=condition=available
+  kubectl wait deploy/root-ingress-controller -n tenant-root --timeout=10m --for=condition=available
 
-  # etcd statefulset
-  timeout 60 sh -ec 'until kubectl get sts/etcd -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait sts/etcd -n tenant-root --for=jsonpath='{.status.readyReplicas}'=3 --timeout=5m
+  # etcd cluster. The v1alpha2 operator manages member Pods directly and creates
+  # NO StatefulSet, so gate on the EtcdCluster readiness signal (mirrors
+  # hack/e2e-apps/etcd.bats and the examples) plus the member Pods themselves.
+  timeout 60 sh -ec 'until kubectl -n tenant-root get etcdcluster.etcd-operator.cozystack.io/etcd >/dev/null 2>&1; do sleep 2; done'
+  kubectl -n tenant-root wait etcdcluster.etcd-operator.cozystack.io/etcd \
+    --for=jsonpath='{.status.conditions[?(@.type=="Available")].status}'=True --timeout=10m
+  kubectl -n tenant-root wait pod \
+    -l app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator \
+    --for=condition=ready --timeout=10m
 
-  # VictoriaMetrics components
+  # VictoriaMetrics components. vmalert/vmalertmanager, vlclusters/generic and
+  # vmcluster/shortterm+longterm are all vm-operator-managed resources that flip
+  # updateStatus=operational only once their workloads are scheduled and Ready.
+  # During platform bring-up they contend for node resources with the rest of
+  # the install, so convergence is load-sensitive: on a calm sandbox each reaches
+  # operational in under a second, but under install-time load (concurrent e2e
+  # sandboxes on one runner) monitoring bring-up is slow. vmalert already uses a
+  # 15m budget; vlclusters and vmcluster used 10m, so this block carried a
+  # 10m/15m split even though all three contend for the same node capacity and a
+  # slow VictoriaLogs bring-up can fail the install on a PR that never touched
+  # monitoring. Unify the block on one 15m budget (near-zero cost in the happy
+  # path, comfortably inside the E2E job budget) and dump live status on timeout
+  # so a genuine stuck-not-slow regression stays legible instead of surfacing as
+  # a bare "timed out" line.
   timeout 60 sh -ec 'until kubectl get vmalert/vmalert-shortterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   timeout 60 sh -ec 'until kubectl get vmalertmanager/alertmanager -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m
+  kubectl wait vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
+    echo "=== vmalert/vmalert-shortterm, vmalertmanager/alertmanager did not reach updateStatus=operational ==="
+    kubectl get vmalert/vmalert-shortterm vmalertmanager/alertmanager -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get vlclusters/generic -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vlclusters/generic -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
+    echo "=== vlclusters/generic did not reach updateStatus=operational ==="
+    kubectl get vlclusters/generic -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=5m
+  kubectl wait vmcluster/shortterm vmcluster/longterm -n tenant-root --for=jsonpath='{.status.updateStatus}'=operational --timeout=15m || {
+    echo "=== vmcluster/shortterm,longterm did not reach updateStatus=operational ==="
+    kubectl get vmcluster/shortterm vmcluster/longterm -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
 
-  # Grafana
+  # Grafana. The grafana-db CNPG cluster and the grafana-deployment Deployment
+  # complete the tenant-root monitoring bring-up and contend for the same node
+  # resources as the VictoriaMetrics stack above during install. Under
+  # install-time load (concurrent e2e sandboxes on one runner) either can be slow
+  # and fail the install on a PR that never touched monitoring, so both move from
+  # their 10m budget to the same uniform 15m as the vm-operator waits above and
+  # dump live status on timeout to keep a genuine stuck-not-slow regression
+  # legible instead of surfacing as a bare "timed out" line.
   timeout 60 sh -ec 'until kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=5m
+  kubectl wait clusters.postgresql.cnpg.io/grafana-db -n tenant-root --for=condition=ready --timeout=15m || {
+    echo "=== clusters.postgresql.cnpg.io/grafana-db did not reach condition=ready ==="
+    kubectl get clusters.postgresql.cnpg.io/grafana-db -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
   timeout 60 sh -ec 'until kubectl get deploy/grafana-deployment -n tenant-root >/dev/null 2>&1; do sleep 2; done'
-  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=5m
+  kubectl wait deploy/grafana-deployment -n tenant-root --for=condition=available --timeout=15m || {
+    echo "=== deploy/grafana-deployment did not reach condition=available ==="
+    kubectl get deploy/grafana-deployment -n tenant-root -o yaml 2>&1 || true
+    echo "=== tenant-root pods ==="
+    kubectl get pods -n tenant-root -o wide 2>&1 || true
+    false
+  }
 
   # Verify Grafana via ingress
   ingress_ip=$(kubectl get svc root-ingress-controller -n tenant-root -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
@@ -240,7 +302,7 @@ EOF
   kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true,"keycloakInternalUrl":"http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"}}}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=10m --for=condition=ready
+  kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=20m --for=condition=ready
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {
@@ -286,8 +348,10 @@ EOF
   # generic DNS-1035 errors and from network/auth failures).
   echo "$output" | grep -q "tenant names must"
   # And assert kubectl did NOT report creation — if validation regressed
-  # into a "warn" variant, the server could still accept the object.
-  ! echo "$output" | grep -qi "created"
+  # into a "warn" variant, the server could still accept the object. A bare
+  # `! echo | grep` is vacuous under cozytest's `set -e` (suppressed for a `!`
+  # pipeline), so the regression would slip through; assert via `if ...; false`.
+  if echo "$output" | grep -qi "created"; then echo "FAIL: kubectl reported the tenant as created — validation must reject it, not warn"; false; fi
 
   # Post-condition cleanup: even though we expect validation to reject the
   # create, removing foo-bar unconditionally keeps the cluster clean for
@@ -312,7 +376,17 @@ spec:
   resourceQuotas:
     cpu: "60"
     memory: "128Gi"
-    storage: "100Gi"
+    # 200Gi so back-to-back tenant Kubernetes tests
+    # (kubernetes-latest, kubernetes-previous) don't run into
+    # ResourceQuota during CDI's second-phase scratch PVC allocation.
+    # Each tenant provisions 2 worker VMs × 20Gi disk + 21Gi CDI scratch
+    # during import; when kubernetes-latest teardown's DRBD detach lags
+    # past cozy_wait_tenant_drained, the leftover 40Gi of latest's worker
+    # PVCs stays counted against tenant-quota while kubernetes-previous
+    # is already asking for its own 40Gi + ~21Gi scratch: the scratch
+    # PVC create call trips the 100Gi ceiling and the second worker's
+    # DataVolume stalls in ImportInProgress indefinitely.
+    storage: "200Gi"
   seaweedfs: false
 EOF
   timeout 60 sh -ec 'until kubectl get hr/tenant-test -n tenant-root >/dev/null 2>&1; do sleep 2; done'
@@ -323,7 +397,7 @@ EOF
   timeout 60 sh -ec 'until [ "$(kubectl get quota -n tenant-test --no-headers 2>/dev/null | wc -l)" -ge 1 ]; do sleep 1; done'
   kubectl get quota -n tenant-test \
     -o jsonpath='{range .items[*]}{.spec.hard.requests\.memory}{" "}{.spec.hard.requests\.storage}{"\n"}{end}' \
-    | grep -qx '137438953472 100Gi'
+    | grep -qx '137438953472 200Gi'
 
   # Assert LimitRange defaults for containers
   kubectl get limitrange -n tenant-test \
@@ -392,7 +466,10 @@ EOF
   version=$(kubectl get configmap cozystack-version -n cozy-system \
     -o jsonpath='{.data.version}')
   kubectl delete configmap cozystack-version -n cozy-system
-  ! kubectl get configmap cozystack-version -n cozy-system 2>/dev/null
+  # A bare `! kubectl get` is vacuous under cozytest's `set -e` (errexit is
+  # suppressed for a `!` pipeline), so a delete that silently failed would not
+  # fail the test; assert the absence via `if kubectl get; then ...; false`.
+  if kubectl get configmap cozystack-version -n cozy-system 2>/dev/null; then echo "FAIL: cozystack-version configmap must be gone after delete with the no-delete label removed"; false; fi
   # Reconstruct: declarative apply matches the chart template at
   # packages/core/platform/templates/cozystack-version.yaml — same label set
   # AND the helm.sh/resource-policy: keep annotation that pins the ConfigMap

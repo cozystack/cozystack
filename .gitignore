@@ -93,3 +93,4 @@ packages/core/platform/.build-revision
 examples/backups/*/.bucket-info.env
 examples/backups/*/.sentinel.env
 examples/backups/*/.backup-name.env
+packages/core/platform/images/migrations/etcd-operator-crds/

@@ -51,6 +51,21 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+DNS domain used INSIDE the tenant cluster (kubelet --cluster-domain,
+apiserver --service-cluster-ip-range FQDNs, CoreDNS authoritative zone).
+Pinned to Kamaji's default `networkProfile.clusterDomain` since this chart
+does not currently expose a knob to override it. If that ever becomes
+configurable, plumb the override here and every consumer picks it up.
+
+Distinct from .Values._cluster["cluster-domain"], which is the MANAGEMENT
+cluster domain (e.g. cozy.local) where the Kamaji control plane and
+monitoring stack live.
+*/}}
+{{- define "kubernetes.tenantClusterDomain" -}}
+cluster.local
+{{- end }}
+
+{{/*
 wait-for-kubeconfig init container shared by the control-plane-side
 Deployments (cluster-autoscaler, kccm, kcsi-controller) that mount the
 *-admin-kubeconfig Secret provisioned asynchronously by Kamaji. The
@@ -59,10 +74,10 @@ Kamaji is still bootstrapping; this container polls the mounted path and
 exits only when super-admin.svc appears, which happens after kubelet's
 optional-Secret refresh cycle.
 
-The 10m deadline stays strictly below the 15m HelmRelease
+The 10m deadline stays strictly below the 20m HelmRelease
 Install.Timeout set by cozystack-api for the Kubernetes kind (via the
-release.cozystack.io/helm-install-timeout annotation) so the
-CrashLoopBackOff surfaces before flux remediation fires and uninstalls
+release.cozystack.io/helm-install-timeout annotation on the cozyrds
+entry) so the CrashLoopBackOff surfaces before flux remediation fires and uninstalls
 the Cluster CR.
 
 The default image lives in images/busybox.tag and points directly at
@@ -97,4 +112,68 @@ must exist on the pod and mount at /etc/kubernetes/kubeconfig.
   - name: kubeconfig
     mountPath: /etc/kubernetes/kubeconfig
     readOnly: true
+{{- end }}
+
+{{/*
+Effective worker node groups.
+
+The default "md0" group is applied here, in the template, only when the user
+supplies no nodeGroups at all. Keeping the default out of values.yaml makes
+user-supplied nodeGroups authoritative: a Helm values merge would otherwise
+re-add a baked-in default md0 on top of the user's groups, and because
+Kubernetes strips null values the default could never be removed. With the
+default applied only when the map is empty, users can freely choose their own
+node groups (and omit md0).
+*/}}
+{{- define "kubernetes.nodeGroups" -}}
+{{- if .Values.nodeGroups -}}
+{{ toYaml .Values.nodeGroups }}
+{{- else -}}
+md0:
+  minReplicas: 0
+  maxReplicas: 10
+  instanceType: "u1.medium"
+  diskSize: 20Gi
+  storageClass: ""
+  roles:
+  - ingress-nginx
+  resources: {}
+  gpus: []
+  kubelet: {}
+{{- end -}}
+{{- end }}
+
+{{/*
+OIDC clientId for the per-cluster Keycloak public client (mode: System).
+
+Namespaced by Release.Namespace so the identifier is globally unique within
+the `cozy` realm — two clusters of the same name in different tenants would
+otherwise collide. The audience binding (KeycloakClientScope) and the
+apiserver's `AuthenticationConfiguration` audience use this same value, so
+both ends of the per-cluster isolation primitive line up by construction.
+
+Truncated to 253 characters because the EDP Keycloak operator stores the
+client as a Kubernetes CR named after the clientId (DNS-1123 subdomain).
+*/}}
+{{- define "kubernetes.oidc.clientId" -}}
+{{- printf "%s-%s" .Release.Namespace .Release.Name | trunc 253 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Name of the per-cluster KeycloakClientScope that carries the audience
+mapper. Same uniqueness considerations as the clientId; suffixed with
+`-audience` so it does not collide with the global `kubernetes-client`
+scope from packages/system/keycloak-configure.
+*/}}
+{{- define "kubernetes.oidc.audienceScopeName" -}}
+{{- printf "%s-%s-audience" .Release.Namespace .Release.Name | trunc 253 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Issuer URL for `mode: System`. Resolves to the platform Keycloak realm
+`cozy`, served at the root host published in the per-namespace bundle by
+cozystack-basics.
+*/}}
+{{- define "kubernetes.oidc.systemIssuerURL" -}}
+{{- printf "https://keycloak.%s/realms/cozy" (dig "root-host" "" (.Values._cluster | default dict)) }}
 {{- end }}

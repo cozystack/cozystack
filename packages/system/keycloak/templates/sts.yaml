@@ -6,6 +6,21 @@
 {{- $ingressHost := .Values.ingress.host | default (printf "keycloak.%s" $host) }}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 
+{{- /*
+Effective theme list. Starts from the explicit .Values.themes and, when the
+platform branding config names a login theme (branding.loginTheme) together
+with the OCI image that carries it (branding.loginThemeImage), appends an
+auto-derived entry. This lets an operator ship a Keycloak login theme purely
+through platform branding values, without editing this chart or patching the
+StatefulSet. branding flows in via _cluster.branding (the cozystack-values
+Secret), the same path that feeds the realm displayName.
+*/}}
+{{- $branding := (.Values._cluster | default dict).branding | default dict }}
+{{- $themes := .Values.themes | default list }}
+{{- if and (hasKey $branding "loginTheme") (hasKey $branding "loginThemeImage") }}
+{{- $themes = concat $themes (list (dict "name" $branding.loginTheme "image" $branding.loginThemeImage)) }}
+{{- end }}
+
 {{- $existingPassword := lookup "v1" "Secret" "cozy-keycloak" (printf "%s-credentials" .Release.Name) }}
 {{- $password := randAlphaNum 16 -}}
 {{- if $existingPassword }}
@@ -49,9 +64,9 @@ spec:
       {{- end }}
       securityContext:
         fsGroup: 1000
-      {{- if .Values.themes }}
+      {{- if $themes }}
       {{- $themeNames := list }}
-      {{- range .Values.themes }}
+      {{- range $themes }}
       {{- if not .name }}{{ fail "theme entry missing required field: name" }}{{- end }}
       {{- if not .image }}{{ fail "theme entry missing required field: image" }}{{- end }}
       {{- $sanitized := include "keycloak.theme.sanitizedName" .name }}
@@ -61,7 +76,7 @@ spec:
       {{- $themeNames = append $themeNames $sanitized }}
       {{- end }}
       initContainers:
-        {{- range .Values.themes }}
+        {{- range $themes }}
         - name: theme-{{ include "keycloak.theme.sanitizedName" .name }}
           image: "{{ .image }}"
           imagePullPolicy: IfNotPresent
@@ -141,6 +156,16 @@ spec:
                   key: password
             - name: KC_DB
               value: "postgres"
+            {{- if .Values.encryption.enabled }}
+            # Encryption on: route through the keycloak-kms-proxy, which dials
+            # the real CNPG cluster. Auth (username/password/dbname) still comes
+            # from the CNPG-managed keycloak-db-app secret below and passes
+            # through the proxy unchanged.
+            - name: KC_DB_URL_HOST
+              value: keycloak-kms-proxy.{{ .Release.Namespace }}.svc.{{ $clusterDomain }}
+            - name: KC_DB_URL_PORT
+              value: "5432"
+            {{- else }}
             - name: KC_DB_URL_HOST
               valueFrom:
                 secretKeyRef:
@@ -151,6 +176,7 @@ spec:
                 secretKeyRef:
                   name: keycloak-db-app
                   key: "port"
+            {{- end }}
             - name: KC_DB_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -170,12 +196,16 @@ spec:
               value: "docker"
             - name: KC_HOSTNAME
               value: https://{{ $ingressHost }}
+            {{- with .Values.ingress.adminHost }}
+            - name: KC_HOSTNAME_ADMIN
+              value: https://{{ . }}
+            {{- end }}
             - name: JAVA_OPTS_APPEND
               value: "-Djgroups.dns.query=keycloak-headless.cozy-keycloak.svc.{{ $clusterDomain }}"
             {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
-          {{- if .Values.themes }}
+          {{- if $themes }}
           volumeMounts:
             - name: themes
               mountPath: /opt/keycloak/themes
@@ -207,7 +237,7 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 5
             failureThreshold: 3
-      {{- if .Values.themes }}
+      {{- if $themes }}
       volumes:
         - name: themes
           emptyDir:

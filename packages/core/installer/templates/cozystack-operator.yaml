@@ -78,23 +78,35 @@ spec:
         {{- if .Values.cozystackOperator.platformSourceRef }}
         - --platform-source-ref={{ .Values.cozystackOperator.platformSourceRef }}
         {{- end }}
-        {{- if eq .Values.cozystackOperator.variant "talos" }}
+        {{- if .Values.cozystackOperator.platformSourceSecret }}
+        - --platform-source-secret={{ .Values.cozystackOperator.platformSourceSecret }}
+        {{- end }}
+        {{- $hasEndpointEnv := or (eq .Values.cozystackOperator.variant "talos") (eq .Values.cozystackOperator.variant "generic") }}
+        {{- if or .Values.cozystackOperator.platformVersion $hasEndpointEnv }}
         env:
+        {{- if .Values.cozystackOperator.platformVersion }}
+        # Platform version reported by the operator (telemetry). Deploy-time data,
+        # not baked into the image — lets a release-candidate image be promoted to
+        # stable by retagging alone. Overrides the build-time value in pkg/version.
+        - name: COZYSTACK_VERSION
+          value: {{ .Values.cozystackOperator.platformVersion | quote }}
+        {{- end }}
+        {{- if eq .Values.cozystackOperator.variant "talos" }}
         # Talos KubePrism endpoint
         - name: KUBERNETES_SERVICE_HOST
           value: "localhost"
         - name: KUBERNETES_SERVICE_PORT
           value: "7445"
         {{- else if eq .Values.cozystackOperator.variant "generic" }}
-        env:
         # Generic Kubernetes: API server endpoint
         - name: KUBERNETES_SERVICE_HOST
           value: {{ required "cozystack.apiServerHost is required in generic mode" .Values.cozystack.apiServerHost | quote }}
         - name: KUBERNETES_SERVICE_PORT
           value: {{ .Values.cozystack.apiServerPort | quote }}
-        {{- else if eq .Values.cozystackOperator.variant "hosted" }}
-        # Hosted: use in-cluster service account, no env override needed
-        env: []
+        {{- end }}
+        {{- end }}
+        {{- if eq .Values.cozystackOperator.variant "hosted" }}
+        # Hosted: use in-cluster service account, no endpoint env override needed
         {{- end }}
       hostNetwork: true
       tolerations:

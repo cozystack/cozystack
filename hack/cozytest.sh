@@ -95,17 +95,33 @@ TMP_SH=$(mktemp) || { echo "Failed to create temp file" >&2; exit 1; }
 COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 _cozy_on_exit() {
   _rc=$?
-  if [ "$_rc" -ne 0 ] && command -v crust-gather >/dev/null 2>&1; then
+  if [ "$_rc" -ne 0 ]; then
     _snap="$COZY_REPORT_DIR/snapshots/$(basename "$TEST_FILE" .bats)"
     mkdir -p "$_snap" 2>/dev/null || true
-    echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
-    # Bound with a timeout: crust-gather collect has hung indefinitely on a
-    # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
-    # wedging the whole test step for hours until the job-level cancel. 5 min is
-    # ample for a host snapshot; a partial capture (timeout exits 124, swallowed
-    # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills if a blocked
-    # collect ignores the SIGTERM.
-    timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
+    if command -v crust-gather >/dev/null 2>&1; then
+      echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
+      # Bound with a timeout: crust-gather collect has hung indefinitely on a
+      # contended/degraded cluster (e.g. streaming logs from a crashlooping pod),
+      # wedging the whole test step for hours until the job-level cancel. 5 min is
+      # ample for a host snapshot; a partial capture (timeout exits 124, swallowed
+      # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills if a blocked
+      # collect ignores the SIGTERM.
+      timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
+    fi
+    # Diagnostic-only: capture the host->pod CNI data-plane state for any
+    # NotReady pod so the recurrent host->local-pod "connection refused"
+    # transient (rooted in our cilium+kube-ovn chaining:
+    # enable-host-legacy-routing + CNI InstallEndpointRoute:false, which
+    # delegates host->local-pod routing to kube-ovn/ovn0) can be root-caused
+    # from the uploaded artifact. crust-gather captures object state but not the
+    # node's L3 forwarding state. This NEVER affects the test outcome: every
+    # capture is time-boxed and `|| true`, and the whole run is wrapped in a
+    # wall-clock backstop so it cannot stall the job. It no-ops when there are no
+    # affected pods or when kubectl/the tooling is absent.
+    if command -v kubectl >/dev/null 2>&1; then
+      echo "» capturing host->pod data-plane for NotReady pods -> $_snap/dataplane"
+      timeout -k 30 600 "$(dirname "$0")/e2e-capture-dataplane.sh" "$_snap/dataplane" 2>&1 || true
+    fi
   fi
   if command -v cozy_cleanup >/dev/null 2>&1; then
     echo "» cozy_cleanup $(basename "$TEST_FILE" .bats)"

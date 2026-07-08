@@ -1,0 +1,58 @@
+name: UI Test
+
+# Typecheck + unit tests for the in-tree console SPA
+# (packages/system/dashboard/images/console, vendored from cozystack-ui).
+# The container image itself is built by `make build` in the main build job.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'packages/system/dashboard/images/console/**'
+  pull_request:
+    paths:
+      - 'packages/system/dashboard/images/console/**'
+
+defaults:
+  run:
+    working-directory: packages/system/dashboard/images/console
+
+# Read-only token; this workflow only checks out code and runs typecheck/tests.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck and test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # No git pushes from this workflow; don't leave the token in .git/config
+          # where a later `pnpm install` step could read it.
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          # The monorepo root has no package.json; read the pnpm version from
+          # the console workspace manifest (packageManager field).
+          package_json_file: packages/system/dashboard/images/console/package.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: packages/system/dashboard/images/console/pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test

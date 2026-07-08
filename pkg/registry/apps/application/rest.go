@@ -189,6 +189,11 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		if nsErrs := r.validateTenantNamespaceLength(app.Namespace, app.Name); len(nsErrs) > 0 {
 			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, nsErrs)
 		}
+		// Enforce hierarchical quota allocation: a child tenant's declared
+		// quota may not exceed its parent's remaining (un-carved) quota.
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
 	}
 
 	// Validate that values don't contain reserved keys (starting with "_")
@@ -532,6 +537,15 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 	// Validate that values don't contain reserved keys (starting with "_")
 	if err := validateNoInternalKeys(app.Spec); err != nil {
 		return nil, false, apierrors.NewBadRequest(err.Error())
+	}
+
+	// Enforce hierarchical quota allocation on quota changes too: raising a
+	// child tenant's declared quota above its parent's remaining budget is
+	// rejected the same way as on create.
+	if r.kindName == "Tenant" {
+		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
+			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
+		}
 	}
 
 	r.warnLegacyPresets(app)
@@ -1604,6 +1618,23 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 			},
 			Values: app.Spec,
 		},
+	}
+
+	// Per-Application HelmRelease wait disablement. An
+	// ApplicationDefinition that sets
+	// release.cozystack.io/helm-install-disable-wait: "true" gets
+	// Install.DisableWait and Upgrade.DisableWait set on the emitted
+	// HelmRelease. Required for parent charts that emit in-tenant child
+	// HelmReleases which cannot become Ready during the parent's own
+	// install (e.g. the Kubernetes Application emits cilium/coredns/csi/etc.
+	// HelmReleases that can never become Ready until worker nodes exist,
+	// plus a main-phase talos-reconcile Job that generates the
+	// TalosConfigTemplate the worker MachineSet clones from; without
+	// DisableWait the helm-controller blocks the release on those addon
+	// HelmReleases, which cannot happen during install).
+	if r.releaseConfig.HelmInstallDisableWait {
+		helmRelease.Spec.Install.DisableWait = true
+		helmRelease.Spec.Upgrade.DisableWait = true
 	}
 
 	return helmRelease, nil

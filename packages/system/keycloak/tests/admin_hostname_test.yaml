@@ -1,0 +1,272 @@
+suite: admin hostname split (ingress.adminHost)
+
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+
+# ingress.adminHost is an opt-in option. When set, Keycloak's admin console
+# and Administration REST API are moved onto a dedicated hostname/route, and
+# the public (login) route is narrowed to the OIDC paths only so /admin is no
+# longer served there. The admin route attaches to the Gateway/ingressClass
+# selected by _cluster.expose-ingress-admin (defaults to expose-ingress),
+# allowing it to be pointed at a separate, e.g. private, Gateway.
+tests:
+  # --- StatefulSet env: KC_HOSTNAME_ADMIN ---
+  - it: does not set KC_HOSTNAME_ADMIN when adminHost is empty (default)
+    template: templates/sts.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+    asserts:
+      - isKind:
+          of: StatefulSet
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_HOSTNAME
+            value: https://keycloak.example.com
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_HOSTNAME_ADMIN
+            value: https://keycloak-admin.example.com
+
+  - it: sets KC_HOSTNAME_ADMIN when adminHost is set
+    template: templates/sts.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KC_HOSTNAME_ADMIN
+            value: https://keycloak-admin.example.com
+
+  # --- Ingress (gateway disabled) ---
+  - it: renders one Ingress serving all paths when adminHost is empty
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Ingress
+      - equal:
+          path: spec.rules[0].host
+          value: keycloak.example.com
+      - lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 1
+      - equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - lengthEqual:
+          path: spec.tls
+          count: 1
+
+  - it: narrows the login Ingress to OIDC paths and adds an admin Ingress
+    template: templates/ingress.yaml
+    set:
+      _cluster:
+        root-host: example.com
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - hasDocuments:
+          count: 2
+      # doc 0: public login Ingress — only OIDC paths, never /admin or /
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: keycloak-ingress
+      - documentIndex: 0
+        equal:
+          path: spec.rules[0].host
+          value: keycloak.example.com
+      - documentIndex: 0
+        lengthEqual:
+          path: spec.rules[0].http.paths
+          count: 3
+      - documentIndex: 0
+        equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /realms
+      - documentIndex: 0
+        equal:
+          path: spec.rules[0].http.paths[1].path
+          value: /resources
+      - documentIndex: 0
+        equal:
+          path: spec.rules[0].http.paths[2].path
+          value: /.well-known
+      # doc 1: admin Ingress — full path, dedicated host/secret/class
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: keycloak-admin-ingress
+      - documentIndex: 1
+        equal:
+          path: spec.rules[0].host
+          value: keycloak-admin.example.com
+      - documentIndex: 1
+        equal:
+          path: spec.rules[0].http.paths[0].path
+          value: /
+      - documentIndex: 1
+        equal:
+          path: spec.tls[0].secretName
+          value: keycloak-admin-tls
+      - documentIndex: 1
+        equal:
+          path: spec.ingressClassName
+          value: tenant-root
+
+  - it: admin Ingress uses expose-ingress-admin ingressClass when set
+    template: templates/ingress.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+        expose-ingress-admin: cozy-private
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-admin-ingress
+      - equal:
+          path: spec.ingressClassName
+          value: cozy-private
+
+  - it: admin Ingress drops per-host TLS in wildcard mode on the shared ingress
+    template: templates/ingress.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+        wildcard-secret-name: cozystack-wildcard
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-admin-ingress
+      # no per-host secret — relies on the operator default SSL cert
+      - notExists:
+          path: spec.tls[0].secretName
+      # no ACME / cluster-issuer annotations in wildcard mode
+      - notExists:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+      - notExists:
+          path: metadata.annotations["acme.cert-manager.io/http01-ingress-ingressclassname"]
+
+  - it: admin Ingress keeps its own cert on a separate ingress even in wildcard mode
+    template: templates/ingress.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+        wildcard-secret-name: cozystack-wildcard
+        expose-ingress-admin: cozy-private
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-admin-ingress
+      # separate ingress has no wildcard default cert -> per-host secret stays
+      - equal:
+          path: spec.tls[0].secretName
+          value: keycloak-admin-tls
+      - equal:
+          path: metadata.annotations["cert-manager.io/cluster-issuer"]
+          value: letsencrypt-prod
+
+  # --- HTTPRoute (gateway enabled) ---
+  - it: renders one HTTPRoute serving all paths when adminHost is empty
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: HTTPRoute
+      - lengthEqual:
+          path: spec.hostnames
+          count: 1
+      - equal:
+          path: spec.hostnames[0]
+          value: keycloak.example.com
+      # no path matches -> all paths routed
+      - isNull:
+          path: spec.rules[0].matches
+
+  - it: narrows the login HTTPRoute to OIDC paths and adds an admin HTTPRoute
+    template: templates/httproute.yaml
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - hasDocuments:
+          count: 2
+      # doc 0: public login route — only OIDC path prefixes
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: keycloak
+      - documentIndex: 0
+        equal:
+          path: spec.hostnames[0]
+          value: keycloak.example.com
+      - documentIndex: 0
+        lengthEqual:
+          path: spec.rules[0].matches
+          count: 3
+      - documentIndex: 0
+        equal:
+          path: spec.rules[0].matches[0].path.value
+          value: /realms
+      # doc 1: admin route — dedicated hostname, default admin namespace
+      - documentIndex: 1
+        equal:
+          path: metadata.name
+          value: keycloak-admin
+      - documentIndex: 1
+        equal:
+          path: spec.hostnames[0]
+          value: keycloak-admin.example.com
+      - documentIndex: 1
+        equal:
+          path: spec.parentRefs[0].namespace
+          value: tenant-root
+
+  - it: admin HTTPRoute attaches to expose-ingress-admin namespace when set
+    template: templates/httproute.yaml
+    documentIndex: 1
+    set:
+      _cluster:
+        root-host: example.com
+        gateway-enabled: "true"
+        expose-ingress-admin: cozy-private
+      ingress:
+        adminHost: keycloak-admin.example.com
+    asserts:
+      - equal:
+          path: metadata.name
+          value: keycloak-admin
+      - equal:
+          path: spec.parentRefs[0].namespace
+          value: cozy-private

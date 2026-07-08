@@ -4,6 +4,17 @@ on:
   push:
     branches:
       - main
+    # Only run when a release changelog changes. The release body is synced from
+    # docs/changelogs/v*.md, which lands on main either when the changelog PR
+    # (tags.yaml generate-changelog) merges or when a maintainer edits an
+    # existing changelog. The v* glob deliberately skips template.md /
+    # patch-template.md in the same directory. Every other main push left this
+    # job scanning the latest 30 releases for nothing.
+    paths:
+      - 'docs/changelogs/v*.md'
+  # Manual re-sync hatch: re-run the changelog -> release-body sync without
+  # touching a changelog file (e.g. if a release body drifted out of sync).
+  workflow_dispatch:
 
 concurrency:
   group: update-releasenotes-${{ github.workflow }}

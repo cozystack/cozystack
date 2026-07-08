@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: securitygroup-controller
+  labels:
+    app: securitygroup-controller
+spec:
+  replicas: {{ .Values.securityGroupController.replicas }}
+  selector:
+    matchLabels:
+      app: securitygroup-controller
+  template:
+    metadata:
+      labels:
+        app: securitygroup-controller
+    spec:
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: securitygroup-controller
+              topologyKey: kubernetes.io/hostname
+      serviceAccountName: securitygroup-controller
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: securitygroup-controller
+        image: "{{ .Values.securityGroupController.image }}"
+        args:
+        - --leader-elect
+        {{- if .Values.securityGroupController.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        ports:
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        {{- with .Values.securityGroupController.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
+        {{- end }}

@@ -32,3 +32,12 @@ tests:
             apiGroups: ["objectstorage.k8s.io"]
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
+
+  - it: grants full access on cilium.io ciliumnetworkpolicies for SecurityGroup storage
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies"]
+            verbs: ["get", "watch", "list", "create", "update", "patch", "delete"]

@@ -1,6 +1,14 @@
 {{- define "cozystack.defaultCiliumValues" -}}
+{{- /* Cilium runs hostNetwork on the Talos worker nodes and resolves the
+       apiserver via the worker's /etc/hosts, which the talos-reconcile
+       main-phase Job seeds with the Kamaji Service ClusterIP under
+       <release>.<ns>.svc through machine.network.extraHostEntries. So a
+       plain DNS host works here without a lookup-and-reuse race: the
+       cert covers the same DNS name from chart render time, and the
+       hosts entry is set well before kubelet (and therefore Cilium)
+       comes up on the node. */}}
 cilium:
-  k8sServiceHost: {{ .Release.Name }}.{{ .Release.Namespace }}.svc
+  k8sServiceHost: {{ printf "%s.%s.svc" .Release.Name .Release.Namespace }}
   k8sServicePort: 6443
   routingMode: tunnel
   MTU: 1350

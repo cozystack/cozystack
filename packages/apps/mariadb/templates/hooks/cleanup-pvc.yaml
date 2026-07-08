@@ -18,16 +18,67 @@ spec:
     spec:
       serviceAccountName: {{ .Release.Name }}-cleanup
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cleanup
-          image: docker.io/clastix/kubectl:v1.32
+          # Digest-pinned (immutable) and routed through the cluster images
+          # registry via cozy-lib.image, so mirrored / air-gapped installs
+          # resolve it and an upstream retag cannot change what runs at
+          # uninstall. The tag+digest is refreshed by the "clastix/kubectl"
+          # custom Renovate manager in .github/renovate.json (the helm-values
+          # manager is disabled repo-wide), so this pin does not silently age.
+          image: {{ include "cozy-lib.image" (list "clastix/kubectl:v1.32@sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c" $) }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
           command:
             - /bin/sh
             - -c
             - |
+              # --ignore-not-found tolerates already-absent resources; only a
+              # genuine delete failure (RBAC/API error) must fail the hook, so
+              # track it and propagate via the final exit instead of masking
+              # errors behind `|| echo ...`.
+              cleanup_failed=0
               echo "Deleting orphaned PVCs for {{ .Release.Name }}..."
-              kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} || true
-              echo "PVC cleanup complete."
+              if kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/instance={{ .Release.Name }} --ignore-not-found; then
+                echo "PVC cleanup complete."
+              else
+                echo "WARNING: PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+                cleanup_failed=1
+              fi
+              echo "Deleting orphaned operator-generated Secrets for {{ .Release.Name }}..."
+              if kubectl delete secret -n {{ .Release.Namespace }} \
+                {{ .Release.Name }}-metrics-password {{ .Release.Name }}-repl-password --ignore-not-found; then
+                echo "Secret cleanup complete."
+              else
+                echo "WARNING: Secret cleanup failed for {{ .Release.Name }}; orphaned Secrets may remain" >&2
+                cleanup_failed=1
+              fi
+              exit "${cleanup_failed}"
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -51,9 +102,18 @@ metadata:
     "helm.sh/hook-weight": "5"
     "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
 rules:
+  # PVCs are deleted by label selector, which requires list.
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "delete"]
+  # Operator-generated Secrets are deleted by name, so scope the rule to
+  # exactly those two resources (least privilege — no namespace-wide secret access).
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ .Release.Name }}-metrics-password
+      - {{ .Release.Name }}-repl-password
+    verbs: ["get", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

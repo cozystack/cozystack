@@ -1,6 +1,6 @@
 # Source: https://github.com/cloudlena/s3manager/blob/main/Dockerfile
 
-FROM docker.io/library/golang:1 AS builder
+FROM docker.io/library/golang:1.26 AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -12,7 +12,7 @@ RUN git apply /cozystack.patch
 RUN go mod tidy
 RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -ldflags="-s -w" -a -installsuffix cgo -o bin/s3manager
 
-FROM docker.io/library/alpine:latest
+FROM docker.io/library/alpine:3.24
 WORKDIR /usr/src/app
 RUN addgroup -S s3manager && adduser -S s3manager -G s3manager
 RUN apk add --no-cache \

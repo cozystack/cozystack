@@ -1,0 +1,37 @@
+suite: Talos to Kubernetes support-matrix guard tests
+
+# Each Talos minor release supports a bounded window of Kubernetes minor
+# versions; running a kubelet outside that window produces a silently
+# broken Talos+kubelet combination that HelmRelease cannot detect. The
+# chart fails render with a clear message instead, so the operator sees
+# the mismatch in Flux/dashboards before workers roll over. Source of
+# truth is the $talosK8sSupportMatrix dict at the top of cluster.yaml.
+#
+# Failure-path coverage is left as a follow-up: values.schema.json
+# enforces Version enum (v1.31..v1.35), which is strictly tighter than
+# the Talos v1.13.0 matrix entry (v1.31..v1.36), so the only way to
+# trigger the fail() guard via helm-unittest is to feed a Version the
+# schema rejects before the template ever runs. Schema-rejection happens
+# before template execution, so the chart fail() message is unreachable
+# from the test harness until either the matrix gains an exclusion the
+# schema enum still allows, or helm-unittest gains a schema-skip toggle.
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+tests:
+  - it: accepts a Kubernetes version inside the Talos v1.13 support window
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      talos:
+        version: "v1.13.0"
+        schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+      version: "v1.31"
+    asserts:
+      - hasDocuments:
+          count: 8

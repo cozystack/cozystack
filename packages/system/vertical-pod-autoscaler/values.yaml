@@ -11,11 +11,16 @@ vertical-pod-autoscaler:
 
   updater:
     resources:
+      # The updater watches every pod in the cluster; a 110Mi limit OOM-kills it
+      # on a full cozystack install, which trips ProgressDeadlineExceeded and
+      # makes Flux fail the HelmRelease (cascading to monitoring/velero/etc).
+      # Give it real headroom; the recommender (which holds more state) is
+      # already unlimited.
       limits:
-        memory: 110Mi
+        memory: 512Mi
       requests:
         cpu: 200m
-        memory: 110Mi
+        memory: 200Mi
 
   recommender:
     extraArgs:

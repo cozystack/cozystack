@@ -224,9 +224,12 @@ spec:
               name: kubeconfig
               readOnly: true
           resources:
+            limits:
+              cpu: 512m
+              memory: 512Mi
             requests:
-              cpu: 10m
-              memory: 20Mi
+              cpu: 125m
+              memory: 128Mi
           securityContext:
             capabilities:
               drop:

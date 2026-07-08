@@ -310,7 +310,7 @@
             "uid": "$ds_prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])* on (uid) group_left(phase) kube_pod_status_phase{phase=\"Running\"})) / sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum(sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])* on (namespace, pod) group_left(phase) (kube_pod_status_phase{phase=\"Running\"} == 1))) / sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])))",
           "hide": false,
           "legendFormat": "Total",
           "range": true,
@@ -380,7 +380,7 @@
             "uid": "$ds_prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"memory\",node=~\"$node\"}[$__rate_interval])* on (uid) group_left(phase) kube_pod_status_phase{phase=\"Running\"})) / sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"memory\",unit=\"byte\",node=~\"$node\"}[$__rate_interval])))",
+          "expr": "sum(sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"memory\",node=~\"$node\"}[$__rate_interval])* on (namespace, pod) group_left(phase) (kube_pod_status_phase{phase=\"Running\"} == 1))) / sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"memory\",unit=\"byte\",node=~\"$node\"}[$__rate_interval])))",
           "hide": false,
           "legendFormat": "Total",
           "range": true,
@@ -995,7 +995,7 @@
             "uid": "$ds_prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"cpu\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])* on (uid) group_left(phase) kube_pod_status_phase{phase=\"Running\"}))",
+          "expr": "sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"cpu\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])* on (namespace, pod) group_left(phase) (kube_pod_status_phase{phase=\"Running\"} == 1)) or sum by (node) (kube_node_status_allocatable{resource=\"cpu\",node=~\"$node\"} * 0))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -1010,7 +1010,7 @@
             "uid": "$ds_prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"cpu\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])* on (uid) group_left(phase) kube_pod_status_phase{phase=\"Running\"})))",
+          "expr": "sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"cpu\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"cpu\",unit=\"core\",node=~\"$node\"}[$__rate_interval])* on (namespace, pod) group_left(phase) (kube_pod_status_phase{phase=\"Running\"} == 1)) or sum by (node) (kube_node_status_allocatable{resource=\"cpu\",node=~\"$node\"} * 0)))",
           "hide": false,
           "legendFormat": "Total",
           "range": true,
@@ -1393,7 +1393,7 @@
             "uid": "$ds_prometheus"
           },
           "editorMode": "code",
-          "expr": "sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"memory\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"memory\",node=~\"$node\"}[$__rate_interval])* on (uid) group_left(phase) kube_pod_status_phase{phase=\"Running\"}))",
+          "expr": "sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"memory\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"memory\",node=~\"$node\"}[$__rate_interval])* on (namespace, pod) group_left(phase) (kube_pod_status_phase{phase=\"Running\"} == 1)) or sum by (node) (kube_node_status_allocatable{resource=\"memory\",node=~\"$node\"} * 0))",
           "format": "time_series",
           "hide": false,
           "intervalFactor": 1,
@@ -1408,7 +1408,7 @@
             "uid": "$ds_prometheus"
           },
           "editorMode": "code",
-          "expr": "sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"memory\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"memory\",node=~\"$node\"}[$__rate_interval])* on (uid) group_left(phase) kube_pod_status_phase{phase=\"Running\"})))",
+          "expr": "sum(sum by (node) (avg_over_time(kube_node_status_allocatable{resource=\"memory\",node=~\"$node\"}[$__rate_interval])) - on(node) (sum by (node) (avg_over_time(kube_pod_container_resource_requests{resource=\"memory\",node=~\"$node\"}[$__rate_interval])* on (namespace, pod) group_left(phase) (kube_pod_status_phase{phase=\"Running\"} == 1)) or sum by (node) (kube_node_status_allocatable{resource=\"memory\",node=~\"$node\"} * 0)))",
           "hide": false,
           "legendFormat": "Total",
           "range": true,

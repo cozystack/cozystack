@@ -133,4 +133,12 @@ jobs:
           label_pattern: '' # don't read labels for targets
           target_branches: ${{ steps.target.outputs.branch }}
           merge_commits: skip
-          conflict_resolution: draft_commit_conflicts
+          # conflict_resolution lives inside the experimental JSON input, not as a
+          # top-level key. Passed top-level it is silently ignored and the action
+          # falls back to the experimental default ("fail"), which on a conflict
+          # creates no PR and only comments. Nesting it here makes a conflicting
+          # backport open a draft PR with the conflict committed for manual fixup.
+          experimental: |
+            {
+              "conflict_resolution": "draft_commit_conflicts"
+            }

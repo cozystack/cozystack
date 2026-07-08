@@ -5,8 +5,6 @@ on:
   schedule:
     # Run weekly on Mondays at 06:00 UTC.
     - cron: '0 6 * * 1'
-  push:
-    branches: [main]
   workflow_dispatch:
 
 # Declare default permissions as read-only.
@@ -17,8 +15,6 @@ jobs:
     name: Scorecard analysis
     runs-on: ubuntu-latest
     permissions:
-      # Needed to upload the results to the GitHub code-scanning dashboard.
-      security-events: write
       # Needed to publish results to the public scorecard.dev API
       # (OIDC token allows publish without storing long-lived credentials).
       id-token: write
@@ -38,18 +34,24 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
+          # The default GITHUB_TOKEN cannot read branch-protection settings, so
+          # the Branch-Protection check is scored on partial data. Provide a PAT
+          # with admin:read on the repo as the SCORECARD_TOKEN secret to let it
+          # see the full ruleset; falls back to the default token when unset, so
+          # this is a no-op until the secret is added.
+          repo_token: ${{ secrets.SCORECARD_TOKEN || github.token }}
           # Publish the results to the OpenSSF Scorecard public API so the
           # project appears at https://scorecard.dev/viewer/?uri=github.com/cozystack/cozystack
           publish_results: true
 
+      # SARIF is kept as a downloadable artifact only. It is intentionally NOT
+      # uploaded to GitHub code-scanning: Scorecard posts one alert per check,
+      # which floods the Security > Code scanning dashboard and buries CodeQL's
+      # first-party findings. The public scorecard.dev badge (publish_results
+      # above) is the canonical view of these results.
       - name: Upload SARIF as artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: scorecard-sarif
           path: results.sarif
           retention-days: 5
-
-      - name: Upload SARIF to code-scanning
-        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4.36.2
-        with:
-          sarif_file: results.sarif

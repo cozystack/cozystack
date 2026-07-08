@@ -1,0 +1,80 @@
+suite: tenant HelmReleases gate on the victoria-metrics-operator
+
+# The victoria-metrics-operator admission webhook is configured with
+# failurePolicy: Fail and rejects the VM* custom resources these tenant
+# releases create (etcd/ingress: VMPodScrape; monitoring via its
+# monitoring-system child: VMCluster/VMAlert/VLCluster/VMAlertmanager/
+# VMServiceScrape) whenever the operator pod is not yet serving on :9443.
+# On a cold install the operator can be briefly unavailable, so every tenant
+# release that creates VM* resources must depend on the operator HelmRelease
+# becoming Ready — otherwise the release reconciles too early, the webhook
+# rejects with connection refused, the install fails and rolls back. Pin the
+# dependsOn so the gate cannot regress.
+
+# Restrict rendering to the gated HelmRelease templates so the chart's
+# namespace.yaml `lookup` (which errors under helm-unittest) is not evaluated.
+templates:
+  - templates/etcd.yaml
+  - templates/ingress.yaml
+  - templates/monitoring.yaml
+  - templates/seaweedfs.yaml
+  - templates/gateway.yaml
+
+release:
+  name: tenant-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    expose-ingress: tenant-root
+    expose-external-ips: "192.0.2.10"
+    gateway-enabled: "true"
+  etcd: true
+  ingress: true
+  monitoring: true
+  seaweedfs: true
+  gateway: true
+  host: ""
+
+tests:
+  - it: etcd HR depends on the victoria-metrics-operator
+    asserts:
+      - template: templates/etcd.yaml
+        equal:
+          path: spec.dependsOn
+          value:
+            - name: victoria-metrics-operator
+              namespace: cozy-victoria-metrics-operator
+
+  - it: ingress HR depends on the victoria-metrics-operator
+    asserts:
+      - template: templates/ingress.yaml
+        equal:
+          path: spec.dependsOn
+          value:
+            - name: victoria-metrics-operator
+              namespace: cozy-victoria-metrics-operator
+
+  - it: monitoring HR depends on the victoria-metrics-operator
+    asserts:
+      - template: templates/monitoring.yaml
+        equal:
+          path: spec.dependsOn
+          value:
+            - name: victoria-metrics-operator
+              namespace: cozy-victoria-metrics-operator
+
+  # The gate is intentionally narrow: only the releases that create VM* custom
+  # resources carry it. Tenant releases that create none (seaweedfs, gateway)
+  # must not be needlessly blocked on the operator.
+  - it: seaweedfs HR carries no operator gate
+    asserts:
+      - template: templates/seaweedfs.yaml
+        notExists:
+          path: spec.dependsOn
+
+  - it: gateway HR carries no operator gate
+    asserts:
+      - template: templates/gateway.yaml
+        notExists:
+          path: spec.dependsOn

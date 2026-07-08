@@ -1,0 +1,14 @@
+diff --git a/packages/system/velero/charts/velero/templates/deployment.yaml b/packages/system/velero/charts/velero/templates/deployment.yaml
+index d2a72639a..a46d73200 100644
+--- a/packages/system/velero/charts/velero/templates/deployment.yaml
++++ b/packages/system/velero/charts/velero/templates/deployment.yaml
+@@ -199,6 +199,9 @@ spec:
+             {{- toYaml . | nindent 12 }}
+           {{- end }}
+           {{- if .Values.metrics.enabled }}
++          {{- with .Values.startupProbe }}
++          startupProbe: {{- toYaml . | nindent 12 }}
++          {{- end }}
+           {{- with .Values.livenessProbe }}
+           livenessProbe: {{- toYaml . | nindent 12 }}
+           {{- end }}

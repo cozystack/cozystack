@@ -29,11 +29,11 @@ tests:
       - hasDocuments:
           count: 0
 
-  # updateMode Auto is deprecated since VPA 1.4 (an alias for Recreate that will
-  # be removed in a future API version). Pin the vpa-for-vpa
-  # VerticalPodAutoscalers to the explicit, non-deprecated Recreate so the bump
-  # does not leave a deprecated value behind.
-  - it: pins the vpa-for-vpa VerticalPodAutoscalers to updateMode Recreate
+  # The vpa-for-vpa VerticalPodAutoscalers use updateMode Initial: they size the
+  # VPA components at pod creation without ever evicting them. Recreate (and its
+  # deprecated Auto alias) would evict the recommender mid-install, adding pod
+  # churn on an already busy cluster. Pin Initial so a bump cannot regress it.
+  - it: pins the vpa-for-vpa VerticalPodAutoscalers to updateMode Initial
     template: templates/vpa-for-vpa.yaml
     documentSelector:
       path: kind
@@ -42,4 +42,194 @@ tests:
     asserts:
       - equal:
           path: spec.updatePolicy.updateMode
-          value: Recreate
+          value: Initial
+
+  ###############################################################
+  # admission-controller TLS — cert-manager path (default)      #
+  ###############################################################
+
+  # certManagerEnabled defaults to true. Certificate must render with a spec
+  # that mirrors the legacy genSignedCert shape exactly (CN + single DNS SAN
+  # `vpa-webhook.<ns>.svc`, 365d validity) so cert-manager adoption of an
+  # existing Secret rotates content once and stabilises — not on every knob.
+  - it: certManagerEnabled=true renders the admission-controller Certificate with the legacy DNS shape
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+    documentSelector:
+      path: kind
+      value: Certificate
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - equal:
+          path: spec.commonName
+          value: vpa-webhook.cozy-vertical-pod-autoscaler.svc
+      - equal:
+          path: spec.dnsNames[0]
+          value: vpa-webhook.cozy-vertical-pod-autoscaler.svc
+      - equal:
+          path: spec.duration
+          value: 8760h
+      - equal:
+          path: spec.secretName
+          value: vpa-vertical-pod-autoscaler-admission-controller-tls
+
+  # Namespace-scoped selfSigned Issuer — NOT ClusterIssuer, since we want the
+  # trust root scoped to the VPA namespace so an admin cannot accidentally use
+  # this issuer to mint certs against other namespaces.
+  - it: certManagerEnabled=true renders a namespace-scoped selfSigned Issuer
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+    documentSelector:
+      path: kind
+      value: Issuer
+    asserts:
+      - equal:
+          path: apiVersion
+          value: cert-manager.io/v1
+      - exists:
+          path: spec.selfSigned
+
+  # certManagerEnabled=true must NOT emit the legacy genCA Secret. Two owners
+  # of the same secret name would race on first apply and rotate on every
+  # reconcile — exactly the problem this whole change targets.
+  - it: certManagerEnabled=true suppresses the legacy in-chart Secret
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The checksum/tls-secret podAnnotation was the ReplicaSet-churn amplifier
+  # under the legacy path; it must be gone under cert-manager. If a bump
+  # accidentally re-introduces this annotation on the cert-manager path, VPA
+  # will regress to the same infinite-rotation loop from a different angle
+  # (any change to Certificate metadata would flip the sha).
+  - it: certManagerEnabled=true does NOT set checksum/tls-secret on the admission-controller pod
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-secret"]
+
+  ###############################################################
+  # admission-controller TLS — legacy genCA path (opt-out)      #
+  ###############################################################
+
+  # certManagerEnabled=false is the escape hatch for operators who cannot run
+  # cert-manager. It must reactivate the legacy Secret AND the
+  # checksum/tls-secret annotation, otherwise the Secret would still be
+  # missing and admission-controller pods would fail to mount.
+  - it: certManagerEnabled=false reactivates the legacy in-chart Secret
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: false
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: Secret
+      - equal:
+          path: metadata.name
+          value: vpa-vertical-pod-autoscaler-admission-controller-tls
+
+  - it: certManagerEnabled=false restores checksum/tls-secret podAnnotation
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: false
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+    asserts:
+      - exists:
+          path: spec.template.metadata.annotations["checksum/tls-secret"]
+
+  - it: certManagerEnabled=false does NOT emit the Certificate
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: false
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###############################################################
+  # admission-controller TLS — existingSecret bypass            #
+  ###############################################################
+
+  # existingSecret has always meant "the operator supplies TLS out-of-band";
+  # the chart must never mint or manage a Secret in that mode. Adding
+  # cert-manager must not regress that contract — no Certificate, no Issuer,
+  # no legacy Secret, no migration/rollout hooks, regardless of
+  # certManagerEnabled.
+  - it: existingSecret bypasses cert-manager Certificate + Issuer entirely
+    set:
+      vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: existingSecret bypasses the legacy in-chart Secret
+    set:
+      vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/tls-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # Belt-and-suspenders: the templates are structurally gated on
+  # `existingSecret`, but pinning that the pod-template carries NEITHER
+  # `checksum/tls-secret` (legacy amplifier) NOR `checksum/tls-cert`
+  # (cert-manager runtime lookup) locks the contract at the observable
+  # boundary. If a future refactor accidentally moves either checksum
+  # outside its `if` gate, this catches it before it hits a customer
+  # cluster and starts a fresh ReplicaSet-churn incident.
+  - it: existingSecret emits neither tls-secret nor tls-cert checksum on the admission-controller pod
+    set:
+      vertical-pod-autoscaler.admissionController.tls.existingSecret: my-external-tls
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-secret"]
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-cert"]
+
+  # `checksum/tls-cert` uses a runtime `lookup` on the Secret content —
+  # `helm template` in a test suite has no cluster, so the Secret is never
+  # found and the annotation is absent. That's actually the correct
+  # rendering path in offline CI; the annotation only ever needs to exist
+  # once the cluster has issued a cert, and that path is verified by the
+  # `admissionController disabled` test group below (which confirms no
+  # unrelated annotation leaks).
+  - it: certManagerEnabled=true does NOT emit checksum/tls-cert during offline render (lookup returns nil)
+    set:
+      vertical-pod-autoscaler.admissionController.tls.certManagerEnabled: true
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.metadata.annotations["checksum/tls-cert"]
+
+  ###############################################################
+  # admission-controller disabled (nested vpa-for-vpa release)  #
+  ###############################################################
+
+  # The vpa-for-vpa release sets admissionController.enabled=false — it runs a
+  # recommender-only VPA to size the main VPA. No admission-controller means
+  # no TLS Secret needed and no cert-manager path either. All admission-
+  # controller templates must be empty in this configuration; otherwise the
+  # nested release would try to reconcile a stray Certificate/Issuer/Job in
+  # its own cozy-vpa-for-vpa namespace, adding failure surface for no reason.
+  - it: admissionController disabled renders no Certificate
+    set:
+      vertical-pod-autoscaler.admissionController.enabled: false
+    template: charts/vertical-pod-autoscaler/templates/admission-controller/certificate.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+

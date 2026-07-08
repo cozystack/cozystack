@@ -1,0 +1,84 @@
+suite: post-delete PVC cleanup hook
+
+# Verifies the post-delete hook that deletes orphaned PVCs left behind by the
+# clickhouse-keeper-operator (and the ClickHouse operator), which do not delete
+# data PVCs when their CR is removed. The cleanup Job selects PVCs by the
+# release-scoped label app.kubernetes.io/instance, which is set on both the
+# keeper volumeClaimTemplates and the main ClickHouse data/log volumeClaimTemplates.
+
+release:
+  name: ch-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+
+templates:
+  - templates/hooks/cleanup-pvc.yaml
+
+tests:
+  - it: "renders a post-delete cleanup Job scoped to the release"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: ch-test-cleanup
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: post-delete
+      - equal:
+          # before-hook-creation only (no hook-succeeded): a failed cleanup Job
+          # must survive so its logs are inspectable instead of being reaped.
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: ch-test-cleanup
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-test -l app\.kubernetes\.io/instance=ch-test'
+      - matchRegex:
+          # The hook must surface kubectl failures (exit 1), not mask them.
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'exit 1'
+
+  - it: "grants only get/list/delete on persistentvolumeclaims"
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          # RBAC artifacts are reclaimed on a successful uninstall (unlike the
+          # Job, which is kept for post-mortem on failure).
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation,hook-succeeded
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: ""
+      - equal:
+          path: rules[0].resources[0]
+          value: persistentvolumeclaims
+      - equal:
+          path: rules[0].verbs
+          value:
+            - get
+            - list
+            - delete
+
+  - it: "binds the cleanup ServiceAccount to the cleanup Role"
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: ch-test-cleanup
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: ch-test-cleanup

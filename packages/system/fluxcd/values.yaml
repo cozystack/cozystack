@@ -19,7 +19,7 @@ flux-instance:
       patches:
         - target:
             kind: Deployment
-            name: "(kustomize-controller|helm-controller|source-controller)"
+            name: "(kustomize-controller|helm-controller|source-controller|source-watcher)"
           patch: |
             - op: add
               path: /spec/template/spec/containers/0/args/-

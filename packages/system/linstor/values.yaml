@@ -1,7 +1,7 @@
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: v1.5.0@sha256:1a00af3642c4814c3552d1964daf2831a430bc451c55e786e5eee278fa50e9e1
+    tag: 1.33.3@sha256:1f8317fc814954f7a2325cfe5c194b44110b5ff2af461f0b9f8da9f857827c9f
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -13,4 +13,23 @@ linstor:
 linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
-    tag: v1.5.0@sha256:c60519d12aa8d078e4891d6e436c709ff53f2cc96457994390ca9424b6505903
+    tag: v1.11.2@sha256:36f33dc8c70f76c3683f8703cdbb5e764c948b8089dc618d4e7dbe20fe388d3e
+controller:
+  # Resource requests for the linstor-controller JVM. Requests (not limits) are
+  # set on purpose: a CPU request guarantees CPU shares so the JVM can answer its
+  # GET /health liveness probe under node CPU contention, while omitting limits
+  # avoids throttling the JVM (CPU limit) or OOM-killing it (memory limit). The
+  # memory value is a conservative starting estimate for the JVM heap + overhead;
+  # tune it to observed RSS.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 700Mi
+  # Liveness-probe timing for the linstor-controller container. Only these timing
+  # fields are overridden; the httpGet target (GET /health on the api port) is
+  # supplied by piraeus-operator and intentionally left untouched. Relaxed from
+  # the operator defaults (timeoutSeconds 1, failureThreshold 3) so a JVM GC
+  # pause or CPU contention does not trip a kubelet liveness kill.
+  livenessProbe:
+    timeoutSeconds: 5
+    failureThreshold: 6

@@ -1,0 +1,101 @@
+suite: securitygroup-controller deployment and RBAC
+
+release:
+  name: securitygroup-controller
+  namespace: cozy-securitygroup-controller
+
+tests:
+  - it: ClusterRole grants cluster-wide pod patch for membership labels, and no more
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods"]
+            verbs: ["get", "list", "watch", "patch"]
+      # Pin the pod verbs exactly so a future widening (e.g. create/delete) fails
+      # the suite — the controller must never gain more than read + label patch.
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "list", "watch", "patch"]
+
+  - it: ClusterRole grants ciliumnetworkpolicies read and finalizer patch, and no more
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["cilium.io"]
+            resources: ["ciliumnetworkpolicies"]
+            verbs: ["get", "list", "watch", "patch"]
+      # Pin the CNP verbs exactly: the controller never creates, updates or
+      # deletes CiliumNetworkPolicies (cozystack-api owns that) — only finalizer
+      # merge patches.
+      - equal:
+          path: rules[1].verbs
+          value: ["get", "list", "watch", "patch"]
+
+  - it: ClusterRole grants leader-election leases and events
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["get", "list", "watch", "create", "update", "patch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["events"]
+            verbs: ["create", "patch"]
+
+  - it: Deployment runs as the controller SA with leader election and a health port
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: securitygroup-controller
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+      - equal:
+          path: spec.template.spec.containers[0].ports[0].containerPort
+          value: 8081
+
+  - it: Deployment hardens the pod and container security context
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: ClusterRoleBinding binds the controller service account
+    templates:
+      - templates/rbac-bind.yaml
+    asserts:
+      - equal:
+          path: subjects[0].name
+          value: securitygroup-controller
+      - equal:
+          path: subjects[0].namespace
+          value: cozy-securitygroup-controller

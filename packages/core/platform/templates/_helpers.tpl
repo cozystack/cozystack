@@ -69,4 +69,10 @@ Does NOT include: networking (variant differs), linstor (talos.enabled differs)
 {{include "cozystack.platform.package.default" (list "cozystack.reloader" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor-scheduler" $root) }}
 {{include "cozystack.platform.package.default" (list "cozystack.snapshot-controller" $root) }}
+{{- /* securitygroup-controller maintains membership labels for CiliumNetworkPolicy-backed
+       SecurityGroups, so it only makes sense where Cilium runs. Keeping it here with the
+       other data-plane packages (rather than in the variant-agnostic body of system.yaml)
+       keeps it out of the isp-hosted (networking=noop) variant, which never calls
+       common-packages and has no cilium.io CRD for the controller to watch. */ -}}
+{{include "cozystack.platform.package.default" (list "cozystack.securitygroup-controller" $root) }}
 {{- end }}
