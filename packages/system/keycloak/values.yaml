@@ -99,6 +99,16 @@ encryption:
   # Bootstrap window only: downgrades fail-loud rules to passthrough so the
   # Keycloak Liquibase migrations can complete. MUST be false in steady state.
   lenient: false
+  # Number of proxy replicas. >1 requires deksetSecretName (a shared wrapped
+  # DEK set) so every replica encrypts deterministic columns under one key.
+  replicas: 1
+  # Existing Secret holding the wrapped DEK set (dekset.json) minted by the
+  # proxy's backfill tool (`cmd/backfill generate-dekset`). REQUIRED to migrate
+  # an existing populated database — the proxy must reuse the DEK the backfill
+  # encrypted rows with — and to run more than one replica. When empty the proxy
+  # mints an ephemeral DEK at startup, which is only safe on a fresh, empty DB.
+  deksetSecretName: ""
+  deksetSecretKey: dekset.json
   kms:
     # "static" — a self-generated 32-byte KEK kept in a Secret (works on any
     # cluster, suitable for evaluation). "vault-transit" — the KEK lives in

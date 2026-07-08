@@ -14,6 +14,10 @@
 {{- /* The proxy needs its ServiceAccount token only for Vault Kubernetes auth. */}}
 {{- $vaultAuth := (($kms.vault | default dict).auth | default "token") }}
 {{- $k8sAuth := and (eq $backend "vault-transit") (eq $vaultAuth "kubernetes") }}
+{{- $replicas := .Values.encryption.replicas | default 1 | int }}
+{{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
+{{- fail "encryption.replicas > 1 requires encryption.deksetSecretName (a shared wrapped DEK set); otherwise replicas would encrypt deterministic columns under different keys" }}
+{{- end }}
 {{- if eq $backend "static" }}
 {{- /*
   Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
@@ -52,10 +56,11 @@ metadata:
   labels:
     app: keycloak-kms-proxy
 spec:
-  # Single replica: HA needs a shared wrapped DEK set (KKP_DEKSET_FILE) so
-  # every replica encrypts deterministic columns with the same key. Tracked
-  # as a follow-up.
-  replicas: 1
+  # Defaults to a single replica. HA (replicas > 1) requires a shared wrapped
+  # DEK set (encryption.deksetSecretName → KKP_DEKSET_FILE) so every replica
+  # encrypts deterministic columns under the same key; the guard above enforces
+  # that.
+  replicas: {{ $replicas }}
   selector:
     matchLabels:
       app: keycloak-kms-proxy
@@ -176,6 +181,15 @@ spec:
                   name: keycloak-kms-proxy-kek
                   key: kek
             {{- end }}
+            {{- if .Values.encryption.deksetSecretName }}
+            # Wrapped DEK set minted by the backfill tool. Required to run more
+            # than one replica AND to migrate an existing populated database
+            # (the proxy must reuse the DEK that encrypt-rows wrapped with);
+            # without it the proxy mints an ephemeral DEK usable only on a fresh
+            # database.
+            - name: KKP_DEKSET_FILE
+              value: /etc/kkp/dekset/{{ .Values.encryption.deksetSecretKey | default "dekset.json" }}
+            {{- end }}
           {{- with .Values.encryption.resources }}
           resources:
             {{- toYaml . | nindent 12 }}
@@ -188,6 +202,18 @@ spec:
             tcpSocket:
               port: postgres
             periodSeconds: 15
+          {{- if .Values.encryption.deksetSecretName }}
+          volumeMounts:
+            - name: dekset
+              mountPath: /etc/kkp/dekset
+              readOnly: true
+          {{- end }}
+      {{- if .Values.encryption.deksetSecretName }}
+      volumes:
+        - name: dekset
+          secret:
+            secretName: {{ .Values.encryption.deksetSecretName }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

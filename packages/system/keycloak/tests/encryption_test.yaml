@@ -433,3 +433,81 @@ tests:
       - equal:
           path: spec.template.spec.automountServiceAccountToken
           value: true
+
+  - it: mints an ephemeral DEK (no dekset) by default
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          any: true
+          content:
+            name: KKP_DEKSET_FILE
+      - notExists:
+          path: spec.template.spec.volumes
+
+  - it: mounts the wrapped DEK set when deksetSecretName is set
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_DEKSET_FILE
+            value: /etc/kkp/dekset/dekset.json
+      - contains:
+          path: spec.template.spec.containers[0].volumeMounts
+          content:
+            name: dekset
+            mountPath: /etc/kkp/dekset
+            readOnly: true
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: dekset
+            secret:
+              secretName: keycloak-kms-proxy-dekset
+
+  - it: rejects HA (replicas > 1) without a dekset
+    template: templates/proxy.yaml
+    set:
+      encryption.enabled: true
+      encryption.replicas: 2
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - failedTemplate:
+          errorPattern: "encryption.replicas > 1 requires encryption.deksetSecretName"
+
+  - it: allows HA when a shared dekset is provided
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.replicas: 2
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
