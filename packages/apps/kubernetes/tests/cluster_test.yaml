@@ -88,7 +88,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
-          pattern: "^https://mirror\\.example\\.com/talos/image/[a-f0-9]+/"
+          pattern: "^https://mirror\\.example\\.com/talos/image/[a-f0-9]+/v[0-9.]+/openstack-amd64\\.raw\\.xz$"
         documentIndex: 4
 
   ###############################################
