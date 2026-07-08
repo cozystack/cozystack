@@ -18,6 +18,10 @@ defaults:
   run:
     working-directory: packages/system/dashboard/images/console
 
+# Read-only token; this workflow only checks out code and runs typecheck/tests.
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Typecheck and test
@@ -25,6 +29,10 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # No git pushes from this workflow; don't leave the token in .git/config
+          # where a later `pnpm install` step could read it.
+          persist-credentials: false
 
       - name: Set up pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4

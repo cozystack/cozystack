@@ -31,6 +31,11 @@ concurrency:
   group: build-main-cache
   cancel-in-progress: true
 
+# Top-level token defaults to read-only; the warm-cache job below narrows to the
+# packages:write scope it actually needs to push the build cache.
+permissions:
+  contents: read
+
 jobs:
   warm-cache:
     name: Warm build cache

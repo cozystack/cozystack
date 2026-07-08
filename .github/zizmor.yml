@@ -1,0 +1,37 @@
+# zizmor configuration — https://docs.zizmor.sh/configuration/
+#
+# zizmor audits GitHub Actions workflows for supply-chain and permission issues.
+# It runs in two places: the pre-commit hook (.pre-commit-config.yaml) for local
+# and PR-diff feedback, and the dedicated gate workflow (.github/workflows/zizmor.yml)
+# for a full-tree scan on every PR.
+#
+# Scope of the gate (deliberately narrow for now): only the two audits that map
+# directly to the OpenSSF Scorecard checks this repo keeps regressing on —
+#   * unpinned-uses      -> Scorecard "Pinned-Dependencies"
+#   * excessive-permissions -> Scorecard "Token-Permissions"
+# Both are clean tree-wide as of this config, so the gate is green and blocks any
+# new workflow that reintroduces an unpinned action or a missing permissions block
+# (the exact regression the in-tree console move introduced via ui-test.yaml).
+#
+# The remaining audits below carry pre-existing findings (58 at time of writing).
+# They are genuinely valuable — template-injection and dangerous-triggers most of
+# all — but fixing them is a separate cleanup, not this hardening PR. They are
+# disabled here (not ignored per-line, to avoid brittle line-number churn) with a
+# TODO to burn the debt down and re-enable them one audit at a time.
+#
+# TODO(scorecard-hardening): burn down and re-enable, highest value first:
+#   template-injection, dangerous-triggers, cache-poisoning, github-app,
+#   adhoc-packages, artipacked.
+rules:
+  template-injection:
+    disable: true
+  dangerous-triggers:
+    disable: true
+  cache-poisoning:
+    disable: true
+  github-app:
+    disable: true
+  adhoc-packages:
+    disable: true
+  artipacked:
+    disable: true
