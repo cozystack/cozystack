@@ -85,7 +85,7 @@
     [ -z "$output" ]
 }
 
-@test "kubernetes-application maps to two suites" {
+@test "kubernetes-application maps to the four kubernetes suites" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -93,6 +93,10 @@
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     echo "$output" | grep -q "kubernetes-latest"
     echo "$output" | grep -q "kubernetes-previous"
+    # The OIDC render-side suites exercise the same kubernetes app chart, so a
+    # chart-only change must select them too.
+    echo "$output" | grep -q "kubernetes-oidc-system"
+    echo "$output" | grep -q "kubernetes-oidc-customconfig"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {

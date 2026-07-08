@@ -1,0 +1,27 @@
+# A pod carrying the lineage labels of a managed application. The lineage
+# webhook skips it (managed-by is already set), so these labels are exactly
+# what the securitygroup-controller resolves the attachment to. The full
+# restricted-profile securityContext is required by tenant-test PSA.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: sg-member-pod-e2e
+  labels:
+    internal.cozystack.io/managed-by-cozystack: "true"
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.kind: Postgres
+    apps.cozystack.io/application.name: sg-member-app
+spec:
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65532
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: pause
+    image: registry.k8s.io/pause:3.9
+    securityContext:
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop: ["ALL"]

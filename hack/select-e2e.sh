@@ -33,7 +33,7 @@ src_to_suites() {
   case "$1" in
     postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
-    kubernetes-application) echo "kubernetes-latest kubernetes-previous" ;;
+    kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
     external-dns) echo external-dns ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
