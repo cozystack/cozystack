@@ -511,3 +511,22 @@ tests:
       - equal:
           path: spec.replicas
           value: 2
+
+  - it: honors a custom deksetSecretKey
+    template: templates/proxy.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    set:
+      encryption.enabled: true
+      encryption.deksetSecretName: keycloak-kms-proxy-dekset
+      encryption.deksetSecretKey: custom.json
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KKP_DEKSET_FILE
+            value: /etc/kkp/dekset/custom.json
