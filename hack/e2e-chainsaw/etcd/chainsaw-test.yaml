@@ -1,4 +1,9 @@
-# Chainsaw port of hack/e2e-apps/etcd.bats. Three scenarios as separate Tests.
+# Chainsaw port of hack/e2e-apps/etcd.bats (v1alpha2 etcd-operator era).
+# Two scenarios as separate Tests, executed in name order:
+#   etcd-1-contracts       — install + the operator runtime contracts the chart
+#                            depends on but the operator owns
+#   etcd-2-backup-roundtrip — S3 backup/restore round-trip, gated out of CI
+#                            (opt in with ETCD_E2E_S3_ROUNDTRIP=1)
 #
 # The etcd chart pins the Helm release name to 'etcd'
 # (packages/extra/etcd/templates/check-release-name.yaml), so every scenario
@@ -14,16 +19,17 @@
 # that during cleanup is what errored every etcd case in CI.
 #
 # Each scenario is self-contained (clean-after-each): a single `run` step
-# pre-cleans any leftover etcd, installs, asserts, and then drains in a `finally`
-# that always runs (the step is always reached, so teardown fires on success and
-# on failure alike). This is deliberate — Chainsaw executes these Tests in name
-# order, not file order, and `finally` has no test-level form in v0.2.15, so the
-# only way to guarantee the last-run scenario is also reclaimed is to tear down
-# inside each scenario. The shared drain lives in _lib/etcd-cleanup.sh.
+# pre-cleans any leftover etcd + backup artifacts, installs, asserts, and then
+# drains in a `finally` that always runs (the step is always reached, so
+# teardown fires on success and on failure alike). This is deliberate —
+# Chainsaw executes these Tests in name order, not file order, and `finally`
+# has no test-level form in v0.2.15, so the only way to guarantee the last-run
+# scenario is also reclaimed is to tear down inside each scenario. The shared
+# drain lives in _lib/etcd-cleanup.sh.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
-  name: etcd-basic
+  name: etcd-1-contracts
 spec:
   # Teardown is the `run` step's finally (see file header), not auto-cleanup.
   skipDelete: true
@@ -34,30 +40,32 @@ spec:
       kind: HelmRelease
       name: etcd
   - describe:
-      apiVersion: etcd.aenix.io/v1alpha1
+      apiVersion: etcd-operator.cozystack.io/v1alpha2
       kind: EtcdCluster
       name: etcd
+  - describe:
+      apiVersion: etcd-operator.cozystack.io/v1alpha2
+      kind: EtcdMember
+  - podLogs:
+      namespace: cozy-etcd-operator
+      selector: app.kubernetes.io/name=etcd-operator
+      tail: 100
   steps:
   - name: run
     try:
-    # Pre-clean: isolate this scenario from any etcd a prior (failed) scenario
-    # left behind, since the release name 'etcd' is a singleton.
+    # Pre-clean: isolate this scenario from any etcd (or aborted backup
+    # round-trip) a prior failed run left behind — the release name 'etcd' is
+    # a singleton and cleanup.sh resumes a suspended HR before deleting.
     - script:
-        timeout: 5m
+        timeout: 6m
         content: |
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_backup_cleanup
           etcd_cleanup
         check:
           ($error == null): true
-    # Backup artifacts tear down with the HelmRelease; confirm a clean slate.
-    - error:
-        timeout: 1m
-        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
-    - error:
-        timeout: 1m
-        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
     - apply:
         file: etcd-basic.yaml
     - assert:
@@ -70,168 +78,133 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+    # Gate on FULL rollout, not mere discovery. The v1alpha2 operator flips
+    # Available=True early (reason ClusterDiscovered) the instant the single
+    # seed member forms the cluster, then scales the remaining members up one
+    # at a time. Gating on Available=True therefore races the replica-count
+    # contracts below and sees only 1/3 Pods. status.readyMembers counts the
+    # members whose EtcdMember Ready condition is True (and feeds the /scale
+    # subresource), so it only reaches 3 once every member Pod is Running and
+    # serving — the correct precondition for every contract asserted below.
     - assert:
-        timeout: 3m
+        timeout: 5m
         resource:
-          apiVersion: etcd.aenix.io/v1alpha1
+          apiVersion: etcd-operator.cozystack.io/v1alpha2
           kind: EtcdCluster
           metadata:
             name: etcd
           status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
-    finally:
-    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
-      script:
-        timeout: 5m
-        content: |
-          set -eu
-          cd ../../..
-          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_cleanup
----
-apiVersion: chainsaw.kyverno.io/v1alpha1
-kind: Test
-metadata:
-  name: etcd-empty-backup
-spec:
-  skipDelete: true
-  catch:
-  - events: {}
-  - describe:
-      apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: etcd
-  steps:
-  - name: run
-    try:
-    - script:
-        timeout: 5m
-        content: |
-          set -eu
-          cd ../../..
-          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_cleanup
-        check:
-          ($error == null): true
-    - error:
-        timeout: 1m
-        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
-    - error:
-        timeout: 1m
-        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
-    - apply:
-        file: etcd-empty-backup.yaml
-    - assert:
-        timeout: 6m
-        resource:
-          apiVersion: helm.toolkit.fluxcd.io/v2
-          kind: HelmRelease
-          metadata:
-            name: etcd
-          status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
-    # With backup disabled, neither the schedule nor the secret should exist.
-    - error:
-        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
-    - error:
-        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
-    finally:
-    - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
-      script:
-        timeout: 5m
-        content: |
-          set -eu
-          cd ../../..
-          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_cleanup
----
-apiVersion: chainsaw.kyverno.io/v1alpha1
-kind: Test
-metadata:
-  name: etcd-backup-schedule
-spec:
-  skipDelete: true
-  catch:
-  - events: {}
-  - describe:
-      apiVersion: helm.toolkit.fluxcd.io/v2
-      kind: HelmRelease
-      name: etcd
-  - describe:
-      apiVersion: etcd.aenix.io/v1alpha1
-      kind: EtcdBackupSchedule
-      name: etcd
-  steps:
-  - name: run
-    try:
-    - script:
-        timeout: 5m
-        content: |
-          set -eu
-          cd ../../..
-          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
-          etcd_cleanup
-        check:
-          ($error == null): true
-    - error:
-        timeout: 1m
-        resource: {apiVersion: v1, kind: Secret, metadata: {name: etcd-s3-creds}}
-    - error:
-        timeout: 1m
-        resource: {apiVersion: etcd.aenix.io/v1alpha1, kind: EtcdBackupSchedule, metadata: {name: etcd}}
-    - apply:
-        file: etcd-backup.yaml
-    - assert:
-        timeout: 6m
-        resource:
-          apiVersion: helm.toolkit.fluxcd.io/v2
-          kind: HelmRelease
-          metadata:
-            name: etcd
-          status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
+            readyMembers: 3
+    # --- Runtime contracts the chart depends on but the operator owns. Each
+    # is a silent failure if a future operator bump changes it, so assert
+    # against the LIVE cluster (not the manifests). ---
+    #
+    # podscrape.yaml + the WorkloadMonitor in etcd-cluster.yaml select member
+    # Pods by app.kubernetes.io/{name=etcd,instance=etcd,managed-by=etcd-operator};
+    # vpa.yaml pins containerPolicies[].containerName=etcd; the VMPodScrape
+    # scrapes the container port named 'metrics'. If the operator labels or
+    # names anything differently, metrics scraping, the VPA bounds and the
+    # dashboard replica count silently break. The member COUNT is carried by
+    # readyMembers=3 above plus the WorkloadMonitor availableReplicas=3 below
+    # (same selector); this assert pins the member Pod shape.
     - assert:
         timeout: 3m
-        resource:
-          apiVersion: etcd.aenix.io/v1alpha1
-          kind: EtcdCluster
-          metadata:
-            name: etcd
-          status:
-            (conditions[?type == 'Ready']):
-            - status: "True"
-    # Region field must propagate to the EtcdBackupSchedule.
-    - assert:
-        resource:
-          apiVersion: etcd.aenix.io/v1alpha1
-          kind: EtcdBackupSchedule
-          metadata:
-            name: etcd
-          spec:
-            destination:
-              s3:
-                region: us-east-1
-    # The S3 secret carries the access key (base64 of "e2e-access-key").
-    - assert:
         resource:
           apiVersion: v1
-          kind: Secret
-          metadata:
-            name: etcd-s3-creds
-          data:
-            AWS_ACCESS_KEY_ID: ZTJlLWFjY2Vzcy1rZXk=
-    # The operator generates a CronJob from the EtcdBackupSchedule.
-    - assert:
-        timeout: 2m
-        resource:
-          apiVersion: batch/v1
-          kind: CronJob
+          kind: Pod
           metadata:
             labels:
-              etcd.aenix.io/etcdbackupschedule-name: etcd
+              app.kubernetes.io/name: etcd
+              app.kubernetes.io/instance: etcd
+              app.kubernetes.io/managed-by: etcd-operator
+          spec:
+            (containers[0].name): etcd
+            # Filter-as-list: exactly one container port named 'metrics'.
+            (containers[0].ports[?name == 'metrics']):
+            - protocol: TCP
+          status:
+            phase: Running
+    # The WorkloadMonitor (etcd-cluster.yaml) selects member Pods by the same
+    # operator-set labels and drives the app's dashboard health indicator.
+    # Assert the controller actually matched them and flipped operational — a
+    # label mismatch leaves it operational=false / wrong replica count.
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: cozystack.io/v1alpha1
+          kind: WorkloadMonitor
+          metadata:
+            name: etcd
+          status:
+            operational: true
+            availableReplicas: 3
+    # vpa.yaml drives the EtcdCluster through its scale subresource; if the
+    # CRD stops exposing /scale the VPA target silently fails to resolve.
+    # Subresources are not assertable declaratively, hence the script.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          r=$(kubectl -n "$NAMESPACE" get etcdcluster.etcd-operator.cozystack.io etcd \
+            --subresource=scale -o jsonpath='{.spec.replicas}')
+          [ "$r" = "3" ] || { echo "/scale reported replicas='$r' (want 3)" >&2; exit 1; }
+        check:
+          ($error == null): true
+    # podscrape.yaml (VMPodScrape) scrapes the port named 'metrics' over http
+    # on the member Pods. Assert it actually serves metrics on plaintext http
+    # (etcd 3.6 can be made to serve metrics on the TLS client port, which
+    # would silently yield empty dashboards). Probe the Pod IP directly — the
+    # scrape targets Pods, and the client Service is headless and does not
+    # publish the metrics port.
+    - script:
+        timeout: 3m
+        content: |
+          set -eu
+          sel='app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator'
+          mport=$(kubectl -n "$NAMESPACE" get pods -l "$sel" \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].spec.containers[0].ports[?(@.name=="metrics")].containerPort}')
+          pod_ip=$(kubectl -n "$NAMESPACE" get pods -l "$sel" \
+            --field-selector=status.phase=Running \
+            -o jsonpath='{.items[0].status.podIP}')
+          [ -n "$mport" ] || { echo "no container port named 'metrics' on member Pod (VMPodScrape would scrape nothing)" >&2; exit 1; }
+          [ -n "$pod_ip" ] || { echo "no running member Pod IP found for metrics probe" >&2; exit 1; }
+          kubectl -n "$NAMESPACE" delete pod etcd-metrics-probe --ignore-not-found >/dev/null 2>&1
+          probe_out=$(kubectl -n "$NAMESPACE" run etcd-metrics-probe --rm --restart=Never --attach \
+            --image=curlimages/curl:8.10.1 \
+            --overrides="{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true,\"runAsUser\":1000,\"seccompProfile\":{\"type\":\"RuntimeDefault\"}},\"containers\":[{\"name\":\"c\",\"image\":\"curlimages/curl:8.10.1\",\"command\":[\"sh\",\"-c\",\"curl -fsS -o /dev/null -w code=%{http_code} http://${pod_ip}:${mport}/metrics\"],\"securityContext\":{\"allowPrivilegeEscalation\":false,\"capabilities\":{\"drop\":[\"ALL\"]}}}]}}" 2>&1) || true
+          echo "$probe_out" | grep -q "code=200" || { echo "metrics endpoint did not return 200 over http on the 'metrics' port; got: $probe_out" >&2; exit 1; }
+        check:
+          ($error == null): true
+    # etcd-defrag.yaml's hourly CronJob targets the client Service
+    # https://etcd.<ns>.svc:2379 with --cluster + the etcd-client-tls cert.
+    # Run it on demand: a clean completion proves the Service name resolves to
+    # every member and the client cert authenticates (the whole defrag
+    # contract). It fails forever and silently if the operator names the
+    # Service differently.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          kubectl -n "$NAMESPACE" delete job etcd-defrag-e2e --ignore-not-found
+          kubectl -n "$NAMESPACE" create job etcd-defrag-e2e --from=cronjob/etcd-defrag
+        check:
+          ($error == null): true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: etcd-defrag-e2e
+          status:
+            (conditions[?type == 'Complete']):
+            - status: "True"
+    - delete:
+        ref:
+          apiVersion: batch/v1
+          kind: Job
+          name: etcd-defrag-e2e
     finally:
     - description: drain etcd + leaked Kamaji DataStore finalizer (clean-after-each)
       script:
@@ -240,4 +213,99 @@ spec:
           set -eu
           cd ../../..
           . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_cleanup
+---
+# Full backup -> EtcdSnapshot -> in-place RestoreJob round-trip against the
+# v1alpha2 operator, driving the validated example scripts
+# (examples/backups/etcd) as the harness so the test and the documented flow
+# can never drift. The scripts run 01 strategy -> 02 bucket+BackupClass ->
+# 03 source Etcd + sentinel write -> 04 BackupJob (waits Succeeded) ->
+# 05 mutate sentinel + RestoreJob (waits Succeeded) and assert the sentinel
+# reverts to its pre-mutation value — the in-cluster witness that the snapshot
+# round-tripped through S3.
+#
+# GATED OUT OF CI (opt in with ETCD_E2E_S3_ROUNDTRIP=1). The etcd S3 backup
+# path cannot succeed in the kind e2e environment with etcd-operator v0.5.2:
+#   - step 02 bakes the bucket's EXTERNAL ingress endpoint into the
+#     BackupClass; in CI that is the s3.example.org placeholder, which the
+#     in-cluster snapshot Job can neither route to nor TLS-validate;
+#   - the in-cluster seaweedfs-s3.<ns>.svc:8333 endpoint serves HTTPS with a
+#     self-signed cert, and the operator's snapshot agent (AWS SDK v2)
+#     verifies against the image's system trust store — the EtcdSnapshot CRD
+#     exposes no InsecureSkipVerify / CA-mount surface, and there is no
+#     plaintext-http S3 port — so it cannot trust that cert;
+#   - the strategy driver intentionally forbids a PVC destination
+#     (api/backups/strategy/v1alpha1/etcd_types.go, CEL has(self.s3)), so
+#     there is no in-cluster no-TLS fallback either.
+# The round-trip therefore only works against a publicly-trusted S3 endpoint
+# (a real cluster). Chainsaw v0.2.15 has no conditional Test-level skip, so
+# the gate is a plain in-script conditional that exits 0 in CI with the skip
+# reason in the log — the same file runs un-gated on a real cluster with just
+# the env var set.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: etcd-2-backup-roundtrip
+spec:
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: etcd
+  - describe:
+      apiVersion: etcd-operator.cozystack.io/v1alpha2
+      kind: EtcdCluster
+      name: etcd
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: etcd-operator.cozystack.io/v1alpha2
+      kind: EtcdSnapshot
+  # The snapshot agent runs in its OWN Job Pod (the operator labels it with
+  # etcd-operator.cozystack.io/cluster=<cluster>); a wedged etcd read or S3
+  # upload leaves its error ONLY in that Pod's log and the statuses above.
+  - podLogs:
+      selector: etcd-operator.cozystack.io/cluster=etcd
+      tail: 200
+  - podLogs:
+      namespace: cozy-etcd-operator
+      selector: app.kubernetes.io/name=etcd-operator
+      tail: 100
+  steps:
+  - name: run
+    try:
+    # 03 re-applies the singleton Etcd 'etcd' in place, reusing (or recreating
+    # after the contracts drain) the cluster; run-all.sh is `set -e` so any
+    # step failing fails the test. NAMESPACE is the e2e tenant namespace.
+    - script:
+        timeout: 20m
+        content: |
+          set -eu
+          if [ "${ETCD_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
+            echo "# S3 backup/restore round-trip gated out of CI: no publicly-trusted"
+            echo "# S3 endpoint in kind (see comment in this file). Set"
+            echo "# ETCD_E2E_S3_ROUNDTRIP=1 on a real cluster to run it."
+            exit 0
+          fi
+          cd ../../..
+          [ -x examples/backups/etcd/run-all.sh ] || { echo "etcd backup example scripts not found at examples/backups/etcd" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" examples/backups/etcd/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    # Clean up the backup-flow resources (idempotent — a no-op when the
+    # round-trip was gated out), then drain etcd, its retained data PVCs and
+    # the Kamaji DataStore. Both have teeth: a teardown that does not settle
+    # fails the step instead of leaking into later app tests.
+    - description: backup cleanup + drain (clean-after-each)
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-cleanup.sh
+          etcd_backup_cleanup
           etcd_cleanup
