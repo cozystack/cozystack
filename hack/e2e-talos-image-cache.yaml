@@ -80,10 +80,15 @@ spec:
               mkdir -p "$(dirname "$dest")"
               echo "seeding $dest from $url"
               # --retry-all-errors + a long retry budget rides out the mid-transfer
-              # stream resets / stalls that break the CDI importer's single attempt.
+              # stream resets that break the CDI importer's single attempt.
+              # --speed-time/--speed-limit additionally abort a transfer that
+              # stalls below 1 KiB/s for 60s — a frozen (not reset) download is
+              # not an "error", so --retry-all-errors alone would let it hang out
+              # the whole rollout budget; the abort is then retried like any other
+              # failure.
               curl --fail --location --show-error \
                    --retry 30 --retry-all-errors --retry-delay 15 \
-                   --connect-timeout 30 \
+                   --connect-timeout 30 --speed-time 60 --speed-limit 1024 \
                    --output "$dest" \
                    "$url"
               ls -la "$dest"
@@ -93,17 +98,23 @@ spec:
       containers:
         - name: serve
           image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
-          # busybox httpd serves static files with HTTP range support, so a warm
-          # mirror also lets CDI use its faster range path instead of the
-          # copy-to-scratch fallback the range-less public factory forces.
-          command: [/bin/sh, -ec]
-          args:
-            - exec busybox httpd -f -v -p 8080 -h /data
+          # Serve the seeded image over HTTP with byte-range (206) support so CDI
+          # can use its fast range import instead of the copy-to-scratch fallback
+          # the range-less public factory forces. The pinned image ships neither a
+          # `busybox httpd` applet nor a standalone httpd/nginx, and stock
+          # `python3 -m http.server` ignores Range headers (answers 200, not 206),
+          # so a tiny range-capable server (serve.py ConfigMap below) runs on the
+          # image's bundled python3 — no extra package pull that would reintroduce
+          # a flaky external dependency.
+          command: [python3, /serve/serve.py, /data, "8080"]
           ports:
             - name: http
               containerPort: 8080
           readinessProbe:
-            tcpSocket:
+            # httpGet (not tcpSocket) so readiness reflects the server actually
+            # answering HTTP, not merely the port being open.
+            httpGet:
+              path: /
               port: http
             initialDelaySeconds: 2
             periodSeconds: 5
@@ -116,6 +127,97 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /data
+            - name: serve-script
+              mountPath: /serve
       volumes:
         - name: data
           emptyDir: {}
+        - name: serve-script
+          configMap:
+            name: talos-image-cache-serve
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: talos-image-cache-serve
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: talos-image-cache
+data:
+  # Minimal static file server with HTTP byte-range support. Stock
+  # `python3 -m http.server` answers Range requests with 200 + the full body;
+  # this adds the single-range 206 path (Content-Range + Accept-Ranges) CDI
+  # needs to skip its slow copy-to-scratch import.
+  serve.py: |
+    import http.server
+    import os
+    import sys
+
+    ROOT = sys.argv[1] if len(sys.argv) > 1 else "/data"
+    PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 8080
+
+
+    class RangeHandler(http.server.SimpleHTTPRequestHandler):
+        # HTTP/1.1 keep-alive lets CDI pull many ranges over one connection.
+        protocol_version = "HTTP/1.1"
+
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=ROOT, **kwargs)
+
+        def send_head(self):
+            path = self.translate_path(self.path)
+            if os.path.isdir(path):
+                return super().send_head()
+            try:
+                f = open(path, "rb")
+            except OSError:
+                self.send_error(404)
+                return None
+            size = os.fstat(f.fileno()).st_size
+            ctype = self.guess_type(path)
+            rng = self.headers.get("Range", "")
+            if not rng.startswith("bytes="):
+                self.send_response(200)
+                self.send_header("Content-Type", ctype)
+                self.send_header("Content-Length", str(size))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                return f
+            start_s, _, end_s = rng[6:].split(",")[0].strip().partition("-")
+            start = int(start_s) if start_s else max(0, size - int(end_s))
+            end = int(end_s) if start_s and end_s else size - 1
+            if start >= size or start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", "bytes */%d" % size)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                f.close()
+                return None
+            end = min(end, size - 1)
+            f.seek(start)
+            self._remaining = end - start + 1
+            self.send_response(206)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Range", "bytes %d-%d/%d" % (start, end, size))
+            self.send_header("Content-Length", str(self._remaining))
+            self.send_header("Accept-Ranges", "bytes")
+            self.end_headers()
+            return f
+
+        def copyfile(self, source, outputfile):
+            remaining = getattr(self, "_remaining", None)
+            if remaining is None:
+                super().copyfile(source, outputfile)
+                return
+            self._remaining = None
+            while remaining > 0:
+                chunk = source.read(min(65536, remaining))
+                if not chunk:
+                    break
+                outputfile.write(chunk)
+                remaining -= len(chunk)
+
+
+    with http.server.ThreadingHTTPServer(("0.0.0.0", PORT), RangeHandler) as httpd:
+        print("serving %s on :%d" % (ROOT, PORT), flush=True)
+        httpd.serve_forever()
