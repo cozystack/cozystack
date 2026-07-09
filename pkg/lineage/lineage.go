@@ -231,8 +231,13 @@ func getUnstructuredObject(
 	mapping, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version)
 	if err != nil {
 		l.Error(err, "Could not map GVK "+gvk.String())
-		// Cache the negative result: missing CRDs aren't a transient condition.
-		cache.Set(apiVersion, kind, namespace, name, nil, err)
+		// Never cache mapping failures: the apps.cozystack.io kinds walked here
+		// are served by the aggregated cozystack-api, so discovery fails
+		// transiently while it rolls (upgrade, drain) or before a new
+		// ApplicationDefinition is discovered. Caching the failure would mark
+		// every object admitted in the TTL window unmanaged — permanently,
+		// since the webhook's objectSelector never re-admits them. In steady
+		// state the mapper serves this from its own discovery cache anyway.
 		return nil, err
 	}
 

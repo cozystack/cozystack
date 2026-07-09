@@ -55,6 +55,10 @@ func NewObjectCache(ttl time.Duration) *ObjectCache {
 
 // Get returns a cached lookup, if any. The second return value reports whether
 // the entry was present and unexpired. A nil receiver is safe.
+//
+// The returned object is the stored pointer, not a copy: the cache is
+// process-wide and admissions run concurrently, so callers MUST treat it as
+// read-only and DeepCopy before any mutation.
 func (c *ObjectCache) Get(apiVersion, kind, namespace, name string) (*unstructured.Unstructured, error, bool) {
 	if c == nil {
 		return nil, nil, false
@@ -69,8 +73,8 @@ func (c *ObjectCache) Get(apiVersion, kind, namespace, name string) (*unstructur
 	return entry.obj, entry.err, true
 }
 
-// Set stores a lookup result. Both successful objects and errors are cached so
-// that repeated misses (NotFound, NoKindMatch) do not retry every admission.
+// Set stores a lookup result. Successful objects and permanent NotFound
+// errors are cached so that repeated misses do not retry every admission.
 // A nil receiver is safe.
 func (c *ObjectCache) Set(apiVersion, kind, namespace, name string, obj *unstructured.Unstructured, err error) {
 	if c == nil {
@@ -117,9 +121,9 @@ func (c *ObjectCache) evictExpiredSampleLocked(now time.Time, n int) {
 
 const (
 	// evictionThreshold is the size at which Set begins sampling for expired
-	// entries. Set high enough that the sweep stays infrequent under steady
-	// load, low enough that the map cannot grow unbounded under pathological
-	// admission patterns.
+	// entries. The sampling bounds the write-lock hold time, not the map
+	// size: the map remains bounded only by the number of distinct owners
+	// looked up within one TTL window.
 	evictionThreshold = 4096
 	// evictionSampleSize caps how many entries each Set inspects when
 	// evicting. With sampleSize ≪ threshold the work is amortised across many
