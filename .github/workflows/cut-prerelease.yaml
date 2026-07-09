@@ -1,0 +1,148 @@
+name: Cut Pre-release Tag
+
+# Cut a pre-release tag (vX.Y.Z-alpha.N / -beta.N / -rc.N) as the CozyStack CI
+# app, so that no human ever pushes a v* tag by hand.
+#
+# This is the single entry point for creating a pre-release. Stable vX.Y.Z tags
+# are never cut here (or by hand) — they are created write-once by
+# pull-requests-release.yaml finalize at a promote PR's merge commit. See
+# docs/release.md and #2677.
+#
+# Dispatch from the branch the tag belongs to: `main` for a new minor's
+# pre-release (vX.Y.0-rc.N), or `release-X.Y` for a patch line (vX.Y.Z-rc.N).
+# The workflow tags that branch's HEAD.
+#
+# Why a workflow instead of a manual `git push`:
+#   1. The tag is pushed with the CI app token. A tag pushed with the default
+#      GITHUB_TOKEN would NOT trigger tags.yaml (GitHub suppresses workflow
+#      recursion from GITHUB_TOKEN); the app token is a distinct identity, so
+#      tags.yaml fires exactly as it does for a maintainer's manual push.
+#   2. It pushes `HEAD:refs/tags/<tag>` from the checked-out branch tip, so the
+#      push event's base_ref is populated — tags.yaml's "Get base branch" step
+#      needs it to detect main vs release-X.Y.
+#   3. Once every pre-release is cut here, repo admins can add a "Restrict
+#      creations" tag ruleset on v* with this app as the sole bypass actor,
+#      turning "don't hand-push tags" from convention into hard enforcement.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Pre-release tag to cut, e.g. v1.6.0-rc.1 (must be -alpha.N / -beta.N / -rc.N)"
+        required: true
+        type: string
+
+concurrency:
+  # One global lane: two dispatches racing to push overlapping tags would
+  # confuse the write-once guard. Pre-release cuts are rare, so serialize.
+  group: cut-prerelease
+  cancel-in-progress: false
+
+# The tag write happens via the app token, not GITHUB_TOKEN, so the job needs
+# only read scope on the default token.
+permissions:
+  contents: read
+
+jobs:
+  cut:
+    name: Cut ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
+
+      # Validate the dispatch input against a strict pre-release pattern before
+      # it reaches git. A stable vX.Y.Z is rejected on purpose: stable tags are
+      # cut only by the promote flow, at a PR merge commit.
+      - name: Parse and validate tag
+        id: parse
+        env:
+          TAG: ${{ inputs.tag }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag = process.env.TAG.trim();
+            const m = tag.match(/^v(\d+)\.(\d+)\.(\d+)-(alpha|beta|rc)\.(\d+)$/);
+            if (!m) {
+              core.setFailed(
+                `tag '${tag}' must match 'vX.Y.Z-(alpha|beta|rc).N'. ` +
+                `Stable vX.Y.Z tags are cut by the promote flow, not here.`
+              );
+              return;
+            }
+            core.setOutput('tag', tag);
+            core.setOutput('line', `${m[1]}.${m[2]}`);   // 1.6
+
+      - name: Check out the dispatched branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          # Authenticate origin with the app token so the tag push below is
+          # attributed to the app (and thus triggers tags.yaml).
+          token: ${{ steps.app-token.outputs.token }}
+
+      # Refuse to cut from anything but main or a release-X.Y line, and make the
+      # tag's version line agree with a release-X.Y dispatch branch. The pushed
+      # tag's base_ref (= the dispatch branch) must be one tags.yaml accepts.
+      - name: Validate dispatch branch
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          LINE: ${{ steps.parse.outputs.line }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "::error::Dispatch this workflow from a branch (main or release-X.Y), not a tag or SHA."
+            exit 1
+          fi
+          case "$REF_NAME" in
+            main)
+              ;;
+            release-*)
+              if [ "release-$LINE" != "$REF_NAME" ]; then
+                echo "::error::Tag line $LINE does not match dispatch branch '$REF_NAME'. Cut v$LINE.* from 'main' or 'release-$LINE'."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Dispatch from 'main' or 'release-X.Y' only. Got '$REF_NAME'."
+              exit 1
+              ;;
+          esac
+
+      # Pre-release tags are write-once. Fail early with a clear message rather
+      # than letting the (non-forced) push reject cryptically.
+      - name: Refuse to move an existing tag
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "::error::Tag $TAG already exists locally — pre-release tags are write-once."
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists on origin — pre-release tags are write-once."
+            exit 1
+          fi
+
+      # Push HEAD (the dispatch branch tip) straight to a tag ref — the exact
+      # form docs/release.md prescribes for a manual cut, so GitHub populates the
+      # push event's base_ref. No local tag object, no -f: a lightweight,
+      # branch-anchored, write-once tag. tags.yaml takes it from here (build +
+      # e2e + draft rc release + staging branch).
+      - name: Cut and push the pre-release tag
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          git push origin "HEAD:refs/tags/$TAG"
+          echo "Pushed $TAG at $(git rev-parse HEAD) from '$GITHUB_REF_NAME'."
+          echo "tags.yaml will now build, e2e, and draft the pre-release."
