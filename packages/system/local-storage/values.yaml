@@ -1,0 +1,15 @@
+localpv-provisioner:
+  # OpenEBS Dynamic LocalPV (hostpath) — the default StorageClass for the
+  # lightweight container e2e lane, replacing cozystack.linstor (which needs
+  # DRBD/ZFS kernel modules absent in a container cluster). See
+  # docs/proposals/e2e-lightweight-container-lane.md (§b).
+  analytics:
+    # No phone-home from CI clusters.
+    enabled: false
+  hostpathClass:
+    # Named `local` to match the LINSTOR default-class name used on full
+    # clusters, and marked default so app manifests that rely on the default
+    # StorageClass (storageClass: "") bind unchanged.
+    name: local
+    isDefaultClass: true
+    reclaimPolicy: Delete
