@@ -121,6 +121,20 @@ spec:
       assertCustomSecretRefUsersEmpty.
     */}}
     {{- if eq $oidcMode "System" }}
+    {{- /*
+      Tenant-membership gate — chart-owned and unconditional in System
+      mode. `groups` is requested so Keycloak emits the caller's realm
+      groups in the token (via the platform-managed `groups`
+      KeycloakClientScope + oidc-group-membership-mapper — see
+      packages/system/keycloak-configure). `allowed_groups` then rejects
+      any login whose token does not carry at least one of this
+      tenant's `<namespace>-{view,use,admin,super-admin}` groups. This
+      closes the cross-tenant hole where a user in the shared `cozy`
+      realm could otherwise sign into any tenant's Grafana just by
+      being authenticated: the audience mapper stops REPLAY of a
+      minted token, the allowed_groups check stops ISSUANCE of a
+      usable one to callers outside the tenant.
+    */}}
     {{- $systemOidc := dict
         "enabled" "true"
         "name" "Keycloak"
@@ -129,7 +143,8 @@ spec:
         "auth_url" (printf "%s/protocol/openid-connect/auth" (include "monitoring.oidc.systemIssuerURL" .))
         "token_url" (printf "%s/protocol/openid-connect/token" (include "monitoring.oidc.systemIssuerURL" .))
         "api_url" (printf "%s/protocol/openid-connect/userinfo" (include "monitoring.oidc.systemIssuerURL" .))
-        "scopes" (printf "openid email profile %s" (include "monitoring.oidc.audienceScopeName" .))
+        "scopes" (printf "openid email profile groups %s" (include "monitoring.oidc.audienceScopeName" .))
+        "allowed_groups" (include "monitoring.oidc.allowedGroups" .)
         "email_attribute_path" "email"
         "auto_login" "false"
     }}

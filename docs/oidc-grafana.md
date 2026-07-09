@@ -78,25 +78,49 @@ CR:
    fallback, same pattern as `packages/system/dashboard`), preserved
    across upgrades.
 4. The Grafana CR's `spec.config.auth.generic_oauth` section wired to
-   the cozy realm issuer + the per-instance audience scope. When
-   `spec.oidc.users` is non-empty the chart also merges three
-   isolation keys on top so the users-Job's app-side role
-   assignments survive login:
-   - `skip_org_role_sync = true` — a login never overwrites the Job's
-     assignments;
+   the cozy realm issuer + the per-instance audience scope. Two
+   independent gates ride on top of the raw OAuth wiring:
+
+   **Tenant-membership gate — unconditional in System mode.** The chart
+   requests the `groups` OIDC scope (already provisioned platform-wide
+   by `packages/system/keycloak-configure` as a realm-default
+   KeycloakClientScope with an `oidc-group-membership-mapper`) and sets
+
+   ```
+   allowed_groups = <namespace>-view <namespace>-use <namespace>-admin <namespace>-super-admin
+   ```
+
+   The four groups match the KeycloakRealmGroups the tenant chart
+   provisions in the `cozy` realm — see
+   `packages/apps/tenant/templates/keycloakgroups.yaml`. Grafana
+   rejects any login whose token does not carry at least one of these
+   groups. This is the isolation primitive that stops tenant-alice
+   from signing into tenant-bob's Grafana even though both authenticate
+   against the same flat `cozy` realm. The audience mapper in point 2
+   protects against *replay* of a minted token across releases; this
+   gate protects against *issuance* of a usable token to a caller
+   outside the release's tenant.
+
+   **Users-map contract — active only when `spec.oidc.users` is
+   non-empty.** Three additional keys are merged on top:
+   - `skip_org_role_sync = true` — a login never overwrites the
+     users-Job's role assignments;
    - `oauth_allow_insecure_email_lookup = true` — the OIDC identity
      binds to the pre-provisioned local account by email;
    - `allow_sign_up = false` — a cozy-realm identity whose email is
-     NOT in `spec.oidc.users` is rejected at login instead of being
-     admitted as `auto_assign_org_role` (Viewer by default) and
-     waiting for the next helm-upgrade prune pass to clean them up.
+     NOT in `spec.oidc.users` is rejected at login (even if they are
+     a tenant member and pass the group gate) instead of being
+     admitted as `auto_assign_org_role` Viewer and waiting for the
+     next helm-upgrade prune pass to clean them up.
 
-   When `spec.oidc.users` is empty (or unset) the three keys are NOT
-   forced — the chart owns nothing app-side, so there is nothing to
-   protect. Everyone in the `cozy` realm can log in and lands at
-   Grafana's `auto_assign_org_role` default (`Viewer`). Operators
-   who want stricter behaviour without using the users-map should
-   set the three keys themselves through `CustomConfig` mode.
+   When `spec.oidc.users` is empty (or unset) the three users-map
+   keys are NOT forced. The tenant-membership gate still applies, so
+   only tenant members can log in — they land at Grafana's
+   `auto_assign_org_role` default (`Viewer`). This is the intended
+   hands-off contract: the chart owns nothing app-side, but the
+   Keycloak-layer gate still isolates the release. Cross-tenant
+   users are rejected outright; in-tenant users get a self-service
+   Viewer with no org-role management by the chart.
 5. A `GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET` env on the Grafana
    Deployment sourced from the Secret in step 3.
 6. A post-install/post-upgrade **users-Job** — see the "Users and
@@ -258,10 +282,13 @@ outlive the next login for users who ARE listed.
 
 For `System` mode, the operator provisions the corresponding
 Keycloak user in `cozy` in whatever way they already do (Keycloak
-UI, a `KeycloakRealmUser` CR, an identity broker). The Monitoring
-release does not create Keycloak users and does not manage
-`KeycloakRealmGroup`s — group membership curated out-of-band is not
-affected by anything this chart does.
+UI, a `KeycloakRealmUser` CR, an identity broker) and adds them to
+one of the tenant's `<namespace>-{view,use,admin,super-admin}`
+groups — Grafana's `allowed_groups` rejects the login otherwise.
+The Monitoring release does not create Keycloak users and does not
+provision `KeycloakRealmGroup`s — group directory ownership stays
+with the tenant chart (`packages/apps/tenant`); group membership is
+curated by whoever operates the `cozy` realm.
 
 ## How a user logs in
 

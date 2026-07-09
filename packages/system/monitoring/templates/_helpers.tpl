@@ -48,6 +48,29 @@
 {{- end -}}
 
 {{- /*
+  Space-separated list of the four tenant-scoped Keycloak groups the
+  Monitoring release's Grafana will accept on login (allowed_groups in
+  auth.generic_oauth). The tenant chart (packages/apps/tenant) already
+  provisions `<namespace>-{view,use,admin,super-admin}` KeycloakRealmGroups
+  in the `cozy` realm — the namespace name is the tenant identifier for
+  both root and nested tenants (see tenant.name in the tenant chart
+  helpers), so `.Release.Namespace` is the correct prefix here.
+
+  Why all four groups instead of just those referenced in
+  `spec.oidc.users[].role`: the users-map controls Grafana org role
+  assignment, not authentication. A tenant admin whose email is not in
+  users[] should still be able to log in and land at the release's
+  configured hands-off default (auto_assign_org_role=Viewer) — being a
+  member of the tenant is the credential that says "you belong to this
+  Grafana", regardless of whether the chart also happens to have
+  pre-provisioned them an org role.
+*/}}
+{{- define "monitoring.oidc.allowedGroups" -}}
+{{- $ns := .Release.Namespace -}}
+{{- printf "%s-view %s-use %s-admin %s-super-admin" $ns $ns $ns $ns -}}
+{{- end -}}
+
+{{- /*
   Fail-fast when `mode: System` is requested without the platform-level
   OIDC feature being on. Mirrors the identical guard from the tenant
   kube-apiserver chart — see the note there for the reasoning.

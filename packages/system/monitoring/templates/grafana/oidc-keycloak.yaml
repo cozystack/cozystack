@@ -8,9 +8,21 @@
   another's Grafana — the per-instance isolation primitive in the
   absence of per-tenant realms.
 
-  No realm groups: authorization is app-side, driven by `spec.oidc.users`
-  and reconciled into Grafana orgs by the users-Job. See
-  templates/grafana/oidc-users-job.yaml and docs/oidc-grafana.md.
+  Two distinct group-based gates are wired:
+    * `defaultClientScopes: [groups, <audience>]` on the client causes
+      Keycloak to emit the caller's realm-group membership in the
+      `groups` claim. Grafana's `allowed_groups` in grafana.yaml then
+      rejects any login whose token does not carry at least one of the
+      release's tenant-scoped groups
+      (`<namespace>-{view,use,admin,super-admin}`, provisioned by the
+      tenant chart in packages/apps/tenant). This is the isolation gate
+      that stops tenant-alice from signing into tenant-bob's Grafana.
+    * `spec.oidc.users`, reconciled into Grafana org membership/roles
+      by the users-Job (templates/grafana/oidc-users-job.yaml), is the
+      per-user authorization layer that runs INSIDE Grafana after the
+      Keycloak-side gate has already admitted the login.
+  No KeycloakRealmGroup is provisioned by this chart — group directory
+  ownership stays with the tenant chart. See docs/oidc-grafana.md.
 
   Nothing is rendered for `mode: CustomConfig` or `mode: None`: in
   those modes `cozy` is not in the path.
@@ -79,6 +91,19 @@ spec:
   redirectUris:
     - "https://{{ $grafanaHost }}/login/generic_oauth"
   defaultClientScopes:
+    # Platform-provisioned realm-default scope carrying an
+    # oidc-group-membership-mapper that emits the caller's Keycloak
+    # groups into the `groups` claim of every token. Grafana's
+    # `allowed_groups` reads that claim to gate login on tenant-scoped
+    # group membership (see grafana.yaml). EDP's KeycloakClient does NOT
+    # merge realm-level defaults into `defaultClientScopes` — we must
+    # list it here explicitly, or the claim would be missing and
+    # `allowed_groups` would reject every login.
+    - groups
+    # Per-instance audience: binds `id_token.aud` to this client's
+    # `clientId` so a token minted for another Monitoring release
+    # (tenant-alice's Grafana) is rejected by this Grafana even if the
+    # caller also happens to be a member of this tenant's groups.
     - {{ $scopeName }}
   attributes:
     "post.logout.redirect.uris": "+"
