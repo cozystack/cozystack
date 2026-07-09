@@ -1,0 +1,145 @@
+{{- /*
+Pre-upgrade selector migration for the controller-manager Deployment.
+
+1.6 replaced the upstream etcd-operator chart with the cozystack-authored one
+(#2859), changing the Deployment's spec.selector.matchLabels:
+
+  1.5: {app.kubernetes.io/instance: etcd-operator, app.kubernetes.io/name: etcd-operator}
+  1.6: {app.kubernetes.io/name: etcd-operator, control-plane: controller-manager}
+
+spec.selector is immutable, so `helm upgrade` cannot patch the existing
+Deployment and the whole HelmRelease upgrade fails ("field is immutable") — the
+operator (and the v1alpha2 CRDs it serves) never come up, which blocks the etcd
+v1alpha2 adoption. Fresh installs use the new selector directly and are
+unaffected, so fresh-install CI does not catch it. See cozystack/cozystack#3242.
+
+This pre-upgrade hook deletes the Deployment ONLY when its live selector is the
+pre-1.6 one (i.e. lacks control-plane=controller-manager), so Helm recreates it
+cleanly with the new selector. It is a no-op when the selector already matches
+(rc.1 -> later upgrades) and never runs on a fresh install (pre-upgrade only).
+Keeping the selector stable in the chart is NOT an option: rc.1 already shipped
+the new selector, so aligning it back would merely move the immutable break to
+rc.1 -> next.
+*/}}
+{{- $name := "etcd-operator-selector-fix" }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd-operator
+    app.kubernetes.io/component: selector-fix-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd-operator
+    app.kubernetes.io/component: selector-fix-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd-operator
+    app.kubernetes.io/component: selector-fix-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: hook-succeeded,hook-failed,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd-operator
+    app.kubernetes.io/component: selector-fix-hook
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    # Keep a failed Job's Pod around for `kubectl logs`; reap the whole hook
+    # bundle on success. before-hook-creation clears a prior run first.
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  activeDeadlineSeconds: 120
+  backoffLimit: 1
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: etcd-operator
+        app.kubernetes.io/component: selector-fix-hook
+    spec:
+      serviceAccountName: {{ $name }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      # writable HOME so kubectl can create its discovery cache under
+      # readOnlyRootFilesystem=true (kubectl 1.30+ aborts otherwise).
+      volumes:
+        - name: home
+          emptyDir: {}
+      containers:
+        - name: selector-fix
+          image: "{{ .Values.kubectlImage.repository }}:{{ .Values.kubectlImage.tag }}"
+          imagePullPolicy: {{ .Values.kubectlImage.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          env:
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: home
+              mountPath: /tmp
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              ns="{{ .Release.Namespace }}"
+              name=etcd-operator-controller-manager
+              if ! kubectl -n "$ns" get deployment "$name" >/dev/null 2>&1; then
+                echo "[selector-fix] Deployment $name absent; nothing to do."
+                exit 0
+              fi
+              cp="$(kubectl -n "$ns" get deployment "$name" \
+                    -o jsonpath='{.spec.selector.matchLabels.control-plane}' 2>/dev/null || true)"
+              if [ "$cp" = "controller-manager" ]; then
+                echo "[selector-fix] Deployment $name already has the v1.6 selector; nothing to do."
+                exit 0
+              fi
+              echo "[selector-fix] Deployment $name has a pre-1.6 spec.selector (immutable); deleting so the chart recreates it with the current selector."
+              kubectl -n "$ns" delete deployment "$name" --wait=true --timeout=90s
+              echo "[selector-fix] Deleted; the chart will recreate $name."
