@@ -137,7 +137,7 @@ jobs:
 
       # The rc's digest-vendored tree (the staging branch the rc build pushed).
       - name: Checkout rc staging branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: ${{ steps.parse.outputs.rc_branch }}
           fetch-depth: 0
