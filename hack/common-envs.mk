@@ -36,6 +36,23 @@ WRITE_CACHE ?= 0
 
 PUSH := 1
 LOAD := 0
+
+# OCI_EXPORT_DIR: when set, build every image to a per-image OCI archive
+# (<dir>/<name>.oci.tar) instead of pushing or loading it. Fork PRs use this:
+# the unprivileged `pull_request` build carries no registry credentials, so it
+# exports the images as workflow artifacts and a privileged `workflow_run` later
+# pushes them to the registry BY DIGEST (see .github/workflows/e2e-fork.yaml).
+# The image digest is content-addressed and captured via --metadata-file
+# regardless of output type, so the values.yaml/.tag refs baked during this
+# build match exactly what the privileged run pushes. Setting it forces
+# PUSH/LOAD off so buildx emits only the archive — a `--push` alongside the OCI
+# --output would attempt an anonymous push and die with `denied` (#3257).
+OCI_EXPORT_DIR ?=
+ifneq ($(strip $(OCI_EXPORT_DIR)),)
+    PUSH := 0
+    LOAD := 0
+endif
+
 BUILDER ?=
 PLATFORM ?=
 BUILDX_EXTRA_ARGS ?=
@@ -65,8 +82,14 @@ BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
 # Consumers reference images by digest, so the build-unique tag is enough
 # for cluster-side pulls; the versioned and floating tags exist for human
 # discoverability and downstream tooling on releases.
+# When OCI_EXPORT_DIR is set it also appends a per-image `--output type=oci`
+# so the build writes <dir>/<name>.oci.tar (the tag becomes the archive's image
+# name). Every package's buildx call routes its tags through this macro, so this
+# is the single point that turns the whole build into an artifact-export build.
+# $(comma) escapes the literal comma so make does not read it as an $(if …)
+# argument separator; it is defined below and resolves at $(call) time.
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)
+--tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)$(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OCI_EXPORT_DIR)/$(subst /,-,$(1)).oci.tar)
 endef
 
 # cache-args <image-name> [<cache-tag>]
