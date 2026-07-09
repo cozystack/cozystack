@@ -27,7 +27,8 @@ permissions:
 jobs:
   update-releasenotes:
     name: Update Release Notes
-    runs-on: [self-hosted]
+    # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
+    runs-on: ubuntu-latest
     permissions:
       contents: write
 
