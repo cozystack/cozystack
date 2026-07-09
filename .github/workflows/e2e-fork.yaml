@@ -231,6 +231,12 @@ jobs:
       contents: read
       packages: read
       actions: read
+    # Set the sandbox name as a job-level env var rather than writing it to
+    # $GITHUB_ENV from a step (which the zizmor github-env audit flags). run_id
+    # is unique per run — in workflow_run context GITHUB_REF is the default
+    # branch, so it can't disambiguate concurrent fork runs on a shared host.
+    env:
+      SANDBOX_NAME: cozy-e2e-sandbox-fork-${{ github.run_id }}
     steps:
       - name: Checkout PR merge ref
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -265,8 +271,6 @@ jobs:
         run: |
           yq -i ".cozystackOperator.platformSourceUrl = \"oci://${REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
           yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:fork-${{ needs.resolve.outputs.pr_number }}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
       - name: Prepare workspace
         run: |
           rm -rf "/tmp/$SANDBOX_NAME"
