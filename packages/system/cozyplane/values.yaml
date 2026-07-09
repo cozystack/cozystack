@@ -80,49 +80,11 @@ controller:
 exportPolicy:
   enabled: true
 
-# Serve the sdn.cozystack.io API group from a real aggregated API server (backed
-# by a dedicated etcd) instead of CRDs. This is the design target — it enables
-# custom validation and subresources (e.g. the /ports observability subresource)
-# beyond CRD ergonomics. Requires cert-manager (for the serving certificate) and
-# a cluster that permits APIService aggregation. When false, the group is served
-# as CRDs (the lightweight path — no etcd/cert-manager needed).
-apiserver:
-  enabled: false
-  replicas: 1
-  resources:
-    requests:
-      cpu: 50m
-      memory: 128Mi
-    limits:
-      memory: 256Mi
-  etcd:
-    # Operator-managed etcd (etcd-operator.cozystack.io/v1alpha2; Cozystack
-    # ships it): replicated, TLS end to end via the operator's cert-manager
-    # integration. MEMORY-BACKED by default (no PVC/storageClass) so the API's
-    # etcd needs no storage layer to bootstrap — the CNI installs first, before
-    # storage. Trade-off: not durable across a full-cluster restart; a
-    # persistent (storageClassName) mode is a follow-up once storage is
-    # sequenced after the CNI. Without the operator, the built-in single-pod
-    # etcd below is used (also ephemeral by default).
-    operator:
-      enabled: false
-      version: "3.6.11"
-      replicas: 3
-      # Memory-backed: `size` is the tmpfs cap (not a reservation), so keep it
-      # modest — the sdn.cozystack.io object set is small.
-      size: 1Gi
-      # StorageClass for a future PVC-backed mode ("" = cluster default);
-      # ignored while storage.medium=Memory.
-      storageClass: ""
-    # Built-in single-pod etcd (dev/evaluation only).
-    image: registry.k8s.io/etcd:3.5.16-0
-    # Storage for the built-in etcd. The default is ephemeral (emptyDir); use a
-    # persistentVolumeClaim volume source to survive a pod restart.
-    storage:
-      emptyDir: {}
-    resources:
-      requests:
-        cpu: 50m
-        memory: 128Mi
-      limits:
-        memory: 256Mi
+# The CRD serving of sdn.cozystack.io — the bootstrap surface: tenancy works
+# from the moment the CNI lands, with no cert-manager in sight. The aggregated
+# API server is the SEPARATE cozyplane-apiserver package (a component that
+# dependsOn cert-manager), whose explicit APIService atomically takes over the
+# group's serving from these CRDs when it installs; the CRDs stay, shadowed and
+# inert. Disable only to keep the group unserved until that package installs.
+crds:
+  enabled: true

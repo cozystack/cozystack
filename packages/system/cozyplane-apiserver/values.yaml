@@ -1,0 +1,43 @@
+# Container image (shared with the cozyplane package — the apiserver binary
+# lives in the same image). Digest-pinned; update on each published build.
+image: ghcr.io/lllamnyp/cozyplane@sha256:0cdf0db33704f7fe36c9e304c376165ba93e5729180d267e960b36815fdc7a20
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicas: 1
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+etcd:
+  # Operator-managed etcd (etcd-operator.cozystack.io/v1alpha2; Cozystack ships
+  # it): replicated, TLS end to end via the operator's cert-manager
+  # integration. MEMORY-BACKED (no PVC/storageClass) so the API's etcd needs no
+  # storage layer — this component installs after cert-manager but before (or
+  # independent of) Linstor. Trade-off: not durable across a full-cluster
+  # restart; a persistent (storageClassName) mode is a follow-up once storage
+  # is sequenced after the CNI.
+  operator:
+    enabled: true
+    version: "3.6.11"
+    replicas: 3
+    # Memory-backed: `size` is the tmpfs cap (not a reservation), so keep it
+    # modest — the sdn.cozystack.io object set is small.
+    size: 1Gi
+    # StorageClass for a future PVC-backed mode ("" = cluster default);
+    # ignored while storage.medium=Memory.
+    storageClass: ""
+  # Built-in single-pod etcd (dev/evaluation only; unused while the operator
+  # mode above is enabled).
+  image: registry.k8s.io/etcd:3.5.16-0
+  storage:
+    emptyDir: {}
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

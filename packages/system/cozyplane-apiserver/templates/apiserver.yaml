@@ -1,4 +1,3 @@
-{{- if .Values.apiserver.enabled }}
 {{- $ns := .Release.Namespace -}}
 # The sdn.cozystack.io group served by a real aggregated API server (backed by a
 # dedicated etcd) instead of CRDs — enabling custom validation and subresources
@@ -9,7 +8,7 @@ metadata:
   name: cozyplane-apiserver
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 ---
 # Delegated authn/authz: the aggregated apiserver verifies incoming tokens and
 # permissions via the kube-apiserver (TokenReview / SubjectAccessReview).
@@ -18,7 +17,7 @@ kind: ClusterRoleBinding
 metadata:
   name: cozyplane-apiserver:system:auth-delegator
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -35,7 +34,7 @@ metadata:
   name: cozyplane-apiserver-auth-reader
   namespace: kube-system
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
@@ -50,7 +49,7 @@ kind: ClusterRole
 metadata:
   name: cozyplane-apiserver
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 rules:
   # Namespace-lifecycle admission reads namespaces.
   - apiGroups: [""]
@@ -74,7 +73,7 @@ kind: ClusterRoleBinding
 metadata:
   name: cozyplane-apiserver
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
@@ -84,7 +83,7 @@ subjects:
     name: cozyplane-apiserver
     namespace: {{ $ns }}
 ---
-{{- if not .Values.apiserver.etcd.operator.enabled }}
+{{- if not .Values.etcd.operator.enabled }}
 # Built-in single-pod etcd (dev/evaluation; ephemeral by default). Production
 # uses the operator-managed EtcdCluster instead — see templates/etcd-cluster.yaml.
 apiVersion: apps/v1
@@ -94,7 +93,7 @@ metadata:
   namespace: {{ $ns }}
   labels:
     app: cozyplane-etcd
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   replicas: 1
   selector:
@@ -105,10 +104,10 @@ spec:
       labels:
         app: cozyplane-etcd
     spec:
-      {{- include "cozyplane.imagePullSecrets" . | nindent 6 }}
+      {{- include "cozyplane-apiserver.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: etcd
-          image: {{ .Values.apiserver.etcd.image }}
+          image: {{ .Values.etcd.image }}
           command:
             - etcd
             - --data-dir=/var/run/etcd/default.etcd
@@ -118,13 +117,13 @@ spec:
             - containerPort: 2379
               name: client
           resources:
-            {{- toYaml .Values.apiserver.etcd.resources | nindent 12 }}
+            {{- toYaml .Values.etcd.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/run/etcd
       volumes:
         - name: data
-          {{- toYaml .Values.apiserver.etcd.storage | nindent 10 }}
+          {{- toYaml .Values.etcd.storage | nindent 10 }}
 ---
 apiVersion: v1
 kind: Service
@@ -132,7 +131,7 @@ metadata:
   name: cozyplane-etcd
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   selector:
     app: cozyplane-etcd
@@ -149,7 +148,7 @@ metadata:
   name: cozyplane-apiserver-selfsign
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   selfSigned: {}
 ---
@@ -159,7 +158,7 @@ metadata:
   name: cozyplane-apiserver-ca
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   isCA: true
   commonName: cozyplane-apiserver-ca
@@ -179,7 +178,7 @@ metadata:
   name: cozyplane-apiserver-ca
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   ca:
     secretName: cozyplane-apiserver-ca
@@ -190,7 +189,7 @@ metadata:
   name: cozyplane-apiserver-serving
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   secretName: cozyplane-apiserver-serving
   duration: 8760h
@@ -214,9 +213,9 @@ metadata:
   namespace: {{ $ns }}
   labels:
     app: cozyplane-apiserver
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.apiserver.replicas }}
+  replicas: {{ .Values.replicas }}
   selector:
     matchLabels:
       app: cozyplane-apiserver
@@ -226,7 +225,7 @@ spec:
         app: cozyplane-apiserver
     spec:
       serviceAccountName: cozyplane-apiserver
-      {{- include "cozyplane.imagePullSecrets" . | nindent 6 }}
+      {{- include "cozyplane-apiserver.imagePullSecrets" . | nindent 6 }}
       containers:
         - name: apiserver
           image: {{ .Values.image }}
@@ -234,7 +233,7 @@ spec:
           command: ["/usr/local/bin/cozyplane-apiserver"]
           args:
             - --serve-sdn
-            {{- if .Values.apiserver.etcd.operator.enabled }}
+            {{- if .Values.etcd.operator.enabled }}
             # The v1alpha2 operator's client Service (members carry
             # operator-assigned names, so dial the Service, not per-member DNS).
             - --etcd-servers=https://cozyplane-etcd.{{ $ns }}.svc:2379
@@ -260,12 +259,12 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 10
           resources:
-            {{- toYaml .Values.apiserver.resources | nindent 12 }}
+            {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: certs
               mountPath: /etc/apiserver-certs
               readOnly: true
-            {{- if .Values.apiserver.etcd.operator.enabled }}
+            {{- if .Values.etcd.operator.enabled }}
             - name: etcd-client-certs
               mountPath: /etc/etcd-certs
               readOnly: true
@@ -274,7 +273,7 @@ spec:
         - name: certs
           secret:
             secretName: cozyplane-apiserver-serving
-        {{- if .Values.apiserver.etcd.operator.enabled }}
+        {{- if .Values.etcd.operator.enabled }}
         - name: etcd-client-certs
           secret:
             secretName: cozyplane-etcd-client-tls
@@ -286,7 +285,7 @@ metadata:
   name: cozyplane-apiserver
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   selector:
     app: cozyplane-apiserver
@@ -300,7 +299,7 @@ kind: APIService
 metadata:
   name: v1alpha1.sdn.cozystack.io
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
   annotations:
     cert-manager.io/inject-ca-from: {{ $ns }}/cozyplane-apiserver-serving
 spec:
@@ -312,4 +311,3 @@ spec:
     name: cozyplane-apiserver
     namespace: {{ $ns }}
     port: 443
-{{- end }}

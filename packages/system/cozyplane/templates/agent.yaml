@@ -14,7 +14,8 @@ metadata:
   labels:
     {{- include "cozyplane.labels" . | nindent 4 }}
 rules:
-  # The agent learns remote pod CIDRs from Node objects.
+  # The agent learns remote pod CIDRs + addresses from Node objects, and patches
+  # its own Node to advertise the address host traffic sources from (node_remotes).
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "patch"]
