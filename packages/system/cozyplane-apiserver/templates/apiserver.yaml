@@ -67,6 +67,13 @@ rules:
   - apiGroups: ["flowcontrol.apiserver.k8s.io"]
     resources: ["flowschemas", "prioritylevelconfigurations"]
     verbs: ["get", "list", "watch"]
+  # The server registers (or takes over from CRD autoregistration) its own
+  # APIService at startup — a chart manifest can't: the kube-apiserver has
+  # already auto-created the object for the bootstrap CRDs, and Helm refuses
+  # to adopt an object it does not own.
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["get", "create", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -233,6 +240,9 @@ spec:
           command: ["/usr/local/bin/cozyplane-apiserver"]
           args:
             - --serve-sdn
+            # Register/take over the group's APIService (see the RBAC note).
+            - --ensure-apiservice-service={{ $ns }}/cozyplane-apiserver
+            - --ensure-apiservice-ca-injection={{ $ns }}/cozyplane-apiserver-serving
             {{- if .Values.etcd.operator.enabled }}
             # The v1alpha2 operator's client Service (members carry
             # operator-assigned names, so dial the Service, not per-member DNS).
@@ -293,21 +303,3 @@ spec:
     - port: 443
       targetPort: 6443
       name: https
----
-apiVersion: apiregistration.k8s.io/v1
-kind: APIService
-metadata:
-  name: v1alpha1.sdn.cozystack.io
-  labels:
-    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
-  annotations:
-    cert-manager.io/inject-ca-from: {{ $ns }}/cozyplane-apiserver-serving
-spec:
-  group: sdn.cozystack.io
-  version: v1alpha1
-  groupPriorityMinimum: 1000
-  versionPriority: 15
-  service:
-    name: cozyplane-apiserver
-    namespace: {{ $ns }}
-    port: 443
