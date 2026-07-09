@@ -5,15 +5,21 @@
   HelmRelease cannot detect. Fail the chart render instead, so the operator
   sees the mismatch in Flux/dashboards before workers roll over.
 
-  The matrix only fires for Talos versions it knows about; operators who
+  Upstream declares the window per Talos *minor* release, and patch releases
+  never move it, so the lookup key is the minor derived from talos.version.
+  Keying on the full patch version would silently disable this guard on every
+  patch bump — exactly the mismatch it exists to catch.
+
+  The matrix only fires for Talos minors it knows about; operators who
   override talos.version to something outside this list take responsibility
   for compatibility themselves (extend the dict or upstream a PR).
   Source: https://docs.siderolabs.com/talos/v1.13/getting-started/support-matrix
 */}}
 {{- $talosK8sSupportMatrix := dict
-      "v1.13.0" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
+      "v1.13" (list "v1.31" "v1.32" "v1.33" "v1.34" "v1.35" "v1.36")
 }}
-{{- with index $talosK8sSupportMatrix .Values.talos.version }}
+{{- $talosMinor := regexFind "^v[0-9]+\\.[0-9]+" .Values.talos.version }}
+{{- with index $talosK8sSupportMatrix $talosMinor }}
 {{-   if not (has $.Values.version .) }}
 {{-     fail (printf "Kubernetes %s is not supported by Talos %s. Supported versions: %v. Bump tenant 'version' or set talos.version explicitly." $.Values.version $.Values.talos.version .) }}
 {{-   end }}
