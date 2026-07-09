@@ -38,6 +38,7 @@ type ConfigSpec struct {
 	Nginx Nginx `json:"nginx"`
 	// Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:MaxLength=63
 	SchedulingClass string `json:"schedulingClass"`
 }
 
