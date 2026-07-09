@@ -95,6 +95,22 @@ spec:
   upgrade:
     remediation:
       retries: -1
+  # helm-controller v1.5.0 kstatus: gate Ready on the backing CNPG Cluster so
+  # the release does not report Ready before the harbor database has finished
+  # bootstrapping (CNPG sets Ready=False/ClusterIsNotReady during normal
+  # bootstrap, and a freshly-applied Cluster has no status at all — the
+  # empty-status race). poller is required for healthCheckExprs to be
+  # evaluated; harbor's own core/registry/portal/jobservice Deployments are
+  # assessed natively by kstatus. The bundled RedisFailover exposes no status
+  # subresource, so it cannot be gated here (see #2642).
+  waitStrategy:
+    name: poller
+  healthCheckExprs:
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      inProgress: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason == 'ClusterIsNotReady')
+      failed:     has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason != 'ClusterIsNotReady')
+      current:    has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values

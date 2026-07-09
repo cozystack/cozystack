@@ -25,6 +25,17 @@ spec:
   upgrade:
     remediation:
       retries: -1
+  # helm-controller v1.5.0 kstatus: gate Ready on the TenantGateway CR's Ready
+  # condition (#2642). The gateway.cozystack.io CRD exposes a Ready-type
+  # condition (its printer column keys on it), so a standard condition
+  # predicate applies; the has(status...) guard avoids the empty-status race on
+  # a fresh apply. poller is required for healthCheckExprs to be evaluated.
+  waitStrategy:
+    name: poller
+  healthCheckExprs:
+    - apiVersion: gateway.cozystack.io/v1alpha1
+      kind: TenantGateway
+      current: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values

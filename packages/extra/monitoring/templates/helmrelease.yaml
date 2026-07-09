@@ -44,12 +44,52 @@ spec:
   # nothing to match. That configuration is rejected at render time by the
   # system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
   # logsStorages), so the "Ready with no log store" hole cannot be reached.
+  #
+  # Extend the same gating to the rest of the monitoring stack this release
+  # applies (#2642): the metrics VMCluster + VMAgent/VMAlert/VMAlertmanager use
+  # the same status.updateStatus string contract as VLCluster; Grafana keys on
+  # status.stage/stageStatus (the grafana-operator has no status.conditions);
+  # and the CNPG Cluster backing the stack uses the standard Ready condition
+  # with the ClusterIsNotReady bootstrap reason. Each expr matches by kind, so
+  # a config that does not render a given kind is a no-op. Enum string values
+  # (updateStatus, grafana stage/stageStatus) are operator convention, not
+  # enumerated in the CRDs — exercised live, not in helm-unittest.
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
       inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
       failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
       current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMCluster
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAgent
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAlert
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1beta1
+      kind: VMAlertmanager
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: grafana.integreatly.org/v1beta1
+      kind: Grafana
+      inProgress: has(status.stageStatus) && status.stageStatus == 'in progress'
+      failed:     has(status.stageStatus) && status.stageStatus == 'failed'
+      current:    has(status.stage) && has(status.stageStatus) && status.stage == 'complete' && status.stageStatus == 'success'
+    - apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      inProgress: has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason == 'ClusterIsNotReady')
+      failed:     has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'False' && e.reason != 'ClusterIsNotReady')
+      current:    has(status.conditions) && status.conditions.exists(e, e.type == 'Ready' && e.status == 'True')
   valuesFrom:
   - kind: Secret
     name: cozystack-values
