@@ -1,0 +1,85 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "logLevel": {
+      "description": "Vector log verbosity (trace, debug, info, warn, error).",
+      "type": "string",
+      "default": "warn"
+    },
+    "listenPort": {
+      "description": "TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs.",
+      "type": "integer",
+      "default": 5170
+    },
+    "image": {
+      "description": "Vector container image.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "pullPolicy": {
+          "description": "Image pull policy.",
+          "type": "string",
+          "default": "IfNotPresent"
+        },
+        "repository": {
+          "description": "Image repository.",
+          "type": "string",
+          "default": "ghcr.io/cozystack/cozystack/vector"
+        },
+        "tag": {
+          "description": "Image tag (digest-pinned by the build).",
+          "type": "string",
+          "default": "0.56.0-alpine@sha256:0eb66216f5f9322264e2ba83f4606428ef77a2cd4dea619a5bea610ac80ccc43"
+        }
+      }
+    },
+    "resources": {
+      "description": "Compute resources for the collector.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU request and limit.",
+          "default": "100m",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory request and limit.",
+          "default": "128Mi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "global": {
+      "description": "Platform-injected global values.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "target": {
+          "description": "Tenant whose VictoriaLogs (vlinsert-generic.\u003ctarget\u003e.svc) receives the logs.",
+          "type": "string",
+          "default": "tenant-root"
+        }
+      }
+    }
+  }
+}

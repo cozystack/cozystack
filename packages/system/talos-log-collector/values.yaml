@@ -1,0 +1,40 @@
+##
+## @section Common parameters
+##
+
+## @param {string} [logLevel] - Vector log verbosity (trace, debug, info, warn, error).
+logLevel: warn
+
+## @param {int} [listenPort] - TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs.
+listenPort: 5170
+
+## @typedef {struct} Image - Vector container image.
+## @field {string} [repository] - Image repository.
+## @field {string} [tag] - Image tag (digest-pinned by the build).
+## @field {string} [pullPolicy] - Image pull policy.
+
+## @param {Image} [image] - Vector container image.
+image:
+  repository: ghcr.io/cozystack/cozystack/vector
+  tag: 0.56.0-alpine@sha256:0eb66216f5f9322264e2ba83f4606428ef77a2cd4dea619a5bea610ac80ccc43
+  pullPolicy: IfNotPresent
+
+## @typedef {struct} Resources - Compute resources for the collector.
+## @field {quantity} [cpu] - CPU request and limit.
+## @field {quantity} [memory] - Memory request and limit.
+
+## @param {Resources} [resources] - Compute resources for the collector.
+resources:
+  cpu: 100m
+  memory: 128Mi
+
+##
+## @section VictoriaLogs destination
+##
+
+## @typedef {struct} Global - Platform-injected global values.
+## @field {string} [target] - Tenant whose VictoriaLogs (vlinsert-generic.<target>.svc) receives the logs.
+
+## @param {Global} [global] - Platform-injected global values.
+global:
+  target: tenant-root
