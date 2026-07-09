@@ -262,6 +262,21 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "- tenant-foo-kubernetes-app"
+      # Cross-tenant isolation gate — the AuthenticationConfiguration
+      # must carry a CEL claimValidationRule keyed on the release's
+      # tenant-scoped groups. Without this rule, any authenticated
+      # cozy-realm user would land at `system:authenticated` on this
+      # tenant's apiserver and get discovery access. See
+      # kubernetes.oidc.groupsClaimValidationExpr in _helpers.tpl.
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "claimValidationRules:"
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'expression: .+has\(claims\.groups\).+tenant-foo-view.+tenant-foo-use.+tenant-foo-admin.+tenant-foo-super-admin'
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'message: "user is not a member of any tenant-foo-\{view,use,admin,super-admin\} group'
 
   - it: System mode injects --authentication-config and the chart-owned volume into the KCP
     release:

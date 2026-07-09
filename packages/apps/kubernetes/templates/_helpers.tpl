@@ -187,3 +187,32 @@ cozystack-basics.
 {{- define "kubernetes.oidc.systemIssuerURL" -}}
 {{- printf "https://keycloak.%s/realms/cozy" (dig "root-host" "" (.Values._cluster | default dict)) }}
 {{- end }}
+
+{{/*
+CEL claimValidationRule body — rejects tokens whose `groups` claim does
+NOT carry at least one of the tenant's four Keycloak groups. The tenant
+chart (packages/apps/tenant) provisions these groups per-tenant in the
+`cozy` realm; the namespace name is the tenant identifier for both root
+and nested tenants (see tenant.name in the tenant chart helpers), so
+`.Release.Namespace` is the correct prefix.
+
+The `has(claims.groups) &&` guard is required — CEL evaluation of
+`claims.groups.exists(...)` on a token missing the claim raises a
+runtime error that surfaces as HTTP 500 from the authenticator rather
+than the intended 401. `has()` short-circuits that path into a plain
+unauthorized outcome with the `message` string in the audit log.
+
+Why enforce membership at the apiserver even though RBAC default-denies
+unmapped identities: `system:authenticated` still leaks the OpenAPI +
+discovery surface (kubectl auth can-i --list, kubectl api-resources,
+`/apis/*` schemata) to every user in the shared `cozy` realm — a
+tenant-alice user could enumerate tenant-bob's cluster's CRDs and
+built-in resource shape. Adding a hard cross-tenant gate here matches
+the design's stated authorization boundary (per-tenant kube-apiserver
+= per-tenant identity domain) rather than relying on downstream
+RBAC-shaped conservatism.
+*/}}
+{{- define "kubernetes.oidc.groupsClaimValidationExpr" -}}
+{{- $ns := .Release.Namespace -}}
+{{- printf "has(claims.groups) && claims.groups.exists(g, g in [\"%s-view\", \"%s-use\", \"%s-admin\", \"%s-super-admin\"])" $ns $ns $ns $ns -}}
+{{- end }}
