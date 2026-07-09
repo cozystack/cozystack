@@ -12,16 +12,9 @@ kubeApiServer:
   host: "localhost"
   port: "7445"
 
-# The aggregated API server (sdn.cozystack.io — VPC tenancy) is DISABLED here,
-# and this is deliberate for the cozyplane-as-CNI topology. cozyplane installs
-# FIRST (it is the CNI), before cert-manager — but the apiserver + its etcd need
-# cert-manager Certificates, so bundling them into this first Helm release makes
-# the whole release fail ("no matches for kind Certificate") and the CNI never
-# comes up. Keeping the CNI slot cert-manager-free lets the cluster bootstrap.
-#
-# FOLLOW-UP (proper fix): split the chart so the CNI (agent) is this networking
-# component and the apiserver+etcd (with its certs) is a SEPARATE component that
-# dependsOn cert-manager. Until then, VPC tenancy (sdn.cozystack.io) is deferred;
-# the default network + Services (cozyplane-kpr) + DNS work without it.
-apiserver:
-  enabled: false
+# The aggregated API server is NOT part of this package: cozyplane installs
+# FIRST (it is the CNI), before cert-manager, and the apiserver needs
+# cert-manager Certificates. It ships as the separate cozyplane-apiserver
+# package (dependsOn cert-manager + etcd-operator); until it installs, the
+# sdn.cozystack.io group is served by this package's bootstrap CRDs, and its
+# APIService takes the group over atomically when it lands.

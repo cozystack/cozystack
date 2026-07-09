@@ -8,16 +8,16 @@
        server / operator-client / peer Certificates itself; we only supply the CA
        issuers and the apiserver's own client cert. Requires cert-manager. The
        self-signed root issuer comes from templates/apiserver.yaml. */ -}}
-{{- if and .Values.apiserver.enabled .Values.apiserver.etcd.operator.enabled }}
+{{- if .Values.etcd.operator.enabled }}
 {{- $ns := .Release.Namespace -}}
-{{- $replicas := int .Values.apiserver.etcd.operator.replicas -}}
+{{- $replicas := int .Values.etcd.operator.replicas -}}
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
   name: cozyplane-etcd-peer-ca
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   isCA: true
   usages: ["signing", "key encipherment", "cert sign"]
@@ -38,7 +38,7 @@ metadata:
   name: cozyplane-etcd-ca
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   isCA: true
   usages: ["signing", "key encipherment", "cert sign"]
@@ -60,7 +60,7 @@ metadata:
   name: cozyplane-etcd-peer-issuer
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   ca:
     secretName: cozyplane-etcd-peer-ca-tls
@@ -74,7 +74,7 @@ metadata:
   name: cozyplane-etcd-issuer
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   ca:
     secretName: cozyplane-etcd-ca-tls
@@ -88,7 +88,7 @@ metadata:
   name: cozyplane-etcd-client
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   commonName: root
   secretName: cozyplane-etcd-client-tls
@@ -108,15 +108,15 @@ metadata:
   name: cozyplane-etcd
   namespace: {{ $ns }}
   labels:
-    {{- include "cozyplane.labels" . | nindent 4 }}
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
-  version: {{ .Values.apiserver.etcd.operator.version | quote }}
+  version: {{ .Values.etcd.operator.version | quote }}
   replicas: {{ $replicas }}
   storage:
     # Memory-backed (see the file header). `medium` is immutable post-create;
     # size is the tmpfs cap, not a reservation. Non-zero is required for Memory.
     medium: Memory
-    size: {{ .Values.apiserver.etcd.operator.size }}
+    size: {{ .Values.etcd.operator.size }}
   options:
     autoCompactionMode: periodic
     autoCompactionRetention: "5m"

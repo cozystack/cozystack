@@ -1,7 +1,10 @@
-{{- /* CRDs are installed only in CRD mode; the aggregated apiserver serves the
-       group directly (an APIService for the same group/version would conflict
-       with these). See templates/apiserver.yaml. */ -}}
-{{- if not .Values.apiserver.enabled }}
+{{- /* The CRD serving of sdn.cozystack.io — the bootstrap surface: it works the
+       moment the CNI lands, with no cert-manager. Installing the separate
+       cozyplane-apiserver chart later creates an explicit APIService for the
+       group, which atomically takes over its serving from these CRDs (they
+       stay installed, shadowed and inert). Disable only to keep the group
+       entirely unserved until that chart installs. */ -}}
+{{- if .Values.crds.enabled }}
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
