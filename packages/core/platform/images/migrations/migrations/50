@@ -114,6 +114,33 @@ CREDS_TENANT_LABEL="internal.cozystack.io/tenantresource"
 # templates declare only the short forms, so adding FQDN SANs here would be
 # stripped on the next HelmRelease reconcile — adoption and chart output must
 # converge to the same fixed point on the cert SANs.
+# _san_present <ns> <secret> <cert> <native>
+# Returns 0 iff <native> is present in the issued Secret's cert-manager.io/alt-names
+# annotation OR the Certificate's spec.dnsNames (the source of truth for the SANs
+# cert-manager will issue). ROBUSTNESS: a plain `kubectl get ... 2>/dev/null` can
+# transiently return an EMPTY string on an API hiccup (discovery refresh, apiserver
+# blip, throttling), which is indistinguishable from "SAN genuinely absent" and
+# makes a correctly-configured cert look missing — the failure mode that wedges the
+# cert wait below. Neither field is ever legitimately empty on a real object, so we
+# treat an empty read from BOTH sources as a transient error and retry, only
+# trusting a non-empty read to decide presence/absence.
+_san_present() {
+  local ns="$1" secret="$2" cert="$3" native="$4" a d try
+  for try in 1 2 3 4 5; do
+    a=$(kubectl -n "$ns" get secret "$secret" \
+          -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null || true)
+    d=$(kubectl -n "$ns" get certificate.cert-manager.io "$cert" \
+          -o jsonpath='{.spec.dnsNames}' 2>/dev/null || true)
+    if [ -n "$a" ] || [ -n "$d" ]; then
+      printf '%s' "$a" | tr ',' '\n' | grep -qxF "$native" && return 0
+      printf '%s' "$d" | tr ',' '\n' | grep -qF  "$native" && return 0
+      return 1
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 ensure_wildcard_sans() {
   local ns="$1" name="$2"
   local native="*.${name}.${ns}.svc"
@@ -129,9 +156,7 @@ ensure_wildcard_sans() {
       echo "  - ${ns}/${cert}: Certificate not found; skipping (operator-managed or already pruned)"
       continue
     fi
-    if kubectl -n "$ns" get secret "$secret" \
-         -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null \
-         | tr ',' '\n' | grep -qxF "$native"; then
+    if _san_present "$ns" "$secret" "$cert" "$native"; then
       echo "  - ${ns}/${cert}: native wildcard already present; nothing to do"
       continue
     fi
@@ -148,9 +173,7 @@ ensure_wildcard_sans() {
     # Wait for cert-manager to re-issue the Secret with the new SANs.
     local i
     for i in $(seq 1 30); do
-      if kubectl -n "$ns" get secret "$secret" \
-           -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null \
-           | tr ',' '\n' | grep -qxF "$native"; then
+      if _san_present "$ns" "$secret" "$cert" "$native"; then
         echo "    ${ns}/${secret}: re-issued with native wildcard"
         break
       fi
@@ -331,9 +354,39 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
     -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' 2>/dev/null)
 fi
 
+# etcd-migrate (unlike kubectl) does NOT fall back to the in-cluster
+# ServiceAccount: it only reads a kubeconfig FILE (-k/--kubeconfig, default
+# /root/.kube/config), which does not exist in this Job pod. Synthesize one from
+# the mounted ServiceAccount so etcd-migrate authenticates as the hook SA.
+ETCD_MIGRATE_KUBECONFIG="/tmp/in-cluster.kubeconfig"
+_sa_dir="/var/run/secrets/kubernetes.io/serviceaccount"
+if [ ! -f "$ETCD_MIGRATE_KUBECONFIG" ] && [ -f "$_sa_dir/token" ]; then
+  cat > "$ETCD_MIGRATE_KUBECONFIG" <<KUBECONFIG_EOF
+apiVersion: v1
+kind: Config
+clusters:
+- name: in-cluster
+  cluster:
+    certificate-authority: ${_sa_dir}/ca.crt
+    server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT:-443}
+contexts:
+- name: in-cluster
+  context:
+    cluster: in-cluster
+    user: sa
+    namespace: $(cat "$_sa_dir/namespace")
+current-context: in-cluster
+users:
+- name: sa
+  user:
+    tokenFile: ${_sa_dir}/token
+KUBECONFIG_EOF
+fi
+
 # Always show the plan first.
 echo "=== etcd-migrate dry-run ==="
 etcd-migrate \
+  --kubeconfig="${ETCD_MIGRATE_KUBECONFIG}" \
   --new-controller="${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY}" \
   --skip-controller-check || true
 
@@ -379,6 +432,7 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
   # 0 is still the LEGACY operator, so resolveAgentImage would otherwise bake the
   # wrong (aenix) image into the snapshot Job.
   etcd-migrate --apply --yes \
+    --kubeconfig="${ETCD_MIGRATE_KUBECONFIG}" \
     --new-controller="${ETCD_OPERATOR_NS}/${ETCD_OPERATOR_DEPLOY}" \
     --skip-controller-check \
     --agent-image="${ETCD_OPERATOR_IMAGE}" \
