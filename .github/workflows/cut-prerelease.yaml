@@ -141,7 +141,10 @@ jobs:
               repo: context.repo.repo,
               username: context.actor,
             });
-            const allowed = ['admin', 'maintain', 'write'];
+            // getCollaboratorPermissionLevel's `permission` field returns only
+            // the legacy roles admin/write/read/none (maintain collapses to
+            // write, triage to read), so admin+write is the whole "can push" set.
+            const allowed = ['admin', 'write'];
             if (!allowed.includes(data.permission)) {
               core.setFailed(
                 `@${context.actor} has '${data.permission}' access — cutting a pre-release tag ` +
@@ -188,9 +191,20 @@ jobs:
           # tags.yaml would then fail, having already burned this write-once name.
           # Refuse and ask for a re-run instead.
           local_head="$(git rev-parse HEAD)"
-          remote_head="$(git ls-remote origin "refs/heads/$REF_NAME" | cut -f1)"
+          # Resolve the remote tip without a pipe masking ls-remote's exit code
+          # (mirrors the write-once query above): a transport/auth failure must
+          # not read as "branch not found".
+          set +e
+          remote_ls="$(git ls-remote origin "refs/heads/$REF_NAME")"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Could not query origin for the tip of '$REF_NAME' (git ls-remote exit $rc) — refusing to proceed."
+            exit 1
+          fi
+          remote_head="$(printf '%s' "$remote_ls" | cut -f1)"
           if [ -z "$remote_head" ]; then
-            echo "::error::Could not resolve the tip of '$REF_NAME' on origin."
+            echo "::error::Could not resolve the tip of '$REF_NAME' on origin (no such branch?)."
             exit 1
           fi
           if [ "$local_head" != "$remote_head" ]; then

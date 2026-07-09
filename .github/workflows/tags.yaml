@@ -104,7 +104,7 @@ jobs:
       - name: Reject hand-pushed stable tags
         if: steps.check_release.outputs.release_exists == 'false' && steps.tag.outputs.is_stable == 'true'
         run: |
-          echo "::error::Stable tag ${GITHUB_REF#refs/tags/} has no pre-existing draft release. Stable tags come from promote-rc.yaml — cut a pre-release (vX.Y.Z-rc.N) with the 'Cut Pre-release Tag' workflow and promote it; do not push vX.Y.Z by hand."
+          echo "::error::Stable tag ${GITHUB_REF#refs/tags/} has no pre-existing draft release. Stable tags are finalized by the promote flow at the merge commit — cut a pre-release (vX.Y.Z-rc.N) with the 'Cut Pre-release Tag' workflow and promote it; do not push vX.Y.Z by hand."
           exit 1
 
       # Detect base branch (main or release-X.Y) the tag was pushed from
