@@ -21,7 +21,8 @@ image:
 		--tag $(IMAGE_BASE):$(IMAGE_TAG) \
 		--tag $(IMAGE_BASE):$(IMAGE_TAG)-$(TAG) \
 		--cache-from type=registry,ref=$(IMAGE_BASE):latest \
-		--cache-to type=inline \
+		$(if $(strip $(OCI_EXPORT_DIR)),,--cache-to type=inline) \
+		$(call oci-output,cluster-api-control-plane-provider-kamaji) \
 		--metadata-file images/cluster-api-control-plane-provider-kamaji.json \
 		$(BUILDX_ARGS)
 	digest=$$(yq e '."containerimage.digest"' images/cluster-api-control-plane-provider-kamaji.json -o json -r); \

@@ -909,13 +909,21 @@ jobs:
               conclusion = 'failure';
               summary = `in-tree e2e did not pass (result: ${E2E_RESULT})`;
             }
-            await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'E2E Tests',
-              head_sha: HEAD_SHA,
-              status: 'completed',
-              conclusion,
-              output: { title: 'E2E Tests', summary },
-            });
+            try {
+              await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'E2E Tests',
+                head_sha: HEAD_SHA,
+                status: 'completed',
+                conclusion,
+                output: { title: 'E2E Tests', summary },
+              });
+            } catch (err) {
+              // The 'E2E Tests' check-run is the required merge gate. If we
+              // cannot publish it, fail loudly and fail-closed: setFailed keeps
+              // the job (and thus the gate) red so the PR stays non-mergeable.
+              core.setFailed(`Failed to report E2E Tests check-run: ${err}`);
+              return;
+            }
             core.info(`E2E Tests → ${conclusion}: ${summary}`);

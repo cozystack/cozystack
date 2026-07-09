@@ -83,13 +83,27 @@ BUILDX_ARGS := --provenance=false --push=$(PUSH) --load=$(LOAD) \
 # for cluster-side pulls; the versioned and floating tags exist for human
 # discoverability and downstream tooling on releases.
 # When OCI_EXPORT_DIR is set it also appends a per-image `--output type=oci`
-# so the build writes <dir>/<name>.oci.tar (the tag becomes the archive's image
-# name). Every package's buildx call routes its tags through this macro, so this
-# is the single point that turns the whole build into an artifact-export build.
-# $(comma) escapes the literal comma so make does not read it as an $(if …)
-# argument separator; it is defined below and resolves at $(call) time.
+# (via the oci-output macro) so the build writes <dir>/<name>.oci.tar (the tag
+# becomes the archive's image name). Every package's buildx call routes its tags
+# through this macro, so this is the single point that turns the whole build into
+# an artifact-export build — except recipes that bypass image-tags, which must
+# call oci-output directly (see #3257).
+
+# comma emits a literal comma inside the lazily-expanded macros below
+# (oci-output, cache-args) without make mis-reading it as an $(if …)/$(call …)
+# argument separator. Defined here, above its first user, so it is unambiguously
+# in scope wherever those macros are $(call)ed from a recipe.
+comma := ,
+
+# oci-output <image-name> — when OCI_EXPORT_DIR is set, expands to a per-image
+# `--output type=oci,dest=<dir>/<name>.oci.tar`; empty otherwise. EVERY buildx
+# call reachable from a fork build must include this — via image-tags, or
+# directly for recipes that bypass image-tags (#3257). A missing archive is
+# caught loudly by the fork build's `if-no-files-found: error` upload.
+oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OCI_EXPORT_DIR)/$(subst /,-,$(1)).oci.tar)
+
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)$(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OCI_EXPORT_DIR)/$(subst /,-,$(1)).oci.tar)
+--tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)$(call oci-output,$(1))
 endef
 
 # cache-args <image-name> [<cache-tag>]
@@ -101,9 +115,8 @@ endef
 #     keep the cache manifest portable across registries (OCIR/ghcr/ECR).
 # <cache-tag> defaults to `buildcache`; pass an explicit tag for images that build
 # a distinct artifact per loop iteration (e.g. ubuntu-container-disk per k8s ver).
-# $(comma) escapes the literal commas in the --cache-to value so make does not
-# mis-parse them as $(if ...) argument separators.
-comma := ,
+# $(comma) (defined above) escapes the literal commas in the --cache-to value so
+# make does not mis-parse them as $(if ...) argument separators.
 cache-args = --cache-from type=registry,ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(if $(filter 1,$(WRITE_CACHE)), --cache-to type=registry$(comma)ref=$(CACHE_REGISTRY)/$(1):$(if $(2),$(2),buildcache)$(comma)mode=max$(comma)oci-mediatypes=true$(comma)image-manifest=true)
 
 ifeq ($(COZYSTACK_VERSION),)
