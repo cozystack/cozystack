@@ -356,6 +356,12 @@ type Scheduler struct {
 }
 
 type Talos struct {
+	// Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
+	// +kubebuilder:default:="https://factory.talos.dev"
+	ImageFactoryURL string `json:"imageFactoryURL"`
+	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
+	// +kubebuilder:default:="factory.talos.dev/installer"
+	InstallerRepository string `json:"installerRepository"`
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`

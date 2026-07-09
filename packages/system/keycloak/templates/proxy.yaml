@@ -11,6 +11,13 @@
 {{- if and (ne $backend "static") (ne $backend "vault-transit") }}
 {{- fail (printf "encryption.kms.backend must be 'static' or 'vault-transit', got %q" $backend) }}
 {{- end }}
+{{- /* The proxy needs its ServiceAccount token only for Vault Kubernetes auth. */}}
+{{- $vaultAuth := (($kms.vault | default dict).auth | default "token") }}
+{{- $k8sAuth := and (eq $backend "vault-transit") (eq $vaultAuth "kubernetes") }}
+{{- $replicas := .Values.encryption.replicas | default 1 | int }}
+{{- if and (gt $replicas 1) (not .Values.encryption.deksetSecretName) }}
+{{- fail "encryption.replicas > 1 requires encryption.deksetSecretName (a shared wrapped DEK set); otherwise replicas would encrypt deterministic columns under different keys" }}
+{{- end }}
 {{- if eq $backend "static" }}
 {{- /*
   Static KMS: a self-generated 32-byte KEK kept in a Secret. Generated once
@@ -32,6 +39,16 @@ data:
   kek: {{ $kek | quote }}
 ---
 {{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: keycloak-kms-proxy
+  labels:
+    app: keycloak-kms-proxy
+# Dedicated identity for the proxy (never the namespace default SA). Its token
+# is only mounted for Vault Kubernetes auth; other modes don't need it.
+automountServiceAccountToken: {{ $k8sAuth }}
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,10 +56,11 @@ metadata:
   labels:
     app: keycloak-kms-proxy
 spec:
-  # Single replica: HA needs a shared wrapped DEK set (KKP_DEKSET_FILE) so
-  # every replica encrypts deterministic columns with the same key. Tracked
-  # as a follow-up.
-  replicas: 1
+  # Defaults to a single replica. HA (replicas > 1) requires a shared wrapped
+  # DEK set (encryption.deksetSecretName → KKP_DEKSET_FILE) so every replica
+  # encrypts deterministic columns under the same key; the guard above enforces
+  # that.
+  replicas: {{ $replicas }}
   selector:
     matchLabels:
       app: keycloak-kms-proxy
@@ -51,6 +69,8 @@ spec:
       labels:
         app: keycloak-kms-proxy
     spec:
+      serviceAccountName: keycloak-kms-proxy
+      automountServiceAccountToken: {{ $k8sAuth }}
       securityContext:
         runAsNonRoot: true
         runAsUser: 65532
@@ -113,23 +133,62 @@ spec:
               value: {{ .Values.encryption.lenient | quote }}
             {{- if eq $backend "vault-transit" }}
             {{- $vault := $kms.vault | default dict }}
+            {{- $auth := $vault.auth | default "token" }}
+            {{- if and (ne $auth "token") (ne $auth "approle") (ne $auth "kubernetes") }}
+            {{- fail (printf "encryption.kms.vault.auth must be 'token', 'approle', or 'kubernetes', got %q" $auth) }}
+            {{- end }}
             - name: KKP_VAULT_ADDR
               value: {{ required "encryption.kms.vault.address is required when kms.backend=vault-transit" $vault.address | quote }}
             - name: KKP_VAULT_KEY_NAME
               value: {{ required "encryption.kms.vault.keyName is required when kms.backend=vault-transit" $vault.keyName | quote }}
             - name: KKP_VAULT_MOUNT
               value: {{ $vault.mount | default "transit" | quote }}
+            {{- if eq $auth "approle" }}
+            {{- $appRole := $vault.appRole | default dict }}
+            {{- $secretName := required "encryption.kms.vault.appRole.secretName is required when vault.auth=approle" $appRole.secretName }}
+            - name: KKP_VAULT_APPROLE_MOUNT
+              value: {{ $appRole.mount | default "approle" | quote }}
+            - name: KKP_VAULT_ROLE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $appRole.roleIdKey | default "role-id" }}
+            - name: KKP_VAULT_SECRET_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: {{ $appRole.secretIdKey | default "secret-id" }}
+            {{- else if eq $auth "kubernetes" }}
+            {{- $k8s := $vault.kubernetes | default dict }}
+            # The proxy logs in with its own ServiceAccount token; bind the
+            # Vault role to system:serviceaccount:<namespace>:keycloak-kms-proxy.
+            # No credential is stored in a Secret.
+            - name: KKP_VAULT_KUBERNETES_ROLE
+              value: {{ required "encryption.kms.vault.kubernetes.role is required when vault.auth=kubernetes" $k8s.role | quote }}
+            - name: KKP_VAULT_KUBERNETES_MOUNT
+              value: {{ $k8s.mount | default "kubernetes" | quote }}
+            {{- else }}
             - name: KKP_VAULT_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ required "encryption.kms.vault.tokenSecretName is required when kms.backend=vault-transit" $vault.tokenSecretName }}
+                  name: {{ required "encryption.kms.vault.tokenSecretName is required when vault.auth=token" $vault.tokenSecretName }}
                   key: token
+            {{- end }}
             {{- else }}
             - name: KKP_KEK
               valueFrom:
                 secretKeyRef:
                   name: keycloak-kms-proxy-kek
                   key: kek
+            {{- end }}
+            {{- if .Values.encryption.deksetSecretName }}
+            # Wrapped DEK set minted by the backfill tool. Required to run more
+            # than one replica AND to migrate an existing populated database
+            # (the proxy must reuse the DEK that encrypt-rows wrapped with);
+            # without it the proxy mints an ephemeral DEK usable only on a fresh
+            # database.
+            - name: KKP_DEKSET_FILE
+              value: /etc/kkp/dekset/{{ .Values.encryption.deksetSecretKey | default "dekset.json" }}
             {{- end }}
           {{- with .Values.encryption.resources }}
           resources:
@@ -143,6 +202,18 @@ spec:
             tcpSocket:
               port: postgres
             periodSeconds: 15
+          {{- if .Values.encryption.deksetSecretName }}
+          volumeMounts:
+            - name: dekset
+              mountPath: /etc/kkp/dekset
+              readOnly: true
+          {{- end }}
+      {{- if .Values.encryption.deksetSecretName }}
+      volumes:
+        - name: dekset
+          secret:
+            secretName: {{ .Values.encryption.deksetSecretName }}
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

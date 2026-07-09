@@ -1,0 +1,44 @@
+suite: monitoring-system HelmRelease readiness gate
+templates:
+  - templates/helmrelease.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# The monitoring-system HelmRelease owns the VLCluster(s) rendered from
+# logsStorages. Without a health gate it flips Ready as soon as helm applies the
+# CR, so a missing or broken VictoriaLogs stays invisible while fluent-bit drops
+# logs at a dead-end vlinsert-generic (issue #3181). A `poller` waitStrategy plus
+# a VLCluster healthCheckExpr makes that failure surface as not-ready.
+tests:
+  - it: names the child release <release>-system
+    asserts:
+      - containsDocument:
+          kind: HelmRelease
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          name: monitoring-system
+
+  - it: uses the poller waitStrategy so healthCheckExprs are evaluated
+    asserts:
+      - equal:
+          path: spec.waitStrategy.name
+          value: poller
+
+  - it: gates readiness on the VLCluster status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[0].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[0].kind
+          value: VLCluster
+      - equal:
+          path: spec.healthCheckExprs[0].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[0].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[0].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"

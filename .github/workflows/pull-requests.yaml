@@ -490,8 +490,22 @@ jobs:
 
   e2e:
     name: "E2E Tests"
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
-    #runs-on: [oracle-vm-32cpu-128gb-x86-64]
+    # The sandbox boots three QEMU guests (hack/e2e-prepare-cluster.bats), each
+    # with `-smp 8 -m 24576`, so the guests alone demand 24 vCPU and 72 GiB.
+    # On the 24-vCPU runner that is a 1:1 CPU commit with zero host headroom for
+    # QEMU's own emulation/IO threads, vhost-net, the host iptables MASQUERADE
+    # every guest image pull traverses, containerd, the kernel and the runner
+    # agent. During "Install Cozystack" (all platform operators + image pulls
+    # across three nodes at once) the guest vCPUs contend with those host threads
+    # and lose cycles to CPU steal, so in-guest kubelet/apiserver readiness and
+    # liveness probes miss their deadlines ("context deadline exceeded"). A
+    # HelmRelease then flips InProgress -> Failed and its dependents cascade to
+    # DependencyNotReady — on a different component each run, the signature of
+    # resource thrash rather than a product bug. The 32-vCPU / 128 GiB class
+    # keeps the guests' 24 vCPU / 72 GiB unchanged (no slower install) while
+    # leaving 8 vCPU (25%) and 56 GiB of host headroom, which removes the
+    # oversubscription that starves the probes.
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-32cpu-128gb-x86-64' }}
     timeout-minutes: 180
     permissions:
       contents: read

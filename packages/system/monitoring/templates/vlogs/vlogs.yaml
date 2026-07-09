@@ -1,3 +1,13 @@
+{{- /*
+  Reject an empty logsStorages outright. With no entry no VLCluster is
+  rendered, the monitoring-system HelmRelease readiness gate (which keys on the
+  VLCluster) has nothing to match, and fluent-bit ends up shipping to a
+  vlinsert-generic that never exists — silently dropping logs (issue #3181).
+  Fail the render instead so the misconfiguration is loud, not silent.
+*/ -}}
+{{- if not .Values.logsStorages }}
+{{- fail "monitoring: logsStorages must define at least one entry; an empty list renders no VLCluster and fluent-bit silently drops logs to a non-existent vlinsert-generic (issue #3181)" }}
+{{- end }}
 {{- range .Values.logsStorages }}
 ---
 apiVersion: operator.victoriametrics.com/v1
@@ -22,6 +32,14 @@ spec:
     resources: {}
     storage:
       volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs (IntoSTSVolume). The operator does NOT apply
+          # spec.managedMetadata to PVCs, so the claim template is the only path
+          # that lands a label on them. The monitoring post-delete cleanup hook
+          # selects PVCs by this label to stay release-scoped.
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
         spec:
           {{- with .storageClassName }}
           storageClassName: {{ . }}

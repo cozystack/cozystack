@@ -1,5 +1,6 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
+. hack/e2e-chainsaw/_lib/talos-image-cache.sh
 
 # kubectl_wait_retry: wraps `kubectl wait` with retries against transient
 # management-cluster apiserver/etcd errors.
@@ -251,6 +252,12 @@ YAML
 )
   fi
 
+  # Point worker DataVolume imports at the in-sandbox Talos image cache when it
+  # is up (falls back to the public factory otherwise). Emitted right under spec:
+  # as `talos: { imageFactoryURL: ... }`, or an empty line when the default applies.
+  local talos_block
+  talos_block=$(talos_image_factory_spec_block)
+
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -258,6 +265,7 @@ metadata:
   name: "${test_name}"
   namespace: tenant-test
 spec:
+${talos_block}
   addons:
     certManager:
       enabled: false
@@ -803,37 +811,130 @@ EOF
       echo "ouroboros-proxy Service has no ClusterIP" >&2
       exit 1
     fi
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      delete pod dnscheck --ignore-not-found 2>/dev/null || true
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      run dnscheck --image=nicolaka/netshoot:v0.13 --restart=Never \
-      --command -- sh -c "
-        deadline=\$(( \$(date +%s) + 120 ))
-        while [ \"\$(date +%s)\" -lt \"\${deadline}\" ]; do
-          addr=\$(dig +short +tries=2 +time=5 ${hairpin_host} | head -n 1)
-          echo \"resolved: \${addr:-<empty>}\"
-          if [ \"\${addr}\" = \"${proxy_ip}\" ]; then
-            exit 0
-          fi
-          sleep 5
-        done
-        echo \"timed out waiting for ${hairpin_host} to resolve to ${proxy_ip}\"
-        exit 1
-      "
-    local dns_deadline=$(( $(date +%s) + 180 ))
+    # The DNS resolution itself is asserted EXACTLY ONCE and fail-fast, per the
+    # e2e no-retry rule (docs/agents/e2e-testing.md #1: never retry a step that
+    # carries product/test logic): a probe that runs to phase Failed means the
+    # in-Pod dig loop (120s, with its own retries -- the right place for CoreDNS
+    # eventual-consistency tolerance) never resolved the hairpin host to the
+    # proxy, i.e. the reconciliation regression this assertion exists to catch,
+    # and it fails the test immediately.
+    #
+    # The one thing recreated is the *vehicle*, and only for the pure-infra event
+    # the same rule carves out (worker-VM boot/recycle). On the single-node
+    # sandbox a tenant worker node can lose its kubelet heartbeat, and the CAPI
+    # MachineHealthCheck deletes its Machine/KubeVirt-VM/Node after 30s and
+    # provisions a replacement. A `--restart=Never` probe bound to that node is
+    # removed by the node controller and, being a bare Pod, never recreated -- so
+    # its verdict is destroyed by infrastructure before it is produced (typically
+    # while its image is still pulling and it has never left Pending). A single-
+    # shot probe reported that as a DNS failure ("last seen: <empty>"), which is
+    # the observed flake (it hits PRs that don't touch virt at all). Recreate the
+    # probe only when it vanished AND the node it was on is confirmed recycled
+    # (gone or no longer Ready). A probe that disappears while its node is still
+    # Ready is NOT infra churn -- it is an unexpected deletion -- and fails loud
+    # rather than being retried, so no pod-churn regression is masked.
+    local hairpin_deadline=$(( $(date +%s) + 420 ))
     local phase=
-    while [ "$(date +%s)" -lt "${dns_deadline}" ]; do
-      phase=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-        get pod dnscheck -o jsonpath='{.status.phase}' 2>/dev/null || true)
+    local probe_node=
+    local attempt=0
+    local exists=
+    local raw=
+    local node=
+    local node_ready=
+    while [ "$(date +%s)" -lt "${hairpin_deadline}" ]; do
+      attempt=$(( attempt + 1 ))
+      # delete defaults to --wait=true, so it returns only once any stale Pod is
+      # fully gone; the subsequent run cannot race an AlreadyExists.
+      kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+        delete pod dnscheck --ignore-not-found 2>/dev/null || true
+      kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+        run dnscheck --image=nicolaka/netshoot:v0.13 --restart=Never \
+        --command -- sh -c "
+          deadline=\$(( \$(date +%s) + 120 ))
+          while [ \"\$(date +%s)\" -lt \"\${deadline}\" ]; do
+            addr=\$(dig +short +tries=2 +time=5 ${hairpin_host} | head -n 1)
+            echo \"resolved: \${addr:-<empty>}\"
+            if [ \"\${addr}\" = \"${proxy_ip}\" ]; then
+              exit 0
+            fi
+            sleep 5
+          done
+          echo \"timed out waiting for ${hairpin_host} to resolve to ${proxy_ip}\"
+          exit 1
+        "
+      # Wait for THIS Pod to reach a terminal phase or vanish, remembering the
+      # node it landed on so a later disappearance can be attributed (or not) to
+      # that node being recycled. One get returns both fields; on NotFound it
+      # errors and yields an empty phase.
+      phase=
+      probe_node=
+      while [ "$(date +%s)" -lt "${hairpin_deadline}" ]; do
+        raw=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+          get pod dnscheck -o jsonpath='{.status.phase}@{.spec.nodeName}' 2>/dev/null || true)
+        phase=${raw%%@*}
+        node=${raw##*@}
+        [ -n "${node}" ] && probe_node=${node}
+        case "${phase}" in
+          Succeeded|Failed) break ;;
+        esac
+        # Empty phase: either the Pod is gone or the tenant API had a transient
+        # error. Only a clean query that definitively reports no such Pod (rc 0
+        # under --ignore-not-found, empty output) is a candidate node recycle; a
+        # transient API error exits nonzero and must NOT be read as a deleted
+        # Pod, so keep polling. The `if var=$(...)` form keeps the nonzero rc
+        # from tripping errexit (the whole test runs under `set -eu`).
+        if [ -z "${phase}" ] \
+          && exists=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+               get pod dnscheck --ignore-not-found -o name 2>/dev/null) \
+          && [ -z "${exists}" ]; then
+          phase=Gone
+          break
+        fi
+        sleep 3
+      done
+
       case "${phase}" in
-        Succeeded|Failed) break ;;
+        Succeeded)
+          break
+          ;;
+        Failed)
+          # The Pod ran and its dig loop exhausted 120s without resolving the
+          # hairpin host to the proxy: a genuine DNS/reconciliation failure.
+          echo "dnscheck ran but ${hairpin_host} never resolved to ${proxy_ip} (attempt ${attempt})" >&2
+          kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+            logs dnscheck 2>&1 | sed 's/^/  dnscheck: /' || true
+          exit 1
+          ;;
+        Gone)
+          # The probe vanished before producing a verdict. Recreate it only if
+          # this was the pure-infra node recycle: its node must be gone or no
+          # longer Ready. `get node` erroring (node deleted) short-circuits the
+          # && so we fall through to retry; a still-Ready node means an
+          # unexpected deletion, which fails loud rather than being retried.
+          if [ -z "${probe_node}" ]; then
+            echo "dnscheck vanished before it was scheduled to any node -- not a node recycle" >&2
+            exit 1
+          fi
+          if node_ready=$(kubectl --kubeconfig "tenantkubeconfig-${test_name}" \
+               get node "${probe_node}" \
+               -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null) \
+             && [ "${node_ready}" = "True" ]; then
+            echo "dnscheck disappeared while its node ${probe_node} was still Ready -- unexpected pod deletion, not a node recycle" >&2
+            exit 1
+          fi
+          echo "» dnscheck attempt ${attempt}: node ${probe_node} was recycled (gone/NotReady) before the probe completed -- retrying on a surviving node" >&2
+          ;;
+        *)
+          # Deadline reached with the Pod still Pending (never ran, never gone):
+          # the outer loop exits; the post-loop check reports it.
+          :
+          ;;
       esac
-      sleep 3
     done
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
-      logs dnscheck 2>&1 | sed 's/^/  dnscheck: /' || true
-    if [ "${phase:-}" != "Succeeded" ]; then
-      echo "dnscheck pod did not reach Succeeded phase (last seen: ${phase:-<empty>})" >&2
+    if [ "${phase}" != "Succeeded" ]; then
+      echo "dnscheck did not resolve ${hairpin_host} to ${proxy_ip} within the deadline (last phase: ${phase:-<empty>}, attempts: ${attempt})" >&2
+      kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n default \
+        logs dnscheck 2>&1 | sed 's/^/  dnscheck: /' || true
       exit 1
     fi
 
