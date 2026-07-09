@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	utiljson "k8s.io/apimachinery/pkg/util/json"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -288,6 +289,16 @@ func (h *LineageControllerWebhook) applySchedulingClass(ctx context.Context, obj
 	}
 	annotations[schedulerapi.SchedulingClassAnnotation] = schedulingClass
 	obj.SetAnnotations(annotations)
+
+	// Defence in depth: a SchedulingClass name is a DNS-1123 subdomain (up to
+	// 253 chars) while a label value is capped at 63. spec.schedulingClass is
+	// schema-capped at 63, but a pre-existing long-named class must degrade to
+	// annotation-only injection rather than have the apiserver reject the Pod.
+	if errs := validation.IsValidLabelValue(schedulingClass); len(errs) > 0 {
+		log.FromContext(ctx).Info("SchedulingClass name is not a valid label value, skipping co-affinity label",
+			"schedulingClass", schedulingClass, "namespace", namespace)
+		return nil
+	}
 
 	podLabels := obj.GetLabels()
 	if podLabels == nil {
