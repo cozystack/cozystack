@@ -16,8 +16,15 @@
 # per-worker imports), then serves it locally over plain HTTP with range support.
 # Tenant `Kubernetes` CRs point `spec.talos.imageFactoryURL` at this Service
 # (see hack/e2e-apps/run-kubernetes.sh) so every worker imports from the warm
-# local copy instead of the public internet. If this Deployment never becomes
-# Available the e2e harness falls back to the public factory (status quo), so the
+# local copy instead of the public internet. Tenant namespaces run under a
+# default-deny Cilium egress installed by the tenant chart, whose allow rules cover
+# same-namespace endpoints, the tenant tree and the `world` entity (which is why the
+# public factory works) but NOT an arbitrary kube-system Service, so a worker's CDI
+# importer would resolve this Service yet have its TCP connect to the ClusterIP
+# silently dropped. The CiliumClusterwideNetworkPolicy at the end of this file punches a
+# single tightly-scoped hole for that path. The e2e harness only points tenants
+# here after a tenant-scoped probe confirms the importer path actually reaches the
+# ClusterIP with a 206; otherwise it falls back to the public factory, so the
 # mirror can only help, never make CI worse.
 #
 # The __SCHEMATIC_ID__ / __TALOS_VERSION__ placeholders are substituted at apply
@@ -221,3 +228,51 @@ data:
     with http.server.ThreadingHTTPServer(("0.0.0.0", PORT), RangeHandler) as httpd:
         print("serving %s on :%d" % (ROOT, PORT), flush=True)
         httpd.serve_forever()
+---
+# CI-only: allow the tenant CDI importer Pods to reach the mirror.
+#
+# Tenant namespaces run under a default-deny Cilium egress installed by the tenant
+# chart (allow-internal-communication, allow-external-communication and the
+# `<tenant>-egress` CiliumClusterwideNetworkPolicy). Their union allows egress to
+# same-namespace endpoints, the tenant tree and the `world` entity (so the public
+# factory works), but nothing permits egress to an arbitrary kube-system Service —
+# so a worker's CDI importer resolves talos-image-cache.kube-system.svc yet its TCP
+# connect to the Service ClusterIP is silently dropped (dial ... i/o timeout), the
+# disk import never starts, and the tenant node never joins. Cilium unions allow
+# rules across policies, so this adds one tightly-scoped allow: importer Pods in
+# tenant-test may egress to the mirror Pod in kube-system.
+#
+# Scoped to tenant-test (which the tenant chart already puts under default-deny
+# egress) so it only ever ADDS an allow — it never flips another namespace from
+# default-allow to default-deny. The mirror Pod is selected by no ingress policy
+# (default-allow ingress), so no ingress rule is needed; replies return on the
+# established conntrack entry.
+#
+# Applied at point-of-use by hack/e2e-apps/talos-image-cache.sh, not with the rest
+# of this manifest in hack/e2e-install-cozystack.bats: that runs before Cozystack
+# (and thus before Cilium's CRDs) is installed, so this kind does not yet exist
+# when the manifest is first applied.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: e2e-talos-image-cache-importer-egress
+  labels:
+    app.kubernetes.io/name: talos-image-cache
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:cdi.kubevirt.io": importer
+      "k8s:io.kubernetes.pod.namespace": tenant-test
+  # No toPorts: the allow is already scoped to a single kube-system pod identity
+  # (CI-only, torn down with the sandbox), so an L4 port restriction adds no
+  # meaningful blast-radius reduction — only risk. With kube-proxy-less Cilium the
+  # importer's connect to the Service ClusterIP is socket-LB translated to the
+  # backend pod port BEFORE egress policy is evaluated, so a port literal here
+  # would have to track the container port (8080), not the Service port (80); a
+  # wrong guess silently drops the traffic and reintroduces the exact public-factory
+  # fallback this policy exists to prevent.
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            "k8s:app.kubernetes.io/name": talos-image-cache
