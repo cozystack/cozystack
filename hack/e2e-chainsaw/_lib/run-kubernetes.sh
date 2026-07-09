@@ -453,6 +453,28 @@ EOF
     kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
     kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
 
+    # (a2) Worker DataVolume IMPORT stage. A VM stuck "Provisioning" whose
+    # DataVolume is ImportInProgress at N/A progress with the importer pod
+    # looping on an HTTP error is a distinct sub-mode of 2a that the VM/VMI
+    # state alone does not show: the OS image never finishes importing, so the
+    # VM never boots. This is what took out PR #2826's CI — the CDI importer
+    # could not reach the talos-image-cache ClusterIP (`dial tcp <svc>:80: i/o
+    # timeout`) even though the cache pod was healthy. Show the DataVolume/PVC
+    # phases and the importer pod logs, then re-probe the cache ClusterIP from a
+    # throwaway pod (talos_image_cache_diagnose) to tell "cache path went dead
+    # mid-run" apart from "upstream factory slow/flaky".
+    echo "=== (a2) tenant worker DataVolume import stage (management cluster, ns tenant-test) ==="
+    kubectl -n tenant-test get datavolume,pvc -o wide 2>&1 | grep -E 'NAME|md0|disk' || true
+    kubectl -n tenant-test describe datavolume 2>&1 | grep -Ei 'Name:|Phase:|Progress:|Restart|Reason:|Message:|Running Condition|Bound Condition' || true
+    for _p in $(kubectl -n tenant-test get pods -o name 2>/dev/null | grep -E '^pod/importer-'); do
+      echo "--- logs ${_p} (current) ---"
+      kubectl -n tenant-test logs "${_p}" --tail=40 2>&1 || true
+      echo "--- logs ${_p} (previous) ---"
+      kubectl -n tenant-test logs "${_p}" --previous --tail=40 2>&1 || true
+    done
+    echo "--- re-probe talos-image-cache ClusterIP + cacher debug bundle ---"
+    talos_image_cache_diagnose || true
+
     # (c) Tenant kubelet CSRs + the talos-csr-signer sidecar log. A mode-2b node
     # boots but blocks on a kubelet-serving/-client CSR that is never submitted
     # or never approved; the pending CSR list (tenant cluster) plus the signer

@@ -54,7 +54,12 @@
     echo "WARNING: could not read talos.schematicID/version from values.yaml — skipping mirror (fallback to public factory)"
     return 0
   fi
+  # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied
+  # here: Cilium's CRDs do not exist until Cozystack is installed (below), so
+  # applying it now would error. It is applied at point-of-use by
+  # hack/e2e-chainsaw/_lib/talos-image-cache.sh once Cilium is up.
   sed -e "s|__SCHEMATIC_ID__|${sid}|g" -e "s|__TALOS_VERSION__|${ver}|g" hack/e2e-talos-image-cache.yaml \
+    | yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' \
     | kubectl apply -f - || echo "WARNING: failed to apply talos-image-cache (fallback to public factory)"
   if kubectl -n kube-system get deploy talos-image-cache >/dev/null 2>&1; then
     echo "talos-image-cache Deployment created (seeding ${sid}/${ver} in background)"
