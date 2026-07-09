@@ -185,7 +185,9 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build ${{ matrix.pkg }}
-        run: make -C "$PKG" image
+        run: |
+          mkdir -p _out/oci
+          make -C "$PKG" image
         env:
           PKG: ${{ matrix.pkg }}
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
@@ -198,6 +200,12 @@ jobs:
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          # Fork PRs get no registry credentials, so instead of pushing, build
+          # each image to _out/oci/<name>.oci.tar and upload it below; the
+          # privileged e2e-fork.yaml workflow_run pushes them by digest. Empty on
+          # same-repo PRs → normal push path. Setting it also forces PUSH/LOAD
+          # off in common-envs.mk (#3257).
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && '_out/oci' || '' }}
       - name: Capture digest patch fragment
         id: frag
         env:
@@ -216,6 +224,15 @@ jobs:
         with:
           name: pr-patch-fragment-${{ steps.frag.outputs.safe }}
           path: _out/fragments/${{ steps.frag.outputs.safe }}.patch
+          if-no-files-found: error
+      # Fork PR only: the images were exported to OCI archives instead of pushed
+      # (OCI_EXPORT_DIR above). Upload them for e2e-fork.yaml to push by digest.
+      - name: Upload OCI image archives (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-${{ steps.frag.outputs.safe }}
+          path: _out/oci/*.oci.tar
           if-no-files-found: error
 
   # Talos is its own leg: the nocloud disk and the installer tarball are heavy
@@ -265,13 +282,17 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build Talos image (matchbox + installer tarball)
-        run: make -C packages/core/talos image
+        run: |
+          mkdir -p _out/oci
+          make -C packages/core/talos image
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          # Fork PR: export to OCI archive instead of pushing (see build job).
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && '_out/oci' || '' }}
       - name: Build Talos nocloud disk
         run: make -C packages/core/talos talos-nocloud
       - name: Capture Talos patch fragment
@@ -284,6 +305,14 @@ jobs:
         with:
           name: pr-patch-fragment-talos
           path: _out/fragments/talos.patch
+          if-no-files-found: error
+      # Fork PR only: upload the Talos image OCI archive for e2e-fork.yaml.
+      - name: Upload Talos OCI image archive (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-talos
+          path: _out/oci/*.oci.tar
           if-no-files-found: error
       - name: Upload Talos image
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -417,16 +446,37 @@ jobs:
           buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-      # Builds the operator image AND flux-pushes the now-fully-patched packages
-      # tree, then patches the installer's platformSourceRef to that artifact.
+      # Same-repo PR: build the operator image AND flux-push the now-fully-patched
+      # packages tree, then patch the installer's platformSourceRef to that
+      # artifact. Fork PR: no registry creds — build ONLY the operator image to an
+      # OCI archive (image-packages/chart, which push, are skipped) and upload it;
+      # e2e-fork.yaml pushes the operator + flux-pushes the packages tree and
+      # bakes platformSourceRef there. The overlay above already ran, so the
+      # pr.patch assembled below carries the fully digest-pinned tree either way.
       - name: Build installer (operator + packages artifact)
-        run: make -C packages/core/installer image
+        run: |
+          mkdir -p _out/oci
+          if [ "$IS_FORK" = "true" ]; then
+            make -C packages/core/installer pre-checks image-operator
+          else
+            make -C packages/core/installer image
+          fi
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && '_out/oci' || '' }}
+      # Fork PR only: upload the operator image OCI archive for e2e-fork.yaml.
+      - name: Upload installer OCI image archive (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-installer
+          path: _out/oci/*.oci.tar
+          if-no-files-found: error
       - name: Assemble pr.patch
         run: |
           mkdir -p _out/assets
@@ -509,8 +559,16 @@ jobs:
             core.setOutput('disk_id',     diskId);
 
 
+  # In-tree e2e for SAME-REPO PRs. Deliberately NOT named "E2E Tests": the
+  # required "E2E Tests" context is an explicit check-run concluded by the
+  # `e2e-report` job (non-fork) or by e2e-fork.yaml (fork). A required *job* that
+  # skips counts as PASSED by branch protection, which is exactly how fork PRs
+  # used to merge with e2e never run (#3257); routing the required context
+  # through a check-run removes that skip-to-green path. Fork PRs skip this job
+  # (they have no pushed images to pull) and run e2e in the privileged
+  # workflow_run instead.
   e2e:
-    name: "E2E Tests"
+    name: "E2E (in-tree)"
     # The sandbox boots three QEMU guests (hack/e2e-prepare-cluster.bats), each
     # with `-smp 8 -m 24576`, so the guests alone demand 24 vCPU and 72 GiB.
     # On the 24-vCPU runner that is a 1:1 CPU commit with zero host headroom for
@@ -533,7 +591,7 @@ jobs:
       packages: read
       checks: write
     needs: ["finalize", "build-talos", "resolve_assets"]
-    if: ${{ always() && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success') }}
+    if: ${{ always() && !github.event.pull_request.head.repo.fork && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success') }}
 
     steps:
       - name: Generate GitHub App token
@@ -806,3 +864,58 @@ jobs:
       - name: Remove workspace
         if: always()
         run: rm -rf /tmp/$SANDBOX_NAME
+
+  # Report the required "E2E Tests" status as an explicit check-run rather than
+  # relying on a job named "E2E Tests". A required *job* that is skipped counts
+  # as PASSED by branch protection — desired for docs-only PRs, but the exact
+  # hole that let fork PRs merge with e2e never run (#3257). This job always runs
+  # on same-repo PRs and concludes "E2E Tests" deterministically:
+  #   • plan failed              → failure
+  #   • docs-only PR (code!=true)→ success (e2e not required)
+  #   • in-tree e2e succeeded     → success
+  #   • otherwise (skipped/failed/cancelled with code changes) → failure
+  # Fork PRs skip this job; e2e-fork.yaml concludes "E2E Tests" for them, so a
+  # fork PR stays "Expected"/not-mergeable until the privileged run reports.
+  e2e-report:
+    name: "Report E2E status"
+    needs: ["plan", "e2e"]
+    if: ${{ always() && !github.event.pull_request.head.repo.fork }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - name: Conclude "E2E Tests" check-run
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          CODE: ${{ needs.plan.outputs.code }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        with:
+          script: |
+            const { PLAN_RESULT, CODE, E2E_RESULT, HEAD_SHA } = process.env;
+            let conclusion, summary;
+            if (PLAN_RESULT !== 'success') {
+              conclusion = 'failure';
+              summary = `plan job did not succeed (result: ${PLAN_RESULT})`;
+            } else if (CODE !== 'true') {
+              conclusion = 'success';
+              summary = 'docs-only PR — e2e not required';
+            } else if (E2E_RESULT === 'success') {
+              conclusion = 'success';
+              summary = 'in-tree e2e passed';
+            } else {
+              conclusion = 'failure';
+              summary = `in-tree e2e did not pass (result: ${E2E_RESULT})`;
+            }
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'E2E Tests',
+              head_sha: HEAD_SHA,
+              status: 'completed',
+              conclusion,
+              output: { title: 'E2E Tests', summary },
+            });
+            core.info(`E2E Tests → ${conclusion}: ${summary}`);

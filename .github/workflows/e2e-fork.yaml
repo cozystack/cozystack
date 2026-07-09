@@ -1,0 +1,389 @@
+name: E2E (fork)
+
+# Privileged half of the fork-PR e2e split (#3257).
+#
+# A fork PR's `pull_request` run (pull-requests.yaml) carries no registry
+# credentials, so it builds every image to an OCI archive and uploads it as an
+# artifact instead of pushing (OCI_EXPORT_DIR). This workflow runs from the
+# DEFAULT branch after that run completes — so it DOES have secrets — and:
+#   1. pushes the pre-built image archives to OCIR BY DIGEST and flux-pushes the
+#      digest-pinned packages tree (job `publish`); and
+#   2. runs the e2e suite against them and reports the required "E2E Tests"
+#      check-run back on the PR head SHA (jobs `e2e` + `report`).
+#
+# Security boundary: the untrusted fork code produced only opaque artifacts. The
+# OCIR push token is live ONLY in `publish`, which runs trusted binaries
+# (git/skopeo/flux/yq) over data — never `make` or any fork-authored script. The
+# fork's images and test scripts run only in `e2e`, which has NO push token and
+# runs in an ephemeral sandbox. This is why the split exists instead of a
+# pull_request_target run that would hand fork code the credentials directly.
+#
+# Same-repo PRs are handled entirely by pull-requests.yaml; this workflow no-ops
+# for them (see the `resolve` job guard).
+
+on:
+  workflow_run:
+    workflows: ["Pull Request"]
+    types: [completed]
+
+# Cancel a stale privileged run when the fork pushes again (a newer Pull Request
+# run for the same fork branch supersedes it). Keyed by fork repo + branch since
+# the PR number is not known at workflow level.
+concurrency:
+  group: e2e-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+permissions:
+  contents: read
+
+jobs:
+  # Decide whether this is a fork PR that needs e2e, resolve its PR number and
+  # head SHA, and open the pending "E2E Tests" check-run so the PR is not
+  # mergeable until we conclude it. Fail-closed if the fork build failed;
+  # green-and-stop for docs-only fork PRs (no pr-patch artifact = nothing built).
+  resolve:
+    name: Resolve fork PR
+    # Only fork PRs: head_repository differs from the base repository. Same-repo
+    # PRs get "E2E Tests" from pull-requests.yaml's e2e-report job instead.
+    if: >-
+      ${{ github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write
+      actions: read
+    outputs:
+      should_run:   ${{ steps.r.outputs.should_run }}
+      pr_number:    ${{ steps.r.outputs.pr_number }}
+      head_sha:     ${{ steps.r.outputs.head_sha }}
+      run_id:       ${{ steps.r.outputs.run_id }}
+      check_run_id: ${{ steps.r.outputs.check_run_id }}
+    steps:
+      - name: Resolve and open check-run
+        id: r
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HEAD_SHA:   ${{ github.event.workflow_run.head_sha }}
+          RUN_ID:     ${{ github.event.workflow_run.id }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const { HEAD_SHA, RUN_ID, CONCLUSION } = process.env;
+            const { owner, repo } = context.repo;
+            // Validate the SHA before it flows into a check-run / image tag.
+            if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
+              core.setFailed(`unexpected head_sha '${HEAD_SHA}'`);
+              return;
+            }
+            core.setOutput('head_sha', HEAD_SHA);
+            core.setOutput('run_id', String(RUN_ID));
+
+            const conclude = async (conclusion, summary) => {
+              const cr = await github.rest.checks.create({
+                owner, repo, name: 'E2E Tests', head_sha: HEAD_SHA,
+                status: 'completed', conclusion,
+                output: { title: 'E2E Tests', summary },
+              });
+              return cr.data.id;
+            };
+
+            // Fork build did not succeed → fail the required check (fail-closed).
+            if (CONCLUSION !== 'success') {
+              await conclude('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Resolve the PR number for this commit (workflow_run.pull_requests
+            // is empty for forks). Validate it is a bare integer before it flows
+            // into a checkout ref.
+            const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner, repo, commit_sha: HEAD_SHA,
+            });
+            const pr = assoc.data.find(p => p.state === 'open') || assoc.data[0];
+            const prNumber = pr ? String(pr.number) : '';
+            if (!/^[0-9]+$/.test(prNumber)) {
+              await conclude('failure', `could not resolve an open PR for ${HEAD_SHA}`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+            core.setOutput('pr_number', prNumber);
+
+            // Docs-only fork PR: the build/finalize chain was skipped, so no
+            // pr-patch artifact exists — nothing to test, conclude success.
+            const arts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner, repo, run_id: RUN_ID, per_page: 100 },
+            );
+            if (!arts.some(a => a.name === 'pr-patch')) {
+              await conclude('success', 'docs-only PR — e2e not required');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Real run: open an in-progress check-run; `report` concludes it.
+            const cr = await github.rest.checks.create({
+              owner, repo, name: 'E2E Tests', head_sha: HEAD_SHA,
+              status: 'in_progress',
+              output: { title: 'E2E Tests', summary: 'Running e2e in the privileged fork workflow…' },
+            });
+            core.setOutput('check_run_id', String(cr.data.id));
+            core.setOutput('should_run', 'true');
+
+  # Push the fork-built image archives to OCIR by digest and flux-push the
+  # digest-pinned packages tree. Only trusted binaries touch the fork's content
+  # while the OCIR token is live — no `make`/fork script runs here.
+  publish:
+    name: Push fork images + packages artifact
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.should_run == 'true' }}
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      packages: write
+      actions: read
+    outputs:
+      packages_digest: ${{ steps.push.outputs.packages_digest }}
+    steps:
+      - name: Set up toolchain (skopeo, flux)
+        run: |
+          command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -v flux   >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+      # The base repo's own merge ref — safe to fetch, not fork-controlled code
+      # execution. pr.patch is applied as DATA below; nothing from the tree runs.
+      - name: Checkout PR merge ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Download pr.patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-patch
+          path: _out/assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Apply pr.patch (reconstruct digest-pinned tree)
+        run: git apply --3way _out/assets/pr.patch
+      - name: Download OCI image archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: pr-oci-*
+          merge-multiple: true
+          path: _out/oci
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Login to OCIR
+        env:
+          OCIR_USER:  ${{ secrets.OCIR_USER }}
+          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+        run: |
+          # skopeo (image copies) and flux (artifact push, via the docker
+          # keychain) each need OCIR auth. Token via stdin, never argv.
+          echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+          echo "$OCIR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+      - name: Push images by digest + packages artifact
+        id: push
+        env:
+          # Tag is cosmetic — consumers resolve by @sha256 digest (baked into
+          # pr.patch) — but keep the pr-<N>-<sha> scheme for discoverability and
+          # retention. Both values are validated in `resolve`.
+          IMAGE_TAG: pr-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.head_sha }}
+          HEAD_SHA:  ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          set -eu
+          shopt -s nullglob
+          for f in _out/oci/*.oci.tar; do
+            name="$(basename "$f" .oci.tar)"
+            echo "Pushing $name → ${REGISTRY}/${name}:${IMAGE_TAG}"
+            # skopeo preserves the manifest digest bit-for-bit, so the
+            # ${REGISTRY}/${name}@sha256:… refs in pr.patch resolve.
+            skopeo copy --preserve-digests "oci-archive:$f" "docker://${REGISTRY}/${name}:${IMAGE_TAG}"
+          done
+          # Push the fully-patched packages tree — the OCI artifact the in-cluster
+          # operator pulls. This uploads data; it runs no code from the tree.
+          flux push artifact "oci://${REGISTRY}/cozystack-packages:${IMAGE_TAG}" \
+            --path=packages \
+            --source=https://github.com/cozystack/cozystack \
+            --revision="fork-pr:${HEAD_SHA}" 2>&1 | tee _push.log
+          digest="$(awk -F@ '/artifact successfully pushed/ {print $2}' _push.log)"
+          [ -n "$digest" ] || { echo "::error::failed to capture packages artifact digest"; exit 1; }
+          echo "packages_digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Pushed packages artifact @${digest}"
+
+  # Run the e2e suite against the pushed closure. NO OCIR push token here — the
+  # sandbox pulls images anonymously; the fork's images/scripts run only in this
+  # ephemeral job. Mirrors pull-requests.yaml's in-tree e2e (full suite; a fork
+  # PR has no reliable cross-workflow diff to scope TIA against).
+  e2e:
+    name: E2E (fork run)
+    needs: [resolve, publish]
+    if: ${{ needs.resolve.outputs.should_run == 'true' }}
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    steps:
+      - name: Checkout PR merge ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up toolchain (yq)
+        run: |
+          command -v yq >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+      - name: Download Talos image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: talos-image
+          path: _out/assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Download pr.patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-patch
+          path: _out/assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Apply pr.patch
+        run: git apply --3way _out/assets/pr.patch
+      # Point the installer at the packages artifact `publish` pushed (the
+      # artifact carries no self-digest, so pin it on the values we install).
+      - name: Pin installer to pushed packages artifact
+        env:
+          PACKAGES_DIGEST: ${{ needs.publish.outputs.packages_digest }}
+        run: |
+          yq -i ".cozystackOperator.platformSourceUrl = \"oci://${REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
+          yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:fork-${{ needs.resolve.outputs.pr_number }}" | sha256sum | cut -c1-10)" >> "$GITHUB_ENV"
+      - name: Prepare workspace
+        run: |
+          rm -rf "/tmp/$SANDBOX_NAME"
+          cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
+      - name: Prepare environment
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+      - name: Install Cozystack into sandbox
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::not-Ready HelmReleases"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            exit 1
+          fi
+      - name: Run OpenAPI tests
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+      - name: Run E2E tests (full suite)
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          apps_list=$(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1)
+          failed_tests=""
+          for app in $apps_list; do
+            echo "::group::Testing $app"
+            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
+              echo "::endgroup::"; echo "✅ $app passed"
+            else
+              echo "::endgroup::"; echo "❌ $app failed"
+              failed_tests="$failed_tests $app"
+              echo "::group::Diagnostics for $app"
+              docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+              docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+              echo "::endgroup::"
+            fi
+          done
+          if [ -n "$failed_tests" ]; then echo "❌ Failed:$failed_tests"; exit 1; fi
+          echo "✅ All E2E tests passed"
+      - name: Collect report
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
+          if-no-files-found: warn
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+      - name: Remove workspace
+        if: always()
+        run: rm -rf "/tmp/$SANDBOX_NAME"
+
+  # Conclude the required "E2E Tests" check-run opened by `resolve`. Always runs
+  # (so a failed publish/e2e still turns the check red rather than leaving it
+  # stuck in-progress). success only when the e2e job passed.
+  report:
+    name: Report fork E2E status
+    needs: [resolve, publish, e2e]
+    if: ${{ always() && needs.resolve.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      checks: write
+    steps:
+      - name: Conclude "E2E Tests" check-run
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          CHECK_RUN_ID:   ${{ needs.resolve.outputs.check_run_id }}
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          E2E_RESULT:     ${{ needs.e2e.result }}
+          HEAD_SHA:       ${{ needs.resolve.outputs.head_sha }}
+        with:
+          script: |
+            const { CHECK_RUN_ID, PUBLISH_RESULT, E2E_RESULT, HEAD_SHA } = process.env;
+            const { owner, repo } = context.repo;
+            let conclusion, summary;
+            if (E2E_RESULT === 'success') {
+              conclusion = 'success';
+              summary = 'fork e2e passed (privileged run)';
+            } else if (PUBLISH_RESULT !== 'success') {
+              conclusion = 'failure';
+              summary = `image/artifact publish did not succeed (result: ${PUBLISH_RESULT})`;
+            } else {
+              conclusion = 'failure';
+              summary = `fork e2e did not pass (result: ${E2E_RESULT})`;
+            }
+            if (CHECK_RUN_ID) {
+              await github.rest.checks.update({
+                owner, repo, check_run_id: Number(CHECK_RUN_ID),
+                status: 'completed', conclusion,
+                output: { title: 'E2E Tests', summary },
+              });
+            } else {
+              await github.rest.checks.create({
+                owner, repo, name: 'E2E Tests', head_sha: HEAD_SHA,
+                status: 'completed', conclusion,
+                output: { title: 'E2E Tests', summary },
+              });
+            }
+            core.info(`E2E Tests → ${conclusion}: ${summary}`);
