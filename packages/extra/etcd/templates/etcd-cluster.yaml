@@ -275,3 +275,50 @@ spec:
     app.kubernetes.io/managed-by: etcd-operator
     app.kubernetes.io/name: etcd
   version: {{ $.Chart.Version }}
+---
+# Transitional headless Service backing the LEGACY per-pod DNS names.
+#
+# `etcd-migrate` adopts legacy clusters IN PLACE — the existing Pods are never
+# recreated, so they keep their original `spec.subdomain: etcd-headless` (and
+# hostname etcd-<i>). Their stable DNS name therefore stays
+# `etcd-<i>.etcd-headless.<ns>.svc`, which the v1alpha2 operator dials for
+# MemberList/health until the members are eventually rolled onto its native
+# `<member>.etcd.<ns>.svc` domain (served by the operator-owned `etcd` Service).
+#
+# The v1alpha2 operator only creates the native `etcd` Service, and the legacy
+# `etcd-headless` Service (previously owned by the old operator) is pruned during
+# the transition. Without a Service named `etcd-headless`, the adopted Pods'
+# `etcd-<i>.etcd-headless.<ns>.svc` records stop resolving (`no such host`),
+# MemberList fails, and status.readyMembers never populates — the cluster never
+# goes Ready even though the etcd processes are healthy and in quorum. This is
+# the DNS counterpart of the legacy `*.etcd-headless.<ns>.svc` wildcard kept in
+# the server/peer cert SANs above for the same transition window.
+#
+# Selector mirrors the operator's native `etcd` Service
+# (etcd-operator.cozystack.io/cluster), so this resolves the same member Pods;
+# publishNotReadyAddresses keeps peer discovery working while a member is not
+# yet Ready. Safe to remove — together with the legacy cert SAN — once the
+# members have been rolled onto the native `etcd` subdomain.
+apiVersion: v1
+kind: Service
+metadata:
+  name: etcd-headless
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: etcd
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    cozystack.io/service: etcd
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    etcd-operator.cozystack.io/cluster: etcd
+  ports:
+  - name: client
+    port: 2379
+    targetPort: 2379
+    protocol: TCP
+  - name: peer
+    port: 2380
+    targetPort: 2380
+    protocol: TCP
