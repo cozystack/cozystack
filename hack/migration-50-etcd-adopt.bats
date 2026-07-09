@@ -289,3 +289,53 @@ lineno() {
   ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
   rm -rf "$WORK"
 }
+
+@test "cert SAN check is exact: a superstring dnsName does not skip the re-issue patch" {
+  prep
+  # The Certificate's spec.dnsNames already carries *.etcd.<ns>.svc.cluster.local,
+  # which CONTAINS the native wildcard *.etcd.<ns>.svc as a substring but is not
+  # an exact match. A substring match (the bug) would treat the wildcard as
+  # already present and skip the patch; the exact match must still re-issue.
+  export FAKE_CERTS=1
+  export FAKE_CERT_SUPERSTRING=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  # Both Certificates are still patched despite the substring-only SAN.
+  grep -qF -- "PATCH-CERT etcd-server" "$FAKE_CMDLOG"
+  grep -qF -- "PATCH-CERT etcd-peer" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "etcd-migrate authenticates via a synthesized in-cluster kubeconfig at kubernetes.default.svc" {
+  prep
+  # etcd-migrate only reads a kubeconfig FILE (no in-cluster SA fallback), so the
+  # script synthesizes one from the mounted ServiceAccount. Point the SA dir at a
+  # fixture and capture the written kubeconfig.
+  sa="$WORK/sa"; mkdir -p "$sa"
+  printf 'faketoken'   > "$sa/token"
+  printf 'fakeca'      > "$sa/ca.crt"
+  printf 'cozy-system' > "$sa/namespace"
+  export ETCD_ADOPT_SA_DIR="$sa"
+  export ETCD_MIGRATE_KUBECONFIG="$WORK/in-cluster.kubeconfig"
+  # A bare IPv6 host that must NOT end up in the (unbracketed, invalid) server URL.
+  export KUBERNETES_SERVICE_HOST="fd00::1"
+  export KUBERNETES_SERVICE_PORT="443"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  # Both the dry-run and --apply invocations carry --kubeconfig=<synthesized>.
+  [ "$(grep -cF -- "--kubeconfig=$WORK/in-cluster.kubeconfig" "$FAKE_CMDLOG")" -ge 2 ]
+  # The kubeconfig is IP-family-agnostic (DNS name, not the bare IPv6 host) and
+  # authenticates via the SA token file + CA.
+  [ -s "$ETCD_MIGRATE_KUBECONFIG" ]
+  grep -qF -- "server: https://kubernetes.default.svc" "$ETCD_MIGRATE_KUBECONFIG"
+  ! grep -qF -- "fd00::1" "$ETCD_MIGRATE_KUBECONFIG"
+  grep -qF -- "tokenFile: $sa/token" "$ETCD_MIGRATE_KUBECONFIG"
+  grep -qF -- "certificate-authority: $sa/ca.crt" "$ETCD_MIGRATE_KUBECONFIG"
+  rm -rf "$WORK"
+}

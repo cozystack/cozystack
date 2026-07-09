@@ -69,6 +69,20 @@ case "$args" in
     cert="$(arg_after certificate.cert-manager.io "$@")"
     : > "$state_dir/reissued-${cert}-tls"
     log "PATCH-CERT $cert"; exit 0 ;;
+  # jsonpath '{.spec.dnsNames[*]}' probe used by _san_present: emit a
+  # SPACE-separated SAN list (matches real kubectl jsonpath[*] output), NOT the
+  # -o json blob below. FAKE_CERT_SUPERSTRING=1 injects a longer SAN that
+  # CONTAINS the native wildcard as a substring (*.etcd.<ns>.svc inside
+  # *.etcd.<ns>.svc.cluster.local) but is not an exact match — exercises the
+  # exact-match guard (a substring match would wrongly skip the re-issue patch).
+  *"get certificate.cert-manager.io"*"dnsNames"*)
+    ns="$(arg_after -n "$@")"
+    if [ "${FAKE_CERT_SUPERSTRING:-0}" = "1" ]; then
+      printf 'etcd etcd.%s.svc *.etcd.%s.svc.cluster.local\n' "$ns" "$ns"
+    else
+      printf 'etcd etcd.%s.svc\n' "$ns"
+    fi
+    exit 0 ;;
   *"get certificate.cert-manager.io"*"-o json"*)
     ns="$(arg_after -n "$@")"
     printf '{"spec":{"dnsNames":["etcd","etcd.%s.svc"]}}\n' "$ns"; exit 0 ;;

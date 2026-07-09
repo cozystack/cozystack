@@ -129,12 +129,40 @@ _san_present() {
   for try in 1 2 3 4 5; do
     a=$(kubectl -n "$ns" get secret "$secret" \
           -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null || true)
+    # {.spec.dnsNames[*]} yields a SPACE-separated list (one SAN per token);
+    # {.spec.dnsNames} would be a bracketed JSON blob that tr ',' cannot split,
+    # forcing a substring match. Split on spaces and match EXACTLY (grep -qxF) —
+    # same as the Secret annotation above — so a wildcard that is a substring of
+    # a longer SAN (e.g. *.etcd.<ns>.svc inside *.etcd.<ns>.svc.cluster.local)
+    # cannot false-positive and skip the patch.
     d=$(kubectl -n "$ns" get certificate.cert-manager.io "$cert" \
-          -o jsonpath='{.spec.dnsNames}' 2>/dev/null || true)
+          -o jsonpath='{.spec.dnsNames[*]}' 2>/dev/null || true)
     if [ -n "$a" ] || [ -n "$d" ]; then
       printf '%s' "$a" | tr ',' '\n' | grep -qxF "$native" && return 0
-      printf '%s' "$d" | tr ',' '\n' | grep -qF  "$native" && return 0
+      printf '%s' "$d" | tr ' ' '\n' | grep -qxF "$native" && return 0
       return 1
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# _secret_has_san: exact-match check that $native is listed in the ISSUED
+# Secret's cert-manager alt-names annotation — the authoritative record of what
+# cert-manager has actually issued. Unlike _san_present it does NOT consult the
+# Certificate spec.dnsNames: after we patch the spec below, the spec carries the
+# wildcard immediately, but the Secret is only re-issued once cert-manager
+# reconciles; the wait loop must gate on the SECRET, not on the value we just
+# wrote. Same empty-read retry rationale as _san_present (a real issued Secret
+# never has an empty alt-names annotation), and the same exact grep -qxF match.
+_secret_has_san() {
+  local ns="$1" secret="$2" native="$3" a try
+  for try in 1 2 3 4 5; do
+    a=$(kubectl -n "$ns" get secret "$secret" \
+          -o jsonpath='{.metadata.annotations.cert-manager\.io/alt-names}' 2>/dev/null || true)
+    if [ -n "$a" ]; then
+      printf '%s' "$a" | tr ',' '\n' | grep -qxF "$native"
+      return
     fi
     sleep 1
   done
@@ -173,8 +201,8 @@ ensure_wildcard_sans() {
     # Wait for cert-manager to re-issue the Secret with the new SANs.
     local i
     for i in $(seq 1 30); do
-      if _san_present "$ns" "$secret" "$cert" "$native"; then
-        echo "    ${ns}/${secret}: re-issued with native wildcard"
+      if _secret_has_san "$ns" "$secret" "$native"; then
+        echo "    ${ns}/${secret}: re-issued Secret now carries the native wildcard"
         break
       fi
       [ "$i" = "30" ] && { echo "    ERROR: ${ns}/${secret} not re-issued with ${native} in time" >&2; exit 1; }
@@ -358,9 +386,14 @@ fi
 # ServiceAccount: it only reads a kubeconfig FILE (-k/--kubeconfig, default
 # /root/.kube/config), which does not exist in this Job pod. Synthesize one from
 # the mounted ServiceAccount so etcd-migrate authenticates as the hook SA.
-ETCD_MIGRATE_KUBECONFIG="/tmp/in-cluster.kubeconfig"
-_sa_dir="/var/run/secrets/kubernetes.io/serviceaccount"
+ETCD_MIGRATE_KUBECONFIG="${ETCD_MIGRATE_KUBECONFIG:-/tmp/in-cluster.kubeconfig}"
+_sa_dir="${ETCD_ADOPT_SA_DIR:-/var/run/secrets/kubernetes.io/serviceaccount}"
 if [ ! -f "$ETCD_MIGRATE_KUBECONFIG" ] && [ -f "$_sa_dir/token" ]; then
+  # server is the in-cluster DNS name, NOT https://$KUBERNETES_SERVICE_HOST:PORT:
+  # on an IPv6-only cluster KUBERNETES_SERVICE_HOST is a bare IPv6 address that
+  # would need bracketing to be a valid URL. kubernetes.default.svc is
+  # IP-family-agnostic, resolves in-cluster, and is validated by the mounted SA
+  # CA — the same server URL kubectl itself synthesizes in-cluster.
   cat > "$ETCD_MIGRATE_KUBECONFIG" <<KUBECONFIG_EOF
 apiVersion: v1
 kind: Config
@@ -368,7 +401,7 @@ clusters:
 - name: in-cluster
   cluster:
     certificate-authority: ${_sa_dir}/ca.crt
-    server: https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT:-443}
+    server: https://kubernetes.default.svc
 contexts:
 - name: in-cluster
   context:
