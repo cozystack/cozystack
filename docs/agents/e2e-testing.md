@@ -97,6 +97,19 @@ Be precise about TIA's scope — it is narrower than "skip E2E for unrelated PRs
 - **Exclude loop devices** from host LVM scanning in the Talos machine config so the host does not activate volume groups inside loop-mounted e2e disk images.
 - **Fail fast on node readiness** (≈5m, then bail) rather than marching into LB/NFS tests that will also fail — it saves several minutes per attempt and keeps the real failure at the top of the log.
 
+## Chainsaw v0.2.15 gotchas
+
+The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026); none of the traps below are fixed upstream yet, so the workarounds stay until a bump is possible. Each one has already cost a debugging session — this is the "no one gets it right the first time" list, worth a read before writing a new assert.
+
+- **Condition asserts must use the filter-as-list form.** `(conditions[?type == 'Ready'])` evaluates to a *list*; assert against it with a list body (`- status: "True"`). The indexed `(conditions[?type == 'Ready'])[0]` form throws `field not found` (also enforced by convention 2).
+- **No number literals / backticks in JMESPath.** `` ports[?port == `443`] `` mis-evaluates in v0.2.15 — the numeric comparison silently returns the wrong set. Assert ports (and any numeric field) with the exact-ordered projection form instead: `(ports[*].port): [80, 443]`. `sort()` and `contains(list, <number>)` are likewise broken with numeric arguments.
+- **`error:` fails hard on an unknown GVK.** Unlike the BATS `! kubectl get <kind>` idiom (which passes when the type is absent), a Chainsaw `error:` op against a kind whose CRD is not installed *errors the step* rather than asserting absence. If a type may legitimately not exist (a version rename, an optional component), gate the check behind a positive precondition or do it in a `script` step — never a bare `error:`. This is what broke the etcd suite on the `v1alpha1` → `v1alpha2` rename.
+- **No conditional Test-level `skip`.** There is no `skip: <expr>`; an env-var-gated test must `exit 0` early inside a `script` step (see the `ETCD_E2E_S3_ROUNDTRIP` gate). A Test with no matching gate always runs.
+- **`finally` is step-level, not test-level.** To guarantee teardown of something Chainsaw did not create, put the work *and* its own cleanup in a single `script` step; there is no test-wide `finally` block to hang it on.
+- **Cleanup is bounded and blocking — it surfaces latent teardown bugs.** Chainsaw waits for the resources it applied to actually delete (within the `delete`/`cleanup` timeouts in `hack/e2e-chainsaw/.chainsaw.yaml`) and *fails* the test if they don't. This is deliberate — a stuck uninstall starves the next suite — but it means a teardown path the BATS suite masked with `|| true` now surfaces as `context deadline exceeded` at cleanup. The failure is honest, not new; fix the teardown rather than widening the timeout (see cozystack/cozystack#3271, a pre-delete hook that hung on a nodeless tenant).
+- **Reading a failure diff: the "actual" side is a projection.** Chainsaw projects the live object onto the expected fields, so `status: {}` in a diff means "the expression matched nothing / evaluated empty," not "status is literally empty." The real reason is the `error` line *above* the diff — read that first.
+- **A `catch`/cleanup `script`'s cwd is the failing suite's directory** (`hack/e2e-chainsaw/<suite>/`), so `../../..` is the repo root. The suites `cd ../../..` and then source shared helpers by repo-root-relative path (`hack/e2e-chainsaw/_lib/…`) rather than juggling `../` hops.
+
 ## Reviewer checklist for a new or changed E2E test
 
 1. No new retry loop unless the step is pure infra (image pull / VM boot / network).
