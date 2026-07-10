@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Sourced by the chainsaw etcd Tests after `cd` to the repo root. Provides:
 #   etcd_cleanup        — drain of the singleton etcd release (details below)
 #   etcd_backup_cleanup — teardown of the S3 backup round-trip's resources

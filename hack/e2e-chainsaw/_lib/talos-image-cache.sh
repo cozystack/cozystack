@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared helper: choose the Talos Image Factory base URL for tenant Kubernetes
 # e2e CRs.
 #

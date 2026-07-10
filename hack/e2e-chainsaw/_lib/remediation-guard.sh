@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Helpers for asserting that a Flux HelmRelease did not fall into an
 # install/upgrade remediation cycle during an e2e run.
 #

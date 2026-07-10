@@ -56,6 +56,11 @@ spec:
   - name: verify-services-and-endpoints
     try:
     # Replaces three `until kubectl get svc ... | grep -q 5432` loops
+    # TODO(chainsaw>0.2.15): the (ports[0].port) / (ports[*].port) projection form in
+    # these Service asserts is a v0.2.15 workaround for mis-evaluated number-literal
+    # filters (ports[?port==`5432`]); (ports[0]) also checks only the first port.
+    # Restore the filter form on a chainsaw bump. Same workaround lives in
+    # kafka/mariadb/harbor — see "Chainsaw v0.2.15 gotchas" in docs/agents/e2e-testing.md.
     - assert:
         resource:
           apiVersion: v1
