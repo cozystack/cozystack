@@ -1,0 +1,222 @@
+name: Cut Pre-release Tag
+
+# Cut a pre-release tag (vX.Y.Z-alpha.N / -beta.N / -rc.N) as the CozyStack CI
+# app, so that no human ever pushes a v* tag by hand.
+#
+# This is the single entry point for creating a pre-release. Stable vX.Y.Z tags
+# are never cut here (or by hand) — they are created write-once by
+# pull-requests-release.yaml finalize at a promote PR's merge commit. See
+# docs/release.md and #2677.
+#
+# Dispatch from the branch the tag belongs to: `main` for a new minor's
+# pre-release (vX.Y.0-rc.N), or `release-X.Y` for a patch line (vX.Y.Z-rc.N).
+# The workflow tags that branch's HEAD.
+#
+# Why a workflow instead of a manual `git push`:
+#   1. The tag is pushed with the CI app token. A tag pushed with the default
+#      GITHUB_TOKEN would NOT trigger tags.yaml (GitHub suppresses workflow
+#      recursion from GITHUB_TOKEN); the app token is a distinct identity, so
+#      tags.yaml fires exactly as it does for a maintainer's manual push.
+#   2. It pushes `HEAD:refs/tags/<tag>` from the checked-out branch tip, so the
+#      push event's base_ref is populated — tags.yaml's "Get base branch" step
+#      needs it to detect main vs release-X.Y.
+#   3. It makes CI the sole creator of pre-release tags. Repo rulesets can
+#      already restrict *stable* tag creation to CI (a "Restrict creations"
+#      ruleset targeting v* while excluding v*-*), but pre-releases were
+#      hand-pushed, so they could not be CI-locked. With this workflow as their
+#      only entry point, admins can extend "Restrict creations" (CI app the sole
+#      bypass) to *all* of v* — pre-release and stable alike.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Pre-release tag to cut, e.g. v1.6.0-rc.1 (must be -alpha.N / -beta.N / -rc.N)"
+        required: true
+        type: string
+
+concurrency:
+  # One global lane: two dispatches racing to push overlapping tags would
+  # confuse the write-once guard. Pre-release cuts are rare, so serialize.
+  group: cut-prerelease
+  cancel-in-progress: false
+
+# The tag write happens via the app token, not GITHUB_TOKEN, so the job needs
+# only read scope on the default token.
+permissions:
+  contents: read
+
+jobs:
+  cut:
+    name: Cut ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # Pure-input validation first — no token minted, no checkout, so a bad tag
+      # or wrong dispatch branch fails in seconds.
+
+      # Validate the dispatch input against a strict pre-release pattern. A
+      # stable vX.Y.Z is rejected on purpose: stable tags are cut only by the
+      # promote flow, at a PR merge commit.
+      - name: Parse and validate tag
+        id: parse
+        env:
+          TAG: ${{ inputs.tag }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag = process.env.TAG.trim();
+            const m = tag.match(/^v(\d+)\.(\d+)\.(\d+)-(alpha|beta|rc)\.(\d+)$/);
+            if (!m) {
+              core.setFailed(
+                `tag '${tag}' must match 'vX.Y.Z-(alpha|beta|rc).N'. ` +
+                `Stable vX.Y.Z tags are cut by the promote flow, not here.`
+              );
+              return;
+            }
+            core.setOutput('tag', tag);
+            core.setOutput('line', `${m[1]}.${m[2]}`);   // 1.6
+            core.setOutput('patch', m[3]);                // 0
+
+      # Refuse to cut from anything but main or the *matching* release-X.Y line.
+      # The pushed tag's base_ref (= the dispatch branch) must be one tags.yaml
+      # accepts, and the branch must actually contain the version being cut.
+      - name: Validate dispatch branch
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+          LINE: ${{ steps.parse.outputs.line }}
+          PATCH: ${{ steps.parse.outputs.patch }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ]; then
+            echo "::error::Dispatch this workflow from a branch (main or release-X.Y), not a tag or SHA."
+            exit 1
+          fi
+          case "$REF_NAME" in
+            main)
+              # From main only a *new minor's* pre-release (vX.Y.0-*) is valid.
+              # A patch-line pre-release (Z>0) built from main content would land
+              # on a wrong-tree release-X.Y.Z-rc.N staging branch — it must be cut
+              # from its own release-X.Y line instead.
+              if [ "$PATCH" != "0" ]; then
+                echo "::error::From 'main' only vX.Y.0-* pre-releases may be cut (got patch .$PATCH). Cut v$LINE.$PATCH-* from 'release-$LINE'."
+                exit 1
+              fi
+              ;;
+            release-*)
+              if [ "release-$LINE" != "$REF_NAME" ]; then
+                echo "::error::Tag line $LINE does not match dispatch branch '$REF_NAME'. Cut v$LINE.* from 'main' or 'release-$LINE'."
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Dispatch from 'main' or 'release-X.Y' only. Got '$REF_NAME'."
+              exit 1
+              ;;
+          esac
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          # Scope the token to this repo only — it never touches other repos.
+          repositories: ${{ github.event.repository.name }}
+
+      # Cutting a release is privileged. workflow_dispatch already requires write
+      # access to trigger, so this is defense-in-depth: it makes the requirement
+      # explicit and auditable, and fails closed if that platform default ever
+      # changes or the job is reached by another path. Reads permission via the
+      # app token (fails the step if the API errors — fail closed).
+      - name: Require write access
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              username: context.actor,
+            });
+            // getCollaboratorPermissionLevel's `permission` field returns only
+            // the legacy roles admin/write/read/none (maintain collapses to
+            // write, triage to read), so admin+write is the whole "can push" set.
+            const allowed = ['admin', 'write'];
+            if (!allowed.includes(data.permission)) {
+              core.setFailed(
+                `@${context.actor} has '${data.permission}' access — cutting a pre-release tag ` +
+                `requires write access to ${context.repo.owner}/${context.repo.repo}.`
+              );
+              return;
+            }
+            core.info(`@${context.actor}: '${data.permission}' access — authorized.`);
+
+      # Minimal checkout — just enough to configure origin with the app-token
+      # credential (persist-credentials, default on) so the bare push below is
+      # app-authenticated, and to resolve HEAD. One ref, shallow, no tags.
+      - name: Check out the dispatched branch
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+          token: ${{ steps.app-token.outputs.token }}
+
+      - name: Cut and push the pre-release tag
+        env:
+          TAG: ${{ steps.parse.outputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Write-once: the tag must not already exist on origin. Distinguish
+          # "absent" (git ls-remote --exit-code exits 2) from a transport/auth
+          # failure (any other non-zero) so an infra blip cannot masquerade as
+          # "free to create".
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::Tag $TAG already exists on origin — pre-release tags are write-once."
+            exit 1
+          elif [ "$rc" -ne 2 ]; then
+            echo "::error::Could not query origin for $TAG (git ls-remote exit $rc) — refusing to proceed."
+            exit 1
+          fi
+
+          # Stale-tip guard: workflow_dispatch checks out the dispatch-time commit,
+          # not the branch tip at push time (the gap includes any wait in the
+          # cut-prerelease concurrency queue). If the branch advanced meanwhile,
+          # pushing HEAD would tag a stale commit and yield an empty base_ref —
+          # tags.yaml would then fail, having already burned this write-once name.
+          # Refuse and ask for a re-run instead.
+          local_head="$(git rev-parse HEAD)"
+          # Resolve the remote tip without a pipe masking ls-remote's exit code
+          # (mirrors the write-once query above): a transport/auth failure must
+          # not read as "branch not found".
+          set +e
+          remote_ls="$(git ls-remote origin "refs/heads/$REF_NAME")"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Could not query origin for the tip of '$REF_NAME' (git ls-remote exit $rc) — refusing to proceed."
+            exit 1
+          fi
+          remote_head="$(printf '%s' "$remote_ls" | cut -f1)"
+          if [ -z "$remote_head" ]; then
+            echo "::error::Could not resolve the tip of '$REF_NAME' on origin (no such branch?)."
+            exit 1
+          fi
+          if [ "$local_head" != "$remote_head" ]; then
+            echo "::error::'$REF_NAME' advanced since dispatch ($local_head -> $remote_head). Re-run the workflow to tag the current tip."
+            exit 1
+          fi
+
+          # Push HEAD straight to a tag ref: no local tag object, non-forced. The
+          # branch-tip anchoring makes GitHub populate the push event's base_ref
+          # (tags.yaml's Get-base-branch step requires it); non-forced makes the
+          # tag write-once at the git layer. tags.yaml takes it from here (build +
+          # e2e + draft pre-release + staging branch).
+          git push origin "HEAD:refs/tags/$TAG"
+          echo "Pushed $TAG at $local_head from '$REF_NAME'."
+          echo "tags.yaml will now build, e2e, and draft the pre-release."

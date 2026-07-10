@@ -6,7 +6,7 @@ This document is both the process design (what the release model looks like) and
 
 You are about to:
 
-- Tag a release candidate (`vX.Y.0-rc.N`).
+- Cut a pre-release (`vX.Y.0-rc.N`, or `vX.Y.0-alpha.N` / `-beta.N`).
 - Cut a regular release (`vX.Y.0`).
 - Cut a patch release (`vX.Y.Z` with `Z > 0`).
 - Triage cherry-picks before a patch release.
@@ -25,7 +25,7 @@ There are three types of releases:
 - **Regular Releases** – Final versions (e.g., `v1.2.0`) that are feature-complete and thoroughly tested.
 - **Patch Releases** – Bugfix-only updates (e.g., `v1.2.1`) made after a stable release, based on a dedicated release branch.
 
-All three are matched by `tags.yaml`'s regex `^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$`. The tag push is the trigger for the whole pipeline. **Always push tags with `git push origin HEAD:refs/tags/<tag>`** so GitHub fills `base_ref` — `tags.yaml`'s `Get base branch` step refuses tags pushed without a base.
+All three are matched by `tags.yaml`'s regex `^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.\d+)?$`. The tag push is the trigger for the whole pipeline. **Pre-release tags (`-alpha` / `-beta` / `-rc`) are cut with the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow** (manual dispatch from `main` or `release-X.Y`) — it pushes the tag as the CI app at the dispatch branch's tip, so GitHub fills `base_ref` (`tags.yaml`'s `Get base branch` step refuses tags pushed without a base) and the push triggers `tags.yaml` (a tag pushed with the default `GITHUB_TOKEN` would not). Stable `vX.Y.Z` tags are never pushed by hand at all — they are cut write-once by the promote flow at a PR merge commit.
 
 ## Release Candidates
 
@@ -55,7 +55,7 @@ gitGraph
 
 A regular release sequence runs as follows:
 
-1. Tag the last good commit on `main` as a release candidate (`v1.2.0-rc.N`) and push it with `git push origin HEAD:refs/tags/v1.2.0-rc.N`. CI builds the rc images, drafts the rc release, and pushes the digest-vendored `release-1.2.0-rc.N` staging branch.
+1. Cut a release candidate (`v1.2.0-rc.N`) from the last good commit on `main`: run the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `main`**) with the tag. It tags `main`'s HEAD as the CI app; `tags.yaml` then builds the rc images, drafts the rc release, and pushes the digest-vendored `release-1.2.0-rc.N` staging branch.
 2. Validate the rc. New features and fixes can still land on `main` and be picked up by a later rc.
 3. Once an rc is green, run the [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) workflow (manual dispatch) with that rc tag. Promotion is **transactional** — it performs no registry mutation at dispatch. It:
    1. Pushes the `release-1.2.0` branch: the rc's digest-vendored tree with the rc version substring rewritten to `1.2.0` (the digests are the rc's — unchanged).
@@ -142,7 +142,7 @@ gitGraph
 
    When all relevant patch commits are cherry-picked, the branch is ready for release.
 
-2. The maintainer tags the `HEAD` commit of branch `release-1.2` as a release candidate (`v1.2.1-rc.N`) and pushes it. CI builds the rc images, drafts the rc release, and pushes the `release-1.2.1-rc.N` staging branch.
+2. The maintainer cuts a release candidate (`v1.2.1-rc.N`) via the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `release-1.2`**), which tags that branch's `HEAD`. CI builds the rc images, drafts the rc release, and pushes the `release-1.2.1-rc.N` staging branch.
 3. Validate the rc.
 4. Once the rc is green, run [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) (manual dispatch) with that rc tag. It pushes the `release-1.2.1` branch (rc digests, tag string rewritten to `1.2.1`), drafts the `v1.2.1` release with the restamped assets, and opens the promote PR into `release-1.2` (labelled `release` + `full-e2e`). As with a regular release the retag is deferred to the merge — no registry mutation at dispatch.
 
@@ -176,12 +176,13 @@ gitGraph
 
 ## What CI does during the release process
 
-The numbered process above is implemented by four workflows. Knowing which job does what makes the failure modes much easier to diagnose.
+The numbered process above is implemented by five workflows. Knowing which job does what makes the failure modes much easier to diagnose.
 
-1. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
-2. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch: stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable), drafts the stable release, and opens the `release-X.Y.Z` promote PR. No registry mutation — transactional.
-3. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
-4. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on every push to `main`; syncs `docs/changelogs/v*.md` content into the corresponding GitHub Release body.
+1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Stable tags are never created here.
+2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
+3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch: stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable), drafts the stable release, and opens the `release-X.Y.Z` promote PR. No registry mutation — transactional.
+4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
+5. [`update-releasenotes.yaml`](../.github/workflows/update-releasenotes.yaml) — fires on every push to `main`; syncs `docs/changelogs/v*.md` content into the corresponding GitHub Release body.
 
 ### Phase 1 — `prepare-release` (hard gate)
 
@@ -249,7 +250,7 @@ A stable `vX.Y.Z` is created only by **promoting an existing release-candidate**
 
 - [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) is triggered manually once an rc has gone green. It rewrites the rc version substring in the vendored image tags (the digests stay the rc's) and opens the `release-X.Y.Z` staging PR — no registry mutation. Merging that PR (Phase 5) creates the write-once stable tag at the merge commit, then retags the rc's already-built, e2e-passed image digests to the stable tag **by digest** (no rebuild — see [`hack/promote-retag.sh`](../hack/promote-retag.sh)) and publishes the release. Because the copy source is the immutable rc digest, the stable image is bit-for-bit the rc image that passed e2e — and because the retag runs only after merge, an abandoned promotion never leaves stable-named bytes behind.
 
-So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. Pushing a stable `vX.Y.Z` tag by hand is **not** a supported path: `tags.yaml` fails fast on a stable tag that has no pre-existing draft ("stable tags come from promote-rc.yaml"), and even so the finalize step would refuse to move a pre-existing tag. Release candidates (`vX.Y.Z-rc.N`) are still pushed by hand — [`tags.yaml`](../.github/workflows/tags.yaml) fires on the rc tag push, builds it, and publishes the rc release.
+So a commit on a supported `release-X.Y` line ships when a maintainer promotes the next rc for that line — not automatically within 24h. Pushing a stable `vX.Y.Z` tag by hand is **not** a supported path: `tags.yaml` fails fast on a stable tag that has no pre-existing draft ("stable tags come from promote-rc.yaml"), and even so the finalize step would refuse to move a pre-existing tag. Pre-releases (`vX.Y.Z-rc.N`, `-alpha.N`, `-beta.N`) are cut with the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow, which pushes the tag as the CI app; [`tags.yaml`](../.github/workflows/tags.yaml) then fires on that push, builds it, and publishes the pre-release. Cutting via the workflow (rather than a manual `git push`) is what lets repo admins lock `v*` tag creation to the CI app — see the tag-protection note below.
 
 ## Nightly builds
 
@@ -552,6 +553,13 @@ Published tags are **write-once** — once a `vX.Y.Z` or rc tag is pushed it is 
 | [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) | Mutates no tags. Stages the `release-X.Y.Z` branch and opens the promote PR; the stable tag and the image retag both happen at merge (finalize). |
 
 This is the immutable-tag + rc-promotion model from [#2677](https://github.com/cozystack/cozystack/issues/2677): stable `vX.Y.Z` is created only by promoting an existing rc, rc tags are write-once, and `api/apps/v1alpha1/vX.Y.Z` is created only on a stable release. The old nightly `auto-release.yaml` (which delete-recreated auto-bumped patch tags) has been removed. rc and stable tags accrete permanently; the only churning artifacts are GHCR nightlies, which [`retention.yaml`](../.github/workflows/retention.yaml) prunes (see [Nightly builds](#nightly-builds)) — GHCR storage is the cost vector to watch.
+
+### Repo-side enforcement (tag-protection rulesets)
+
+The guarantees above are enforced in the workflows. Repo admins back them with two GitHub **tag rulesets** targeting `v*`:
+
+- **Immutability** — *Restrict updates* + *Restrict deletions*, **no bypass**. No actor (not even the CI app) can move or delete a shipped `v*` tag. Safe to enable at any time: nothing in the release flow ever moves or deletes a `v*` tag, it only creates new ones.
+- **Creation control** — *Restrict creations* with the **CI app as the sole bypass actor**, plus *Limit branches/tags updated in a single push* = 1. This turns "don't hand-push tags" from convention into hard enforcement: every `v*` tag — pre-release **and** stable — can then be created only by CI. Enable this **only after** [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) is in use, since that workflow is what makes CI the sole creator of pre-release tags; enabling it earlier would lock maintainers out of cutting rc/alpha/beta. (The Go-module tag `api/apps/v1alpha1/*` gets an equivalent pair of rulesets.)
 
 ## Splitting a release-blocking bundle PR
 

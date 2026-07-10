@@ -70,7 +70,7 @@ jobs:
   # required check rather than blocking e2e from starting.
   checks:
     name: Unit & controller tests
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
       contents: read
@@ -106,7 +106,7 @@ jobs:
       needs.plan.outputs.code == 'true'
       && needs.plan.outputs.any == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
       contents: read
@@ -207,7 +207,7 @@ jobs:
     if: |
       needs.plan.outputs.code == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 40
     permissions:
       contents: read
@@ -290,7 +290,7 @@ jobs:
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && needs.build-talos.result == 'success'
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
       contents: read
@@ -505,7 +505,7 @@ jobs:
     # keeps the guests' 24 vCPU / 72 GiB unchanged (no slower install) while
     # leaving 8 vCPU (25%) and 56 GiB of host headroom, which removes the
     # oversubscription that starves the probes.
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-32cpu-128gb-x86-64' }}
+    runs-on: oracle-vm-32cpu-128gb-x86-64
     timeout-minutes: 180
     permissions:
       contents: read

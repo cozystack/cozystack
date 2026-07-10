@@ -23,7 +23,8 @@ jobs:
         contains(github.event.pull_request.labels.*.name, 'backport-previous') ||
         (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous'))
       )
-    runs-on: [self-hosted]
+    # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     outputs:
@@ -95,7 +96,8 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (needs.prepare.outputs.backport_current == 'true' || needs.prepare.outputs.backport_previous == 'true')
-    runs-on: [self-hosted]
+    # git cherry-picks via backport-action — no docker, no repo toolchain: GitHub-hosted.
+    runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
