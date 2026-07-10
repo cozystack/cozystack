@@ -19,7 +19,7 @@ IMAGE_TAG = $(UPSTREAM_VERSION)-cozystack.$(COZYSTACK_REV)
 image:
 	docker buildx build images/cluster-api-control-plane-provider-kamaji \
 		--tag $(IMAGE_BASE):$(IMAGE_TAG) \
-		--tag $(IMAGE_BASE):$(IMAGE_TAG)-$(TAG) \
+		$(if $(strip $(OCI_EXPORT_DIR)),,--tag $(IMAGE_BASE):$(IMAGE_TAG)-$(TAG)) \
 		--cache-from type=registry,ref=$(IMAGE_BASE):latest \
 		$(if $(strip $(OCI_EXPORT_DIR)),,--cache-to type=inline) \
 		$(call oci-output,cluster-api-control-plane-provider-kamaji) \
