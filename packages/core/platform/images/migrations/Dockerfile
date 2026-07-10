@@ -5,7 +5,7 @@
 # target arch and verify it against the release's cli-SHA256SUMS.txt. Bump
 # ETCD_OPERATOR_VERSION (and the pinned checksums below) together, keeping it in
 # sync with packages/system/etcd-operator (Chart appVersion).
-FROM alpine:3.24
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 ARG TARGETOS
 ARG TARGETARCH

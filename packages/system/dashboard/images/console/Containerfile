@@ -1,4 +1,4 @@
-ARG NODE_VERSION=22-alpine
+ARG NODE_VERSION=22-alpine@sha256:16e22a550f3863206a3f701448c45f7912c6896a62de43add43bb9c86130c3e2
 
 # Stage 1: Install dependencies and build
 FROM node:${NODE_VERSION} AS builder
@@ -28,7 +28,7 @@ COPY tsconfig.base.json ./
 RUN pnpm --filter @cozystack/console build
 
 # Stage 2: Serve with nginx
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.29-alpine@sha256:0c79d56aee561a1d81c63f00eee5fb5fe29279560cdc55e91425133104c7fbe6
 
 COPY --from=builder /src/apps/console/dist /usr/share/nginx/html
 

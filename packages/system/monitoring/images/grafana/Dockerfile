@@ -1,4 +1,4 @@
-FROM grafana/grafana:11.6.15
+FROM grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
 
 USER root
 
