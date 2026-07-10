@@ -1,4 +1,4 @@
-FROM ubuntu:22.04 AS stage
+FROM ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982 AS stage
 
 ARG NGINX_VERSION=1.25.3
 ARG IP2LOCATION_C_VERSION=8.6.1
@@ -162,7 +162,7 @@ RUN checkinstall \
 RUN mkdir /packages \
  && mv /*/*.deb /packages/
 
-FROM ubuntu:22.04
+FROM ubuntu:22.04@sha256:0e0a0fc6d18feda9db1590da249ac93e8d5abfea8f4c3c0c849ce512b5ef8982
 COPY --from=stage /packages /packages
 COPY nginx-reloader.sh /usr/bin/nginx-reloader.sh
 
