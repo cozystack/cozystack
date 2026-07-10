@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -80,6 +81,25 @@ type ApplicationDefinitionRelease struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// Prefix for the release name
 	Prefix string `json:"prefix"`
+
+	// WaitStrategy maps to HelmReleaseSpec.WaitStrategy.Name — a deliberate
+	// scalar simplification of the upstream {name} object, since there is only
+	// one value to set. One of poller|legacy. When healthCheckExprs is set and
+	// this is empty, the generated HelmRelease defaults to poller, because
+	// healthCheckExprs are only evaluated under the poller wait strategy.
+	// +optional
+	// +kubebuilder:validation:Enum=poller;legacy
+	WaitStrategy string `json:"waitStrategy,omitempty"`
+
+	// HealthCheckExprs maps to HelmReleaseSpec.HealthCheckExprs — CEL health
+	// expressions for the custom resource(s) this application renders, so the
+	// HelmRelease reports Ready only when the CR is actually healthy instead of
+	// as soon as helm applies it. OpenAPI validates only the struct shape, not
+	// that the CEL compiles or that the referenced apiVersion/kind CRD is
+	// installed; a bad expression or a not-yet-installed CRD makes the
+	// HelmRelease hang until its timeout (the backstop).
+	// +optional
+	HealthCheckExprs []kustomize.CustomHealthCheck `json:"healthCheckExprs,omitempty"`
 }
 
 // ApplicationDefinitionResourceSelector extends metav1.LabelSelector with resourceNames support.

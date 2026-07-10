@@ -267,6 +267,12 @@ func (o *CozyServerOptions) Complete() error {
 			HelmReleaseInstallTimeout: hrFlags.installTimeout,
 			HelmReleaseUpgradeTimeout: hrFlags.upgradeTimeout,
 			HelmReleaseMaxHistory:     hrFlags.maxHistory,
+			// kstatus readiness (issue #2642): typed spec.release fields, read
+			// directly (no annotation parsing). WaitStrategy/HealthCheckExprs
+			// are threaded into the generated HelmRelease by the REST storage
+			// layer; see config.ResolveWaitStrategy for the poller default.
+			WaitStrategy:     crd.Spec.Release.WaitStrategy,
+			HealthCheckExprs: crd.Spec.Release.HealthCheckExprs,
 		}
 		// Per-Application HelmRelease Install/Upgrade timeout. Applications
 		// whose parent chart contains asynchronously-provisioned resources

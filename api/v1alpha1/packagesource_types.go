@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"github.com/fluxcd/pkg/apis/kustomize"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -142,6 +143,25 @@ type ComponentInstall struct {
 	// +optional
 	// +kubebuilder:validation:Enum=Skip;Create;CreateReplace
 	UpgradeCRDs string `json:"upgradeCRDs,omitempty"`
+
+	// WaitStrategy maps to HelmReleaseSpec.WaitStrategy.Name — a deliberate
+	// scalar simplification of the upstream {name} object. One of poller|legacy.
+	// When healthCheckExprs is set and this is empty, the generated HelmRelease
+	// defaults to poller, because healthCheckExprs are only evaluated under the
+	// poller wait strategy.
+	// +optional
+	// +kubebuilder:validation:Enum=poller;legacy
+	WaitStrategy string `json:"waitStrategy,omitempty"`
+
+	// HealthCheckExprs maps to HelmReleaseSpec.HealthCheckExprs — CEL health
+	// expressions for the custom resource(s) this component renders, so the
+	// HelmRelease reports Ready only when the CR is actually healthy. OpenAPI
+	// validates only the struct shape, not that the CEL compiles or that the
+	// referenced apiVersion/kind CRD is installed; a bad expression or a
+	// not-yet-installed CRD makes the HelmRelease hang until its timeout (the
+	// backstop).
+	// +optional
+	HealthCheckExprs []kustomize.CustomHealthCheck `json:"healthCheckExprs,omitempty"`
 }
 
 // Component defines a single Helm release component within a package source

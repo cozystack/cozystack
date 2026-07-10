@@ -22,6 +22,7 @@ package v1alpha1
 
 import (
 	"github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -151,6 +152,11 @@ func (in *ApplicationDefinitionRelease) DeepCopyInto(out *ApplicationDefinitionR
 		for key, val := range *in {
 			(*out)[key] = val
 		}
+	}
+	if in.HealthCheckExprs != nil {
+		in, out := &in.HealthCheckExprs, &out.HealthCheckExprs
+		*out = make([]kustomize.CustomHealthCheck, len(*in))
+		copy(*out, *in)
 	}
 }
 
@@ -283,6 +289,11 @@ func (in *ComponentInstall) DeepCopyInto(out *ComponentInstall) {
 	if in.DependsOn != nil {
 		in, out := &in.DependsOn, &out.DependsOn
 		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
+	if in.HealthCheckExprs != nil {
+		in, out := &in.HealthCheckExprs, &out.HealthCheckExprs
+		*out = make([]kustomize.CustomHealthCheck, len(*in))
 		copy(*out, *in)
 	}
 }
