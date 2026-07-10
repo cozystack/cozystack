@@ -61,9 +61,33 @@ spec:
               done
 
               echo "Step 2: Deleting HelmReleases with label cozystack.io/target-cluster-name={{ .Release.Name }}"
-              kubectl -n {{ .Release.Namespace }} delete helmreleases.helm.toolkit.fluxcd.io \
-                -l "cozystack.io/target-cluster-name={{ .Release.Name }}" \
-                --ignore-not-found=true --wait=true
+              # --wait=true blocks until the child HelmReleases (in-tenant cilium,
+              # coredns, csi, ingress-nginx, …) are fully gone. When the tenant
+              # never became a working cluster — no Ready nodes: storage/LINSTOR
+              # exhaustion, worker VMs that never joined, or a nodeGroup at
+              # minReplicas: 0 — those uninstalls cannot converge (e.g. in-tenant
+              # cilium stays InstallFailed because cilium-operator has nothing to
+              # schedule on), and an UNBOUNDED wait hangs this hook forever: the
+              # parent Helm uninstall then fails on the pre-cleanup Job and the
+              # Kubernetes CR is stuck deleting (see #3271). Bound the wait; if it
+              # expires, force-remove the Flux finalizer from any child HR still
+              # present so it can be garbage-collected. This is safe here because
+              # the whole tenant — its control plane included (torn down in Steps
+              # 3/4 below) — is being destroyed, so there is nothing left to
+              # orphan; a healthy tenant's children uninstall well within the
+              # timeout and never reach the force path.
+              if ! kubectl -n {{ .Release.Namespace }} delete helmreleases.helm.toolkit.fluxcd.io \
+                   -l "cozystack.io/target-cluster-name={{ .Release.Name }}" \
+                   --ignore-not-found=true --wait=true --timeout=120s; then
+                echo "WARNING: child HelmReleases for {{ .Release.Name }} did not uninstall within timeout (tenant likely has no working nodes); force-clearing their finalizers so teardown can proceed" >&2
+                for hr in $(kubectl -n {{ .Release.Namespace }} get helmreleases.helm.toolkit.fluxcd.io -l "cozystack.io/target-cluster-name={{ .Release.Name }}" -o name 2>/dev/null || true); do
+                  [ -n "$hr" ] || continue
+                  echo "  Force-clearing finalizers on $hr"
+                  kubectl -n {{ .Release.Namespace }} patch "$hr" \
+                    --type=merge -p '{"metadata":{"finalizers":null}}' \
+                    || echo "WARNING: failed to clear finalizers on $hr" >&2
+                done
+              fi
 
               echo "Step 3: Deleting KamajiControlPlane {{ .Release.Name }}"
               kubectl -n {{ .Release.Namespace }} delete kamajicontrolplanes.controlplane.cluster.x-k8s.io {{ .Release.Name }} \
