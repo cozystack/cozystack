@@ -30,14 +30,15 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 ### Application-specific parameters
 
-| Name                          | Description                      | Type                | Value |
-| ----------------------------- | -------------------------------- | ------------------- | ----- |
-| `users`                       | Users configuration map.         | `map[string]object` | `{}`  |
-| `users[name].password`        | Password for the user.           | `string`            | `""`  |
-| `vhosts`                      | Virtual hosts configuration map. | `map[string]object` | `{}`  |
-| `vhosts[name].roles`          | Virtual host roles list.         | `object`            | `{}`  |
-| `vhosts[name].roles.admin`    | List of admin users.             | `[]string`          | `[]`  |
-| `vhosts[name].roles.readonly` | List of readonly users.          | `[]string`          | `[]`  |
+| Name                          | Description                                                                                                                                                                                                       | Type                | Value |
+| ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ----- |
+| `users`                       | Users configuration map.                                                                                                                                                                                          | `map[string]object` | `{}`  |
+| `users[name].password`        | Password for the user.                                                                                                                                                                                            | `string`            | `""`  |
+| `vhosts`                      | Virtual hosts configuration map.                                                                                                                                                                                  | `map[string]object` | `{}`  |
+| `vhosts[name].roles`          | Virtual host roles list.                                                                                                                                                                                          | `object`            | `{}`  |
+| `vhosts[name].roles.admin`    | List of admin users.                                                                                                                                                                                              | `[]string`          | `[]`  |
+| `vhosts[name].roles.readonly` | List of readonly users.                                                                                                                                                                                           | `[]string`          | `[]`  |
+| `schedulingClass`             | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string`            | `""`  |
 
 
 ## Parameter examples and reference

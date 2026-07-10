@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"encoding/json"
+
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -52,10 +54,24 @@ type ApplicationStatus struct {
 	ExternalIPsCount int32 `json:"externalIPsCount,omitempty"`
 }
 
-// SchedulingClass returns the scheduling class requested by this Application.
-// TODO: read from a dedicated Application field once the struct is extended.
+// SchedulingClass returns the scheduling class requested by this Application,
+// parsed from its Spec JSON under the top-level `schedulingClass` key. When set,
+// the named SchedulingClass takes precedence over any tenant-level class for
+// the workloads of this Application.
+//
+// A missing or empty field returns "" — the caller then falls back to the
+// namespace-level scheduling class.
 func (in Application) SchedulingClass() string {
-	return ""
+	if in.Spec == nil || len(in.Spec.Raw) == 0 {
+		return ""
+	}
+	var s struct {
+		SchedulingClass string `json:"schedulingClass,omitempty"`
+	}
+	if err := json.Unmarshal(in.Spec.Raw, &s); err != nil {
+		return ""
+	}
+	return s.SchedulingClass
 }
 
 // GetConditions returns the status conditions of the object.

@@ -29,10 +29,11 @@ Service deploys Qdrant as a StatefulSet with automatic cluster mode when multipl
 
 ### TLS parameters
 
-| Name          | Description                                                                                                                                            | Type     | Value  |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ | -------- | ------ |
-| `tls`         | TLS configuration. When omitted, the effective TLS state follows the value of `external`.                                                              | `object` | `{}`   |
-| `tls.enabled` | Enable TLS. When unset, inherits the value of `external` (TLS is on when external access is enabled). Set explicitly to `true` or `false` to override. | `*bool`  | `null` |
+| Name              | Description                                                                                                                                                                                                       | Type     | Value  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`             | TLS configuration. When omitted, the effective TLS state follows the value of `external`.                                                                                                                         | `object` | `{}`   |
+| `tls.enabled`     | Enable TLS. When unset, inherits the value of `external` (TLS is on when external access is enabled). Set explicitly to `true` or `false` to override.                                                            | `*bool`  | `null` |
+| `schedulingClass` | Name of a SchedulingClass CR (cluster-scoped, group cozystack.io) applied to this application's workloads. When set, takes precedence over any tenant-level schedulingClass. Empty means inherit from the tenant. | `string` | `""`   |
 
 
 ## Parameter examples and reference
