@@ -288,7 +288,7 @@ images:
 
 ## @param {Talos} talos - Talos worker image configuration.
 talos:
-  version: "v1.13.0"
+  version: "v1.13.6"
   schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
   imageFactoryURL: "https://factory.talos.dev"
   installerRepository: "factory.talos.dev/installer"

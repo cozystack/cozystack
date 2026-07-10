@@ -212,12 +212,12 @@ tests:
   # KubevirtMachineTemplate name (everything after the last '-'). Run from
   # packages/apps/kubernetes/:
   #
-  #   # default-body pin (test-k8s-md0-63ff81):
+  #   # default-body pin (test-k8s-md0-fdbcb9):
   #   helm template test-k8s . --namespace tenant-test \
   #     --values tests/values/common.yaml \
   #     | yq e 'select(.kind == "KubevirtMachineTemplate") | .metadata.name'
   #
-  #   # omitted-storageClass pin (test-k8s-md0-dcdf58): append --set storageClass=""
+  #   # omitted-storageClass pin (test-k8s-md0-4a2527): append --set storageClass=""
   #
   # The release name (test-k8s) and tests/values/common.yaml must match the pins
   # or the hash differs. Note common.yaml keeps instanceType="" on purpose —
@@ -233,7 +233,7 @@ tests:
         documentIndex: 4
       - equal:
           path: metadata.name
-          value: test-k8s-md0-63ff81
+          value: test-k8s-md0-fdbcb9
         documentIndex: 4
 
   - it: renames the worker KubevirtMachineTemplate when storageClassName is omitted (pre-fallback body)
@@ -248,7 +248,7 @@ tests:
         documentIndex: 4
       - equal:
           path: metadata.name
-          value: test-k8s-md0-dcdf58
+          value: test-k8s-md0-4a2527
         documentIndex: 4
 
   ###############################################

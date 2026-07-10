@@ -954,7 +954,7 @@
         "version": {
           "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
           "type": "string",
-          "default": "v1.13.0"
+          "default": "v1.13.6"
         }
       }
     },
