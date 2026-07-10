@@ -13,7 +13,7 @@ migrations:
   # below therefore lags targetVersion in-tree by design; run-migrations.sh
   # refuses to advance past a migration file missing from the image (exit 1), so
   # a stale pin fails loudly rather than silently skipping the etcd adoption.
-  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.0@sha256:8bf61f17e99eb4a3365394e3d97ac52a1d68cc84aa104894ecb09de25721dc1d
+  image: ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0-rc.2@sha256:91fb22b1781889ea6e1c8799375e148f54555c8dca84c55ed631b6b171e7181e
   targetVersion: 52
 # Bundle deployment configuration
 bundles:
