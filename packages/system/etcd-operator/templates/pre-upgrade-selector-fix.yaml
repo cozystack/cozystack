@@ -22,6 +22,8 @@ the new selector, so aligning it back would merely move the immutable break to
 rc.1 -> next.
 */}}
 {{- $name := "etcd-operator-selector-fix" }}
+{{- $img := printf "%s:%s" .Values.kubectlImage.repository .Values.kubectlImage.tag }}
+{{- with .Values.kubectlImage.digest }}{{- $img = printf "%s@%s" $img . }}{{- end }}
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -101,6 +103,11 @@ spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
+        # clastix/kubectl's image user is the non-numeric name `nonroot`, which
+        # the kubelet cannot verify against runAsNonRoot; pin a numeric UID so
+        # the Pod passes admission (matches postgres-operator's webhook-ready
+        # hook running the same image).
+        runAsUser: 65532
         seccompProfile:
           type: RuntimeDefault
       # writable HOME so kubectl can create its discovery cache under
@@ -110,7 +117,7 @@ spec:
           emptyDir: {}
       containers:
         - name: selector-fix
-          image: "{{ .Values.kubectlImage.repository }}:{{ .Values.kubectlImage.tag }}"
+          image: {{ $img | quote }}
           imagePullPolicy: {{ .Values.kubectlImage.pullPolicy }}
           securityContext:
             allowPrivilegeEscalation: false

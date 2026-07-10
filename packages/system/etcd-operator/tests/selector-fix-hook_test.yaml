@@ -1,0 +1,120 @@
+suite: pre-upgrade selector-fix hook — hook wiring, RBAC scope, security context, image
+
+# 1.6 changed the controller Deployment's immutable spec.selector (#3242); this
+# pre-upgrade hook deletes a pre-1.6 Deployment so Helm recreates it with the new
+# selector. Pin the parts that are easy to break and fail closed on a real
+# cluster:
+#   - it is a pre-upgrade hook, RBAC (weight -5) before the Job (weight 0);
+#   - the Role is namespaced and grants only get/list/delete on deployments;
+#   - the Job runs the digest-pinned kubectl image as a NUMERIC non-root user.
+# The last one is load-bearing: clastix/kubectl's image user is the non-numeric
+# name `nonroot`, which the kubelet cannot verify against runAsNonRoot, so
+# runAsNonRoot WITHOUT a numeric runAsUser fails admission and the hook never
+# runs — silently blocking the very upgrade it exists to unblock.
+
+templates:
+  - templates/pre-upgrade-selector-fix.yaml
+
+release:
+  name: etcd-operator
+  namespace: cozy-etcd-operator
+
+tests:
+  - it: renders four hook objects (SA + Role + RoleBinding + Job)
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: every rendered object is a pre-upgrade hook
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - documentIndex: 1
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - documentIndex: 2
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+      - documentIndex: 3
+        equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+
+  - it: RBAC (weight -5) is created before the Job (weight 0)
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ServiceAccount
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: Role
+      - documentIndex: 2
+        equal:
+          path: kind
+          value: RoleBinding
+      - documentIndex: 3
+        equal:
+          path: kind
+          value: Job
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "-5"
+      - documentIndex: 3
+        equal:
+          path: metadata.annotations["helm.sh/hook-weight"]
+          value: "0"
+
+  - it: the Role is least-privilege — namespaced get/list/delete on deployments only, never a wildcard verb
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: rules[0].apiGroups[0]
+          value: apps
+      - equal:
+          path: rules[0].resources[0]
+          value: deployments
+      - contains:
+          path: rules[0].verbs
+          content: get
+      - contains:
+          path: rules[0].verbs
+          content: list
+      - contains:
+          path: rules[0].verbs
+          content: delete
+      - notContains:
+          path: rules[0].verbs
+          content: "*"
+
+  - it: the Job runs as a NUMERIC non-root user so the nonroot-image passes the kubelet runAsNonRoot check
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: the kubectl image is digest-pinned (reproducible across the fleet)
+    documentIndex: 3
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: ^docker\.io/clastix/kubectl:v1\.32@sha256:[0-9a-f]{64}$

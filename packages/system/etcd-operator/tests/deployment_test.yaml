@@ -89,3 +89,13 @@ tests:
             containerPort: 8080
             protocol: TCP
           any: true
+
+  - it: "cold-start memory limit floor is at/above the manager working set so the Pod is not OOMKilled before VPA mutates it"
+    # A freshly-created Pod runs under resources.limits until the VPA admission
+    # webhook rewrites it; a 128Mi floor OOMKills the ~250Mi manager on any start
+    # the webhook does not mutate in time (Deployment recreated out of band, or
+    # webhook briefly down during an upgrade). Keep the floor at/above 256Mi.
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 256Mi

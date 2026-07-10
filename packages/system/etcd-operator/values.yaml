@@ -48,10 +48,14 @@ vpa:
     memory: 1Gi
 
 # Image for the pre-upgrade selector-migration hook Job (see
-# templates/pre-upgrade-selector-fix.yaml). Only needs a kubectl binary. Pinned
-# by digest for reproducibility; clastix/kubectl is already used elsewhere in
-# cozystack (Kamaji).
+# templates/pre-upgrade-selector-fix.yaml). Only needs a kubectl binary. The tag
+# is digest-pinned so an upstream retag does not change what runs across the
+# fleet; refresh by resolving the current manifest-list digest
+# (`docker manifest inspect docker.io/clastix/kubectl:v1.32`) and updating
+# `digest` below. Same image the postgres-operator webhook-ready hook pins.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
 kubectlImage:
   repository: docker.io/clastix/kubectl
   tag: v1.32
+  digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
   pullPolicy: IfNotPresent
