@@ -42,8 +42,12 @@ permissions:
 jobs:
   # Decide whether this is a fork PR that needs e2e, resolve its PR number and
   # head SHA, and open the pending "E2E Tests" check-run so the PR is not
-  # mergeable until we conclude it. Fail-closed if the fork build failed;
-  # green-and-stop for docs-only fork PRs (no pr-patch artifact = nothing built).
+  # mergeable until we conclude it. Every decision is derived from data the fork
+  # cannot forge — the workflow_run conclusion, the base-repo PR list, and the
+  # base-repo PR file list — NOT from the presence/absence of an artifact the
+  # fork's own build controls. Fail-closed if the fork build failed or the
+  # pr-patch artifact is missing; green-and-stop only for a PR whose file list is
+  # entirely under docs/ (verified against the base-repo API).
   resolve:
     name: Resolve fork PR
     # Only fork PRs: head_repository differs from the base repository. Same-repo
@@ -56,6 +60,7 @@ jobs:
       contents: read
       checks: write
       actions: read
+      pull-requests: read
     outputs:
       should_run:   ${{ steps.r.outputs.should_run }}
       pr_number:    ${{ steps.r.outputs.pr_number }}
@@ -99,28 +104,46 @@ jobs:
             }
 
             // Resolve the PR number for this commit (workflow_run.pull_requests
-            // is empty for forks). Validate it is a bare integer before it flows
-            // into a checkout ref.
+            // is empty for forks). Select ONLY an OPEN PR — never fall back to a
+            // closed/merged association, which a fork could point at a stale
+            // commit to smuggle a green through. Validate it is a bare integer
+            // before it flows into a checkout ref.
             const assoc = await github.rest.repos.listPullRequestsAssociatedWithCommit({
               owner, repo, commit_sha: HEAD_SHA,
             });
-            const pr = assoc.data.find(p => p.state === 'open') || assoc.data[0];
+            const pr = assoc.data.find(p => p.state === 'open');
             const prNumber = pr ? String(pr.number) : '';
             if (!/^[0-9]+$/.test(prNumber)) {
-              await conclude('failure', `could not resolve an open PR for ${HEAD_SHA}`);
+              await conclude('failure', `no open PR for ${HEAD_SHA}`);
               core.setOutput('should_run', 'false');
               return;
             }
             core.setOutput('pr_number', prNumber);
 
-            // Docs-only fork PR: the build/finalize chain was skipped, so no
-            // pr-patch artifact exists — nothing to test, conclude success.
+            // Docs-only decision from TRUSTED data: the base-repo PR file list,
+            // NOT the presence of a fork-build artifact. A fork controls whether
+            // pull-requests.yaml emits pr-patch (its plan step runs from the fork
+            // merge commit), so inferring docs-only from a missing artifact would
+            // let a fork skip e2e and conclude green with nothing tested (#3257).
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: Number(prNumber), per_page: 100,
+            });
+            const hasNonDocs = files.some(f => !f.filename.startsWith('docs/'));
+            if (!hasNonDocs) {
+              await conclude('success', 'docs-only PR (verified via PR file list) — e2e not required');
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Non-docs change → e2e is REQUIRED. The fork build must have produced
+            // the pr-patch artifact; a missing one means the build did not
+            // complete, so fail closed (never conclude green without running e2e).
             const arts = await github.paginate(
               github.rest.actions.listWorkflowRunArtifacts,
               { owner, repo, run_id: RUN_ID, per_page: 100 },
             );
             if (!arts.some(a => a.name === 'pr-patch')) {
-              await conclude('success', 'docs-only PR — e2e not required');
+              await conclude('failure', 'expected pr-patch artifact is missing — the fork build did not complete');
               core.setOutput('should_run', 'false');
               return;
             }
@@ -143,9 +166,10 @@ jobs:
     if: ${{ needs.resolve.outputs.should_run == 'true' }}
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 40
+    # No `packages: write`: this job authenticates to OCIR via OCIR_USER/
+    # OCIR_TOKEN (not the GHCR GITHUB_TOKEN), so it needs no GHCR push scope.
     permissions:
       contents: read
-      packages: write
       actions: read
     outputs:
       packages_digest: ${{ steps.push.outputs.packages_digest }}
@@ -153,7 +177,7 @@ jobs:
       - name: Set up toolchain (skopeo, flux)
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          command -v flux   >/dev/null || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+          if ! command -v flux >/dev/null; then s="$(mktemp)"; curl -fsSL https://fluxcd.io/install.sh -o "$s"; sudo bash "$s"; rm -f "$s"; fi
       # The base repo's own merge ref — safe to fetch, not fork-controlled code
       # execution. pr.patch is applied as DATA below; nothing from the tree runs.
       - name: Checkout PR merge ref
@@ -162,6 +186,16 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
+      # Guard against a TOCTOU race: the check-run is stamped on the SHA `resolve`
+      # saw, but refs/pull/N/merge tracks the live PR head. If the fork pushed
+      # again between resolve and here, HEAD^2 (the merge ref's PR-head parent)
+      # no longer matches — abort rather than push/test unresolved code.
+      - name: Assert checkout matches resolved head SHA
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          got="$(git rev-parse HEAD^2)"
+          [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
       - name: Download pr.patch
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
@@ -199,8 +233,19 @@ jobs:
         run: |
           set -eu
           shopt -s nullglob
+          # A non-docs fork PR must have exported at least one image; an empty
+          # download means the build silently produced nothing — fail rather than
+          # push an empty closure and let e2e install a stale/mismatched tree.
+          count=$(ls _out/oci/*.oci.tar 2>/dev/null | wc -l)
+          [ "$count" -ge 1 ] || { echo "::error::no OCI image archives to push"; exit 1; }
           for f in _out/oci/*.oci.tar; do
             name="$(basename "$f" .oci.tar)"
+            # The archive basename becomes a registry repo path — the fork picked
+            # the filename, so validate it against a strict charset before it
+            # flows into a docker:// ref (defence against a crafted artifact name).
+            case "$name" in
+              *[!a-z0-9._-]*|""|-*) echo "::error::unexpected image archive name: $name"; exit 1;;
+            esac
             echo "Pushing $name → ${REGISTRY}/${name}:${IMAGE_TAG}"
             # skopeo preserves the manifest digest bit-for-bit, so the
             # ${REGISTRY}/${name}@sha256:… refs in pr.patch resolve.
@@ -244,6 +289,14 @@ jobs:
           ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
           fetch-depth: 0
           persist-credentials: false
+      # Same TOCTOU guard as `publish`: refuse to test a merge ref that moved off
+      # the SHA the check-run is stamped on (see the publish job for the rationale).
+      - name: Assert checkout matches resolved head SHA
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          got="$(git rev-parse HEAD^2)"
+          [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
       - name: Set up toolchain (yq)
         run: |
           command -v yq >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
