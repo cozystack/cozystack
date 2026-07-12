@@ -23,6 +23,8 @@ etcd:
     enabled: true
     replicas: 3
     size: 4Gi
+    # etcd version the operator runs (required by the EtcdCluster schema).
+    version: "3.6.11"
     # persistent: PVC-backed (durable) vs tmpfs. The aggregated API's objects
     # are cluster state; a memory-backed etcd loses all of them on a
     # full-cluster restart, which is what a node reboot is. Requires a storage
