@@ -113,9 +113,19 @@ spec:
   version: {{ .Values.etcd.operator.version | quote }}
   replicas: {{ $replicas }}
   storage:
-    # Memory-backed (see the file header). `medium` is immutable post-create;
-    # size is the tmpfs cap, not a reservation. Non-zero is required for Memory.
+    {{- if .Values.etcd.operator.persistent }}
+    # PVC-backed: the aggregated API's objects (VPCs, Ports, policies) are
+    # cluster state. A memory-backed etcd loses every one of them on a
+    # full-cluster restart — which is exactly what a node reboot is.
+    medium: ""
+    {{- with .Values.etcd.operator.storageClass }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    # tmpfs: no storage layer needed, but NOT durable across a full-cluster
+    # restart. `medium` is immutable post-create; size is the tmpfs cap.
     medium: Memory
+    {{- end }}
     size: {{ .Values.etcd.operator.size }}
   options:
     autoCompactionMode: periodic

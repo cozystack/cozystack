@@ -1,6 +1,7 @@
-# Container image (shared with the cozyplane package — the apiserver binary
-# lives in the same image). Digest-pinned; update on each published build.
-image: ghcr.io/lllamnyp/cozyplane@sha256:3d6fece3355f4f0accf47c4ab02d9b75919f002db4dee444a08f157d888c2a7b
+# Container image (shared with the cozyplane chart — the apiserver binary lives
+# in the same image). Digest-pinned (no floating tag); update on each published
+# build.
+image: ghcr.io/lllamnyp/cozyplane@sha256:c3858ecc3d590b05de81599f65bf2ed1ecd4708f41f6be80244ddd566b303101
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -13,28 +14,39 @@ resources:
     memory: 256Mi
 
 etcd:
-  # Operator-managed etcd (etcd-operator.cozystack.io/v1alpha2; Cozystack ships
-  # it): replicated, TLS end to end via the operator's cert-manager
-  # integration. MEMORY-BACKED (no PVC/storageClass) so the API's etcd needs no
-  # storage layer — this component installs after cert-manager but before (or
-  # independent of) Linstor. Trade-off: not durable across a full-cluster
-  # restart; a persistent (storageClassName) mode is a follow-up once storage
-  # is sequenced after the CNI.
+  # Operator-managed etcd (the aenix-io etcd-operator; Cozystack ships it):
+  # replicated, PVC-backed, TLS end to end. The production path — without it
+  # the built-in single-pod etcd below is used, and with its default
+  # emptyDir storage a single pod reschedule erases every sdn.cozystack.io
+  # object in the cluster.
   operator:
     enabled: true
-    version: "3.6.11"
     replicas: 3
-    # Memory-backed: `size` is the tmpfs cap (not a reservation), so keep it
-    # modest — the sdn.cozystack.io object set is small.
-    size: 1Gi
-    # StorageClass for a future PVC-backed mode ("" = cluster default);
-    # ignored while storage.medium=Memory.
-    storageClass: ""
-  # Built-in single-pod etcd (dev/evaluation only; unused while the operator
-  # mode above is enabled).
+    size: 4Gi
+    # persistent: PVC-backed (durable) vs tmpfs. The aggregated API's objects
+    # are cluster state; a memory-backed etcd loses all of them on a
+    # full-cluster restart, which is what a node reboot is. Requires a storage
+    # layer, so the component must be sequenced after it.
+    persistent: true
+    # StorageClass for the members' PVCs ("" = cluster default). Replicated, so
+    # a member's data survives losing the node it was scheduled on.
+    storageClass: "replicated"
+  # Built-in single-pod etcd (dev/evaluation only).
   image: registry.k8s.io/etcd:3.5.16-0
+  # Storage for the built-in etcd. The default is ephemeral (emptyDir); use a
+  # persistentVolumeClaim volume source to survive a pod restart.
+  # Storage for the built-in single-pod etcd. Default is a PVC — the aggregated
+  # API's objects (VPCs, Ports, policies) are cluster state, and an emptyDir
+  # loses them on a pod move. Set `emptyDir: {}` explicitly for a throwaway
+  # cluster with no storage class.
   storage:
-    emptyDir: {}
+    persistentVolumeClaim:
+      claimName: cozyplane-etcd-data
+  # The PVC the chart creates when storage above references it.
+  persistence:
+    enabled: true
+    storageClassName: ""   # "" = the cluster default
+    size: 2Gi
   resources:
     requests:
       cpu: 50m

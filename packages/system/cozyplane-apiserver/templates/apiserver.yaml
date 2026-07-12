@@ -74,6 +74,13 @@ rules:
   - apiGroups: ["apiregistration.k8s.io"]
     resources: ["apiservices"]
     verbs: ["get", "create", "patch"]
+  # ...and then removes the bootstrap CRDs it superseded. They are shadowed for
+  # routing but NOT for OpenAPI: while they exist, the group's spec fails to
+  # merge (duplicated paths) and `kubectl apply` of any object in it dies with
+  # "failed to download openapi".
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -91,8 +98,28 @@ subjects:
     namespace: {{ $ns }}
 ---
 {{- if not .Values.etcd.operator.enabled }}
-# Built-in single-pod etcd (dev/evaluation; ephemeral by default). Production
-# uses the operator-managed EtcdCluster instead — see templates/etcd-cluster.yaml.
+{{- if .Values.etcd.persistence.enabled }}
+# The single-pod etcd's storage. The aggregated API's objects are cluster state:
+# an emptyDir would lose every VPC, Port and policy the moment the pod moves.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: cozyplane-etcd-data
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  accessModes: [ReadWriteOnce]
+  {{- with .Values.etcd.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.etcd.persistence.size }}
+---
+{{- end }}
+# Built-in single-pod etcd. Production uses the operator-managed EtcdCluster
+# instead — see templates/etcd-cluster.yaml.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -103,6 +130,10 @@ metadata:
     {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 spec:
   replicas: 1
+  # Recreate, not RollingUpdate: two etcd pods must never hold the same RWO
+  # volume, and a rolling update would try.
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: cozyplane-etcd
@@ -244,9 +275,11 @@ spec:
             - --ensure-apiservice-service={{ $ns }}/cozyplane-apiserver
             - --ensure-apiservice-ca-injection={{ $ns }}/cozyplane-apiserver-serving
             {{- if .Values.etcd.operator.enabled }}
-            # The v1alpha2 operator's client Service (members carry
-            # operator-assigned names, so dial the Service, not per-member DNS).
-            - --etcd-servers=https://cozyplane-etcd.{{ $ns }}.svc:2379
+            {{- $eps := list }}
+            {{- range $i := until (int .Values.etcd.operator.replicas) }}
+            {{- $eps = append $eps (printf "https://cozyplane-etcd-%d.cozyplane-etcd-headless.%s.svc:2379" $i $ns) }}
+            {{- end }}
+            - --etcd-servers={{ join "," $eps }}
             - --etcd-cafile=/etc/etcd-certs/ca.crt
             - --etcd-certfile=/etc/etcd-certs/tls.crt
             - --etcd-keyfile=/etc/etcd-certs/tls.key
