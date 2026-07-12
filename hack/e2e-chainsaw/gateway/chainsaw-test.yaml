@@ -1,0 +1,1057 @@
+# Chainsaw port of hack/e2e-apps/gateway.bats (29 cases).
+#
+# Declarative cases (CRD/GatewayClass/Gateway/HTTPRoute/TenantGateway status,
+# VAP existence) use asserts. Admission-rejection cases need kubectl
+# impersonation or error-message greps that Chainsaw `apply` can't express, so
+# they stay scripts. The tenant apex is read at runtime from the tenant-test
+# namespace's namespace.cozystack.io/host label, so these tests pass both in CI
+# (test.example.org) and on a dev cluster with a different host.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gateway-api-crds
+spec:
+  steps:
+  - name: crds-established-and-gatewayclass-accepted
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: gatewayclasses.gateway.networking.k8s.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: gateways.gateway.networking.k8s.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: httproutes.gateway.networking.k8s.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: GatewayClass
+          metadata:
+            name: cilium
+          status:
+            (conditions[?type == 'Accepted']):
+            - status: "True"
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gateway-minimal-programmed
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: Gateway
+      name: gateway-e2e-probe
+  steps:
+  - name: create-minimal-gateway
+    try:
+    - apply:
+        file: gw-minimal.yaml
+  - name: assert-accepted-programmed
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: gateway-e2e-probe
+          status:
+            (conditions[?type == 'Accepted']):
+            - status: "True"
+            (conditions[?type == 'Programmed']):
+            - status: "True"
+    # Cilium materialises a LoadBalancer Service per programmed Gateway.
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: cilium-gateway-gateway-e2e-probe
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gateway-hostname-policy-installed
+spec:
+  steps:
+  - name: vap-and-binding-and-host-label
+    try:
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicy
+          metadata:
+            name: cozystack-gateway-hostname-policy
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: cozystack-gateway-hostname-policy
+          # Binding must Deny — [Audit]/[] would let requests through silently.
+          (contains(spec.validationActions, 'Deny')): true
+    # The whole hostname policy keys off this label; assert it is set
+    # (script, not an assert: numeric/length compares on labels are unreliable).
+    - script:
+        content: |
+          set -eu
+          kubectl get namespace "$NAMESPACE" \
+            -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}' | grep -q .
+        check:
+          ($error == null): true
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: gateway-foreign-hostname-rejected
+spec:
+  steps:
+  - name: foreign-listener-hostname-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          out=$(kubectl apply -n "$NAMESPACE" -f - 2>&1 <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: hostname-hijack-probe
+          spec:
+            gatewayClassName: cilium
+            listeners:
+            - name: https
+              protocol: HTTPS
+              port: 443
+              hostname: "dashboard.example.org"
+              tls:
+                mode: Terminate
+                certificateRefs:
+                - name: noop
+              allowedRoutes:
+                namespaces:
+                  from: Same
+          EOF
+          ) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          if [ "$rc" -eq 0 ]; then
+            kubectl -n "$NAMESPACE" delete gateway hostname-hijack-probe --ignore-not-found
+            echo "BUG: admission accepted cross-tenant hostname" >&2
+            exit 1
+          fi
+          echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          echo "$out" | grep -q "must equal"
+        check:
+          ($error == null): true
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: package-attachednamespaces-accept
+spec:
+  steps:
+  # Admission must accept a tenant-* entry in gateway.attachedNamespaces; a
+  # successful apply (and Chainsaw auto-cleanup of the Package) is the proof.
+  - name: apply-package-probe
+    try:
+    - apply:
+        file: package-attach-probe.yaml
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-host-policy
+spec:
+  steps:
+  - name: untrusted-sa-cannot-set-tenant-host
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          # Authorization runs before admission; grant the SA RBAC to create
+          # Tenants so the apply reaches the VAP rather than failing on RBAC.
+          kubectl apply -f - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: vap-probe-tenant-create
+            namespace: ${ns}
+          rules:
+          - apiGroups: ["apps.cozystack.io"]
+            resources: ["tenants"]
+            verbs: ["create","get","list","watch","update","patch","delete"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: vap-probe-tenant-create
+            namespace: ${ns}
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: vap-probe-tenant-create
+          subjects:
+          - kind: ServiceAccount
+            name: default
+            namespace: ${ns}
+          EOF
+          cleanup() {
+            # || true each delete: the trap runs under set -eu, and one
+            # transient delete failure must not skip the remaining cleanup.
+            kubectl -n "$ns" delete rolebinding vap-probe-tenant-create --ignore-not-found || true
+            kubectl -n "$ns" delete role vap-probe-tenant-create --ignore-not-found || true
+            kubectl -n "$ns" delete tenants.apps.cozystack.io vaphostprobe --ignore-not-found || true
+          }
+          trap cleanup EXIT
+          out=$(kubectl --as="system:serviceaccount:${ns}:default" \
+                        --as-group=system:serviceaccounts \
+                        --as-group="system:serviceaccounts:${ns}" \
+            apply -n "$ns" -f - 2>&1 <<EOF
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: vaphostprobe
+            namespace: ${ns}
+          spec:
+            host: foreign.example.org
+          EOF
+          ) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          echo "$out" | grep -q "spec.host can only be set"
+        check:
+          ($error == null): true
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: namespace-host-label-policy
+spec:
+  steps:
+  - name: untrusted-sa-cannot-change-host-label
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          host=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          kubectl apply -f - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: vap-probe-namespace-patch
+          rules:
+          - apiGroups: [""]
+            resources: ["namespaces"]
+            verbs: ["get","list","watch","update","patch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: vap-probe-namespace-patch
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: vap-probe-namespace-patch
+          subjects:
+          - kind: ServiceAccount
+            name: default
+            namespace: ${ns}
+          EOF
+          cleanup() {
+            # Restore the original host label in case admission let it through.
+            # || true each command: the trap runs under set -eu, and one
+            # transient failure must not skip the remaining cleanup.
+            kubectl label namespace "$ns" "namespace.cozystack.io/host=${host}" --overwrite >/dev/null 2>&1 || true
+            kubectl delete clusterrolebinding vap-probe-namespace-patch --ignore-not-found || true
+            kubectl delete clusterrole vap-probe-namespace-patch --ignore-not-found || true
+          }
+          trap cleanup EXIT
+          out=$(kubectl --as="system:serviceaccount:${ns}:default" \
+                        --as-group=system:serviceaccounts \
+                        --as-group="system:serviceaccounts:${ns}" \
+            label namespace "$ns" namespace.cozystack.io/host=foreign.example.org --overwrite 2>&1) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          echo "$out" | grep -q "immutable"
+        check:
+          ($error == null): true
+  - name: untrusted-sa-cannot-set-host-label-at-create
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          kubectl apply -f - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRole
+          metadata:
+            name: vap-probe-namespace-create
+          rules:
+          - apiGroups: [""]
+            resources: ["namespaces"]
+            verbs: ["create","get","list","delete"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: ClusterRoleBinding
+          metadata:
+            name: vap-probe-namespace-create
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: ClusterRole
+            name: vap-probe-namespace-create
+          subjects:
+          - kind: ServiceAccount
+            name: default
+            namespace: ${ns}
+          EOF
+          cleanup() {
+            # || true each delete: the trap runs under set -eu, and one
+            # transient delete failure must not skip the remaining cleanup.
+            kubectl delete namespace vap-host-label-probe --ignore-not-found --wait=false || true
+            kubectl delete clusterrolebinding vap-probe-namespace-create --ignore-not-found || true
+            kubectl delete clusterrole vap-probe-namespace-create --ignore-not-found || true
+          }
+          trap cleanup EXIT
+          out=$(kubectl --as="system:serviceaccount:${ns}:default" \
+                        --as-group=system:serviceaccounts \
+                        --as-group="system:serviceaccounts:${ns}" \
+            apply -f - 2>&1 <<EOF
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: vap-host-label-probe
+            labels:
+              namespace.cozystack.io/host: foreign.example.org
+          EOF
+          ) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          echo "$out" | grep -q "immutable"
+        check:
+          ($error == null): true
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenantgateway-crd
+spec:
+  steps:
+  - name: crd-established
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: apiextensions.k8s.io/v1
+          kind: CustomResourceDefinition
+          metadata:
+            name: tenantgateways.gateway.cozystack.io
+          status:
+            (conditions[?type == 'Established']):
+            - status: "True"
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenantgateway-reconciler
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: gateway.cozystack.io/v1alpha1
+      kind: TenantGateway
+      name: tg-e2e-probe
+  steps:
+  - name: create-tenantgateway
+    try:
+    # apex is read from the namespace host label so the CR is valid on any host.
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          apex=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: gateway.cozystack.io/v1alpha1
+          kind: TenantGateway
+          metadata:
+            name: tg-e2e-probe
+          spec:
+            apex: ${apex}
+            certMode: http01
+            gatewayClassName: cilium
+          EOF
+        check:
+          ($error == null): true
+  - name: assert-gateway-issuer-status
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: tg-e2e-probe
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: cert-manager.io/v1
+          kind: Issuer
+          metadata:
+            name: tg-e2e-probe-gateway
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gateway.cozystack.io/v1alpha1
+          kind: TenantGateway
+          metadata:
+            name: tg-e2e-probe
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    finally:
+    - delete:
+        ref:
+          apiVersion: gateway.cozystack.io/v1alpha1
+          kind: TenantGateway
+          name: tg-e2e-probe
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: route-hostname-policy
+spec:
+  steps:
+  - name: foreign-apex-route-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          out=$(kubectl apply -n "$NAMESPACE" -f - 2>&1 <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-hostname-hijack-probe
+          spec:
+            hostnames:
+            - "attacker.com"
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+          ) && rc=0 || rc=$?
+          echo "rc=$rc out=$out"
+          if [ "$rc" -eq 0 ]; then
+            kubectl -n "$NAMESPACE" delete httproute route-hostname-hijack-probe --ignore-not-found
+            echo "BUG: admission accepted cross-apex HTTPRoute hostname" >&2
+            exit 1
+          fi
+          echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          echo "$out" | grep -qi "hostnames must equal"
+        check:
+          ($error == null): true
+  - name: own-apex-route-allowed
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          apex=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-hostname-allow-probe
+          spec:
+            hostnames:
+            - "harbor.${apex}"
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+          kubectl -n "$ns" delete httproute route-hostname-allow-probe --ignore-not-found
+        check:
+          ($error == null): true
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: httproute-parentref-accepted
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: gateway.networking.k8s.io/v1
+      kind: HTTPRoute
+      name: httproute-probe
+  steps:
+  - name: create-gateway-and-route
+    try:
+    - apply:
+        file: gw-route-probe.yaml
+  - name: assert-route-accepted
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: Gateway
+          metadata:
+            name: gateway-route-probe
+          status:
+            (conditions[?type == 'Programmed']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: httproute-probe
+          (status.parents[0].conditions[?type == 'Accepted']):
+          - status: "True"
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-gateway-label-lockstep
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: create-child-tenant-with-gateway
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: gwprop
+          spec:
+            gateway: true
+  - name: assert-label-and-values
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-gwprop
+            labels:
+              namespace.cozystack.io/gateway: tenant-test-gwprop
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until kubectl -n tenant-test-gwprop get secret cozystack-values >/dev/null 2>&1; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "cozystack-values not created" >&2; exit 1; }
+            sleep 2
+          done
+          v=$(kubectl -n tenant-test-gwprop get secret cozystack-values -o jsonpath='{.data.values\.yaml}' | base64 -d)
+          echo "$v" | grep -E '^\s*gateway:\s*"tenant-test-gwprop"\s*$'
+        check:
+          ($error == null): true
+    finally:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          name: gwprop
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-gateway-inheritance
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: create-parent-tenant
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: gwparent
+          spec:
+            gateway: true
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-gwparent
+            labels:
+              namespace.cozystack.io/gateway: tenant-test-gwparent
+  - name: create-child-tenant
+    try:
+    - apply:
+        resource:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: gwchild
+            namespace: tenant-test-gwparent
+          spec: {}
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: tenant-test-gwparent-gwchild
+            labels:
+              namespace.cozystack.io/gateway: tenant-test-gwparent
+  - name: assert-inheritance-values
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          deadline=$(( $(date +%s) + 60 ))
+          until kubectl -n tenant-test-gwparent-gwchild get secret cozystack-values >/dev/null 2>&1; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "child cozystack-values not created" >&2; exit 1; }
+            sleep 2
+          done
+          v=$(kubectl -n tenant-test-gwparent-gwchild get secret cozystack-values -o jsonpath='{.data.values\.yaml}' | base64 -d)
+          echo "$v" | grep -E '^\s*gateway:\s*"tenant-test-gwparent"\s*$'
+        check:
+          ($error == null): true
+    # The child must NOT own a gateway HelmRelease — inheritance, not its own.
+    - error:
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: gateway
+            namespace: tenant-test-gwparent-gwchild
+    finally:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          name: gwchild
+          namespace: tenant-test-gwparent
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          name: gwparent
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-gateway-route-listener
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: parent-child-and-route-drive-listener-set
+    try:
+    - script:
+        timeout: 6m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+
+          cleanup() {
+            kubectl -n tenant-test-rparent-rchild delete httproute inherit-probe --ignore-not-found >/dev/null 2>&1 || true
+            kubectl -n tenant-test-rparent delete tenant rchild --ignore-not-found >/dev/null 2>&1 || true
+            kubectl -n "$ns" delete tenant rparent --ignore-not-found >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          # Parent tenant owns the Gateway.
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: rparent
+          spec:
+            gateway: true
+          EOF
+          timeout 180 sh -ec 'until kubectl get ns tenant-test-rparent >/dev/null 2>&1; do sleep 3; done'
+          timeout 120 sh -ec 'until kubectl -n tenant-test-rparent get gateway cozystack >/dev/null 2>&1; do sleep 3; done'
+
+          # Child tenant inherits the parent Gateway.
+          kubectl apply -n tenant-test-rparent -f - <<EOF
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: Tenant
+          metadata:
+            name: rchild
+          spec: {}
+          EOF
+          timeout 180 sh -ec 'until kubectl get ns tenant-test-rparent-rchild >/dev/null 2>&1; do sleep 3; done'
+
+          child_apex=$(kubectl get ns tenant-test-rparent-rchild -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ -n "$child_apex" ]
+          route_host="harbor.${child_apex}"
+
+          # An HTTPRoute in the child, attached to the parent Gateway.
+          kubectl apply -n tenant-test-rparent-rchild -f - <<EOF
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: inherit-probe
+          spec:
+            parentRefs:
+            - group: gateway.networking.k8s.io
+              kind: Gateway
+              name: cozystack
+              namespace: tenant-test-rparent
+            hostnames:
+            - "${route_host}"
+            rules:
+            - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+              backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+
+          # cozystack-controller collects the route across the inheritance label
+          # and grows a per-listener HTTPS entry on the parent Gateway.
+          timeout 120 sh -ec '
+            until kubectl -n tenant-test-rparent get gateway cozystack \
+              -o jsonpath="{range .spec.listeners[?(@.protocol==\"HTTPS\")]}{.hostname}{\"\n\"}{end}" 2>/dev/null \
+              | grep -qx "'"$route_host"'"; do sleep 3; done'
+
+          # ...and a matching per-listener Certificate.
+          timeout 60 sh -ec '
+            until kubectl -n tenant-test-rparent get certificate \
+              -l cozystack.io/per-listener-cert=true \
+              -o jsonpath="{range .items[*]}{.spec.dnsNames[0]}{\"\n\"}{end}" 2>/dev/null \
+              | grep -qx "'"$route_host"'"; do sleep 3; done'
+        check:
+          ($error == null): true
+---
+# Legacy-Ingress counterpart of the gateway/route hostname VAPs (bats: the 12
+# cozystack-ingress-hostname-policy cases). Gateway API is off by default, so
+# tenant apps publish through a legacy networking.k8s.io/Ingress; the VAP
+# constrains tenant Ingress hostnames on the shared ingress-nginx. The VAP
+# matches on the tenant-* namespace, not the caller, so plain applies as the
+# runner's identity exercise it — no impersonation needed. Hostnames are
+# derived at runtime: the tenant apex from this namespace's
+# namespace.cozystack.io/host label (as elsewhere in this suite) and the
+# platform ROOT apex from the same label on tenant-root, so the
+# under-root-but-outside-own-apex cases stay host-independent where the bats
+# hardcoded test.example.org / example.org.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: ingress-hostname-policy
+spec:
+  catch:
+  - events: {}
+  steps:
+  # If these resources are missing, admission cannot constrain tenant Ingress
+  # hostnames — make that loud instead of letting it fall through as a silent
+  # pass.
+  - name: vap-and-binding-installed
+    try:
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicy
+          metadata:
+            name: cozystack-ingress-hostname-policy
+    - assert:
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: cozystack-ingress-hostname-policy
+          spec:
+            (contains(validationActions, 'Deny')): true
+  # Apex-derived rejects:
+  #   foreign-apex-host    dashboard.<root> — under the platform root apex but
+  #                        outside the tenant's own apex
+  #   prefix-adjacent      evil<apex> — dot-boundary guard: a naive suffix
+  #                        check without the leading dot would match "<apex>"
+  #                        inside "evil<apex>"; the CEL uses endsWith("." + apex)
+  #   foreign-tls-host     in-apex rule host, but a spec.tls[].hosts[] entry
+  #                        under the root apex — the tls branch denies on its own
+  #   wildcard-matches-apex *.<root-parent> is "outside" the root apex by a
+  #                        plain string test, but at ingress-nginx it also
+  #                        matches the bare root apex; the outside-root path is
+  #                        gated on the host not being a wildcard
+  - name: foreign-and-adjacent-hosts-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          apex=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          root=$(kubectl get namespace tenant-root -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ -n "$apex" ] || { echo "SETUP FAILURE: $ns lacks the namespace.cozystack.io/host label" >&2; exit 1; }
+          [ -n "$root" ] || { echo "SETUP FAILURE: tenant-root lacks the namespace.cozystack.io/host label" >&2; exit 1; }
+          [ "$apex" != "$root" ] || { echo "SETUP FAILURE: tenant apex equals root apex; under-root-outside-own cases are undefined" >&2; exit 1; }
+          # deny <case> <ingress-name> <extra-grep|""> reads a manifest on
+          # stdin and expects admission to reject it with a VAP message.
+          deny() {
+            kubectl -n "$ns" delete ingress "$2" --ignore-not-found >/dev/null
+            out=$(kubectl apply -n "$ns" -f - 2>&1) && rc=0 || rc=$?
+            echo "case=$1 rc=$rc"
+            if [ "$rc" -eq 0 ]; then
+              kubectl -n "$ns" delete ingress "$2" --ignore-not-found
+              echo "BUG: admission accepted $1: $out" >&2
+              exit 1
+            fi
+            echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+            [ -z "$3" ] || echo "$out" | grep -qi "$3"
+          }
+          deny foreign-apex-host ingress-out-of-apex-host-probe "must be within" <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-out-of-apex-host-probe
+          spec:
+            rules:
+            - host: "dashboard.${root}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          deny prefix-adjacent ingress-prefix-adjacent-probe "" <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-prefix-adjacent-probe
+          spec:
+            rules:
+            - host: "evil${apex}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          deny foreign-tls-host ingress-tls-out-of-apex-probe "must be within" <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-tls-out-of-apex-probe
+          spec:
+            tls:
+            - hosts:
+              - "harbor.${root}"
+              secretName: noop-tls
+            rules:
+            - host: "harbor.${apex}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          case "$root" in
+            *.*) w="*.${root#*.}" ;;
+            *)   w="*.${root}" ;;
+          esac
+          deny wildcard-matches-apex ingress-wildcard-host-probe "" <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-wildcard-host-probe
+          spec:
+            rules:
+            - host: "${w}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+        check:
+          ($error == null): true
+  # Static rejects — catch-all shapes on the shared ingress-nginx:
+  #   hostless        a rule with no .host matches all inbound HTTP
+  #   empty-host      host: "" is the same catch-all; the CEL denies it via
+  #                   r.host != "" (or has(r.host) if the apiserver drops it)
+  #   defaultBackend  catch-all for otherwise-unmatched traffic
+  - name: catch-all-shapes-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          deny() {
+            kubectl -n "$ns" delete ingress "$2" --ignore-not-found >/dev/null
+            out=$(kubectl apply -n "$ns" -f - 2>&1) && rc=0 || rc=$?
+            echo "case=$1 rc=$rc"
+            if [ "$rc" -eq 0 ]; then
+              kubectl -n "$ns" delete ingress "$2" --ignore-not-found
+              echo "BUG: admission accepted $1: $out" >&2
+              exit 1
+            fi
+            echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          }
+          deny hostless-rule ingress-hostless-probe <<'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-hostless-probe
+          spec:
+            rules:
+            - http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          deny empty-host ingress-empty-host-probe <<'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-empty-host-probe
+          spec:
+            rules:
+            - host: ""
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          deny default-backend ingress-defaultbackend-probe <<'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-defaultbackend-probe
+          spec:
+            defaultBackend:
+              service:
+                name: noop
+                port:
+                  number: 80
+          EOF
+        check:
+          ($error == null): true
+  # Inverse sanity checks under the tenant's own apex: an in-apex rule+tls
+  # Ingress and a wildcard under the own apex (*.<apex>) must NOT be rejected
+  # — the anti-wildcard gate applies only to the outside-root path. Created
+  # inside the script (they need ${apex} interpolation), so also deleted here.
+  - name: own-apex-allowed
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          apex=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ -n "$apex" ] || { echo "SETUP FAILURE: $ns lacks the namespace.cozystack.io/host label" >&2; exit 1; }
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-hostname-allow-probe
+          spec:
+            tls:
+            - hosts:
+              - "harbor.${apex}"
+              secretName: noop-tls
+            rules:
+            - host: "harbor.${apex}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          kubectl -n "$ns" delete ingress ingress-hostname-allow-probe --ignore-not-found
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: ingress-ownapex-wildcard-probe
+          spec:
+            rules:
+            - host: "*.${apex}"
+              http:
+                paths:
+                - path: /
+                  pathType: Prefix
+                  backend:
+                    service:
+                      name: noop
+                      port:
+                        number: 80
+          EOF
+          kubectl -n "$ns" delete ingress ingress-ownapex-wildcard-probe --ignore-not-found
+        check:
+          ($error == null): true
+  # Static accepts — concrete external domains outside the platform root apex
+  # on both spec.rules[].host and spec.tls[].hosts. Declarative apply; Chainsaw
+  # auto-cleanup deletes the probes.
+  - name: external-domain-allowed
+    try:
+    - apply:
+        file: ingress-external-allow.yaml

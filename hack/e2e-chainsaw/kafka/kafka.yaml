@@ -1,0 +1,32 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kafka
+metadata:
+  name: test
+spec:
+  external: false
+  kafka:
+    size: 10Gi
+    replicas: 2
+    storageClass: ""
+    resources: {}
+    resourcesPreset: "c1.small"
+  zookeeper:
+    size: 5Gi
+    replicas: 2
+    storageClass: ""
+    resources: {}
+    resourcesPreset: "c1.small"
+  topics:
+    - name: testResults
+      partitions: 1
+      replicas: 2
+      config:
+        min.insync.replicas: 2
+    - name: testOrders
+      config:
+        cleanup.policy: compact
+        segment.ms: 3600000
+        max.compaction.lag.ms: 5400000
+        min.insync.replicas: 2
+      partitions: 1
+      replicas: 2

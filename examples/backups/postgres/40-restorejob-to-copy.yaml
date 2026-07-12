@@ -3,9 +3,10 @@
 # from the source's Barman archive while pg-src stays running and
 # untouched.
 #
-# Driven by the CI e2e (hack/e2e-apps/backup-postgres.bats) for the
-# same-namespace happy path. The cross-tenant variant stays manual; see
-# 30-postgres-target.yaml for the network-policy reason.
+# A manual / dev-cluster reference for the same-namespace happy path — the
+# automated e2e suite (hack/e2e-chainsaw/) does not exercise postgres
+# backups. The cross-tenant variant stays manual; see 30-postgres-target.yaml
+# for the network-policy reason.
 ---
 apiVersion: backups.cozystack.io/v1alpha1
 kind: RestoreJob

@@ -1,0 +1,174 @@
+# Chainsaw port of hack/e2e-apps/foundationdb.bats ("Create DB FoundationDB").
+#
+# The dense block of `until kubectl get ... jsonpath | grep` status probes
+# collapses into one assert on the FoundationDBCluster status tree. Pod-count
+# (by process class + phase) and PVC-size checks stay as polling scripts —
+# they count List results, which an assert cannot express.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: foundationdb
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: foundationdb-test
+  - describe:
+      apiVersion: apps.foundationdb.org/v1beta2
+      kind: FoundationDBCluster
+      name: foundationdb-test
+  - podLogs:
+      selector: foundationdb.org/fdb-cluster-name=foundationdb-test
+      tail: 50
+  steps:
+  - name: create-foundationdb
+    try:
+    - apply:
+        file: foundationdb.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: foundationdb-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: assert-cluster-status
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps.foundationdb.org/v1beta2
+          kind: FoundationDBCluster
+          metadata:
+            name: foundationdb-test
+          status:
+            configured: true
+            hasListenIPsForAllPods: true
+            databaseConfiguration:
+              logs: 3
+              proxies: 3
+              redundancy_mode: double
+              resolvers: 1
+              storage_engine: ssd-2
+              usable_regions: 1
+            health:
+              available: true
+              fullReplication: true
+              healthy: true
+    # volumeClaimTemplate size is pinned on the CR spec.
+    - assert:
+        resource:
+          apiVersion: apps.foundationdb.org/v1beta2
+          kind: FoundationDBCluster
+          metadata:
+            name: foundationdb-test
+          spec:
+            processes:
+              general:
+                volumeClaimTemplate:
+                  spec:
+                    resources:
+                      requests:
+                        storage: 1Gi
+
+  - name: verify-processes-and-security-context
+    try:
+    - script:
+        timeout: 5m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          cl=foundationdb-test
+          sel="foundationdb.org/fdb-cluster-name=$cl"
+          count_running() {
+            kubectl -n "$ns" get pods -l "$sel,foundationdb.org/fdb-process-class=$1" \
+              --field-selector=status.phase=Running --no-headers 2>/dev/null | wc -l
+          }
+          deadline=$(( $(date +%s) + 240 ))
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            s=$(count_running storage); l=$(count_running log); c=$(count_running cluster_controller)
+            echo "storage=$s log=$l cluster_controller=$c"
+            if [ "$s" -eq 3 ] && [ "$l" -ge 1 ] && [ "$c" -eq 1 ]; then break; fi
+            sleep 10
+          done
+          test "$(count_running storage)" -eq 3
+          test "$(count_running log)" -ge 1
+          test "$(count_running cluster_controller)" -eq 1
+          # securityContext: storage pod must run as the non-root 4059 uid/gid.
+          pod=$(kubectl -n "$ns" get pods -l "$sel,foundationdb.org/fdb-process-class=storage" \
+            --no-headers | head -n1 | awk '{print $1}')
+          kubectl -n "$ns" get pod "$pod" -o jsonpath='{.spec.containers[0].securityContext.runAsUser}' | grep -qx 4059
+          kubectl -n "$ns" get pod "$pod" -o jsonpath='{.spec.containers[0].securityContext.runAsGroup}' | grep -qx 4059
+          # Status fields that are nil early on (so they live here, not in the
+          # assert, where contains()/numeric-compare on nil hard-errors).
+          fdb() { kubectl -n "$ns" get foundationdbclusters.apps.foundationdb.org "$cl" -o jsonpath="$1"; }
+          deadline=$(( $(date +%s) + 120 ))
+          until fdb '{.status.connectionString}' | grep -qE '@.*\.svc\.cozy\.local'; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "connectionString not set" >&2; fdb '{.status.connectionString}' >&2; exit 1; }
+            sleep 5
+          done
+          fdb '{.status.desiredProcessGroups}' | grep -qE '^[0-9]+$'
+          # generations.reconciled is stamped by the operator after the
+          # post-bounce uptime gate and can trail the fdbcli-derived health
+          # fields the previous assert converged on; retry briefly instead of
+          # a one-shot read (mirrors main's widened budgets, a79f8009f).
+          deadline=$(( $(date +%s) + 120 ))
+          until fdb '{.status.generations.reconciled}' | grep -qE '^[0-9]+$'; do
+            [ "$(date +%s)" -ge "$deadline" ] && { echo "generations.reconciled not stamped" >&2; fdb '{.status.generations}' >&2; exit 1; }
+            sleep 5
+          done
+        check:
+          ($error == null): true
+
+  - name: verify-monitoring-and-storage
+    try:
+    # Dashboard resource map ConfigMap is created by the controller.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: foundationdb-test-resourcemap
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          cl=foundationdb-test
+          # WorkloadMonitor is created and configured with replicas=3.
+          kubectl -n "$ns" get workloadmonitor "$cl"
+          kubectl -n "$ns" get workloadmonitor "$cl" -o jsonpath='{.spec.replicas}' | grep -qx 3
+          # PVCs: at least 3, all requesting and reporting 1Gi.
+          count=$(kubectl -n "$ns" get pvc -l "foundationdb.org/fdb-cluster-name=$cl" --no-headers | wc -l)
+          test "$count" -ge 3
+          kubectl -n "$ns" get pvc -l "foundationdb.org/fdb-cluster-name=$cl" \
+            -o jsonpath='{.items[*].spec.resources.requests.storage}' | grep -q '1Gi'
+          kubectl -n "$ns" get pvc -l "foundationdb.org/fdb-cluster-name=$cl" \
+            -o jsonpath='{.items[*].status.capacity.storage}' | grep -q '1Gi'
+        check:
+          ($error == null): true
+
+  - name: verify-cleanup
+    try:
+    - delete:
+        ref:
+          apiVersion: apps.cozystack.io/v1alpha1
+          kind: FoundationDB
+          name: test
+    - error:
+        timeout: 2m
+        resource:
+          apiVersion: apps.foundationdb.org/v1beta2
+          kind: FoundationDBCluster
+          metadata:
+            name: foundationdb-test

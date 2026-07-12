@@ -25,7 +25,7 @@ The platform exposes infrastructure services via the Kubernetes API with ready-m
 │   └── extra/             # Tenant-specific modules, singleton charts which are used as dependencies
 ├── dashboards/            # Grafana dashboards for monitoring
 ├── hack/                  # Helper scripts for local development
-│   └── e2e-apps/         # End-to-end application tests
+│   └── e2e-chainsaw/     # End-to-end application tests (Kyverno Chainsaw)
 ├── scripts/               # Scripts used by cozystack container
 │   └── migrations/       # Version migration scripts
 ├── docs/                  # Documentation
@@ -101,7 +101,7 @@ Package `values.yaml` files carry annotations (`@param`, `@typedef`, `@field`, `
 ## Testing
 
 - **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). `make unit-tests` runs the full unit suite — Helm, BATS, Go, and the preset/readiness checks.
-- **E2E tests:** BATS suites in `hack/e2e-apps/` (one `.bats` per app), run through `hack/cozytest.sh`. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
+- **E2E tests:** Kyverno Chainsaw suites in `hack/e2e-chainsaw/` (one directory per app), run with `chainsaw test`. Cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
 
 ## Conventions

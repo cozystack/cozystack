@@ -1,0 +1,123 @@
+# Chainsaw port of hack/e2e-apps/kubernetes-oidc-system.bats.
+#
+# Phase-1 OIDC System-mode e2e — render-side only. Pairs with the
+# kubernetes-oidc-customconfig suite (BYO issuer path).
+#
+# Does NOT spin up a full Kamaji control plane: that path is covered by the
+# kubernetes-latest/previous suites and would add another ~25 min bringup for
+# a feature whose end-to-end OIDC browser flow is explicitly out of scope
+# (see docs/oidc-tenant.md -> Phase 1). minReplicas: 0 means no worker VMs;
+# the suite runs in minutes. Accordingly the HR is only asserted to EXIST
+# (cozystack-api materialised it), never Ready.
+#
+# What is exercised on a live cluster: the new spec.oidc.* fields are
+# admitted by the aggregated API; the HelmRelease renders the OIDC templates;
+# and the resulting KamajiControlPlane / AuthenticationConfiguration Secret /
+# KeycloakClient / KeycloakClientScope carry the expected per-cluster shape.
+# The Keycloak asserts are unconditional: the chart capability-gates their
+# rendering on v1.edp.epam.com/v1 (oidc-keycloak.yaml), and the CI platform
+# always ships the operator — the bats' api-resources guard was dead code
+# there (and its `skip` did not exist under cozytest anyway).
+#
+# The Kubernetes CR is applied declaratively, so Chainsaw auto-cleanup
+# deletes it at test end — the bats' hand-rolled cleanup_kr/cozy_cleanup
+# hooks have no equivalent here by construction.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-oidc-system
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: kubernetes-oidc-system
+  - describe:
+      apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+      kind: KamajiControlPlane
+      name: kubernetes-oidc-system
+  steps:
+  - name: create-kubernetes-oidc-system
+    try:
+    - apply:
+        file: kubernetes-oidc-system.yaml
+    # cozystack-api materialises the HelmRelease…
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-oidc-system
+    # …and the chart renders the KamajiControlPlane (no Ready wait — that
+    # would require the Kamaji bringup this suite deliberately avoids).
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata:
+            name: kubernetes-oidc-system
+
+  - name: kamajicontrolplane-oidc-wiring
+    try:
+    - assert:
+        resource:
+          apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata:
+            name: kubernetes-oidc-system
+          spec:
+            apiServer:
+              # --authentication-config is appended to extraArgs; the
+              # chart-owned mount lands on extraVolumeMounts.
+              (contains(extraArgs, '--authentication-config=/etc/kubernetes/authentication-config/config.yaml')): true
+              (extraVolumeMounts[?name == 'authentication-config']):
+              - name: authentication-config
+            deployment:
+              # The chart-owned volume lands on extraVolumes.
+              (extraVolumes[?name == 'authentication-config']):
+              - name: authentication-config
+
+  - name: authn-config-secret
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kubernetes-oidc-system-oidc-authn-config
+    # The issuer check is a regex (any keycloak.<host>), so it stays a script;
+    # the per-cluster audience literal rides along.
+    - script:
+        content: |
+          set -eu
+          body=$(kubectl -n "$NAMESPACE" get secret kubernetes-oidc-system-oidc-authn-config \
+            -o jsonpath='{.data.config\.yaml}' | base64 -d)
+          echo "$body" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'
+          echo "$body" | grep -qF -- "- tenant-test-kubernetes-oidc-system"
+        check:
+          ($error == null): true
+
+  - name: keycloak-objects-in-cozy-realm
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          metadata:
+            name: tenant-test-kubernetes-oidc-system
+          spec:
+            public: true
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClientScope
+          metadata:
+            name: tenant-test-kubernetes-oidc-system-audience
+          spec:
+            (protocolMappers[0].protocolMapper): oidc-audience-mapper

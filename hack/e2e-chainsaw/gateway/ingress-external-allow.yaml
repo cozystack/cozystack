@@ -1,0 +1,46 @@
+# Outside-root allowance probes (bats: "allows an Ingress host outside the
+# platform root apex" + "allows an external domain on spec.tls[].hosts").
+# This is the path the kubernetes app's Proxied exposeMethod uses —
+# addons.ingressNginx.hosts routes a user-supplied external domain to a
+# nested cluster — and it must be admitted.
+#
+# shop.external-probe.invalid uses the RFC 2606 reserved TLD, so unlike the
+# bats' shop.example.net it can never collide with a dev cluster's real root
+# apex. Applied declaratively: Chainsaw auto-cleanup deletes both probes.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-external-host-probe
+spec:
+  rules:
+  - host: "shop.external-probe.invalid"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ingress-external-tls-probe
+spec:
+  tls:
+  - hosts:
+    - "shop.external-probe.invalid"
+    secretName: noop-tls
+  rules:
+  - host: "shop.external-probe.invalid"
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: noop
+            port:
+              number: 80

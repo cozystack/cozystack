@@ -1,0 +1,12 @@
+apiVersion: cozystack.io/v1alpha1
+kind: Package
+metadata:
+  name: vap-accept-probe
+spec:
+  variant: isp-full
+  components:
+    platform:
+      values:
+        gateway:
+          attachedNamespaces:
+          - tenant-alice

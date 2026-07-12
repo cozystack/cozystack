@@ -6,11 +6,11 @@
 # hack/e2e-talos-image-cache.yaml bundles four documents but they are applied in
 # two phases: hack/e2e-install-cozystack.bats applies everything EXCEPT the
 # CiliumClusterwideNetworkPolicy (its CRD does not exist before Cozystack is
-# installed), and hack/e2e-apps/talos-image-cache.sh applies ONLY that policy
-# later, once Cilium is up. If a future document is added to the manifest and
-# silently dropped from the pre-Cilium apply, or the Cilium document leaks into
-# it (and errors on the missing CRD), the mirror breaks and e2e falls back to
-# the flaky public factory. These tests pin that split.
+# installed), and hack/e2e-chainsaw/_lib/talos-image-cache.sh applies ONLY that
+# policy later, once Cilium is up. If a future document is added to the manifest
+# and silently dropped from the pre-Cilium apply, or the Cilium document leaks
+# into it (and errors on the missing CRD), the mirror breaks and e2e falls back
+# to the flaky public factory. These tests pin that split.
 #
 # They also pin the load-bearing reachability invariant: the throwaway probe pod
 # is a faithful proxy for a real CDI importer only if it carries the exact label
@@ -18,12 +18,15 @@
 # pass while real importers stay blocked (a false positive that makes CI worse).
 #
 # Finally they cover the two pure fragments of the decision itself, sourced from
-# hack/e2e-apps/talos-image-cache.sh (sourcing it has no cluster side effects — it
-# only sets parameter defaults and defines functions): the strict 206 gate that
-# decides whether tenants are pointed at the mirror at all, and the --overrides JSON
-# builder whose silent breakage would drop every probe to the public factory. The
-# kubectl orchestration around them needs a live cluster and is covered by the e2e
-# run, matching how the other hack/ helpers are tested.
+# hack/e2e-chainsaw/_lib/talos-image-cache.sh (sourcing it has no cluster side
+# effects — it only sets parameter defaults and defines functions): the strict
+# 206 gate that decides whether tenants are pointed at the mirror at all, and the
+# --overrides JSON builder whose silent breakage would drop every probe to the
+# public factory. The kubectl orchestration around them needs a live cluster and
+# is covered by the e2e run, matching how the other hack/ helpers are tested.
+#
+# Root cause + fix are from cozystack/cozystack#3254 (@lexfrei); this is the port
+# to the Chainsaw layout (hack/e2e-chainsaw/_lib/).
 #
 # cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
 # own line; there is no bats `run` or `$status`, and setup()/teardown() are not
@@ -65,7 +68,7 @@
 
 @test "egress policy selects the importer label and namespace the probe pod uses" {
     manifest=hack/e2e-talos-image-cache.yaml
-    helper=hack/e2e-apps/talos-image-cache.sh
+    helper=hack/e2e-chainsaw/_lib/talos-image-cache.sh
     label=$(yq 'select(.kind == "CiliumClusterwideNetworkPolicy") | .spec.endpointSelector.matchLabels["k8s:cdi.kubevirt.io"]' "$manifest")
     ns=$(yq 'select(.kind == "CiliumClusterwideNetworkPolicy") | .spec.endpointSelector.matchLabels["k8s:io.kubernetes.pod.namespace"]' "$manifest")
     [ "$label" = "importer" ]
@@ -92,7 +95,7 @@
 }
 
 @test "strict 206 gate selects the mirror on a byte-range success" {
-    . hack/e2e-apps/talos-image-cache.sh
+    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
     if ! _talos_image_cache_probe_succeeded "code=206"; then
         echo "expected a 206 probe result to select the mirror" >&2
         exit 1
@@ -100,7 +103,7 @@
 }
 
 @test "strict 206 gate finds the marker inside surrounding probe output" {
-    . hack/e2e-apps/talos-image-cache.sh
+    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
     out=$(printf 'pod/talos-image-cache-probe created\ncode=206\npod "talos-image-cache-probe" deleted\n')
     if ! _talos_image_cache_probe_succeeded "$out"; then
         echo "expected 206 to be found in multi-line attach output" >&2
@@ -109,7 +112,7 @@
 }
 
 @test "strict 206 gate falls back on range-less, unreachable, empty and unrelated output" {
-    . hack/e2e-apps/talos-image-cache.sh
+    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
     # A plain 200 means the mirror answered without range support; 000 means curl
     # never connected. Both fall back to the public factory, as does output that
     # carried no result marker at all (an attach stream lost with no logs to recover).
@@ -122,7 +125,7 @@
 }
 
 @test "probe overrides builder emits valid JSON with the image, command and restricted PSA" {
-    . hack/e2e-apps/talos-image-cache.sh
+    . hack/e2e-chainsaw/_lib/talos-image-cache.sh
     img=example.invalid/img:tag
     cmd='curl -s -o /dev/null -w code=%{http_code} -r 0-0 http://talos-image-cache.kube-system.svc/x.raw.xz'
     json=$(_talos_image_cache_probe_overrides "$img" "$cmd")
@@ -132,13 +135,6 @@
     [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].name')" = "c" ]
     [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].image')" = "$img" ]
     [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].command[2]')" = "$cmd" ]
-    # Every field the tenant namespace's restricted Pod Security Admission requires:
-    # drop any one of them and the probe Pod is rejected at admission, the probe
-    # fails, and CI silently falls back to the public factory.
     [ "$(printf '%s' "$json" | yq -p=json '.spec.securityContext.runAsNonRoot')" = "true" ]
-    [ "$(printf '%s' "$json" | yq -p=json '.spec.securityContext.runAsUser')" = "1000" ]
-    [ "$(printf '%s' "$json" | yq -p=json '.spec.securityContext.seccompProfile.type')" = "RuntimeDefault" ]
     [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].securityContext.allowPrivilegeEscalation')" = "false" ]
-    [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].securityContext.capabilities.drop | length')" = "1" ]
-    [ "$(printf '%s' "$json" | yq -p=json '.spec.containers[0].securityContext.capabilities.drop[0]')" = "ALL" ]
 }

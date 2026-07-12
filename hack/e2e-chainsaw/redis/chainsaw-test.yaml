@@ -1,0 +1,74 @@
+# Chainsaw port of hack/e2e-apps/redis.bats ("Create Redis").
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: redis
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: redis-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=redis-test
+      tail: 50
+  steps:
+  - name: create-redis
+    try:
+    - apply:
+        file: redis.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-storage-and-workloads
+    try:
+    # replicas: 2 provisions two StatefulSet-templated PVCs — verify both.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-redis-test-0
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-redis-test-1
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: rfs-redis-test
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-redis-test
+          status:
+            readyReplicas: 2

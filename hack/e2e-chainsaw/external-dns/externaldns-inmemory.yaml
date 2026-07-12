@@ -1,0 +1,8 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: ExternalDNS
+metadata:
+  name: test
+spec:
+  provider: inmemory
+  domainFilters:
+    - example.com

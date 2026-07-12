@@ -11,7 +11,7 @@
 # Run with: hack/cozytest.sh hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
 
-@test "single app diff selects only that bats" {
+@test "single app diff selects only that suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -20,10 +20,10 @@
     [ "$output" = "postgres" ]
 }
 
-@test "operator diff selects all dependent app bats" {
+@test "operator diff selects all dependent app suites" {
     # postgres-operator is depended on by postgres-application, harbor-application
     # (Harbor uses postgres as its backing DB), and monitoring-application (Grafana
-    # DB). monitoring isn't in hack/e2e-apps/ so it's filtered out by the selector.
+    # DB). monitoring has no chainsaw suite so it's filtered out by the selector.
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -63,7 +63,7 @@
     cp -r packages/core/platform/sources "$tmp/sources"
     echo "packages/system/cilium/values.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
-    # Full suite means more than 5 bats files
+    # Full suite means more than 5 suites
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
@@ -85,7 +85,7 @@
     [ -z "$output" ]
 }
 
-@test "kubernetes-application maps to two bats files" {
+@test "kubernetes-application maps to the four kubernetes suites" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
@@ -93,6 +93,10 @@
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     echo "$output" | grep -q "kubernetes-latest"
     echo "$output" | grep -q "kubernetes-previous"
+    # The OIDC render-side suites exercise the same kubernetes app chart, so a
+    # chart-only change must select them too.
+    echo "$output" | grep -q "kubernetes-oidc-system"
+    echo "$output" | grep -q "kubernetes-oidc-customconfig"
 }
 
 @test "dashboards-only diff selects nothing (path is plural)" {
@@ -108,7 +112,16 @@
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo "hack/e2e-apps/run-kubernetes.sh" > "$tmp/diff"
+    echo "hack/e2e-chainsaw/_lib/run-kubernetes.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+}
+
+@test "chainsaw config change triggers full suite" {
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-chainsaw/.chainsaw.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
@@ -122,11 +135,11 @@
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
-@test "per-app bats edit selects only that app, never escalates" {
+@test "per-suite edit selects only that suite, never escalates" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     cp -r packages/core/platform/sources "$tmp/sources"
-    echo "hack/e2e-apps/redis.bats" > "$tmp/diff"
+    echo "hack/e2e-chainsaw/redis/chainsaw-test.yaml" > "$tmp/diff"
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
     [ "$output" = "redis" ]
 }

@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for hack/e2e-apps/remediation-guard.sh
+# Unit tests for hack/e2e-chainsaw/_lib/remediation-guard.sh
 #
 # helmrelease_has_remediation_cycle takes a newline-delimited list of
 # HelmRelease history snapshot status values (deployed/superseded/failed/
@@ -20,7 +20,7 @@
 # -----------------------------------------------------------------------------
 
 @test "empty history returns not-detected" {
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     if helmrelease_has_remediation_cycle ""; then
         echo "expected not-detected for empty history" >&2
         exit 1
@@ -28,7 +28,7 @@
 }
 
 @test "single deployed snapshot returns not-detected" {
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     if helmrelease_has_remediation_cycle "deployed"; then
         echo "expected not-detected for deployed-only history" >&2
         exit 1
@@ -36,7 +36,7 @@
 }
 
 @test "deployed then superseded returns not-detected" {
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     statuses=$(printf 'deployed\nsuperseded\n')
     if helmrelease_has_remediation_cycle "${statuses}"; then
         echo "expected not-detected for deployed+superseded history" >&2
@@ -45,7 +45,7 @@
 }
 
 @test "single failed snapshot returns detected" {
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     if ! helmrelease_has_remediation_cycle "failed"; then
         echo "expected detected when history contains failed snapshot" >&2
         exit 1
@@ -56,7 +56,7 @@
     # The exact signature of the install-remediation race: the first install
     # exceeded flux's wait budget, remediation uninstalled, the next retry
     # eventually succeeded. History still carries the uninstalled snapshot.
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     if ! helmrelease_has_remediation_cycle "uninstalled"; then
         echo "expected detected when history contains uninstalled snapshot" >&2
         exit 1
@@ -64,7 +64,7 @@
 }
 
 @test "uninstalled then deployed still returns detected" {
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     statuses=$(printf 'uninstalled\ndeployed\n')
     if ! helmrelease_has_remediation_cycle "${statuses}"; then
         echo "expected detected despite later successful deploy" >&2
@@ -73,7 +73,7 @@
 }
 
 @test "deployed then failed still returns detected" {
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     statuses=$(printf 'deployed\nfailed\n')
     if ! helmrelease_has_remediation_cycle "${statuses}"; then
         echo "expected detected when any entry is failed" >&2
@@ -119,7 +119,7 @@ YAML
     [ -n "$statuses" ]
     echo "$statuses" | grep --quiet '^uninstalled$'
 
-    . hack/e2e-apps/remediation-guard.sh
+    . hack/e2e-chainsaw/_lib/remediation-guard.sh
     if ! helmrelease_has_remediation_cycle "$statuses"; then
         echo "expected detected for pinned HR snippet with uninstalled + deployed history" >&2
         exit 1

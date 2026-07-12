@@ -1,0 +1,120 @@
+# Chainsaw port of hack/e2e-apps/serviceexposure.bats.
+#
+# Smoke test for the ServiceExposure controller (network.cozystack.io): the
+# CRDs are installed, the controller resolves a ServiceExposure to its
+# ExposureClass, renders NO foreign backend CRs for the externalIPs backend,
+# and reports status. See serviceexposure.yaml for why externalIPs.
+#
+# Both Tests reuse the same fixture names — safe under the global
+# execution.parallel: 1 (the first Test's auto-cleanup completes before the
+# second starts).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: serviceexposure-externalips
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: network.cozystack.io/v1alpha1
+      kind: ServiceExposure
+      name: se-e2e
+  - get:
+      apiVersion: network.cozystack.io/v1alpha1
+      kind: ExposureClass
+      name: se-e2e-externalips
+  - podLogs:
+      namespace: cozy-system
+      selector: app=cozystack-controller
+      tail: 100
+  steps:
+  - name: create-fixtures
+    try:
+    - apply:
+        file: serviceexposure.yaml
+
+  - name: resolved-backend
+    try:
+    # The controller stamps status.resolvedBackend once it has reconciled.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: network.cozystack.io/v1alpha1
+          kind: ServiceExposure
+          metadata:
+            name: se-e2e
+          status:
+            resolvedBackend: externalIPs
+
+  - name: no-backend-pool
+    try:
+    # externalIPs backend must not create a MetalLB pool
+    # (backend.PoolName = cozystack-<class>). resolvedBackend above already
+    # proved the reconcile ran, so a short non-existence poll is race-free —
+    # same ordering as the bats.
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: cozystack-se-e2e-externalips
+            namespace: cozy-metallb
+
+  - name: ready-and-assigned-ips
+    try:
+    # The pinned externalIPs make the exposure Ready.
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: network.cozystack.io/v1alpha1
+          kind: ServiceExposure
+          metadata:
+            name: se-e2e
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+            (assignedIPs[0]): 203.0.113.10
+---
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: serviceexposure-delete
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: network.cozystack.io/v1alpha1
+      kind: ServiceExposure
+      name: se-e2e
+  - podLogs:
+      namespace: cozy-system
+      selector: app=cozystack-controller
+      tail: 100
+  steps:
+  - name: create-fixtures
+    try:
+    - apply:
+        file: serviceexposure.yaml
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: network.cozystack.io/v1alpha1
+          kind: ServiceExposure
+          metadata:
+            name: se-e2e
+          status:
+            resolvedBackend: externalIPs
+
+  - name: delete-completes-despite-finalizer
+    try:
+    # Deletion must complete despite the cleanup finalizer (nothing to GC for
+    # the externalIPs backend, so the finalizer is removed promptly). The
+    # chainsaw delete op waits for the object to be fully gone — the delete
+    # IS the test. 3m covers the bats' 2m delete + 1m wait-for-delete.
+    - delete:
+        timeout: 3m
+        ref:
+          apiVersion: network.cozystack.io/v1alpha1
+          kind: ServiceExposure
+          name: se-e2e

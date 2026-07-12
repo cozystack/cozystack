@@ -5,6 +5,7 @@ ARG TALOSCTL_VERSION=1.13.5
 ARG HELM_VERSION=3.21.2
 ARG COZYHR_VERSION=1.6.1
 ARG CRUST_GATHER_VERSION=v0.15.2
+ARG CHAINSAW_VERSION=0.2.15
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -23,9 +24,14 @@ RUN curl -sSL "https://github.com/cozystack/cozyhr/raw/refs/heads/main/hack/inst
 RUN curl -fsSL "https://dl.min.io/client/mc/release/${TARGETOS}-${TARGETARCH}/mc" --create-dirs -o /usr/local/bin/mc \
  && chmod +x /usr/local/bin/mc
 # crust-gather: full-cluster diagnostic snapshots, captured per failed test by
-# cozytest.sh (host + each nested tenant cluster) and `crust-gather serve`-able
-# from the cozyreport artifact. Installs a static musl binary as crust-gather.
+# cozytest.sh (BATS install/openapi tests) and by the global .chainsaw.yaml
+# error.catch (Chainsaw app suite) — host plus each nested tenant cluster — and
+# `crust-gather serve`-able from the cozyreport artifact. Installs a static musl
+# binary as crust-gather.
 RUN curl -sSfL "https://github.com/crust-gather/crust-gather/raw/main/install.sh" | sh -s -- --version "${CRUST_GATHER_VERSION}" --bin-dir /usr/local/bin --yes
+RUN curl -sSL "https://github.com/kyverno/chainsaw/releases/download/v${CHAINSAW_VERSION}/chainsaw_${TARGETOS}_${TARGETARCH}.tar.gz" \
+ | tar -xz -C /usr/local/bin chainsaw \
+ && chmod +x /usr/local/bin/chainsaw
 RUN <<'EOF'
 cat <<'EOT' >> /etc/bash.bashrc
 . /etc/bash_completion

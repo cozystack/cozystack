@@ -1,0 +1,50 @@
+# nodeGroups (and storageClass) intentionally omitted — this is a render-side
+# test that only asserts on the KamajiControlPlane + the tenant-supplied
+# issuer AuthenticationConfiguration Secret. With the schema default `{}`,
+# the chart helper emits the default `md0` group with `minReplicas: 0` —
+# exactly one MachineDeployment renders (API-surface completeness) but the
+# chart no longer manages `spec.replicas`, so CAPI's defaulting webhook seeds
+# it to 0 from the autoscaler min-size annotation. Result: zero
+# KubevirtMachines, zero worker DataVolumes, no DRBD churn between CI runs
+# (see #3231).
+# Unlike the bats original, no talos.imageFactoryURL block is injected here:
+# the helper emits it only when the in-sandbox Talos image cache is up, and
+# with zero worker replicas this render-side test instantiates no DataVolume
+# imports for it to redirect — the static fixture stays equivalent.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: Kubernetes
+metadata:
+  name: oidc-byo
+spec:
+  addons:
+    ingressNginx:
+      enabled: false
+      hosts: []
+      valuesOverride: {}
+  controlPlane:
+    apiServer:
+      resources: {}
+      resourcesPreset: small
+    replicas: 1
+  version: v1.35
+  oidc:
+    mode: CustomConfig
+    customConfig:
+      config: |
+        apiVersion: apiserver.config.k8s.io/v1beta1
+        kind: AuthenticationConfiguration
+        jwt:
+        - issuer:
+            url: https://idp.byo.example.test
+            audiences:
+            - cozystack-byo-oidc-byo
+          claimMappings:
+            username:
+              claim: preferred_username
+              prefix: ""
+            groups:
+              claim: groups
+              prefix: ""
+    users:
+    - email: byo-admin@example.test
+      role: admin

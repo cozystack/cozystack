@@ -15,8 +15,8 @@
 # curl retry loop (decoupling the one flaky external fetch from the many
 # per-worker imports), then serves it locally over plain HTTP with range support.
 # Tenant `Kubernetes` CRs point `spec.talos.imageFactoryURL` at this Service
-# (see hack/e2e-apps/run-kubernetes.sh) so every worker imports from the warm
-# local copy instead of the public internet. Tenant namespaces run under a
+# (see hack/e2e-chainsaw/_lib/run-kubernetes.sh) so every worker imports from the
+# warm local copy instead of the public internet. Tenant namespaces run under a
 # default-deny Cilium egress installed by the tenant chart, whose allow rules cover
 # same-namespace endpoints, the tenant tree and the `world` entity (which is why the
 # public factory works) but NOT an arbitrary kube-system Service, so a worker's CDI
@@ -248,10 +248,10 @@ data:
 # (default-allow ingress), so no ingress rule is needed; replies return on the
 # established conntrack entry.
 #
-# Applied at point-of-use by hack/e2e-apps/talos-image-cache.sh, not with the rest
-# of this manifest in hack/e2e-install-cozystack.bats: that runs before Cozystack
-# (and thus before Cilium's CRDs) is installed, so this kind does not yet exist
-# when the manifest is first applied.
+# Applied at point-of-use by hack/e2e-chainsaw/_lib/talos-image-cache.sh, not with
+# the rest of this manifest in hack/e2e-install-cozystack.bats: that runs before
+# Cozystack (and thus before Cilium's CRDs) is installed, so this kind does not yet
+# exist when the manifest is first applied.
 apiVersion: cilium.io/v2
 kind: CiliumClusterwideNetworkPolicy
 metadata:

@@ -1,0 +1,82 @@
+# Chainsaw port of hack/e2e-apps/kubernetes-latest.bats.
+#
+# Spinning up a tenant Kubernetes control plane (Kamaji) + worker nodes + the
+# LB/NFS/ouroboros checks is deeply imperative (port-forwards, a tenant
+# kubeconfig, curl probes), so the battle-tuned logic in
+# _lib/run-kubernetes.sh is reused verbatim from a single script step rather
+# than rewritten as asserts. The script cd's to the repo root (the test dir is
+# hack/e2e-chainsaw/kubernetes-latest, so repo root is ../../..) where the
+# helper's `helm template` and versions.yaml paths resolve.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-latest
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: tenant-kubernetes-latest-version
+    try:
+    - script:
+        # ~25m Kamaji bringup + worker join + LB/NFS/ouroboros assertions.
+        timeout: 40m
+        # Co-locate the tenant crust-gather snapshot (captured by
+        # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
+        # the global .chainsaw.yaml catch's host snapshot.
+        env:
+        - name: COZY_SNAPSHOT_NAME
+          value: ($test.metadata.name)
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          # 4th arg "true" folds the ouroboros hairpin-NAT assertions onto this
+          # cluster instead of a second ~25m bringup.
+          run_kubernetes_test 'keys | sort_by(.) | .[-1]' 'test-latest-version' '59991' 'true'
+        check:
+          ($error == null): true
+    finally:
+    # Always runs after try/catch — i.e. after the crust-gather snapshots on a
+    # failed run. Reclaims the tenant Kubernetes cluster, which run_kubernetes_test
+    # applies imperatively (kubectl), so Chainsaw's auto-cleanup does not track it.
+    # On success run_kubernetes_test already tore it down, so this is a no-op then.
+    - description: tear down the tenant Kubernetes cluster
+      script:
+        timeout: 10m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          cozy_cleanup
+---
+# Version-independent regression guard for PR #2872 B1 (runs once, here, not
+# in kubernetes-previous): with the `replicated` StorageClass absent on the
+# management cluster, the chart's fallback default must be a real management
+# SC (nvme/ssd probes) and never the `kubevirt` alias. A separate Test doc,
+# not a step of the bringup Test above, because it provisions no tenant
+# cluster and must run regardless of that heavy test's outcome (Chainsaw
+# skips a Test's remaining steps after a failure).
+#
+# The helper temporarily deletes the cluster-scoped `replicated` SC and
+# restores it inline before any assertion exit; safe only because the global
+# .chainsaw.yaml runs suites sequentially (execution.parallel: 1) — nothing
+# else can schedule against the mutated SC set mid-probe.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-sc-fallback-default
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: fallback-default-storageclass
+    try:
+    - script:
+        timeout: 15m
+        content: |
+          set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+          verify_storageclass_fallback_default
+        check:
+          ($error == null): true

@@ -1,0 +1,117 @@
+# Chainsaw port of hack/e2e-apps/kubernetes-oidc-customconfig.bats.
+#
+# Phase-1 OIDC CustomConfig selector e2e — render-side only. Pairs with the
+# kubernetes-oidc-system suite; see its header for why no Kamaji bringup and
+# no HR Ready wait (minReplicas: 0, HR asserted to exist only).
+#
+# What is exercised on a live cluster: spec.oidc.mode: CustomConfig is
+# admitted; the HelmRelease renders; the tenant-supplied
+# AuthenticationConfiguration is wired onto the KamajiControlPlane; and —
+# crucially — NO Keycloak objects are created in the cozy realm when the
+# tenant brings their own issuer, and the placeholder OIDC kubeconfig Secret
+# is NOT pre-rendered (System mode pre-renders it; CustomConfig distributes
+# out-of-band).
+#
+# The absence checks run AFTER the positive authn-config Secret assert
+# establishes the chart has finished rendering — otherwise a not-yet-
+# reconciled HR would false-pass them, a hazard the sequential bats never had.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: kubernetes-oidc-customconfig
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: kubernetes-oidc-byo
+  - describe:
+      apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+      kind: KamajiControlPlane
+      name: kubernetes-oidc-byo
+  steps:
+  - name: create-kubernetes-oidc-byo
+    try:
+    - apply:
+        file: kubernetes-oidc-byo.yaml
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: kubernetes-oidc-byo
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata:
+            name: kubernetes-oidc-byo
+
+  - name: kamajicontrolplane-still-carries-authentication-config
+    try:
+    - assert:
+        resource:
+          apiVersion: controlplane.cluster.x-k8s.io/v1alpha1
+          kind: KamajiControlPlane
+          metadata:
+            name: kubernetes-oidc-byo
+          spec:
+            apiServer:
+              (contains(extraArgs, '--authentication-config=/etc/kubernetes/authentication-config/config.yaml')): true
+
+  - name: authn-config-secret-carries-tenant-issuer
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kubernetes-oidc-byo-oidc-authn-config
+    - script:
+        content: |
+          set -eu
+          body=$(kubectl -n "$NAMESPACE" get secret kubernetes-oidc-byo-oidc-authn-config \
+            -o jsonpath='{.data.config\.yaml}' | base64 -d)
+          echo "$body" | grep -qF "url: https://idp.byo.example.test"
+          echo "$body" | grep -qF "cozystack-byo-oidc-byo"
+          # Fail-loud negation (a bare `! ... | grep` is vacuous under set -e):
+          # the cozy-realm issuer must NOT appear in a BYO config.
+          if echo "$body" | grep -qE 'url: https://keycloak\.[^/]+/realms/cozy'; then
+            echo "FAIL: BYO AuthenticationConfiguration must not carry the cozy realm issuer" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
+
+  # Absence proofs — ordered after the positive asserts above (chart has
+  # rendered), so `error` op polling to its timeout is a real negative, not a
+  # not-yet-reconciled false pass.
+  - name: no-keycloak-objects-and-no-prerendered-kubeconfig
+    try:
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClient
+          metadata:
+            name: tenant-test-kubernetes-oidc-byo
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: v1.edp.epam.com/v1
+          kind: KeycloakClientScope
+          metadata:
+            name: tenant-test-kubernetes-oidc-byo-audience
+    # System mode pre-renders <release>-oidc-kubeconfig as a placeholder;
+    # CustomConfig must not.
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: kubernetes-oidc-byo-oidc-kubeconfig

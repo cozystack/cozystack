@@ -1,0 +1,36 @@
+apiVersion: apps.cozystack.io/v1alpha1
+kind: FoundationDB
+metadata:
+  name: test
+spec:
+  cluster:
+    version: "7.3.63"
+    processCounts:
+      storage: 3
+      stateless: -1
+      cluster_controller: 1
+    redundancyMode: "double"
+    storageEngine: "ssd-2"
+    faultDomain:
+      key: "foundationdb.org/none"
+      valueFrom: "$FDB_ZONE_ID"
+  storage:
+    size: "1Gi"
+    storageClass: ""
+  resourcesPreset: "small"
+  backup:
+    enabled: false
+    s3:
+      bucket: ""
+      endpoint: ""
+      region: ""
+      credentials:
+        accessKeyId: ""
+        secretAccessKey: ""
+    retentionPolicy: "7d"
+  monitoring:
+    enabled: true
+  customParameters:
+    - "knob_disable_posix_kernel_aio=1"
+  imageType: "unified"
+  automaticReplacements: true
