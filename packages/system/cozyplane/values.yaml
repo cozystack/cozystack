@@ -1,6 +1,6 @@
 # Container image for all cozyplane components (agent, CNI plugin, controller).
 # Digest-pinned (no floating tag); update on each published build.
-image: ghcr.io/lllamnyp/cozyplane@sha256:3d6fece3355f4f0accf47c4ab02d9b75919f002db4dee444a08f157d888c2a7b
+image: ghcr.io/lllamnyp/cozyplane@sha256:c3858ecc3d590b05de81599f65bf2ed1ecd4708f41f6be80244ddd566b303101
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -21,7 +21,7 @@ cniConfName: "10-cozyplane.conflist"
 # proxy serves it. When cozyplane is the CNI AND there is no kube-proxy, that
 # ClusterIP is unserved until cozyplane-kpr (which needs the agent) is up, a
 # bootstrap cycle — so point the agent at a real endpoint (Talos: KubePrism
-# localhost:7445; see values-talos.yaml).
+# localhost:7445).
 kubeApiServer:
   host: ""
   port: ""
@@ -80,11 +80,16 @@ controller:
 exportPolicy:
   enabled: true
 
-# The CRD serving of sdn.cozystack.io — the bootstrap surface: tenancy works
-# from the moment the CNI lands, with no cert-manager in sight. The aggregated
-# API server is the SEPARATE cozyplane-apiserver package (a component that
-# dependsOn cert-manager), whose explicit APIService atomically takes over the
-# group's serving from these CRDs when it installs; the CRDs stay, shadowed and
-# inert. Disable only to keep the group unserved until that package installs.
+# CRDs for the LOCAL group (local.sdn.cozystack.io): underlay IPAM (FabricIP).
+# This is the layer beneath everything — it must work before cert-manager,
+# before etcd, and before cozyplane's own aggregated apiserver, all of which run
+# as default-network pods.
+#
+# The tenant kinds (VPC, Port, SecurityGroup, HostFirewall, ...) are NOT CRDs.
+# They are served only by chart/cozyplane-apiserver: a group served by both a
+# CRD and an APIService makes the kube-apiserver's OpenAPI merge collide, and
+# `kubectl apply` then fails for every object in the group (docs/api-groups.md).
+#
+# Disable only if you install these CRDs out-of-band.
 crds:
   enabled: true

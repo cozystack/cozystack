@@ -113,10 +113,12 @@
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
 {{- end -}}
-{{- /* cozyplane owns the sdn.cozystack.io group (bootstrap CRDs, then the
-       cozyplane-apiserver aggregated server takes it over), so cozystack-api must
-       not aggregate it — a second APIService for the group would hijack it and
-       every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
+{{- /* cozyplane owns the sdn.cozystack.io group — served ONLY by the
+       cozyplane-apiserver aggregated server; it has no CRDs (a group served by
+       both a CRD and an APIService makes the kube-apiserver's OpenAPI merge
+       collide on duplicated paths, and the group's schema then never serves).
+       So cozystack-api must not aggregate it: a second APIService for the group
+       would hijack it and every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
 {{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" -}}
 {{- $apiValues := index $cozystackEngineComponents "cozystack-api" | default (dict "values" (dict)) -}}
 {{- $apiInner := index $apiValues "values" | default (dict) -}}
@@ -142,10 +144,12 @@
        Cilium variants the cilium chart provides the CRDs, so skip it there. */ -}}
 {{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozyplane-cilium-crds" $) }}
-{{- /* The aggregated sdn.cozystack.io apiserver: a separate component precisely so
-       the CNI slot stays cert-manager-free — this one dependsOn cert-manager +
-       etcd-operator (see sources/cozyplane-apiserver.yaml). Its APIService takes
-       the group over from the CNI package's bootstrap CRDs when it lands. */ -}}
+{{- /* The aggregated sdn.cozystack.io apiserver: a separate component precisely
+       so the CNI slot stays cert-manager-free — this one dependsOn cert-manager,
+       etcd-operator and (for its PVC-backed etcd) storage. There is no takeover:
+       the tenant kinds have no CRDs at all. The CNI package ships only the LOCAL
+       group's CRDs (local.sdn.cozystack.io — underlay IPAM, which must work
+       before cert-manager, etcd and this server, all of which are pods). */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.cozyplane-apiserver" $) }}
 {{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}

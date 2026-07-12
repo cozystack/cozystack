@@ -20,10 +20,20 @@ rules:
     resources: ["nodes"]
     verbs: ["get", "list", "watch", "patch"]
   # The plugin (using this SA) reads pod annotations to resolve VPC membership,
-  # and the agent reads pods to distinguish revocation from ordinary teardown.
+  # the agent reads pods to distinguish revocation from ordinary teardown, and
+  # the NetworkPolicy compiler watches them for identities/membership
+  # (docs/network-policy.md).
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get"]
+    verbs: ["get", "list", "watch"]
+  # Namespace labels resolve namespaceSelector peers; NetworkPolicies are the
+  # net-0 policy source (docs/network-policy.md).
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch"]
   # Tenant network ids from VPC objects (namespaced; read across all namespaces).
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpcs"]
@@ -48,10 +58,26 @@ rules:
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["securitygroups"]
     verbs: ["get", "list", "watch"]
+  # FabricIPs: the CNI plugin claims and releases underlay addresses through
+  # this SA (the agent writes its kubeconfig), and the agent watches them.
+  - apiGroups: ["local.sdn.cozystack.io"]
+    resources: ["fabricips"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # HostFirewalls: the agent compiles the objects selecting its node into the
+  # hf_allow map and arms enforcement (docs/host-firewall.md).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["hostfirewalls"]
+    verbs: ["get", "list", "watch"]
   # FloatingIPs: the agent programs the floating map and advertises the address
   # for those whose target Port is on this node.
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["floatingips"]
+    verbs: ["get", "list", "watch"]
+  # ExternalPools: the agent ensures the datapath serves every pool's link on
+  # every node — LB/NodePort frontends arrive wherever the provider attracts
+  # them, and a DSR reply must leave by that link (docs/lb-ingress.md).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["externalpools"]
     verbs: ["get", "list", "watch"]
   # ServiceVIPs: the agent programs the svc_vips datapath map from them, the
   # resolver answers attached ClusterIP services with the VIP, and the CNI
