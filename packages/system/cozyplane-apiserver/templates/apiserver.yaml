@@ -147,18 +147,18 @@ spec:
         - name: etcd
           image: {{ .Values.etcd.image }}
           command:
-            - etcd
-            - --data-dir=/var/run/etcd/default.etcd
-            - --listen-client-urls=http://0.0.0.0:2379
-            - --advertise-client-urls=http://cozyplane-etcd.{{ $ns }}.svc:2379
+ Register/take over the group.s APIService (see the RBAC note).- etcd
+ Register/take over the group.s APIService (see the RBAC note).- --data-dir=/var/run/etcd/default.etcd
+ Register/take over the group.s APIService (see the RBAC note).- --listen-client-urls=http://0.0.0.0:2379
+ Register/take over the group.s APIService (see the RBAC note).- --advertise-client-urls=http://cozyplane-etcd.{{ $ns }}.svc:2379
           ports:
-            - containerPort: 2379
-              name: client
+ Register/take over the group.s APIService (see the RBAC note).- containerPort: 2379
+ Register/take over the group.s APIService (see the RBAC note).  name: client
           resources:
-            {{- toYaml .Values.etcd.resources | nindent 12 }}
+ Register/take over the group.s APIService (see the RBAC note).{{- toYaml .Values.etcd.resources | nindent 12 }}
           volumeMounts:
-            - name: data
-              mountPath: /var/run/etcd
+ Register/take over the group.s APIService (see the RBAC note).- name: data
+ Register/take over the group.s APIService (see the RBAC note).  mountPath: /var/run/etcd
       volumes:
         - name: data
           {{- toYaml .Values.etcd.storage | nindent 10 }}
@@ -270,56 +270,57 @@ spec:
           imagePullPolicy: {{ .Values.imagePullPolicy }}
           command: ["/usr/local/bin/cozyplane-apiserver"]
           args:
-            - --serve-sdn
-            # Register/take over the group's APIService (see the RBAC note).
-            - --ensure-apiservice-service={{ $ns }}/cozyplane-apiserver
-            - --ensure-apiservice-ca-injection={{ $ns }}/cozyplane-apiserver-serving
-            {{- if .Values.etcd.operator.enabled }}
-            {{- $eps := list }}
-            {{- range $i := until (int .Values.etcd.operator.replicas) }}
-            {{- $eps = append $eps (printf "https://cozyplane-etcd-%d.cozyplane-etcd-headless.%s.svc:2379" $i $ns) }}
-            {{- end }}
-            - --etcd-servers={{ join "," $eps }}
-            - --etcd-cafile=/etc/etcd-certs/ca.crt
-            - --etcd-certfile=/etc/etcd-certs/tls.crt
-            - --etcd-keyfile=/etc/etcd-certs/tls.key
-            {{- else }}
-            - --etcd-servers=http://cozyplane-etcd.{{ $ns }}.svc:2379
-            {{- end }}
-            - --secure-port=6443
-            - --tls-cert-file=/etc/apiserver-certs/tls.crt
-            - --tls-private-key-file=/etc/apiserver-certs/tls.key
-            - --audit-log-path=-
+ Register/take over the group.s APIService (see the RBAC note).- --serve-sdn
+ Register/take over the group.s APIService (see the RBAC note).# Register/take over the group's APIService (see the RBAC note).
+ Register/take over the group.s APIService (see the RBAC note).- --ensure-apiservice-service={{ $ns }}/cozyplane-apiserver
+ Register/take over the group.s APIService (see the RBAC note).- --ensure-apiservice-ca-injection={{ $ns }}/cozyplane-apiserver-serving
+ Register/take over the group.s APIService (see the RBAC note).{{- if .Values.etcd.operator.enabled }}
+ Register/take over the group.s APIService (see the RBAC note).# The operator names its members randomly (not -0/-1/-2) and fronts
+ Register/take over the group.s APIService (see the RBAC note).# them with one Service — so address the Service, never per-pod
+ Register/take over the group.s APIService (see the RBAC note).# endpoints. Getting this wrong looks exactly like a dead etcd: the
+ Register/take over the group.s APIService (see the RBAC note).# apiserver dials names that never resolve and panics on the storage
+ Register/take over the group.s APIService (see the RBAC note).# deadline.
+ Register/take over the group.s APIService (see the RBAC note).- --etcd-servers=https://cozyplane-etcd.{{ $ns }}.svc:2379
+ Register/take over the group.s APIService (see the RBAC note).- --etcd-cafile=/etc/etcd-certs/ca.crt
+ Register/take over the group.s APIService (see the RBAC note).- --etcd-certfile=/etc/etcd-certs/tls.crt
+ Register/take over the group.s APIService (see the RBAC note).- --etcd-keyfile=/etc/etcd-certs/tls.key
+ Register/take over the group.s APIService (see the RBAC note).{{- else }}
+ Register/take over the group.s APIService (see the RBAC note).- --etcd-servers=http://cozyplane-etcd.{{ $ns }}.svc:2379
+ Register/take over the group.s APIService (see the RBAC note).{{- end }}
+ Register/take over the group.s APIService (see the RBAC note).- --secure-port=6443
+ Register/take over the group.s APIService (see the RBAC note).- --tls-cert-file=/etc/apiserver-certs/tls.crt
+ Register/take over the group.s APIService (see the RBAC note).- --tls-private-key-file=/etc/apiserver-certs/tls.key
+ Register/take over the group.s APIService (see the RBAC note).- --audit-log-path=-
           ports:
-            - containerPort: 6443
-              name: https
+ Register/take over the group.s APIService (see the RBAC note).- containerPort: 6443
+ Register/take over the group.s APIService (see the RBAC note).  name: https
           livenessProbe:
-            httpGet: { path: /livez, port: 6443, scheme: HTTPS }
-            initialDelaySeconds: 15
-            periodSeconds: 20
+ Register/take over the group.s APIService (see the RBAC note).httpGet: { path: /livez, port: 6443, scheme: HTTPS }
+ Register/take over the group.s APIService (see the RBAC note).initialDelaySeconds: 15
+ Register/take over the group.s APIService (see the RBAC note).periodSeconds: 20
           readinessProbe:
-            httpGet: { path: /readyz, port: 6443, scheme: HTTPS }
-            initialDelaySeconds: 5
-            periodSeconds: 10
+ Register/take over the group.s APIService (see the RBAC note).httpGet: { path: /readyz, port: 6443, scheme: HTTPS }
+ Register/take over the group.s APIService (see the RBAC note).initialDelaySeconds: 5
+ Register/take over the group.s APIService (see the RBAC note).periodSeconds: 10
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+ Register/take over the group.s APIService (see the RBAC note).{{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
-            - name: certs
-              mountPath: /etc/apiserver-certs
-              readOnly: true
-            {{- if .Values.etcd.operator.enabled }}
-            - name: etcd-client-certs
-              mountPath: /etc/etcd-certs
-              readOnly: true
-            {{- end }}
+ Register/take over the group.s APIService (see the RBAC note).- name: certs
+ Register/take over the group.s APIService (see the RBAC note).  mountPath: /etc/apiserver-certs
+ Register/take over the group.s APIService (see the RBAC note).  readOnly: true
+ Register/take over the group.s APIService (see the RBAC note).{{- if .Values.etcd.operator.enabled }}
+ Register/take over the group.s APIService (see the RBAC note).- name: etcd-client-certs
+ Register/take over the group.s APIService (see the RBAC note).  mountPath: /etc/etcd-certs
+ Register/take over the group.s APIService (see the RBAC note).  readOnly: true
+ Register/take over the group.s APIService (see the RBAC note).{{- end }}
       volumes:
         - name: certs
           secret:
-            secretName: cozyplane-apiserver-serving
+ Register/take over the group.s APIService (see the RBAC note).secretName: cozyplane-apiserver-serving
         {{- if .Values.etcd.operator.enabled }}
         - name: etcd-client-certs
           secret:
-            secretName: cozyplane-etcd-client-tls
+ Register/take over the group.s APIService (see the RBAC note).secretName: cozyplane-etcd-client-tls
         {{- end }}
 ---
 apiVersion: v1
