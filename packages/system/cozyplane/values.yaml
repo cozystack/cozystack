@@ -1,6 +1,6 @@
 # Container image for all cozyplane components (agent, CNI plugin, controller).
 # Digest-pinned (no floating tag); update on each published build.
-image: ghcr.io/lllamnyp/cozyplane@sha256:359e57da4a727e2bfb0d3713f9928f7478d9d511ce96760cc50cd1b3123724d6
+image: ghcr.io/lllamnyp/cozyplane@sha256:f81936c2f1d0e40d9e9747a1fabc72b6f738412a366c45694acef068f6b03568
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -15,19 +15,6 @@ genevePort: 6081
 # low prefix (e.g. "00-cozyplane.conflist") to win over a co-installed CNI such
 # as Cilium (which ships 05-cilium.conflist).
 cniConfName: "10-cozyplane.conflist"
-
-# Elect the node that ANNOUNCES a floating IP independently of the node hosting
-# its target pod (docs/floating-ha.md). The announcer then forwards over the
-# overlay, and the host replies straight to the client from its own uplink — so
-# a live-migrating VM's public address needs no gratuitous ARP at all, and a
-# floating-IP target no longer has to be scheduled onto a node sitting on the
-# pool's L2.
-#
-# Set false where the underlay accepts a pool address ONLY from the pod's own
-# node (strict IP source guard / dynamic ARP inspection): that pins the
-# announcement back to the target's node. It is the same underlay property that
-# `etp: Cluster` DSR needs.
-floatingHA: true
 
 # Kube-apiserver endpoint the hostNetwork agent/responder dial. Empty = the
 # in-cluster kubernetes.default ClusterIP (10.96.0.1) — correct once a service
