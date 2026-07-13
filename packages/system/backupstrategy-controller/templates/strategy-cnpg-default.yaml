@@ -9,7 +9,7 @@ spec:
     serverName: {{ printf "{{ .Application.metadata.namespace }}-{{ .Application.metadata.name }}" | quote }}
     barmanObjectStore:
       destinationPath: {{ printf "s3://%s/{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" $bucketName | quote }}
-      endpointURL: {{ .Values.backupStorage.endpoint | quote }}
+      endpointURL: {{ include "backupstrategy-controller.endpoint" . | quote }}
       retentionPolicy: "30d"
       s3Credentials:
         secretRef:

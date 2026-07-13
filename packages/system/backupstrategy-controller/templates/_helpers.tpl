@@ -60,3 +60,44 @@
      BucketClaim CAN come into existence even on the first install. */}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+  Resolve the S3 endpoint URL (scheme included) shared by every default
+  Strategy CR (CNPG/Etcd/MariaDB/FDB), the Velero BSL, and the controller
+  Deployment env.
+
+  Why not just use .Values.backupStorage.endpoint: Cozystack ships SeaweedFS
+  with global.seaweedfs.enableSecurity=true, so its in-cluster S3 Service
+  serves TLS on :8333 fronted by the self-signed "SeaweedFS CA". The static
+  default endpoint (http://seaweedfs-s3...svc:8333) therefore hits a TLS
+  listener over plaintext and every backup upload fails the handshake. The
+  Etcd Strategy's S3 schema has no caCert/insecureSkipVerify field, so it
+  cannot target the self-signed in-cluster endpoint at all — it needs a
+  trusted-cert endpoint. The COSI-provisioned bucket exposes exactly that: the
+  external S3 ingress (ACME cert), advertised in the bucket's system
+  credentials Secret (backupStorage.systemSecretName) — the same Secret the
+  projector already consumes. We read the bucket host from there and force the
+  https:// scheme (the S3 ingress is always TLS).
+
+  Failure semantics mirror bucketName:
+    - provisionBucket: false → external S3, the admin-configured
+      .Values.backupStorage.endpoint is authoritative. Return it as-is.
+    - provisionBucket: true + system Secret present → return
+      https://<bucket-host>.
+    - provisionBucket: true + Secret missing (offline `helm template`/unit
+      render, or pre-reconcile install where lookup returns nil) → fall back
+      to .Values.backupStorage.endpoint. On a live deploy Flux re-renders on
+      spec.interval once the Secret exists, promoting the derived endpoint.
+*/}}
+{{- define "backupstrategy-controller.endpoint" -}}
+{{- if not .Values.backupStorage.provisionBucket -}}
+{{- .Values.backupStorage.endpoint -}}
+{{- else -}}
+{{- $secret := lookup "v1" "Secret" .Values.backupStorage.namespace .Values.backupStorage.systemSecretName -}}
+{{- if and $secret $secret.data (index $secret.data "endpoint") -}}
+{{- printf "https://%s" (b64dec (index $secret.data "endpoint") | trimPrefix "https://" | trimPrefix "http://") -}}
+{{- else -}}
+{{- .Values.backupStorage.endpoint -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

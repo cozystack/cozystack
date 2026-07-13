@@ -9,7 +9,7 @@ spec:
     destination:
       s3:
         bucket: {{ $bucketName | quote }}
-        endpoint: {{ .Values.backupStorage.endpoint | quote }}
+        endpoint: {{ include "backupstrategy-controller.endpoint" . | quote }}
         key: {{ printf "{{ .Application.metadata.namespace }}/{{ .Application.metadata.name }}/" | quote }}
         region: {{ .Values.backupStorage.region | quote }}
         forcePathStyle: {{ .Values.backupStorage.forcePathStyle }}

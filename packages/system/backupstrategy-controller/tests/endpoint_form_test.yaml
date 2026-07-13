@@ -1,13 +1,25 @@
 suite: endpoint scheme → per-driver derivations (TLS / secure_connection / scheme stripping)
 
-# backupStorage.endpoint is a single URL adapted per driver. MariaDB and
-# FoundationDB want a bare host:port and derive their secure flag from the
-# scheme, so flipping http<->https must flip tls.enabled / secure_connection
-# without leaking the scheme into the host fields.
+# The S3 endpoint is resolved by the "backupstrategy-controller.endpoint"
+# helper and shared by every driver: CNPG/Etcd want a full URL (scheme
+# included), MariaDB/FoundationDB want a bare host:port and derive their secure
+# flag from the scheme, and the Velero BSL wants a full URL. Flipping
+# http<->https must flip tls.enabled / secure_connection without leaking the
+# scheme into the host fields, and must reach every consumer identically.
+#
+# NOTE: the provisionBucket:true derivation (read the external ACME endpoint
+# from the COSI system Secret and force https://) uses `lookup`, which returns
+# nothing under `helm template` / helm-unittest. These offline tests therefore
+# exercise the FALLBACK path — where the helper returns
+# .Values.backupStorage.endpoint verbatim — which is exactly what runs on the
+# pre-reconcile first install and for external S3 (provisionBucket:false).
 
 templates:
+  - templates/strategy-etcd-default.yaml
+  - templates/strategy-cnpg-default.yaml
   - templates/strategy-mariadb-default.yaml
   - templates/strategy-foundationdb-default.yaml
+  - templates/velero-bsl.yaml
 
 release:
   name: t
@@ -18,10 +30,22 @@ set:
   backupStorage.bucketNameOverride: test-bucket
 
 tests:
-  - it: "https endpoint: MariaDB TLS on, FDB secure_connection=1, scheme stripped from host fields"
+  - it: "https endpoint: full URL reaches CNPG/Etcd/Velero; MariaDB TLS on, FDB secure_connection=1, scheme stripped from host fields"
     set:
       backupStorage.endpoint: https://s3.example.com:8333
     asserts:
+      - equal:
+          path: spec.template.destination.s3.endpoint
+          value: https://s3.example.com:8333
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.template.barmanObjectStore.endpointURL
+          value: https://s3.example.com:8333
+        template: templates/strategy-cnpg-default.yaml
+      - equal:
+          path: spec.config.s3Url
+          value: https://s3.example.com:8333
+        template: templates/velero-bsl.yaml
       - equal:
           path: spec.template.storage.s3.endpoint
           value: s3.example.com:8333
@@ -39,10 +63,14 @@ tests:
           content: secure_connection=1
         template: templates/strategy-foundationdb-default.yaml
 
-  - it: "http endpoint: MariaDB TLS off, FDB secure_connection=0"
+  - it: "http endpoint: MariaDB TLS off, FDB secure_connection=0, Etcd keeps scheme"
     set:
       backupStorage.endpoint: http://s3.example.com:8333
     asserts:
+      - equal:
+          path: spec.template.destination.s3.endpoint
+          value: http://s3.example.com:8333
+        template: templates/strategy-etcd-default.yaml
       - equal:
           path: spec.template.storage.s3.tls.enabled
           value: false
@@ -51,3 +79,18 @@ tests:
           path: spec.template.blobStoreConfiguration.urlParameters
           content: secure_connection=0
         template: templates/strategy-foundationdb-default.yaml
+
+  - it: "external S3 (provisionBucket:false): endpoint is used verbatim (no derivation)"
+    set:
+      backupStorage.provisionBucket: false
+      backupStorage.bucketName: ext-bucket
+      backupStorage.endpoint: https://minio.example.internal:9000
+    asserts:
+      - equal:
+          path: spec.template.destination.s3.endpoint
+          value: https://minio.example.internal:9000
+        template: templates/strategy-etcd-default.yaml
+      - equal:
+          path: spec.config.s3Url
+          value: https://minio.example.internal:9000
+        template: templates/velero-bsl.yaml

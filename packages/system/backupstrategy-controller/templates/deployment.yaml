@@ -43,7 +43,7 @@ spec:
         - name: BACKUP_STORAGE_CREDS_SECRET_NAME
           value: cozy-backups-creds
         - name: BACKUP_STORAGE_ENDPOINT
-          value: {{ .Values.backupStorage.endpoint | quote }}
+          value: {{ include "backupstrategy-controller.endpoint" . | quote }}
         - name: BACKUP_STORAGE_REGION
           value: {{ .Values.backupStorage.region | quote }}
         - name: BACKUP_STORAGE_FORCE_PATH_STYLE

@@ -1,5 +1,6 @@
-{{- $endpointHost := .Values.backupStorage.endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
-{{- $secureConn := ternary "1" "0" (hasPrefix "https://" .Values.backupStorage.endpoint) -}}
+{{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
+{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- $secureConn := ternary "1" "0" (hasPrefix "https://" $endpoint) -}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
 {{- if $bucketName -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1

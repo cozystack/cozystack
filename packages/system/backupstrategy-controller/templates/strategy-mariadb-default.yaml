@@ -1,4 +1,5 @@
-{{- $endpointHost := .Values.backupStorage.endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
+{{- $endpoint := include "backupstrategy-controller.endpoint" . -}}
+{{- $endpointHost := $endpoint | trimPrefix "https://" | trimPrefix "http://" -}}
 {{- $bucketName := include "backupstrategy-controller.bucketName" . -}}
 {{- if $bucketName -}}
 apiVersion: strategy.backups.cozystack.io/v1alpha1
@@ -20,6 +21,6 @@ spec:
           name: cozy-backups-creds
           key: AWS_SECRET_ACCESS_KEY
         tls:
-          enabled: {{ hasPrefix "https://" .Values.backupStorage.endpoint }}
+          enabled: {{ hasPrefix "https://" $endpoint }}
     compression: gzip
 {{- end -}}
