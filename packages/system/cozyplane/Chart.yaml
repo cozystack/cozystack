@@ -3,7 +3,7 @@ name: cozyplane
 description: Multi-tenant eBPF CNI for Cozystack — flat default network plus VPC tenancy
 type: application
 # Placeholder; the real version is stamped by the build/release pipeline.
-version: 0.3.25
+version: 0.3.26
 appVersion: "0.1.0"
 kubeVersion: ">=1.30.0-0"
 keywords:
