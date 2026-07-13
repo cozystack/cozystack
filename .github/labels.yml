@@ -298,6 +298,10 @@
   color: '704479'
   description: Debugging in progress
 
+- name: upgrade-e2e
+  color: '1d76db'
+  description: Run the release upgrade E2E test (previous minor stable -> this build) on this PR
+
 - name: sponsored
   color: '00ff00'
   description: Sponsored work

@@ -1,0 +1,52 @@
+# Upgrade lane — Phase 4 (verify): PostgreSQL survived + canary intact.
+#
+# Assert-only: applies nothing, so there is nothing to clean up. Confirms the
+# HelmRelease seeded before the upgrade is still Ready and the 3 canary rows are
+# exactly preserved (data integrity across the platform upgrade).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-verify-postgres
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-test
+  - podLogs:
+      selector: cnpg.io/cluster=postgres-test
+      tail: 50
+  steps:
+  - name: helmrelease-still-ready
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: postgres-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: canary-intact
+    try:
+    - script:
+        timeout: 2m
+        # Self-validating: the script exits non-zero on any mismatch, so the
+        # check only needs ($error == null). Avoids fragile substring matching
+        # on $stdout (e.g. "3" would also match "30").
+        content: |
+          set -eu
+          pod=$(kubectl -n "$NAMESPACE" get pod \
+            -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
+            -o name | head -n1)
+          [ -n "$pod" ] || { echo "no primary pod found" >&2; exit 1; }
+          count=$(kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- \
+            psql -U postgres -tAc 'SELECT count(*) FROM upgrade_canary;')
+          echo "postgres canary rows after upgrade: $count"
+          [ "$count" = "3" ] || { echo "FAIL: expected 3 canary rows, got '$count'" >&2; exit 1; }
+        check:
+          ($error == null): true
