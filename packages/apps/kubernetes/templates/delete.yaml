@@ -90,8 +90,20 @@ spec:
               fi
 
               echo "Step 3: Deleting KamajiControlPlane {{ .Release.Name }}"
+              # Fire-and-forget (--wait=false): unlike the child HelmReleases in
+              # Step 2 — whose Flux finalizer only clears once helm-controller can
+              # uninstall INSIDE the tenant cluster (impossible with no Ready
+              # nodes) — the KamajiControlPlane is finalized by the Kamaji/CAPI
+              # controllers in THIS management cluster, so its teardown does not
+              # depend on tenant node health and cannot hang on the nodeless
+              # condition (#3271). kubectl delete defaults to --wait=true; waiting
+              # here would only block this hook on the same TCP teardown that
+              # Step 4 already handles with a bounded wait + Step 4b backstop — an
+              # unbounded wait here would run first and defeat that backstop. So
+              # trigger deletion and move on; Step 4 owns the bounded TCP wait.
               kubectl -n {{ .Release.Namespace }} delete kamajicontrolplanes.controlplane.cluster.x-k8s.io {{ .Release.Name }} \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false \
+                || echo "WARNING: failed to trigger deletion of KamajiControlPlane {{ .Release.Name }}; Step 4 will still attempt the TenantControlPlane" >&2
 
               echo "Step 4: Deleting TenantControlPlane {{ .Release.Name }} and waiting for it to be removed"
               # --wait=true blocks until the TenantControlPlane object is fully
@@ -138,15 +150,38 @@ spec:
               fi
 
               echo "Step 5: Cleaning up DataVolumes"
+              # Fire-and-forget (--wait=false): DataVolumes and their backing PVCs
+              # live in THIS management cluster and are finalized by CDI and the
+              # CSI driver here, independent of tenant node health — so, like
+              # Step 3, deletion cannot hang on the nodeless condition (#3271).
+              # kubectl delete defaults to --wait=true, which would block this
+              # hook until every worker-disk PVC is physically reclaimed; under
+              # storage pressure that can exceed the parent Helm uninstall budget
+              # and wedge the whole teardown. Deleting the Kubernetes CR only
+              # TRIGGERS this reclaim anyway — the actual VM/PVC drain is waited
+              # on separately and best-effort by the caller (e.g. the e2e
+              # cozy_wait_tenant_drained barrier), NOT on the CR-finalization
+              # path. Do NOT force-clear a stuck PVC/DataVolume finalizer here:
+              # that would orphan the LINSTOR backing volume. A genuinely wedged
+              # PVC is a storage-layer problem and surfaces honestly as a
+              # Terminating namespace rather than being masked.
               kubectl -n {{ .Release.Namespace }} delete datavolumes \
                 -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false \
+                || echo "WARNING: failed to trigger deletion of DataVolumes for {{ .Release.Name }}" >&2
 
               echo "Step 6: Cleaning up LoadBalancer Services"
+              # Fire-and-forget (--wait=false): these LoadBalancer Services are
+              # reconciled by the management cluster's LB controller (MetalLB /
+              # kube-vip), so their teardown does not depend on tenant node
+              # health. kubectl delete defaults to --wait=true; there is nothing
+              # to wait for on the CR-finalization path here — trigger the delete
+              # and let the LB controller release the address asynchronously.
               kubectl -n {{ .Release.Namespace }} delete services \
                 -l "cluster.x-k8s.io/cluster-name={{ .Release.Name }}" \
                 --field-selector spec.type=LoadBalancer \
-                --ignore-not-found=true
+                --ignore-not-found=true --wait=false \
+                || echo "WARNING: failed to trigger deletion of LoadBalancer Services for {{ .Release.Name }}" >&2
 
               echo "Cleanup completed successfully"
           volumeMounts:

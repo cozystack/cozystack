@@ -68,3 +68,62 @@ tests:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'get tenantcontrolplanes\.kamaji\.clastix\.io test-k8s[\s\S]*still present[\s\S]*patch secret test-k8s-datastore-config'
+
+  # ---- issue #3271: the hook must not hang teardown on a nodeless tenant ----
+
+  # The patterns below anchor --wait=false / --wait=true to each command's OWN
+  # continuation lines (`\\?\s+`), not a loose `[\s\S]*?` gap: a loose gap would
+  # match a *later* step's flag and pass even if this step's were removed
+  # (verified: such a pattern survives mutation, i.e. it is vacuous).
+
+  - it: Step 2 keeps a bounded wait and force-clears child HR finalizers on timeout (#3271)
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # Child HelmReleases carry a Flux finalizer that only clears once
+      # helm-controller can uninstall INSIDE the tenant — impossible with no
+      # Ready nodes. So Step 2 must stay bounded (not an unbounded --wait) and
+      # force-clear the leftover finalizer so teardown proceeds.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete helmreleases\.helm\.toolkit\.fluxcd\.io \\?\s+-l "cozystack\.io/target-cluster-name=test-k8s" \\?\s+--ignore-not-found=true --wait=true --timeout=120s'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'Force-clearing finalizers on \$hr'
+
+  - it: Step 3 deletes the KamajiControlPlane fire-and-forget, never an unbounded wait (#3271)
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # The KCP is finalized by mgmt-cluster controllers, so its deletion cannot
+      # hang on tenant node health — trigger it and let Step 4 own the bounded
+      # TCP wait. An unbounded wait here would run first and defeat Step 4/4b.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete kamajicontrolplanes\.controlplane\.cluster\.x-k8s\.io test-k8s \\?\s+--ignore-not-found=true --wait=false'
+
+  - it: Step 5 deletes DataVolumes fire-and-forget so a stuck PVC cannot wedge the Job (#3271)
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete datavolumes \\?\s+-l "cluster\.x-k8s\.io/cluster-name=test-k8s" \\?\s+--ignore-not-found=true --wait=false'
+      # It must NOT force-clear a stuck PVC/DataVolume finalizer — that would
+      # orphan the LINSTOR backing volume. Only the child-HR (Step 2) and the
+      # Kamaji datastore Secret (Step 4b) are ever finalizer-stripped.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete datavolumes[\s\S]*?patch[\s\S]*?finalizers'
+
+  - it: Step 6 deletes LoadBalancer Services fire-and-forget (#3271)
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete services \\?\s+-l "cluster\.x-k8s\.io/cluster-name=test-k8s" \\?\s+--field-selector spec\.type=LoadBalancer \\?\s+--ignore-not-found=true --wait=false'
