@@ -43,6 +43,12 @@ rules:
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpcbindings"]
     verbs: ["get", "list", "watch"]
+  # VPCGateways: a VPC with no gateway admits no LoadBalancer ingress — the
+  # agent programs that gate into the datapath (docs/north-south.md, tenet 7).
+  # The CNI plugin (same SA) also reads them to give a gateway pod its VPC leg.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcgateways"]
+    verbs: ["get", "list", "watch"]
   # VPCPeering halves: the agent programs the peers map from mutually-matched
   # specs (not status), so it only needs to observe them.
   - apiGroups: ["sdn.cozystack.io"]

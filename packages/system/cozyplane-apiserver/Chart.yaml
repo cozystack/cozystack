@@ -2,7 +2,7 @@ apiVersion: v2
 name: cozyplane-apiserver
 description: Aggregated API server for cozyplane's sdn.cozystack.io group (VPC tenancy), with its dedicated etcd
 type: application
-version: 0.0.0
+version: 0.0.1
 appVersion: "0.1.0"
 kubeVersion: ">=1.30.0-0"
 home: https://github.com/lllamnyp/cozyplane
