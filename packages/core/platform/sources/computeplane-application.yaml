@@ -1,0 +1,39 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.computeplane-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: kubevirt
+      # The wrapped apps/kubernetes chart renders child HelmReleases whose
+      # chartRefs point at the kubernetes-application addon artifacts
+      # (cozystack-kubernetes-application-kubevirt-*), so that package must be
+      # present before a ComputePlane cluster can reconcile.
+      dependsOn:
+        - cozystack.kubernetes-application
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        # The ComputePlane module chart (tenant module, source-only): rendered
+        # into the tenant namespace by the tenant chart when the module is on.
+        - name: computeplane
+          path: extra/computeplane
+        # The ordinary managed-kubernetes app, re-declared source-only under
+        # this package's own scope (cozystack-computeplane-application-kubevirt-kubernetes)
+        # so the module is self-contained and does not reach into another
+        # package's artifacts for the cluster chart itself.
+        - name: kubernetes
+          path: apps/kubernetes
+          libraries: ["cozy-lib"]
+        - name: computeplane-rd
+          path: system/computeplane-rd
+          install:
+            namespace: cozy-system
+            releaseName: computeplane-rd

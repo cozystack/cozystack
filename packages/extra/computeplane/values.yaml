@@ -1,0 +1,6 @@
+##
+## @section Cluster shape
+##
+
+## @param {object} nodeGroups - Worker node groups of the ComputePlane cluster (cluster shape only — the security posture is fixed by the module and cannot be overridden). Uses the same structure as the `kubernetes` application's `nodeGroups`. When left empty, the wrapped `kubernetes` chart emits its default scale-from-zero `md0` group, so the cluster sits idle until a pending Pod (e.g. the ingress-nginx controller) triggers the cluster-autoscaler.
+nodeGroups: {}

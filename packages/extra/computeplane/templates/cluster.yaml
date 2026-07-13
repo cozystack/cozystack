@@ -1,0 +1,89 @@
+{{- /*
+  ComputePlane cluster (rendered by the computeplane tenant module).
+
+  Provisions a single-tenant, Cozystack-managed cluster for untrusted-code
+  workloads by deploying the ordinary `apps/kubernetes` chart (Kamaji control
+  plane + KubeVirt-VM worker nodes) with operator-fixed values. The chart is
+  sourced from this package's own source-only ExternalArtifact (see
+  packages/core/platform/sources/computeplane-application.yaml), so the module
+  is self-contained.
+
+  The Helm release is named "computeplane" (spec.releaseName below) so Kamaji
+  writes the cluster's admin kubeconfig to the Secret
+  `computeplane-admin-kubeconfig` (key super-admin.svc) — the fixed contract
+  consumed by the HelmReleases of `placement: ComputePlane` applications. The
+  HelmRelease object itself is named computeplane-cluster because the module's
+  own HelmRelease already occupies the object name "computeplane" in the
+  tenant namespace.
+
+  Everything security-relevant is fixed here and unreachable by the tenant:
+  the tenant holds no admin kubeconfig for this cluster and the module exposes
+  cluster *shape* only (nodeGroups). See design-proposals/compute-plane in
+  cozystack/community.
+
+  install/upgrade.disableWait mirrors how the managed `kubernetes` app is
+  reconciled elsewhere: it emits child HelmReleases (cilium/coredns/csi/…) and
+  a talos-reconcile Job that cannot become Ready until worker nodes exist, so
+  the parent must not block on them.
+*/}}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: computeplane-cluster
+  labels:
+    sharding.fluxcd.io/key: tenants
+    internal.cozystack.io/computeplane: "true"
+spec:
+  releaseName: computeplane
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-computeplane-application-kubevirt-kubernetes
+    namespace: cozy-system
+  interval: 5m
+  timeout: 30m
+  install:
+    disableWait: true
+    remediation:
+      retries: -1
+  upgrade:
+    disableWait: true
+    remediation:
+      retries: -1
+  # Cozystack-enablement. A ComputePlane is not a vanilla Kubernetes cluster:
+  # placement: ComputePlane apps (e.g. cozyllm Jupyter/n8n/Langflow) render
+  # child HelmReleases (-> fluxcd), Certificate resources (-> certManager) and
+  # Ingress objects (-> ingressNginx) into the target cluster. Enabling these
+  # addons makes the provisioned cluster a Cozystack-prepared environment so
+  # those resources reconcile on it instead of failing with "no matches for
+  # kind". Flux merges spec.values after valuesFrom, so nothing injected via
+  # cozystack-values can disable them.
+  values:
+    addons:
+      fluxcd:
+        enabled: true
+        # The kubernetes-app fluxcd addon (cozy-fluxcd chart) defaults the
+        # FluxInstance spec.distribution.artifact to "", which fails CRD
+        # validation ("must be of type string"). ComputePlane is the first real
+        # consumer of the fluxcd addon, so set the canonical distribution
+        # artifact here so the in-cluster Flux installs and can reconcile the
+        # child HelmReleases that placement: ComputePlane apps render.
+        valuesOverride:
+          flux-instance:
+            instance:
+              distribution:
+                artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest"
+      certManager:
+        enabled: true
+      ingressNginx:
+        enabled: true
+        # Expose the ComputePlane ingress-nginx via the Proxied NodePort Service so a
+        # ComputePlane app's per-app management Ingress can route to it without a
+        # management LoadBalancer. The Service (computeplane-ingress-nginx) is created
+        # whenever exposeMethod is Proxied, independent of any hosts list.
+        exposeMethod: Proxied
+    {{- with .Values.nodeGroups }}
+    nodeGroups: {{- toYaml . | nindent 6 }}
+    {{- end }}
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
