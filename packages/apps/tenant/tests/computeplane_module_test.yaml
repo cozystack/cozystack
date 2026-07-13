@@ -1,0 +1,41 @@
+suite: tenant computeplane module toggle
+# The computeplane module provisions a single-tenant, Cozystack-managed
+# cluster for untrusted-code apps (design-proposals/compute-plane in
+# cozystack/community). Contract pinned here:
+#   - off by default — no HelmRelease;
+#   - the module's own Helm release takes the -module suffix so the canonical
+#     release name "computeplane" (and the computeplane-admin-kubeconfig
+#     Secret consumed by placement: ComputePlane apps) stays reserved for the
+#     cluster HelmRelease the module chart renders.
+templates:
+  - templates/computeplane.yaml
+release:
+  name: tenant-alice
+  namespace: tenant-alice
+tests:
+  - it: renders nothing by default
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the module HelmRelease when enabled
+    set:
+      computeplane: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: computeplane
+      - equal:
+          path: spec.releaseName
+          value: computeplane-module
+      - equal:
+          path: spec.chartRef.name
+          value: cozystack-computeplane-application-kubevirt-computeplane
+      - equal:
+          path: metadata.labels["internal.cozystack.io/tenantmodule"]
+          value: "true"
+      - equal:
+          path: metadata.labels["apps.cozystack.io/application.kind"]
+          value: ComputePlane

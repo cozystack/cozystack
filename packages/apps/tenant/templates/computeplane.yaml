@@ -1,0 +1,47 @@
+{{- /*
+  ComputePlane tenant module.
+
+  When enabled, deploys the operator-owned computeplane module chart
+  (packages/extra/computeplane), which in turn provisions a single-tenant,
+  Cozystack-managed cluster for untrusted-code workloads by deploying the
+  ordinary `kubernetes` app with operator-fixed values. The tenant gets no
+  admin kubeconfig for that cluster; see design-proposals/compute-plane in
+  cozystack/community.
+*/}}
+{{- if .Values.computeplane }}
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: computeplane
+  namespace: {{ include "tenant.name" . }}
+  labels:
+    sharding.fluxcd.io/key: tenants
+    internal.cozystack.io/tenantmodule: "true"
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+    apps.cozystack.io/application.kind: ComputePlane
+    apps.cozystack.io/application.group: apps.cozystack.io
+    apps.cozystack.io/application.name: computeplane
+spec:
+  # The module's own Helm release takes the -module suffix so the canonical
+  # release name "computeplane" — and with it the Kamaji admin-kubeconfig
+  # Secret "computeplane-admin-kubeconfig" consumed by placement: ComputePlane
+  # applications — stays reserved for the cluster HelmRelease this module
+  # renders (see packages/extra/computeplane/templates/cluster.yaml).
+  releaseName: computeplane-module
+  chartRef:
+    kind: ExternalArtifact
+    name: cozystack-computeplane-application-kubevirt-computeplane
+    namespace: cozy-system
+  interval: 5m
+  timeout: 10m
+  install:
+    remediation:
+      retries: -1
+  upgrade:
+    remediation:
+      retries: -1
+  valuesFrom:
+  - kind: Secret
+    name: cozystack-values
+{{- end }}
