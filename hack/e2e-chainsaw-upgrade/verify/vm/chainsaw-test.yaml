@@ -1,0 +1,57 @@
+# Upgrade lane — Phase 4 (verify): the VirtualMachine survived.
+#
+# Confirms the VM is still Ready and its disk is still backed by the same PV
+# recorded pre-upgrade (no reprovision), i.e. KubeVirt + storage continuity held
+# across the platform upgrade.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-verify-vm
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      name: vm-instance-test
+  steps:
+  - name: vm-still-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: vm-instance-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            phase: Bound
+
+  - name: same-volume-bound
+    try:
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          before=/workspace/_out/upgrade-baseline/vm-pv.txt
+          [ -f "$before" ] || { echo "missing baseline vm-pv.txt (seed did not run?)" >&2; exit 1; }
+          after=$(kubectl -n "$NAMESPACE" get pvc vm-disk-vmi-test \
+            -o jsonpath='{.metadata.name}={.spec.volumeName}{"\n"}')
+          echo "before: $(cat "$before")"; echo "after:  $after"
+          if [ "$(cat "$before")" != "$after" ]; then
+            echo "FAIL: VM disk PVC->PV binding changed across the upgrade" >&2
+            exit 1
+          fi
+          echo "VM disk volume preserved across upgrade"
+        check:
+          ($error == null): true

@@ -1,0 +1,56 @@
+name: "E2E sandbox prepare"
+description: >-
+  Compute the sandbox id, copy the workspace into /tmp, and provision the Talos
+  e2e sandbox (make prepare-env with the sanctioned 3x infra retry — the one
+  retry justified by docs/agents/e2e-testing.md #1). Shared by the e2e and
+  upgrade-e2e jobs so the sandbox bring-up lives in exactly one place.
+
+inputs:
+  sandbox-suffix:
+    description: >-
+      Appended to the sandbox id so jobs that run in parallel on the same
+      workflow/ref (e2e vs upgrade-e2e) get distinct sandbox names. Empty
+      reproduces the original single-job id byte-for-byte.
+    required: false
+    default: ""
+
+outputs:
+  sandbox-name:
+    description: "The computed sandbox container name (also exported as SANDBOX_NAME)."
+    value: ${{ steps.set.outputs.sandbox-name }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set sandbox ID
+      id: set
+      shell: bash
+      run: |
+        key="${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}"
+        # Only extend the hash key when a suffix is given, so the default
+        # (e2e) sandbox name is identical to the pre-composite behaviour.
+        [ -n "${{ inputs.sandbox-suffix }}" ] && key="${key}:${{ inputs.sandbox-suffix }}"
+        name="cozy-e2e-sandbox-$(echo "$key" | sha256sum | cut -c1-10)"
+        echo "SANDBOX_NAME=$name" >> "$GITHUB_ENV"
+        echo "sandbox-name=$name" >> "$GITHUB_OUTPUT"
+
+    - name: Prepare workspace
+      shell: bash
+      run: |
+        rm -rf "/tmp/$SANDBOX_NAME"
+        cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
+
+    - name: Prepare environment
+      shell: bash
+      run: |
+        cd "/tmp/$SANDBOX_NAME"
+        attempt=0
+        until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+          attempt=$((attempt + 1))
+          if [ $attempt -ge 3 ]; then
+            echo "Attempt $attempt failed, exiting..."
+            exit 1
+          fi
+          echo "Attempt $attempt failed, retrying..."
+        done
+        echo "Prepare environment completed after $((attempt + 1)) attempts"

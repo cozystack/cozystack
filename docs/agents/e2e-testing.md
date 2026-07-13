@@ -121,6 +121,17 @@ The suite is pinned to Chainsaw **v0.2.15** (the latest release as of May 2026);
 7. Failure path attaches scoped diagnostics via a `catch:` block, never a silent pass.
 8. If it touches parent-HR behavior, add the `status.history` remediation guard (`hack/e2e-chainsaw/_lib/remediation-guard.sh`).
 
+## Upgrade testing (release lane)
+
+Separate from the per-PR app suite, the **upgrade lane** tests the most common upgrade path — **previous latest minor stable release → current version** — with real workloads and data (cozystack/cozystack#2401). It installs the old Cozystack, seeds workloads + canary data, upgrades the platform to the build under test, then verifies the workloads survived, the data is intact, every HelmRelease reconciled, PVs stayed Bound, and the migration stamp advanced.
+
+- **Two Chainsaw phases bracketing the upgrade.** Chainsaw cannot pause mid-test for an external `helm upgrade`, so the flow is `chainsaw test seed` → external `helm upgrade` → `chainsaw test verify`, all under `hack/e2e-chainsaw-upgrade/` (its own `.chainsaw.yaml`). Orchestration (install-previous, the upgrade itself) stays BATS, matching the install/bootstrap split; assertions are Chainsaw.
+- **`cleanup.skipDelete: true`** in `hack/e2e-chainsaw-upgrade/.chainsaw.yaml` is what lets seeded CRs cross the phase boundary — the seed phase applies them, the verify phase (assert-only, no `apply`) re-observes them. The sandbox is torn down wholesale at end-of-job, so leaving resources is safe.
+- **DRY over the app suite.** Seed suites `apply` the *existing* app manifests by relative path (`../../../e2e-chainsaw/<app>/<app>.yaml`) rather than re-authoring CRs; the all-HRs-Ready gate is the shared `hack/e2e-wait-hr-ready.sh` (also used by `hack/e2e-install-cozystack.bats`); the baseline version is resolved by `hack/upgrade-prev-version.sh` (unit-tested by `hack/upgrade-prev-version_test.bats`). The CI sandbox lifecycle is shared with the app-suite `e2e` job through the composite actions under `.github/actions/e2e-{prepare,collect,teardown}/`.
+- **Cross-boundary state** other than CRs (the pre-upgrade CrashLoop/unbound-PV baseline and recorded PV bindings) is written to `/workspace/_out/upgrade-baseline/*.txt` by seed suites and diffed by the verify suites. The all-HRs-Ready gate + migration-stamp advance (the `cozystack-version` ConfigMap reaching `migrations.targetVersion`) are the authoritative health signals; the CrashLoop name-diff is a warning-only heuristic (pod names churn across an upgrade).
+- **Trigger — a `upgrade-e2e` job in `pull-requests.yaml`, parallel to `e2e`.** It is a sibling with the same `needs` (no dependency between them), so it adds no critical-path wall-clock. It runs on the release-promotion PR (`release` label) or any PR a maintainer opts in with the **`upgrade-e2e`** label. **Advisory / non-blocking** — its own check, gates nothing.
+- **The heaviest workload (a tenant Kubernetes cluster spanning the upgrade — the #2931 worker-rollover path) is env-gated OFF** behind `UPGRADE_E2E_TENANT_K8S`, via an early `exit 0` in a single `script` step (Chainsaw v0.2.15 has no test-level `skip`). It is the flakiest surface (nested KVM + DRBD + the #3231 tenant-worker image import) and needs dev-stand validation before being enabled in CI; the DB/Redis canaries + platform-health checks are the always-on core.
+
 ## In-flight direction (not yet the merged standard)
 
 These are being explored on branches and may become conventions; do not assume they are the current `main` behavior:

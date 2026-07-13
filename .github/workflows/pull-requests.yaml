@@ -555,59 +555,19 @@ jobs:
         with:
           fetch-depth: 0
 
-      # ▸ Regular PR path – download the Talos disk from build-talos and pr.patch from finalize
-      - name: "Download Talos image (regular PR)"
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      # ▸ Download the Talos disk (+ pr.patch) — shared with upgrade-e2e.
+      - name: Download e2e assets
+        uses: ./.github/actions/e2e-download-assets
         with:
-          name: talos-image
-          path: _out/assets
+          app-token: ${{ steps.app-token.outputs.token }}
+          disk-id: ${{ needs.resolve_assets.outputs.disk_id }}
 
-      - name: Download PR patch
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
-        with:
-          name: pr-patch
-          path: _out/assets
-
-      - name: Apply patch
-        if: "!contains(github.event.pull_request.labels.*.name, 'release')"
-        run: |
-          git apply _out/assets/pr.patch
-
-      # ▸ Release PR path – fetch artefacts from the corresponding draft release
-      - name: Download assets from draft release (release PR)
-        if: contains(github.event.pull_request.labels.*.name, 'release')
-        run: |
-          mkdir -p _out/assets
-          curl -sSL -H "Authorization: token ${APP_TOKEN}" -H "Accept: application/octet-stream" \
-            -o _out/assets/nocloud-amd64.raw.xz \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${{ needs.resolve_assets.outputs.disk_id }}"
-        env:
-          APP_TOKEN: ${{ steps.app-token.outputs.token }}
-
-      - name: Set sandbox ID
-        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
-
-      # ▸ Prepare environment
-      - name: Prepare workspace
-        run: |
-          rm -rf /tmp/$SANDBOX_NAME
-          cp -r ${{ github.workspace }} /tmp/$SANDBOX_NAME
-
-      - name: Prepare environment
-        run: |
-          cd /tmp/$SANDBOX_NAME
-          attempt=0
-          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
-            attempt=$((attempt + 1))
-            if [ $attempt -ge 3 ]; then
-              echo "Attempt $attempt failed, exiting..."
-              exit 1
-            fi
-            echo "Attempt $attempt failed, retrying..."
-          done
-          echo "Prepare environment completed after $((attempt + 1)) attempts"
+      # ▸ Compute sandbox id, copy workspace, provision the Talos sandbox
+      #   (make prepare-env with the sanctioned 3x infra retry) — shared with
+      #   the upgrade-e2e job via a composite action.
+      - name: Prepare e2e sandbox
+        id: prepare
+        uses: ./.github/actions/e2e-prepare
 
       # ▸ Install Cozystack
       - name: Install Cozystack into sandbox
@@ -722,32 +682,14 @@ jobs:
           path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
           if-no-files-found: ignore
 
-      # ▸ Collect debug information (always runs)
-      - name: Collect report
+      # ▸ Collect debug information (always runs) — cozyreport + image list.
+      #   Shared with upgrade-e2e via a composite; runs before the breakpoint so
+      #   diagnostics are captured while the sandbox is still up.
+      - name: Collect sandbox diagnostics
         if: always()
-        run: |
-          cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
-
-      - name: Upload cozyreport.tgz
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: ./.github/actions/e2e-collect
         with:
-          name: cozyreport
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/cozyreport.tgz
-
-      - name: Collect images list
-        if: always()
-        run: |
-          cd /tmp/$SANDBOX_NAME
-          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-images || true
-
-      - name: Upload image list
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: image-list
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/images.txt
+          sandbox-name: ${{ env.SANDBOX_NAME }}
 
       # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
       #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
@@ -798,11 +740,145 @@ jobs:
             Resume from inside: `breakpoint resume`. Otherwise the breakpoint
             exits 10 minutes after the last SSH session disconnects.
 
-      # ▸ Tear down environment (always runs)
+      # ▸ Tear down environment (always runs) — shared with upgrade-e2e.
       - name: Tear down sandbox
         if: always()
-        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+        uses: ./.github/actions/e2e-teardown
+        with:
+          sandbox-name: ${{ env.SANDBOX_NAME }}
 
-      - name: Remove workspace
+  # Release upgrade test: install the previous latest minor stable release, seed
+  # workloads + canary data, upgrade the platform to THIS build, then verify the
+  # workloads survived, data is intact, and the platform reconciled clean (see
+  # docs/agents/e2e-testing.md "Upgrade testing (release lane)" and #2401).
+  #
+  # A SIBLING of `e2e` (same needs, no dependency between them) so it runs in
+  # PARALLEL — no added wall-clock on the critical path. Advisory / non-blocking:
+  # it is its own check and gates nothing. Runs on the release-promotion PR
+  # (`release` label) or any PR a maintainer opts in with the `upgrade-e2e`
+  # label. Reuses the same sandbox composites and asset paths as `e2e`.
+  upgrade-e2e:
+    name: "Upgrade E2E Test"
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+    needs: ["finalize", "build-talos", "resolve_assets"]
+    if: >-
+      always()
+      && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success')
+      && (contains(github.event.pull_request.labels.*.name, 'release')
+          || contains(github.event.pull_request.labels.*.name, 'upgrade-e2e'))
+
+    steps:
+      - name: Generate GitHub App token
+        if: contains(github.event.pull_request.labels.*.name, 'release')
+        id: app-token
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
+          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
+          owner: cozystack
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: read
+
+      # fetch-depth: 0 also fetches all tags — hack/upgrade-prev-version.sh needs
+      # them to resolve the baseline ("upgrade FROM") version on the runner.
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      # ▸ Same asset paths as the e2e job (shared composite): regular PR pulls the
+      #   Talos disk + pr.patch built by this run; a release PR pulls the draft.
+      - name: Download e2e assets
+        uses: ./.github/actions/e2e-download-assets
+        with:
+          app-token: ${{ steps.app-token.outputs.token }}
+          disk-id: ${{ needs.resolve_assets.outputs.disk_id }}
+
+      - name: Prepare e2e sandbox
+        id: prepare
+        uses: ./.github/actions/e2e-prepare
+        with:
+          sandbox-suffix: upgrade
+
+      # ▸ Resolve the baseline (upgrade FROM) version on the runner, where the
+      #   full tag history is available. For a release PR the target is the
+      #   promoted version parsed from the release-X.Y.Z branch; otherwise it is
+      #   empty and the resolver picks the highest stable tag overall. HEAD_REF
+      #   is untrusted, so it is read via env and only regex-matched (never eval'd).
+      - name: Resolve baseline version
+        id: prev
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: |
+          target=""
+          if printf '%s' "$HEAD_REF" | grep -qE '^release-[0-9]+\.[0-9]+\.[0-9]+'; then
+            target="v$(printf '%s' "$HEAD_REF" | sed -E 's/^release-//')"
+          fi
+          from=$(hack/upgrade-prev-version.sh "$target")
+          echo "Upgrade path: ${from} -> ${target:-<this build>}"
+          echo "from=$from" >> "$GITHUB_OUTPUT"
+          echo "target=$target" >> "$GITHUB_OUTPUT"
+
+      # ▸ install previous -> seed -> helm upgrade to current -> verify
+      - name: Run upgrade test
+        env:
+          FROM_VERSION: ${{ steps.prev.outputs.from }}
+          TARGET_TAG: ${{ steps.prev.outputs.target }}
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME \
+              UPGRADE_FROM_VERSION="$FROM_VERSION" \
+              UPGRADE_TARGET_TAG="$TARGET_TAG" \
+              upgrade-cozystack; then
+            echo "❌ Upgrade test failed (see the phase output above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: not-Ready HelmReleases (describe)"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ Upgrade test passed"
+
+      # Chainsaw writes its JUnit report to the upgrade tree; the verify run is
+      # the last invocation, so its report is what lands here.
+      - name: Collect chainsaw report
         if: always()
-        run: rm -rf /tmp/$SANDBOX_NAME
+        run: |
+          cd /tmp/$SANDBOX_NAME
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw-upgrade/chainsaw-report.xml \
+            _out/upgrade-chainsaw-report.xml || true
+
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: upgrade-chainsaw-report
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/upgrade-chainsaw-report.xml
+          if-no-files-found: ignore
+
+      - name: Collect sandbox diagnostics
+        if: always()
+        uses: ./.github/actions/e2e-collect
+        with:
+          sandbox-name: ${{ env.SANDBOX_NAME }}
+          artifact-prefix: upgrade-
+
+      - name: Tear down sandbox
+        if: always()
+        uses: ./.github/actions/e2e-teardown
+        with:
+          sandbox-name: ${{ env.SANDBOX_NAME }}
