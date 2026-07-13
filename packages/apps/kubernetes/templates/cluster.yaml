@@ -815,19 +815,28 @@ spec:
          bare integer (0, 1, ...) or a percentage string ("0%", "50%"), but
          rejects a quoted plain integer ("0"). Quote only when the operator
          supplied a percentage; otherwise render the value as a bare int so
-         the admission webhook is happy with the chart-default "0". */}}
+         the admission webhook is happy with the chart-default "0". A node
+         group may override the cluster-wide nodeHealthCheck via
+         nodeGroups.<name>.maxUnhealthy / .nodeStartupTimeout. */}}
   {{- $maxUnhealthy := toString $.Values.nodeHealthCheck.maxUnhealthy }}
+  {{- $muSource := "nodeHealthCheck.maxUnhealthy" }}
+  {{- if hasKey $group "maxUnhealthy" }}
+  {{-   $maxUnhealthy = toString $group.maxUnhealthy }}
+  {{-   $muSource = printf "nodeGroups.%s.maxUnhealthy" $groupName }}
+  {{- end }}
   {{- if hasSuffix "%" $maxUnhealthy }}
   {{-   if not (regexMatch "^[0-9]+%$" $maxUnhealthy) }}
-  {{-     fail (printf "nodeHealthCheck.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
+  {{-     fail (printf "%s must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $muSource $maxUnhealthy) }}
   {{-   end }}
   maxUnhealthy: {{ $maxUnhealthy | quote }}
   {{- else if regexMatch "^[0-9]+$" $maxUnhealthy }}
   maxUnhealthy: {{ $maxUnhealthy | int }}
   {{- else }}
-  {{-   fail (printf "nodeHealthCheck.maxUnhealthy must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $maxUnhealthy) }}
+  {{-   fail (printf "%s must be a bare integer (e.g. 0, 1) or an integer percentage (e.g. 50%%), got %q" $muSource $maxUnhealthy) }}
   {{- end }}
-  nodeStartupTimeout: {{ $.Values.nodeHealthCheck.nodeStartupTimeout }}
+  {{- $nodeStartupTimeout := $.Values.nodeHealthCheck.nodeStartupTimeout }}
+  {{- if hasKey $group "nodeStartupTimeout" }}{{ $nodeStartupTimeout = $group.nodeStartupTimeout }}{{ end }}
+  nodeStartupTimeout: {{ $nodeStartupTimeout }}
   selector:
     matchLabels:
       cluster.x-k8s.io/cluster-name: {{ $.Release.Name }}

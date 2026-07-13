@@ -107,10 +107,18 @@
             "type": "integer",
             "default": 10
           },
+          "maxUnhealthy": {
+            "description": "Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer (\"0\", \"1\", ...) or an integer percentage (\"0%\", \"50%\").",
+            "type": "string"
+          },
           "minReplicas": {
             "description": "Minimum number of replicas.",
             "type": "integer",
             "default": 0
+          },
+          "nodeStartupTimeout": {
+            "description": "Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.",
+            "type": "string"
           },
           "resources": {
             "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
