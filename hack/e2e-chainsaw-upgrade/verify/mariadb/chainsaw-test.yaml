@@ -33,8 +33,8 @@ spec:
         timeout: 2m
         content: |
           set -eu
-          count=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -- env MYSQL_PWD=xai7Wepo \
-            mysql -h 127.0.0.1 -u testuser -N -B testdb -e "SELECT count(*) FROM upgrade_canary;")
+          count=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- env MYSQL_PWD=xai7Wepo \
+            mariadb -h mariadb-test-primary -u testuser -N -B testdb -e "SELECT count(*) FROM upgrade_canary;")
           echo "mariadb canary rows after upgrade: $count"
           [ "$count" = "3" ] || { echo "FAIL: expected 3 canary rows, got '$count'" >&2; exit 1; }
         check:
