@@ -1,6 +1,6 @@
 # Container image for all cozyplane components (agent, CNI plugin, controller).
 # Digest-pinned (no floating tag); update on each published build.
-image: ghcr.io/lllamnyp/cozyplane@sha256:680bee29ea155834b47eecd40e90f6658384d8f6253bcde8943bd0bffc26c7c5
+image: ghcr.io/lllamnyp/cozyplane@sha256:399f4e5da3e726add98759c2c8ea1cc9399e4ed6a285e3ff7dc71a73125c89e9
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -73,7 +73,10 @@ agent:
       cpu: 50m
       memory: 64Mi
     limits:
-      memory: 256Mi
+      # 256Mi was marginal: the eBPF maps are charged to the agent's memory cgroup
+      # and most preallocate at load (~100MB+ before a packet moves). The agent was
+      # OOM-killed at startup with 28MB anon RSS — see docs/internals.md §6a.
+      memory: 512Mi
 
 controller:
   replicas: 1
