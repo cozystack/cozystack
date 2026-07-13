@@ -62,7 +62,10 @@ spec:
             -l cnpg.io/cluster=postgres-test,cnpg.io/instanceRole=primary \
             -o name | head -n1)
           [ -n "$pod" ] || { echo "no primary pod found" >&2; exit 1; }
-          kubectl -n "$NAMESPACE" exec "$pod" -c postgres -- psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
+          # -i is required: the SQL is fed on stdin via the heredoc, and without
+          # -i kubectl exec does not forward stdin (verified on dev10 — the
+          # CREATE/INSERT silently never runs).
+          kubectl -n "$NAMESPACE" exec -i "$pod" -c postgres -- psql -U postgres -v ON_ERROR_STOP=1 <<'SQL'
           CREATE TABLE IF NOT EXISTS upgrade_canary (id serial PRIMARY KEY, data text);
           TRUNCATE upgrade_canary;
           INSERT INTO upgrade_canary (data) VALUES ('pre-upgrade-1'), ('pre-upgrade-2'), ('pre-upgrade-3');
