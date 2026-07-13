@@ -1,0 +1,24 @@
+name: "E2E sandbox teardown"
+description: >-
+  Tear down the sandbox container and remove its workspace copy. Both steps are
+  `if: always()`. Kept separate from e2e-collect so a job can slot other
+  always-run steps (e.g. the SSH breakpoint) BETWEEN collecting diagnostics and
+  destroying the sandbox. Shared by the e2e and upgrade-e2e jobs.
+
+inputs:
+  sandbox-name:
+    description: "Sandbox container name (from the e2e-prepare action output)."
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Tear down sandbox
+      if: always()
+      shell: bash
+      run: make -C packages/core/testing SANDBOX_NAME=${{ inputs.sandbox-name }} delete || true
+
+    - name: Remove workspace
+      if: always()
+      shell: bash
+      run: rm -rf "/tmp/${{ inputs.sandbox-name }}"

@@ -1,0 +1,50 @@
+name: "E2E sandbox collect"
+description: >-
+  Collect the cozyreport bundle (operator/Flux/LINSTOR/Talos logs + per-failed-
+  test crust-gather snapshots) and the image list from the sandbox and upload
+  them as artifacts. Every step is `if: always()` so diagnostics are captured
+  even after a failed run. Shared by the e2e and upgrade-e2e jobs; runs BEFORE
+  teardown so the sandbox is still alive. The chainsaw JUnit report is uploaded
+  by each job separately (its path differs per lane).
+
+inputs:
+  sandbox-name:
+    description: "Sandbox container name (from the e2e-prepare action output)."
+    required: true
+  artifact-prefix:
+    description: >-
+      Prefix for uploaded artifact names so parallel jobs don't collide
+      (e.g. "" for e2e, "upgrade-" for upgrade-e2e).
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Collect report
+      if: always()
+      shell: bash
+      run: |
+        cd "/tmp/${{ inputs.sandbox-name }}"
+        make -C packages/core/testing SANDBOX_NAME=${{ inputs.sandbox-name }} collect-report || true
+
+    - name: Upload cozyreport.tgz
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ inputs.artifact-prefix }}cozyreport
+        path: /tmp/${{ inputs.sandbox-name }}/_out/cozyreport.tgz
+
+    - name: Collect images list
+      if: always()
+      shell: bash
+      run: |
+        cd "/tmp/${{ inputs.sandbox-name }}"
+        make -C packages/core/testing SANDBOX_NAME=${{ inputs.sandbox-name }} collect-images || true
+
+    - name: Upload image list
+      if: always()
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      with:
+        name: ${{ inputs.artifact-prefix }}image-list
+        path: /tmp/${{ inputs.sandbox-name }}/_out/images.txt

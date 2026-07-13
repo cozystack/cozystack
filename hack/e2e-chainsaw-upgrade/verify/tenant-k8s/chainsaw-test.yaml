@@ -1,0 +1,36 @@
+# Upgrade lane — Phase 4 (verify): the tenant Kubernetes cluster survived
+# (env-gated, OFF by default — must match seed/tenant-k8s).
+#
+# Single gated script step (Chainsaw v0.2.15 has no test-level skip). When
+# enabled, asserts the tenant control plane is still Ready and its worker
+# MachineDeployment still has its replica — i.e. the cluster (and the #2931
+# worker path) survived the platform upgrade.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-verify-tenant-k8s
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: verify-tenant-kubernetes
+    try:
+    - script:
+        timeout: 20m
+        content: |
+          set -eu
+          case "${UPGRADE_E2E_TENANT_K8S:-}" in
+            1|true|TRUE|yes) : ;;
+            *) echo "UPGRADE_E2E_TENANT_K8S not set — skipping tenant Kubernetes verify"; exit 0 ;;
+          esac
+
+          echo "asserting tenant cluster upgrade-tk8s is still healthy after upgrade"
+          kubectl wait hr -n tenant-test kubernetes-upgrade-tk8s \
+            --timeout=15m --for=condition=ready
+          kubectl wait tcp -n tenant-test kubernetes-upgrade-tk8s --timeout=10m \
+            --for=jsonpath='{.status.kubernetesResources.version.status}'=Ready
+          kubectl wait machinedeployment kubernetes-upgrade-tk8s-md0 -n tenant-test \
+            --timeout=15m --for=jsonpath='{.status.v1beta2.readyReplicas}'=1
+          echo "tenant Kubernetes cluster upgrade-tk8s survived the upgrade"
+        check:
+          ($error == null): true
