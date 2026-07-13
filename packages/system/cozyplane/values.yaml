@@ -1,6 +1,6 @@
 # Container image for all cozyplane components (agent, CNI plugin, controller).
 # Digest-pinned (no floating tag); update on each published build.
-image: ghcr.io/lllamnyp/cozyplane@sha256:55f72b4fa8f888323b2cba728c3da873193fc9dfe9de9dd6f06f42fdf8fe1057
+image: ghcr.io/lllamnyp/cozyplane@sha256:78b32e9d88873195e621da593eb2877139a0a0d5af3b90cb70c0d1af73b4a558
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
