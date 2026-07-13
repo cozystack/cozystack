@@ -20,7 +20,7 @@ etcd:
   # emptyDir storage a single pod reschedule erases every sdn.cozystack.io
   # object in the cluster.
   operator:
-    enabled: false
+    enabled: true
     replicas: 3
     size: 4Gi
     # etcd version the operator runs (required by the EtcdCluster schema).
@@ -30,8 +30,9 @@ etcd:
     # full-cluster restart, which is what a node reboot is. Requires a storage
     # layer, so the component must be sequenced after it.
     persistent: true
-    # StorageClass for the members' PVCs ("" = cluster default).
-    storageClass: ""
+    # StorageClass for the members' PVCs ("" = cluster default). Replicated, so
+    # a member's data survives losing the node it was scheduled on.
+    storageClass: "replicated"
   # Built-in single-pod etcd (dev/evaluation only).
   image: registry.k8s.io/etcd:3.5.16-0
   # Storage for the built-in etcd. The default is ephemeral (emptyDir); use a
