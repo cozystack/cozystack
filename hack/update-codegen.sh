@@ -24,8 +24,8 @@ SCRIPT_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
 # for `code-generator@vX.Y.Z` and expects exactly one match, so keep
 # the version literal only in CODEGEN_PKG (not duplicated in any
 # comment) — bump both lines together when upgrading.
-CODEGEN_VERSION=v0.34.1
-CODEGEN_PKG=${CODEGEN_PKG:-~/go/pkg/mod/k8s.io/code-generator@v0.34.1}
+CODEGEN_VERSION=v0.35.0
+CODEGEN_PKG=${CODEGEN_PKG:-~/go/pkg/mod/k8s.io/code-generator@v0.35.0}
 
 # Pre-fetch the code-generator module if it is not yet in the local
 # module cache. We intentionally do not declare k8s.io/code-generator
