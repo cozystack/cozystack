@@ -135,6 +135,20 @@ spec:
       minted token, the allowed_groups check stops ISSUANCE of a
       usable one to callers outside the tenant.
     */}}
+    {{- /*
+      `groups_attribute_path` is REQUIRED (not optional) alongside
+      `allowed_groups` on Grafana v11.x+. Without it Grafana leaves
+      the extracted user's Groups slice empty regardless of what the
+      userinfo endpoint returns, and the `allowed_groups` gate rejects
+      every login with "user not a member of one of the required
+      groups" — even when the token carries the correct claim. Verified
+      end-to-end on dev3 with Grafana v11.6.15: id_token AND userinfo
+      both contained `groups: [<ns>-super-admin, ...]`, `allowed_groups`
+      listed `<ns>-super-admin`, but login failed until
+      `groups_attribute_path=groups` was added. JMESPath expression
+      "groups" reads the top-level `groups` array from userinfo — the
+      shape Keycloak's oidc-group-membership-mapper emits.
+    */}}
     {{- $systemOidc := dict
         "enabled" "true"
         "name" "Keycloak"
@@ -144,6 +158,7 @@ spec:
         "token_url" (printf "%s/protocol/openid-connect/token" (include "monitoring.oidc.systemIssuerURL" .))
         "api_url" (printf "%s/protocol/openid-connect/userinfo" (include "monitoring.oidc.systemIssuerURL" .))
         "scopes" (printf "openid email profile groups %s" (include "monitoring.oidc.audienceScopeName" .))
+        "groups_attribute_path" "groups"
         "allowed_groups" (include "monitoring.oidc.allowedGroups" .)
         "email_attribute_path" "email"
         "auto_login" "false"

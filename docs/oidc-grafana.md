@@ -88,7 +88,18 @@ CR:
 
    ```
    allowed_groups = <namespace>-view <namespace>-use <namespace>-admin <namespace>-super-admin
+   groups_attribute_path = groups
    ```
+
+   `groups_attribute_path` is REQUIRED alongside `allowed_groups` on
+   Grafana v11.x+: without it Grafana leaves the extracted
+   `user.Groups` slice empty regardless of what the userinfo endpoint
+   returns, and the gate rejects every login with "user not a member
+   of one of the required groups" — even when the token carries the
+   correct claim (verified end-to-end on dev3 with Grafana v11.6.15).
+   The JMESPath expression `groups` reads the top-level `groups`
+   array from userinfo, matching the shape Keycloak's
+   `oidc-group-membership-mapper` emits.
 
    The four groups match the KeycloakRealmGroups the tenant chart
    provisions in the `cozy` realm — see

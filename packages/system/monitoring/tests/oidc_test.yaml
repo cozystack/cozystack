@@ -231,6 +231,15 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].allowed_groups
           value: "tenant-root-view tenant-root-use tenant-root-admin tenant-root-super-admin"
+      # groups_attribute_path is REQUIRED alongside allowed_groups on
+      # Grafana v11.x+ — without it Grafana leaves the extracted
+      # user.Groups slice empty and the allowed_groups gate rejects
+      # every login (verified end-to-end on dev3 with v11.6.15). "groups"
+      # points at the top-level `groups` array from userinfo — the
+      # shape Keycloak's oidc-group-membership-mapper emits.
+      - equal:
+          path: spec.config["auth.generic_oauth"].groups_attribute_path
+          value: "groups"
       # No group-based mapping; the users-Job drives roles instead.
       - notExists:
           path: spec.config["auth.generic_oauth"].role_attribute_path
@@ -282,6 +291,12 @@ tests:
       - equal:
           path: spec.config["auth.generic_oauth"].allowed_groups
           value: "tenant-root-view tenant-root-use tenant-root-admin tenant-root-super-admin"
+      # groups_attribute_path must stay too — without it the gate is a
+      # silent no-op on Grafana v11.x+ regardless of whether the
+      # users-map is active.
+      - equal:
+          path: spec.config["auth.generic_oauth"].groups_attribute_path
+          value: "groups"
       - equal:
           path: spec.config["auth.generic_oauth"].scopes
           value: "openid email profile groups tenant-root-monitoring-audience"
