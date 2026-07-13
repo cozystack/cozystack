@@ -1,5 +1,6 @@
 {{- $ingress := .Values._namespace.ingress }}
-{{- if and (eq .Values.addons.ingressNginx.exposeMethod "Proxied") .Values.addons.ingressNginx.hosts }}
+{{- if eq .Values.addons.ingressNginx.exposeMethod "Proxied" }}
+{{- if .Values.addons.ingressNginx.hosts }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -41,7 +42,12 @@ spec:
             port:
               number: 80
   {{- end }}
+{{- end }}
 ---
+# The proxy Service is created whenever exposeMethod is Proxied (independent of
+# `hosts`) so that external consumers — e.g. a ComputePlane app's per-app management
+# Ingress — can route to the tenant cluster's ingress-nginx without the tenant module
+# having to know every app host in advance.
 apiVersion: v1
 kind: Service
 metadata:
