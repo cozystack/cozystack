@@ -43,6 +43,15 @@ rules:
   - apiGroups: [""]
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
+  # VPCGateways: a VPC's north-south boundary (docs/north-south.md). The
+  # controller owns their status (VPC/pool resolution, one-per-VPC) and reads
+  # them to decide whether to realize the gateway pod.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcgateways"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcgateways/status"]
+    verbs: ["get", "update", "patch"]
   # VPCPeerings: surface matched/ready in status (observability only; the
   # agents key the datapath on the halves' specs).
   - apiGroups: ["sdn.cozystack.io"]

@@ -1,7 +1,7 @@
 # Container image (shared with the cozyplane chart — the apiserver binary lives
 # in the same image). Digest-pinned (no floating tag); update on each published
 # build.
-image: ghcr.io/lllamnyp/cozyplane@sha256:253e4b628a3c73d4fce2b02e3c11a8860e46cb7c8708375cfca34df85cb9080e
+image: ghcr.io/lllamnyp/cozyplane@sha256:680bee29ea155834b47eecd40e90f6658384d8f6253bcde8943bd0bffc26c7c5
 imagePullPolicy: IfNotPresent
 imagePullSecrets: []
 
@@ -20,7 +20,7 @@ etcd:
   # emptyDir storage a single pod reschedule erases every sdn.cozystack.io
   # object in the cluster.
   operator:
-    enabled: true
+    enabled: false
     replicas: 3
     size: 4Gi
     # etcd version the operator runs (required by the EtcdCluster schema).
@@ -30,9 +30,8 @@ etcd:
     # full-cluster restart, which is what a node reboot is. Requires a storage
     # layer, so the component must be sequenced after it.
     persistent: true
-    # StorageClass for the members' PVCs ("" = cluster default). Replicated, so
-    # a member's data survives losing the node it was scheduled on.
-    storageClass: "replicated"
+    # StorageClass for the members' PVCs ("" = cluster default).
+    storageClass: ""
   # Built-in single-pod etcd (dev/evaluation only).
   image: registry.k8s.io/etcd:3.5.16-0
   # Storage for the built-in etcd. The default is ephemeral (emptyDir); use a
