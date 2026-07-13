@@ -562,11 +562,14 @@ jobs:
           app-token: ${{ steps.app-token.outputs.token }}
           disk-id: ${{ needs.resolve_assets.outputs.disk_id }}
 
-      # ▸ Compute sandbox id, copy workspace, provision the Talos sandbox
-      #   (make prepare-env with the sanctioned 3x infra retry) — shared with
-      #   the upgrade-e2e job via a composite action.
+      # ▸ Compute sandbox id (kept in the job — a $GITHUB_ENV write inside a
+      #   composite trips zizmor's github-env audit), then copy workspace +
+      #   provision the Talos sandbox via the shared composite (3x infra retry).
+      #   GITHUB_JOB makes the e2e and upgrade-e2e sandboxes distinct.
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}:${GITHUB_JOB}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
       - name: Prepare e2e sandbox
-        id: prepare
         uses: ./.github/actions/e2e-prepare
 
       # ▸ Install Cozystack
@@ -798,11 +801,11 @@ jobs:
           app-token: ${{ steps.app-token.outputs.token }}
           disk-id: ${{ needs.resolve_assets.outputs.disk_id }}
 
+      - name: Set sandbox ID
+        run: echo "SANDBOX_NAME=cozy-e2e-sandbox-$(echo "${GITHUB_REPOSITORY}:${GITHUB_WORKFLOW}:${GITHUB_REF}:${GITHUB_JOB}" | sha256sum | cut -c1-10)" >> $GITHUB_ENV
+
       - name: Prepare e2e sandbox
-        id: prepare
         uses: ./.github/actions/e2e-prepare
-        with:
-          sandbox-suffix: upgrade
 
       # ▸ Resolve the baseline (upgrade FROM) version on the runner, where the
       #   full tag history is available. For a release PR the target is the
