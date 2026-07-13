@@ -1,0 +1,78 @@
+---
+# The TENANT persona (docs/multitenancy.md).
+#
+# Until now cozyplane had no tenant in its API — only component roles. A tenant was
+# something the datapath enforced, not something the API knew about. These are the
+# roles a tenant holds.
+#
+# R2 ("a tenant enumerates nothing it does not own") is satisfied STRUCTURALLY, not
+# by vigilance: these roles list only NAMESPACED kinds, and a RoleBinding cannot
+# grant access to a cluster-scoped resource. So a tenant bound to these in its own
+# namespace *cannot* be given `list ports`, `list servicevips`, `list externalpools`
+# or `list hostfirewalls` — not by accident, not by a later careless edit here.
+# Those are cluster-scoped precisely because allocation needs a global keyspace, and
+# that allocation detail must never become a tenant-visible surface: one `list ports`
+# would hand over every other tenant's pods, addresses, MACs and node placement.
+#
+# They aggregate into the built-in admin/edit/view ClusterRoles, so a namespace
+# admin gets cozyplane's tenant surface without anyone wiring it up per tenant.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-tenant-edit
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+  # A tenant's own network: its VPCs, who may use them, its boundary, its policy,
+  # its external addresses. All namespaced; all its own.
+  - apiGroups: ["sdn.cozystack.io"]
+    resources:
+      - vpcs
+      - vpcbindings
+      - vpcgateways
+      - vpcpeerings
+      - securitygroups
+      - floatingips
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["sdn.cozystack.io"]
+    resources:
+      - vpcs/status
+      - vpcgateways/status
+      - vpcpeerings/status
+      - securitygroups/status
+      - floatingips/status
+    verbs: ["get"]
+
+  # The virtual verbs on a tenant's OWN VPCs.
+  #
+  # `export` gates creating a VPCBinding to a VPC; `peer` gates creating a peering
+  # half. Granting them here is not an escalation, and this is the whole reason the
+  # verbs are checked against the VPC rather than the binding: a RoleBinding in the
+  # tenant's namespace can only ever authorize these on VPCs IN THAT NAMESPACE.
+  # Reaching into someone else's namespace still needs their consent, from them.
+  #
+  # Without `export` a tenant could not attach a pod even to its own VPC (attach is
+  # default-deny and a VPCBinding is required in every case, including same-namespace).
+  - apiGroups: ["sdn.cozystack.io"]
+    resources: ["vpcs"]
+    verbs: ["export", "peer"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cozyplane-tenant-view
+  labels:
+    {{- include "cozyplane.labels" . | nindent 4 }}
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+  - apiGroups: ["sdn.cozystack.io"]
+    resources:
+      - vpcs
+      - vpcbindings
+      - vpcgateways
+      - vpcpeerings
+      - securitygroups
+      - floatingips
+    verbs: ["get", "list", "watch"]

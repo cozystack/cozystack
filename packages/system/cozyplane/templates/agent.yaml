@@ -23,9 +23,14 @@ rules:
   # the agent reads pods to distinguish revocation from ordinary teardown, and
   # the NetworkPolicy compiler watches them for identities/membership
   # (docs/network-policy.md).
+  # `patch` on pods: the CNI stamps a VPC pod with the address and MAC it just
+  # allocated (sdn.cozystack.io/vpc-ip / -mac). That is the ONLY way a tenant can
+  # learn its own network identity — status.podIP is the fabric IP, and the real
+  # address lives on the cluster-scoped Port, which no tenant may read
+  # (docs/multitenancy.md R1/R2).
   - apiGroups: [""]
     resources: ["pods"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "patch"]
   # Namespace labels resolve namespaceSelector peers; NetworkPolicies are the
   # net-0 policy source (docs/network-policy.md).
   - apiGroups: [""]
