@@ -11,11 +11,13 @@ spec:
     path: /
   variants:
     - name: kubevirt
-      # The wrapped apps/kubernetes chart renders child HelmReleases whose
-      # chartRefs point at the kubernetes-application addon artifacts
-      # (cozystack-kubernetes-application-kubevirt-*), so that package must be
-      # present before a ComputePlane cluster can reconcile.
+      # cozystack-engine serves the ApplicationDefinition CRD that the
+      # computeplane-rd component installs; the kubernetes-application edge is
+      # needed because the wrapped apps/kubernetes chart renders child
+      # HelmReleases whose chartRefs point at that package's addon artifacts
+      # (cozystack-kubernetes-application-kubevirt-*).
       dependsOn:
+        - cozystack.cozystack-engine
         - cozystack.kubernetes-application
       libraries:
         - name: cozy-lib
