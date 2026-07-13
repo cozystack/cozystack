@@ -51,6 +51,16 @@ metadata:
   labels:
     {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
 rules:
+  # ResourceQuota admission (docs/multitenancy.md R5): the kube-apiserver's quota
+  # cannot see an aggregated API's kinds, so this server enforces
+  # `count/<resource>.sdn.cozystack.io` itself. It reads the tenant's ResourceQuotas
+  # and writes the observed usage back into their status.
+  - apiGroups: [""]
+    resources: ["resourcequotas"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["resourcequotas/status"]
+    verbs: ["get", "update", "patch"]
   # Namespace-lifecycle admission reads namespaces.
   - apiGroups: [""]
     resources: ["namespaces"]
