@@ -167,6 +167,12 @@ spec:
             # (routed to the gateway instead, which proxies DNS / denies the rest).
             - "--internal-cidrs={{ join "," $internal }}"
             {{- end }}
+            {{- if not .Values.floatingHA }}
+            # Pin a floating IP's announcement to the node hosting its target pod
+            # (the pre-HA behaviour). Only needed where the underlay accepts a pool
+            # address solely from the pod's own node — docs/floating-ha.md §6.
+            - "--floating-ha=false"
+            {{- end }}
           ports:
             # Per-VPC traffic metrics (#2), Prometheus text at /metrics.
             - name: metrics
