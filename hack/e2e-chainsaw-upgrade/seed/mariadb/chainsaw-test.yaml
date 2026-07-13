@@ -18,6 +18,10 @@ spec:
   - podLogs:
       selector: app.kubernetes.io/instance=mariadb-test
       tail: 50
+  # Canary writes go to the mariadb-test-primary Service (the writable primary)
+  # via the `mariadb` client (MariaDB 11 dropped the `mysql` binary). Verified on
+  # dev10: connecting to 127.0.0.1 fails (server does not bind loopback) and its
+  # retry OOM-kills the nano server container; the primary Service is clean.
   steps:
   - name: create-mariadb
     try:
@@ -53,18 +57,18 @@ spec:
     try:
     - script:
         timeout: 2m
-        # mariadb-test-0 is the primary in a fresh install; 127.0.0.1 forces a
-        # TCP connection so the testuser@%% grant applies (a unix-socket login
-        # would be testuser@localhost and fail to match).
+        # Exec from mariadb-test-0 (always present) but connect to the
+        # mariadb-test-primary Service, so writes reach the actual primary
+        # regardless of which pod holds that role.
         content: |
           set -eu
-          kubectl -n "$NAMESPACE" exec mariadb-test-0 -- env MYSQL_PWD=xai7Wepo \
-            mysql -h 127.0.0.1 -u testuser testdb -e "
+          kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- env MYSQL_PWD=xai7Wepo \
+            mariadb -h mariadb-test-primary -u testuser testdb -e "
               CREATE TABLE IF NOT EXISTS upgrade_canary (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(64));
               TRUNCATE upgrade_canary;
               INSERT INTO upgrade_canary (data) VALUES ('pre-upgrade-1'), ('pre-upgrade-2'), ('pre-upgrade-3');"
-          count=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -- env MYSQL_PWD=xai7Wepo \
-            mysql -h 127.0.0.1 -u testuser -N -B testdb -e "SELECT count(*) FROM upgrade_canary;")
+          count=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- env MYSQL_PWD=xai7Wepo \
+            mariadb -h mariadb-test-primary -u testuser -N -B testdb -e "SELECT count(*) FROM upgrade_canary;")
           echo "mariadb canary rows seeded: $count"
           [ "$count" = "3" ] || { echo "FAIL: expected 3 seeded rows, got '$count'" >&2; exit 1; }
         check:
