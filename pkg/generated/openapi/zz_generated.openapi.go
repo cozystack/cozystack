@@ -22,6 +22,7 @@ limitations under the License.
 package openapi
 
 import (
+	v1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,9 +34,9 @@ import (
 
 func GetOpenAPIDefinitions(ref common.ReferenceCallback) map[string]common.OpenAPIDefinition {
 	return map[string]common.OpenAPIDefinition{
-		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.Application":         schema_pkg_apis_apps_v1alpha1_Application(ref),
-		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationList":     schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
-		"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationStatus":   schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
+		v1alpha1.Application{}.OpenAPIModelName():                                   schema_pkg_apis_apps_v1alpha1_Application(ref),
+		v1alpha1.ApplicationList{}.OpenAPIModelName():                               schema_pkg_apis_apps_v1alpha1_ApplicationList(ref),
+		v1alpha1.ApplicationStatus{}.OpenAPIModelName():                             schema_pkg_apis_apps_v1alpha1_ApplicationStatus(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.Option":              schema_pkg_apis_core_v1alpha1_Option(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionItem":          schema_pkg_apis_core_v1alpha1_OptionItem(ref),
 		"github.com/cozystack/cozystack/pkg/apis/core/v1alpha1.OptionList":          schema_pkg_apis_core_v1alpha1_OptionList(ref),
@@ -181,14 +182,14 @@ func schema_pkg_apis_apps_v1alpha1_Application(ref common.ReferenceCallback) com
 					"status": {
 						SchemaProps: spec.SchemaProps{
 							Default: map[string]interface{}{},
-							Ref:     ref("github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationStatus"),
+							Ref:     ref(v1alpha1.ApplicationStatus{}.OpenAPIModelName()),
 						},
 					},
 				},
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.ApplicationStatus", v1.JSON{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
+			v1alpha1.ApplicationStatus{}.OpenAPIModelName(), v1.JSON{}.OpenAPIModelName(), metav1.ObjectMeta{}.OpenAPIModelName()},
 	}
 }
 
@@ -226,7 +227,7 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationList(ref common.ReferenceCallback)
 								Schema: &spec.Schema{
 									SchemaProps: spec.SchemaProps{
 										Default: map[string]interface{}{},
-										Ref:     ref("github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.Application"),
+										Ref:     ref(v1alpha1.Application{}.OpenAPIModelName()),
 									},
 								},
 							},
@@ -237,7 +238,7 @@ func schema_pkg_apis_apps_v1alpha1_ApplicationList(ref common.ReferenceCallback)
 			},
 		},
 		Dependencies: []string{
-			"github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1.Application", metav1.ListMeta{}.OpenAPIModelName()},
+			v1alpha1.Application{}.OpenAPIModelName(), metav1.ListMeta{}.OpenAPIModelName()},
 	}
 }
 
