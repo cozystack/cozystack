@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -107,7 +107,7 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
@@ -118,6 +118,13 @@ helm-unit-tests:
 # hack/update-crd.sh and that RD's schema drifts from values.schema.json.
 rd-presets-check:
 	hack/check-rd-presets.sh
+
+# Catch the off-by-one where migrations/<N> is added but
+# migrations.targetVersion in packages/core/platform/values.yaml is not
+# bumped to >= N+1. run-migrations.sh loops `seq $$CURRENT $$((TARGET-1))`,
+# so the new migration is silently skipped on every cluster upgrade.
+migrations-target-check:
+	hack/check-migrations-target.sh
 
 # Scoped go test over the cozystack-api surface that this repo owns. Kept
 # narrow intentionally - running `go test ./...` pulls in generated code
