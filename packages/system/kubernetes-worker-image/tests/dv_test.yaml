@@ -1,0 +1,94 @@
+suite: golden Talos worker image DataVolume tests
+
+templates:
+  - templates/dv.yaml
+
+tests:
+  # The DataVolume name is a contract: packages/apps/kubernetes reconstructs
+  # `talos-worker-<schematicID>-<version>` to clone this golden. A rename here
+  # silently breaks the clone (workers fall back to per-worker HTTP import), so
+  # pin it.
+  - it: renders the default golden DataVolume in cozy-public with the contract name
+    asserts:
+      - isKind:
+          of: DataVolume
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentIndex: 0
+      - equal:
+          path: metadata.namespace
+          value: cozy-public
+        documentIndex: 0
+      - equal:
+          path: spec.source.http.url
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+        documentIndex: 0
+      - equal:
+          path: spec.contentType
+          value: kubevirt
+        documentIndex: 0
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 6Gi
+        documentIndex: 0
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.usePopulator"]
+          value: "true"
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
+          value: "true"
+        documentIndex: 0
+
+  # Per-image overrides + name format for a non-default (schematicID, version).
+  - it: honours per-image overrides and keeps the contract name format
+    set:
+      images:
+        - schematicID: "abc123"
+          version: "v1.14.0"
+          imageFactoryURL: "http://mirror.example.com/talos/"
+          storage: "6Gi"
+          storageClass: "local"
+    asserts:
+      - equal:
+          path: metadata.name
+          value: talos-worker-abc123-v1.14.0
+        documentIndex: 0
+      - equal:
+          path: spec.source.http.url
+          value: http://mirror.example.com/talos/image/abc123/v1.14.0/openstack-amd64.raw.xz
+        documentIndex: 0
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 6Gi
+        documentIndex: 0
+      - equal:
+          path: spec.storage.storageClassName
+          value: local
+        documentIndex: 0
+
+  # Multiple images -> one DataVolume each.
+  - it: renders one DataVolume per images[] entry
+    set:
+      images:
+        - schematicID: "aaa"
+          version: "v1.13.6"
+        - schematicID: "bbb"
+          version: "v1.14.0"
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: talos-worker-aaa-v1.13.6
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: talos-worker-bbb-v1.14.0
+        documentIndex: 1

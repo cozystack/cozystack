@@ -1,0 +1,36 @@
+{{- range .Values.images }}
+{{- $schematicID := required "A valid .schematicID entry is required for each images[] entry!" .schematicID }}
+{{- $version := required "A valid .version entry is required for each images[] entry!" .version }}
+{{- $factory := .imageFactoryURL | default $.Values.imageFactoryURL | trimSuffix "/" }}
+---
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  annotations:
+    # bind.immediate so the image is imported now (not deferred to a first
+    # consumer): the DataVolume becoming ready is what the kubernetes app's
+    # worker clones wait on. usePopulator matches the vm-default-images golden
+    # convention.
+    cdi.kubevirt.io/storage.bind.immediate.requested: "true"
+    cdi.kubevirt.io/storage.usePopulator: "true"
+    kubernetes-worker-image.cozystack.io/schematic-id: {{ $schematicID | quote }}
+    kubernetes-worker-image.cozystack.io/talos-version: {{ $version | quote }}
+  labels:
+    app.kubernetes.io/managed-by: cozystack
+  # Deterministic name the kubernetes app reconstructs to clone this golden —
+  # keep in sync with packages/apps/kubernetes/templates/cluster.yaml.
+  name: {{ printf "talos-worker-%s-%s" $schematicID $version }}
+  namespace: cozy-public
+spec:
+  contentType: kubevirt
+  source:
+    http:
+      url: {{ printf "%s/image/%s/%s/openstack-amd64.raw.xz" $factory $schematicID $version | quote }}
+  storage:
+    resources:
+      requests:
+        storage: {{ .storage | default $.Values.storage | default "4Gi" }}
+    {{- with .storageClass | default $.Values.storageClass }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+{{- end }}
