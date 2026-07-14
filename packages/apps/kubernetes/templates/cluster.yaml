@@ -89,10 +89,55 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
+      {{- /* Prefer a CDI storage-layer clone of the shared golden Talos image in
+             cozy-public (packages/system/kubernetes-worker-image) over a per-worker
+             HTTP import: the clone is a CSI copy, so N workers no longer each stream
+             the OS image across the pod network — the source of the kubernetes-*
+             e2e node-join flake (cozystack/cozystack#3231) and a per-worker Image
+             Factory dependency in production. The golden is named
+             talos-worker-<schematicID>-<version>; keep in sync with that package's
+             templates/dv.yaml.
+
+             Existing node groups are never migrated: this whole template is
+             content-hashed to name the KubevirtMachineTemplate (see the KMT block
+             below), so changing the source (or the usePopulator annotation below)
+             would roll every worker. When a MachineDeployment for this group already
+             exists, re-emit the source type its live KMT already uses (http stays
+             http, clone stays clone) so the render — and the hash — is unchanged.
+             Only a brand new group (no live MD) adopts the clone, and only when the
+             matching golden exists; otherwise it falls back to the HTTP import.
+             lookup() is empty under `helm template`, so renders/unit-tests always
+             take the HTTP path. */}}
+      {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($.Values.talos.imageFactoryURL | trimSuffix "/") $.Values.talos.schematicID $.Values.talos.version }}
+      {{- $goldenName := printf "talos-worker-%s-%s" $.Values.talos.schematicID $.Values.talos.version }}
+      {{- $liveSourceType := "" }}
+      {{- $liveMD := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" $.Release.Namespace (printf "%s-%s" $.Release.Name .groupName) }}
+      {{- if $liveMD }}
+      {{-   $ref := dig "spec" "template" "spec" "infrastructureRef" (dict) $liveMD }}
+      {{-   if and (dig "name" "" $ref) (eq (dig "kind" "" $ref) "KubevirtMachineTemplate") }}
+      {{-     $liveKMT := lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" $.Release.Namespace (dig "name" "" $ref) }}
+      {{-     range (dig "spec" "template" "spec" "virtualMachineTemplate" "spec" "dataVolumeTemplates" (list) $liveKMT) }}
+      {{-       if eq (dig "metadata" "name" "" .) "disk-system" }}
+      {{-         if hasKey (dig "spec" "source" (dict) .) "pvc" }}{{- $liveSourceType = "pvc" }}{{- else if hasKey (dig "spec" "source" (dict) .) "http" }}{{- $liveSourceType = "http" }}{{- end }}
+      {{-       end }}
+      {{-     end }}
+      {{-   end }}
+      {{- end }}
+      {{- $useClone := eq $liveSourceType "pvc" }}
+      {{- if not $liveMD }}{{- if lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}{{- $useClone = true }}{{- end }}{{- end }}
       - metadata:
           name: disk-system
+          {{- /* usePopulator=false stays ONLY on the HTTP/import path (and thus on
+                 every existing group, pinned to its live source above): it preserves
+                 the legacy import behaviour and keeps the rendered DV — hence the KMT
+                 hash — byte-identical, so existing workers never roll. The clone path
+                 omits it so CDI's populator performs a storage-layer CSI clone of the
+                 golden (verified on dev10: temp PVC CSI-cloned + resized, no
+                 host-assisted upload pod) instead of a slower pod-network copy. */}}
+          {{- if not $useClone }}
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"
+          {{- end }}
         spec:
           {{- /* Use the openstack/configdrive Talos image: KubeVirt CAPK
                 injects bootstrap data via cloudInitConfigDrive (OpenStack
@@ -100,8 +145,14 @@ spec:
                 is the one that reads it. The nocloud-amd64 image silently
                 ignores configdrive and never applies the machineconfig. */}}
           source:
+          {{- if $useClone }}
+            pvc:
+              namespace: cozy-public
+              name: {{ $goldenName }}
+          {{- else }}
             http:
-              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
+              url: {{ $httpURL }}
+          {{- end }}
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}
