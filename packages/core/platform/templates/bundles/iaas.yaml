@@ -120,6 +120,7 @@
 {{include "cozystack.platform.package" (list "cozystack.kubevirt" "default" $ $kubevirtComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kubevirt-cdi" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.vm-default-images" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.kubernetes-worker-image" $) }}
 {{- /*
   Forward platform-level vGPU knobs into the emitted cozystack.gpu-operator
   Package CR's components.gpu-operator.values. Only applies to the vgpu
