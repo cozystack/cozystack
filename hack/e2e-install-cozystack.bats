@@ -33,41 +33,6 @@
   fi
 }
 
-@test "Deploy Talos image factory cache (best-effort e2e mirror)" {
-  # Tenant Kubernetes worker VMs boot from a Talos raw disk image that CDI
-  # streams over HTTP from the public Talos Image Factory. That endpoint has no
-  # byte-range support and intermittently stream-resets/stalls mid-transfer from
-  # the CI runner, so a worker DataVolume import can hang past the chart's
-  # 12-minute node-join deadline and fail (or merely make) the kubernetes-* tests
-  # (see cozystack/cozystack#3231). This Deployment fetches the image ONCE with a
-  # hard curl retry loop and serves it locally; tenant CRs then point
-  # spec.talos.imageFactoryURL at its Service. Deployed here (before the long
-  # install) so the seed download overlaps the install churn — readiness is gated
-  # at point-of-use in hack/e2e-apps/run-kubernetes.sh, which falls back to the
-  # public factory if the mirror never becomes Available, so this can only help.
-  # Best-effort: never fail the suite on the band-aid. Remove once tenant workers
-  # no longer bulk-pull the OS image from the public internet in CI.
-  local sid ver
-  sid=$(yq '.talos.schematicID' packages/apps/kubernetes/values.yaml 2>/dev/null)
-  ver=$(yq '.talos.version' packages/apps/kubernetes/values.yaml 2>/dev/null)
-  if [ -z "$sid" ] || [ "$sid" = "null" ] || [ -z "$ver" ] || [ "$ver" = "null" ]; then
-    echo "WARNING: could not read talos.schematicID/version from values.yaml — skipping mirror (fallback to public factory)"
-    return 0
-  fi
-  # The CiliumClusterwideNetworkPolicy in the manifest is intentionally NOT applied
-  # here: Cilium's CRDs do not exist until Cozystack is installed (below), so
-  # applying it now would error. It is applied at point-of-use by
-  # hack/e2e-chainsaw/_lib/talos-image-cache.sh once Cilium is up.
-  sed -e "s|__SCHEMATIC_ID__|${sid}|g" -e "s|__TALOS_VERSION__|${ver}|g" hack/e2e-talos-image-cache.yaml \
-    | yq 'select(.kind != "CiliumClusterwideNetworkPolicy")' \
-    | kubectl apply -f - || echo "WARNING: failed to apply talos-image-cache (fallback to public factory)"
-  if kubectl -n kube-system get deploy talos-image-cache >/dev/null 2>&1; then
-    echo "talos-image-cache Deployment created (seeding ${sid}/${ver} in background)"
-  else
-    echo "WARNING: talos-image-cache Deployment NOT created — tenant workers will use public factory.talos.dev"
-  fi
-}
-
 @test "Required installer chart exists" {
   if [ ! -f packages/core/installer/Chart.yaml ]; then
     echo "Missing: packages/core/installer/Chart.yaml" >&2
