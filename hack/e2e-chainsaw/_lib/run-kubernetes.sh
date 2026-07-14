@@ -1,28 +1,31 @@
 # shellcheck shell=bash
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
-. hack/e2e-chainsaw/_lib/talos-image-cache.sh
 . hack/e2e-chainsaw/_lib/ghcr-mirror.sh
 
-# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
-# Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
-# (registryMirrors), each included only when its in-sandbox mirror is up. Prints
-# nothing when both fall back to the public defaults, so the chart defaults apply.
-# Indented for insertion directly under `spec:` in the heredoc below.
+# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block carrying the
+# ghcr.io worker image-pull mirror (registryMirrors), included only when the
+# in-sandbox mirror is up. Prints nothing when it falls back to the public
+# default, so the chart defaults apply. Indented for insertion directly under
+# `spec:` in the heredoc below.
 #
-# No trailing newline, unlike the single-key helper this replaced: the caller reads
-# it through `$(...)`, which strips one anyway, and `${talos_block}` sits on a line
-# of its own in the heredoc, which supplies the break before the next `spec` key.
-# An empty result therefore leaves a blank line, which is valid YAML.
+# This block no longer carries an imageFactoryURL. Workers boot by CDI-cloning the
+# golden Talos image in cozy-public (nodeGroups.md0.image.builtin below), so no
+# worker imports the OS image over HTTP and the per-worker Talos image-cache mirror
+# this once selected has been removed; only the kubelet image pull still leaves the
+# sandbox, which is what the ghcr.io mirror covers.
+#
+# No trailing newline: the caller reads it through `$(...)`, which strips one
+# anyway, and `${talos_block}` sits on a line of its own in the heredoc, which
+# supplies the break before the next `spec` key. An empty result therefore leaves a
+# blank line, which is valid YAML.
 talos_spec_block() {
-  local url ghcr mirrors
-  url=$(resolve_talos_image_factory_url)
+  local ghcr mirrors
   ghcr=$(resolve_ghcr_mirror_endpoint)
   mirrors=$(ghcr_registry_mirrors_block "$ghcr")
-  [ -n "$url" ] || [ -n "$mirrors" ] || return 0
+  [ -n "$mirrors" ] || return 0
   printf '  talos:\n'
-  [ -n "$url" ] && printf '    imageFactoryURL: %s\n' "$url"
-  [ -n "$mirrors" ] && printf '%s' "$mirrors"
+  printf '%s' "$mirrors"
   return 0
 }
 
@@ -3277,12 +3280,13 @@ COZY_DIAG_RATE_INTERVAL_DEFAULT=12
 # that moved it, and it is two costs rather than one.
 #
 # A shorter budget declines more, and what it declines first is what is gated
-# last -- ghcr_mirror_diagnose and talos_image_cache_diagnose. Neither loses its
-# subject entirely. The mirror's state is partly recoverable from the request
-# counts and response durations the mirror capture records against its own log,
-# and from the kube-system snapshot the host report takes; the image cache's
-# re-probe has no substitute and is the collector this budget gives up first,
-# which was already true at 480.
+# last -- ghcr_mirror_diagnose. It does not lose its subject entirely: the
+# mirror's state is partly recoverable from the request counts and response
+# durations the mirror capture records against its own log, and from the
+# kube-system snapshot the host report takes. It used to share the tail with a
+# talos-image-cache re-probe, the one collector here whose subject had no
+# substitute; that cache is gone with the per-worker HTTP import, and the golden
+# it was replaced by is read at (a2), inside the budget rather than at its mercy.
 #
 # The second cost lands on the guest captures rather than on the tail. Two
 # collectors read the node's metric stream ahead of the console -- (d2) and (d3)
@@ -3669,18 +3673,22 @@ cozy_report_node_join_failure() {
   cozy_diag_read 'virt-launcher Pod detail' \
     kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher "${request_timeout}"
 
-  # (a2) Worker DataVolume IMPORT stage. A VM stuck "Provisioning" whose
-  # DataVolume is ImportInProgress at N/A progress with the importer pod
-  # looping on an HTTP error is a distinct sub-mode of 2a that the VM/VMI
-  # state alone does not show: the OS image never finishes importing, so the
-  # VM never boots. This is what took out PR #2826's CI — the CDI importer
-  # could not reach the talos-image-cache ClusterIP (`dial tcp <svc>:80: i/o
-  # timeout`) even though the cache pod was healthy. Show the DataVolume/PVC
-  # phases and the importer pod logs here; the cache ClusterIP re-probe that tells
-  # "cache path went dead mid-run" apart from "upstream factory slow/flaky" belongs
-  # to this section too, but it creates a Pod and waits on curl, so it sits with
-  # the other minute-scale collectors further down rather than here.
-  echo "=== (a2) tenant worker DataVolume import stage (management cluster, ns tenant-test) ==="
+  # (a2) Worker DataVolume boot-disk stage. A VM stuck "Provisioning" whose
+  # disk-system DataVolume never reaches Succeeded is a distinct sub-mode of 2a
+  # that the VM/VMI state alone does not show: the OS disk never populates, so the
+  # VM never boots.
+  #
+  # These suites set nodeGroups.md0.image.builtin, so a worker disk is a CDI CLONE
+  # of the golden Talos image in cozy-public (packages/system/kubernetes-worker-image)
+  # rather than a per-worker HTTP import. The usual culprit is therefore a clone
+  # blocked on a golden that has not finished importing, which is why the golden's
+  # own DataVolume/PVC is dumped alongside the worker ones below.
+  #
+  # The importer-Pod walk further down stays, but read its result with that in mind:
+  # on the clone path there is no importer Pod in tenant-test and "matched none" is
+  # the healthy state, not a finding. An importer-* Pod appearing at all means the
+  # group fell back to the HTTP import, and its log then carries the factory error.
+  echo "=== (a2) tenant worker DataVolume boot-disk stage (management cluster) ==="
   # The two greps keep these dumps readable. kubectl's stderr is no longer folded
   # into them: `2>&1 | grep` sent a refusal into the filter, which dropped it for
   # not matching, so a read that never happened looked the same as one that found
@@ -3691,6 +3699,12 @@ cozy_report_node_join_failure() {
   cozy_diag_read 'worker DataVolume detail' \
     kubectl -n tenant-test describe datavolume "${request_timeout}" \
     | grep -Ei 'Name:|Phase:|Progress:|Restart|Reason:|Message:|Running Condition|Bound Condition' || true
+  # The clone SOURCE. A worker clone sits pending indefinitely while its golden is
+  # still importing, so a worker DataVolume that never leaves Pending means nothing
+  # until this read says whether the golden reached Succeeded.
+  cozy_diag_read 'golden Talos worker image (clone source, ns cozy-public)' \
+    kubectl -n cozy-public get datavolume,pvc -o wide "${request_timeout}" \
+    | grep -E 'NAME|talos-worker' || true
 
   # The listing is read on its own rather than inline in the `for`, so a listing
   # that never answered stays distinguishable from a namespace with no importer
@@ -3989,34 +4003,26 @@ cozy_report_node_join_failure() {
     cozy_capture_tenant_talos "${test_name}" || true
   fi
 
-  # The OS-image cache and the ghcr.io mirror fail independently and produce the
-  # same symptom from outside the guest, so both get dumped: this one answers
-  # whether the worker's kubelet-image pull reached the mirror or fell back to
-  # public ghcr.io, which the node-join failure alone cannot distinguish. Gated
-  # like its neighbours, and after the guest captures. Bounded read by read
-  # like the collector at (d2), but five of them at COZY_DIAG_READ_TIMEOUT plus
-  # grace, so it can spend a quarter of the phase budget -- and time is the
-  # only thing the gate rations, so a quarter spent here is a quarter the
-  # guest captures do not get. Cost is not what settles the order, though, or
-  # (d2) would sit here too: what settles it is whether the answer survives
-  # being declined. The console evidence this would starve is irreplaceable
-  # and (d2)'s question has no other answer in the tree, while the mirror's
-  # state is partly recoverable from the reads above -- so those two go first
-  # and this one waits, whichever of them is cheaper. Cheaper than the
-  # talos-image-cache re-probe below, which creates a Pod and waits on curl
-  # retries, so it goes ahead of it.
+  # Last: this answers whether the worker's kubelet-image pull reached the mirror
+  # or fell back to public ghcr.io, which the node-join failure alone cannot
+  # distinguish. Gated like its neighbours, and after the guest captures. Bounded
+  # read by read like the collector at (d2), but five of them at
+  # COZY_DIAG_READ_TIMEOUT plus grace, so it can spend a quarter of the phase
+  # budget -- and time is the only thing the gate rations, so a quarter spent here
+  # is a quarter the guest captures do not get. Cost is not what settles the order,
+  # though, or (d2) would sit here too: what settles it is whether the answer
+  # survives being declined. The console evidence this would starve is
+  # irreplaceable and (d2)'s question has no other answer in the tree, while the
+  # mirror's state is partly recoverable from the reads above -- so those two go
+  # first and this one waits.
+  #
+  # It used to have a neighbour here, a re-probe of the talos-image-cache
+  # ClusterIP. The worker OS disk is cloned from the golden in cozy-public now
+  # rather than imported per worker over HTTP, so there is no cache to re-probe;
+  # the golden's own state is read at (a2) instead, off the same one read.
   if cozy_diag_phase_has_time 'ghcr-mirror state, access log and warm-up Job'; then
     echo "--- ghcr-mirror state, access log and warm-up Job ---"
     ghcr_mirror_diagnose || true
-  fi
-
-  # Last, and gated on the phase as well as bounded per read, because it is the
-  # collector that most needs both: its reachability re-probe creates a Pod, waits
-  # on curl retries, and makes seven unbounded management-cluster calls of its own,
-  # so it has no ceiling here at all.
-  if cozy_diag_phase_has_time 're-probe talos-image-cache ClusterIP + cacher debug bundle'; then
-    echo "--- re-probe talos-image-cache ClusterIP + cacher debug bundle ---"
-    talos_image_cache_diagnose || true
   fi
 }
 
@@ -4063,13 +4069,13 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos OS image cache and
-  # worker image pulls at the in-sandbox ghcr.io mirror when each is up (falls back
-  # to the public defaults otherwise). Emitted right under spec: as
-  # `talos: { imageFactoryURL: ..., registryMirrors: {...} }`, or nothing when both
-  # defaults apply.
+  # Point worker image pulls at the in-sandbox ghcr.io mirror when it is up (falls
+  # back to the public default otherwise). Emitted right under spec: as
+  # `talos: { registryMirrors: {...} }`, or nothing when the default applies. The
+  # worker OS disk is not sourced here at all — it is cloned from the golden below.
   local talos_block
   talos_block=$(talos_spec_block)
+
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -4078,7 +4084,6 @@ metadata:
   name: "${test_name}"
   namespace: tenant-test
 spec:
-${talos_block}
   addons:
     certManager:
       enabled: false
