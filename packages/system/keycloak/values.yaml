@@ -145,3 +145,26 @@ encryption:
       cpu: 50m
     limits:
       memory: 256Mi
+
+# Scheduled S3 backup of the Keycloak CNPG database (keycloak-db).
+# Disabled by default; enabling it configures WAL archiving + base backups
+# to an S3-compatible object store via CNPG Barman.
+backup:
+  # Enable S3 backups for keycloak-db.
+  enabled: false
+  # Cron schedule for recurring base backups. NOTE: CNPG ScheduledBackup uses a
+  # 6-field cron (leading seconds field), not the 5-field Kubernetes format.
+  schedule: "0 0 2 * * *"
+  # Barman retention policy for stored backups.
+  retentionPolicy: "30d"
+  # Destination prefix, e.g. s3://bucket/keycloak-db/.
+  destinationPath: ""
+  # S3-compatible endpoint URL, e.g. https://s3.example.com.
+  endpointURL: ""
+  # Inline S3 credentials (rendered into keycloak-db-backup-s3-creds), or
+  # leave empty and set existingSecretName instead.
+  s3AccessKey: ""
+  s3SecretKey: ""
+  # Reference an existing Secret carrying AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY instead of inline keys.
+  existingSecretName: ""
