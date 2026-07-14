@@ -88,6 +88,12 @@
       render, or pre-reconcile install where lookup returns nil) → fall back
       to .Values.backupStorage.endpoint. On a live deploy Flux re-renders on
       spec.interval once the Secret exists, promoting the derived endpoint.
+
+  Normalization of the decoded value: trim first (a trailing newline in the
+  Secret data would otherwise ride into the URL and break it), then strip any
+  leftover scheme before re-forcing https://. The producer already writes a
+  bare host, so the trimPrefix pair is belt-and-suspenders and never fires
+  today — kept as insurance against a future producer that emits a scheme.
 */}}
 {{- define "backupstrategy-controller.endpoint" -}}
 {{- if not .Values.backupStorage.provisionBucket -}}
@@ -95,7 +101,7 @@
 {{- else -}}
 {{- $secret := lookup "v1" "Secret" .Values.backupStorage.namespace .Values.backupStorage.systemSecretName -}}
 {{- if and $secret $secret.data (index $secret.data "endpoint") -}}
-{{- printf "https://%s" (b64dec (index $secret.data "endpoint") | trimPrefix "https://" | trimPrefix "http://") -}}
+{{- printf "https://%s" (b64dec (index $secret.data "endpoint") | trim | trimPrefix "https://" | trimPrefix "http://") -}}
 {{- else -}}
 {{- .Values.backupStorage.endpoint -}}
 {{- end -}}

@@ -119,6 +119,16 @@ spec:
         - name: selector-fix
           image: {{ $img | quote }}
           imagePullPolicy: {{ .Values.kubectlImage.pullPolicy }}
+          # Small fixed budget for a one-shot kubectl get/delete; values mirror
+          # the postgres-operator webhook-ready hook that runs the same image,
+          # so the hook Pod schedules predictably without over-reserving.
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

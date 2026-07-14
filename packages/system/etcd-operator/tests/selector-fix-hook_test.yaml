@@ -112,6 +112,22 @@ tests:
           path: spec.template.spec.containers[0].securityContext.capabilities.drop
           content: ALL
 
+  - it: the container declares resource requests and limits so the hook Pod schedules predictably
+    documentIndex: 3
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 32Mi
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.cpu
+          value: 100m
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 64Mi
+
   - it: the kubectl image is digest-pinned (reproducible across the fleet)
     documentIndex: 3
     asserts:
