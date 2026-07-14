@@ -1,7 +1,6 @@
 # AI Agents Overview
 
-This file provides structured guidance for AI coding assistants and agents
-working with the **Cozystack** project.
+This file provides structured guidance for AI coding assistants and agents working with the **Cozystack** project.
 
 ## Activation
 
@@ -64,9 +63,25 @@ working with the **Cozystack** project.
 - **Helm Charts**: Umbrella pattern, vendored upstream charts in `charts/`
 - **Go Code**: Controller-runtime patterns, kubebuilder style
 - **Git Commits**: Conventional Commits (`type(scope): description`) with `--signoff`
+- **Prose**: One continuous line per paragraph — see [Prose Formatting](#prose-formatting)
 
 ### What NOT to Do
 - ❌ Edit `/vendor/`, `zz_generated.*.go`, upstream charts directly
 - ❌ Modify `go.mod`/`go.sum` manually (use `go get`)
 - ❌ Force push to main/master
 - ❌ Commit built artifacts from `_out`
+- ❌ Hardwrap a prose paragraph in markdown, a PR body, or an issue comment
+
+## Prose Formatting
+
+Markdown files and everything an agent publishes to GitHub — PR bodies, issue bodies, review comments, release notes — use **one continuous line per paragraph**. Renderers collapse a soft line break into a space, so a paragraph hardwrapped at ~80 columns renders exactly like the same paragraph on one line, while breaking narrow viewports, mangling nested list and table rendering, and turning a one-word edit into a diff that reflows the entire block. The renderer decides where the line ends; the author does not.
+
+Line breaks stay wherever they carry meaning: code fences, one item per list line, tables, headings, blockquotes, front matter, and README badge stacks. The rule governs prose paragraphs and nothing else. Commit messages are the deliberate exception — `git log` and the tooling around it still expect a body wrapped at ~72 columns.
+
+This is the rule LLM agents break most often, because an ~80-column wrap is correct in the places they spend most of their time (Go comments, commit bodies) and the reflex leaks from there into documentation and GitHub. Treat it as a mechanical check at the moment of writing, not as a style preference to weigh: before saving a markdown file or passing `--body` to `gh`, look at each paragraph and confirm it is a single line.
+
+The rule applies to prose this repository owns, and to new or changed paragraphs. Much of the existing tree predates it and is wrapped throughout; that is not a defect to go and fix. Vendored upstream chart docs (`packages/*/*/charts/**`) must stay verbatim — `make update` regenerates them — and published changelogs are historical records. Neither is in scope.
+
+`.claude/hooks/md-no-hardwrap.py` enforces the rule for agents that support PreToolUse hooks (registered for Claude Code in `.claude/settings.json`). It refuses a `Write`/`Edit`/`MultiEdit` that would *add* a hardwrapped paragraph, list item or blockquote to a markdown file, and a `gh` command that would publish one to GitHub. A break counts as added only when the edit wrote both lines it joins, so fixing a typo inside a paragraph that was already wrapped goes through, while rewriting the same file as fresh hardwrapped prose does not. Anything it cannot read with certainty it allows — a guard that blocks legitimate work gets switched off, and then it guards nothing — which includes a body the shell assembles at runtime, and a `--body-file` written by the very command being checked, since the file does not exist yet when the hook runs. `hack/md-no-hardwrap.bats` covers it under `make unit-tests` and requires `python3`. Agents on other harnesses are held to the same rule without the hook.
+
+`.claude/settings.json` is tracked, so keep personal Claude Code overrides in `.claude/settings.local.json`, which is not. A personal `.claude/settings.json` predating this will be overwritten on pull without warning, because git had been ignoring it.
