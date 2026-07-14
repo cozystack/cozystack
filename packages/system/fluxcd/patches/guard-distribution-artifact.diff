@@ -1,0 +1,22 @@
+# Upstream bug: flux-instance's instance.yaml renders spec.distribution.artifact
+# unconditionally, unlike the sibling optional fields (artifactPullSecret,
+# imagePullSecret, variant). The umbrella's empty default then renders as
+# `artifact: null`, which the FluxInstance CRD rejects (type: string,
+# pattern ^oci://.*$, and the field is optional). Guard it like its siblings.
+#
+# Chart source: https://github.com/controlplaneio-fluxcd/charts (flux-instance)
+# Not yet reported upstream; drop this hunk once upstream guards the field.
+diff --git a/charts/flux-instance/templates/instance.yaml b/charts/flux-instance/templates/instance.yaml
+index f1f58309e..5217c24d9 100644
+--- a/charts/flux-instance/templates/instance.yaml
++++ b/charts/flux-instance/templates/instance.yaml
+@@ -16,7 +16,9 @@ spec:
+   distribution:
+     version: {{ .Values.instance.distribution.version | quote }}
+     registry: {{ .Values.instance.distribution.registry }}
++    {{- if .Values.instance.distribution.artifact }}
+     artifact: {{ .Values.instance.distribution.artifact }}
++    {{- end }}
+     {{- if .Values.instance.distribution.artifactPullSecret }}
+     artifactPullSecret: {{ .Values.instance.distribution.artifactPullSecret }}
+     {{- end }}
