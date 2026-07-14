@@ -9,6 +9,7 @@ Project-side conventions for commits, branches, and pull requests in Cozystack.
 - [ ] Branch is rebased on `upstream/main` (no extra commits)
 - [ ] PR body includes description and release note
 - [ ] Ran `make generate` in every package whose `values.yaml`, `values.schema.json`, `Chart.yaml`, or `README.md` was touched, and committed the regenerated files
+- [ ] Walked the [Downstream Repositories](#downstream-repositories) trigger map against the diff, and linked a follow-up (a PR, or an issue when the PR is out of scope) in every repository the change reaches
 
 ## Regenerate Artifacts Before Committing
 
@@ -135,9 +136,130 @@ git push -f origin my-feature
 
 ## Pull Request Body
 
-Fill in the template at [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). It includes the required `release-note` block.
+Fill in the template at [`.github/PULL_REQUEST_TEMPLATE.md`](../../.github/PULL_REQUEST_TEMPLATE.md). It includes the required `release-note` block and the [Downstream Repositories](#downstream-repositories) checklist.
 
 Create the PR with `gh pr create --title "type(scope): brief description" --body-file <file>`.
+
+`--body` and `--body-file` replace the body wholesale, so the template is not applied and its checklists are silently dropped. Start the body file from the template instead:
+
+```bash
+cp .github/PULL_REQUEST_TEMPLATE.md /tmp/pr-body.md
+# fill in /tmp/pr-body.md, then:
+gh pr create --draft --title "type(scope): brief description" --body-file /tmp/pr-body.md
+```
+
+## Downstream Repositories
+
+Cozystack is upstream for repositories that are **not** kept in sync with it automatically. A change here can break them silently, because nothing in CI compares the two sides.
+
+The failure is structural, not hypothetical. The website's docs generator works from an app list hardcoded in its own `Makefile`, and a package that nobody adds to that list is simply skipped, in silence. `packages/apps/opensearch` ships today with a `README.md` and a `values.schema.json` and has no reference page on the site at all; `packages/apps/bucket` has only a hand-written page, which no generator keeps in step with its values. Nobody broke either of them — the coupling just had no owner.
+
+Walk the trigger map below against the **diff**, not against the PR title, and tick the matching boxes in the PR template. Tick a repository only after opening the follow-up PR there and linking it: a ticked box with no link claims work that does not exist. Search the target repository for an open PR or issue covering it first, and link that rather than filing a duplicate. When the follow-up is genuinely out of scope, or when it needs a decision that is not yours to make, open an issue there instead, link that, and say so in the PR body.
+
+### What is already automated
+
+Two narrow paths, and neither of them runs on your PR:
+
+- **`website`** — on a stable tag a bot opens a docs PR that regenerates the managed-apps reference pages from each package's `README.md`, for the apps hardcoded in the website `Makefile`. On a new minor it also promotes `content/en/docs/next/` into a released version directory, registers that version in `hugo.yaml`, and snapshots `data/versions/next.yaml` into `data/versions/vX.Y.yaml`. That is the whole of it. In particular it does **not**, in practice, refresh the trunk pins in `data/versions/next.yaml`, the Talos version among them. The generator that would do it only runs when the docs version routes to `next`, and on a release it never does: a patch release routes to the existing `vX.Y/`, and on a new minor the promotion step creates `vX.Y/` before the generator runs, so it routes there instead. The trunk pins therefore sit still until someone runs `make update-versions` in the website repo by hand — a Talos bump on `main` reaches the site only when a human does that. Released `data/versions/vX.Y.yaml` files are frozen at cut time and a patch release does not revisit them.
+- **`ansible-cozystack`** — Renovate, on its own schedule rather than on a release, bumps the `cozy-installer` chart version and the k3s version. It carries nothing structural: no values key, no task, no playbook.
+
+Everything else is manual and unguarded, bar the odd version pin Renovate carries for a satellite. The website keeps one copy of each page per documentation version, so a docs follow-up normally lands in `content/en/docs/next/` and is backported only if it matters for a released version.
+
+### cozystack/website
+
+- Add, rename or remove a package under `packages/apps/` or `packages/extra/` → the app lists in the website `Makefile` (`APPS`, `VMS`, `NETWORKING`, `K8S`, `SERVICES`) are hardcoded, and a package missing from them gets no reference page at all, with nothing reporting the gap.
+- Change `packages/core/platform/values.yaml` → `content/en/docs/next/operations/configuration/platform-package.md` is a hand-written table of the `spec.components.platform.values.*` keys, and it has already drifted. The platform chart has no `values.schema.json`, so nothing on this path is generated.
+- Add, rename or recompose a platform variant or bundle → `content/en/docs/next/operations/configuration/variants.md`, `install/cozystack/kubernetes-distribution.md`, `install/ansible.md`.
+- Add or remove a platform component → `content/en/docs/next/guides/platform-stack/_index.md`, `operations/configuration/licenses.md`.
+- Rename a release asset in `hack/upload-assets.sh` → the install pages hardcode asset filenames: `content/en/docs/next/install/kubernetes/generic.md`, `install/talos/iso.md`, `install/providers/*.md`.
+- Change `ApplicationDefinition` semantics → `content/en/docs/next/cozystack-api/application-definitions.md`.
+- Bump the Talos version in `packages/core/talos/images/talos/profiles/installer.yaml` → the website's trunk pins in `data/versions/next.yaml`, which no CI job refreshes. Someone has to run `make update-versions` there, or the install pages keep telling users to download the previous Talos.
+- Change developer tooling (`cozyvalues-gen`, `cozypkg`, the package `Makefile`s) → `content/en/docs/next/development.md`.
+- Make a documented workaround obsolete → grep the docs for it and delete it, because users keep following stale workarounds.
+
+### cozystack/terraform-provider-cozystack
+
+The provider is hand-written: every Kind carries a hand-maintained Terraform schema and its own expand/flatten pair, with no codegen from `values.schema.json`. A test guard there catches new top-level spec fields, but only once someone bumps its `api/apps/v1alpha1` pin, and it sees neither nested fields nor enums nor defaults.
+
+- Add an app under `packages/apps/` → a new resource and data source, written from scratch.
+- Add, remove or rename a field in an app's `values.schema.json` → the schema, the model, and the expand/flatten pair.
+- Change a version enum (postgres, kubernetes, mariadb, mongodb, redis, rabbitmq, opensearch) → the provider's `stringvalidator.OneOf` lists. Drift means Terraform rejects a version the API accepts, or accepts one it will refuse.
+- Change a default in an app's `values.yaml` → the provider restates the defaults of every field it models, as `Default: stringdefault.StaticString(...)` and friends on an `Optional`+`Computed` attribute. That means the provider *sends* its own default rather than letting the API apply yours, so a stale one does not merely show up as a diff: it silently wins, and users keep getting the old value.
+- Change `kind` or `plural` in an `ApplicationDefinition` → the provider hardcodes both in the client descriptor it builds each GVR from. This one at least fails loudly: a write errors out, and a read stops matching and drops the resource from state.
+- Change `release.prefix`, or rename an output Secret or Service → the provider derives those names by concatenating the prefix (`"postgres-" + name`, then `-rw` and `-ro`) and looks them up as literal strings. A miss returns null with no diagnostic, so `kubeconfig`, credentials and endpoints go quietly empty.
+- Change a CRD the provider types by hand — `Package` under `cozystack.io`, `Plan` and `RestoreJob` under `backups.cozystack.io` → those are schema and model changes over there. Its tests also carry hand-vendored copies of those field names, because importing this module is too heavy, so the copies have to move too.
+- Change any other `cozystack.io` or `backups.cozystack.io` CRD → their specs travel as opaque JSON, so the provider keeps working but silently offers no typed access to whatever you added.
+
+### cozystack/ansible-cozystack
+
+- Add a required key to `packages/core/installer/values.yaml`, or rename one the role passes (`cozystackOperator.variant`, `cozystack.apiServerHost`, `cozystack.apiServerPort`) → the chart values block in the role's `main.yml` task, and its `defaults/main.yml`.
+- Change the `cozy-system` namespace or the PSA pre-install hook contract → the role carries namespace-adoption logic written against the current behaviour of `packages/core/installer/templates/`.
+- Add or rename a platform variant → the variant list is hardcoded in Go, in `cmd/cozystack-operator/main.go`; over there it is `cozystack_platform_variant` in `defaults/main.yml` and the README table.
+- Change a `packages/core/platform/values.yaml` key the role sets — `networking.podCIDR`, `networking.podGateway`, `networking.serviceCIDR`, `networking.joinCIDR`, `publishing.host`, `publishing.apiServerEndpoint`, `publishing.externalIPs` → the role's platform-package template. The `externalIPs` to `exposureClass` migration in particular needs a coordinated PR there.
+- Rename an object the role waits on — `deployment/cozystack-operator`, `crd/packages.cozystack.io`, the root `Tenant` — or change the `<packagesource>.<package>` naming scheme of the Package it applies → the role's tasks and its own CI assertions.
+- Change node prerequisites in `hack/e2e-prepare-cluster.bats` — the kernel modules a node must load, the containerd settings, the LVM `global_filter` → those are mirrored by hand into that repo's `examples/ubuntu`, `examples/rhel` and `examples/suse` prepare playbooks. Its CI tests some of them, but never against this repo, so a kernel module added here and not there surfaces as a broken storage layer on a generic cluster.
+- Change what Cozystack requires from the Kubernetes distribution (CNI, kube-proxy, cluster domain, max pods) → the k3s flags, which live only in that repo's inventories.
+
+### cozystack/ccp
+
+Its CI validates internal consistency only, never against this repo.
+
+- Move or rename anything under `hack/`, or change what a make target does → its skills gate on `hack/package.mk` and `hack/common-envs.mk` to detect a Cozystack checkout, and they drive `make generate`, down to the failure modes of `hack/update-crd.sh` underneath it. A skill that cannot find its anchor file refuses to run.
+- Change the `packages/apps`, `packages/system`, `packages/extra`, `packages/core` layout → package resolution in its skills is hardcoded to that split.
+- Rename `packages/system/<name>-rd/cozyrds/<name>.yaml` → it is the declared source of truth for dependency contracts in its external-app skill.
+- Rename a namespace: `cozy-system`, `cozy-installer`, `tenant-root`.
+- Change variant or bundle names → its variant-picker reference tables.
+- Change release-prep behaviour in `.github/workflows/tags.yaml` → its contributor-versus-maintainer guidance rests on it.
+
+### cozystack/external-apps-example
+
+It has no CI at all, it vendors copies of this repo's tooling, and it is the reference every third-party catalogue is built from, so it breaks quietly and takes them with it.
+
+- Change `hack/package.mk` → its `scripts/package.mk` is a byte-for-byte copy.
+- Change `hack/update-crd.sh` → its `scripts/update-appdef.sh` is a miniature of it.
+- Change the `ApplicationDefinition` CRD, above all the `release.chartRef.kind` enum in `packages/system/application-definition-crd/definition/` → it still uses `chartRef.kind: HelmChart` while this repo has moved on to `ExternalArtifact`. Dropping `HelmChart` from the enum kills it outright.
+- Change the `release.labels` convention, for example the `flux-shard-operator` sharding key.
+- Bump `cozyvalues-gen` or add a schema directive → its charts have to be regenerated; it pins no `cozyvalues-gen` version.
+- Rename `cozy-public` or `cozy-system`, or move Flux to a new API version.
+- Change how external catalogues register themselves → it is still on the `GitRepository` to `HelmChart` to `HelmRelease` path rather than `PackageSource`, so moving that contract rewrites the example instead of patching it.
+
+### cozystack/talm
+
+It ships `charts/cozystack/`, the preset the documented Talos bootstrap applies, and that preset restates this repo's node contract.
+
+- Change node prerequisites in `hack/e2e-prepare-cluster.bats` — the kernel modules, the LVM `global_filter`, the cluster domain → its `charts/cozystack/` restates them. This is the same contract the Ansible collection mirrors, so a change here usually needs a PR in both. Its copy overlaps ours but is not identical: it loads the vfio modules for PCI passthrough on top of ours, and templates the cluster domain instead of hardcoding it. Diff the two and port your change; do not paste our block over theirs.
+
+### cozystack/cozyhr
+
+- Rename the `cozyhr.cozystack.io/values-files` annotation, or change what the operator writes into it (`internal/operator/package_reconciler.go`) → it reads that annotation to decide which values files to merge. Its fallback is the HelmRelease's own `valuesFiles`, which is empty for an ExternalArtifact-backed release, so a rename does not fail: it silently merges the wrong values.
+- Add or change a chart source kind (`HelmChart`, `ExternalArtifact`, `OCIRepository`) → it switches on the kind to resolve the chart, so a new one is simply unsupported until it learns about it.
+- Change what `hack/package.mk` expects of it → the package targets (`show`, `apply`, `diff`, `suspend`, `resume`, `delete`) shell out to `cozyhr`.
+
+### cozystack/cozy-proxy
+
+Its chart is vendored here — `packages/system/cozy-proxy/Makefile` pulls it from the latest upstream tag — so a chart fix belongs in that repository and must be re-vendored: an edit to the vendored copy is wiped by the next `make update`. The runtime contract, though, is produced here and consumed there.
+
+- Rename the `service.kubernetes.io/service-proxy-name` label value, or the `networking.cozystack.io/wholeIP` and `networking.cozystack.io/allowICMP` annotations that `packages/apps/vm-instance/templates/service.yaml` stamps → it matches all three as literal strings, and gates every service it manages on the first. Rename one and it quietly stops handling external VM services: no error, no crash.
+
+### cozystack/cozystack-telemetry-server
+
+- Rename a telemetry metric or one of its labels — `cozy_cluster_info{cozystack_version,kubernetes_version}` in `internal/telemetry/operator_collector.go`, `cozy_application_count{kind}` in `internal/telemetry/collector.go` → it queries those names in its Grafana dashboard and its overview. A rename does not error anywhere: the panels just go empty.
+
+### cozystack/examples
+
+Not coupled to the API: it holds Terraform that provisions bare nodes, with no Cozystack manifests in it. The only thing that reaches it is a change to the minimum node requirements (count, CPU, RAM, disk) or to the network requirements (VLAN, underlay).
+
+### Not a downstream repository
+
+`cozystack-ui` is archived. The console was vendored into `packages/system/dashboard/images/console`, so a UI change belongs in this repo, in the same PR. Note that the console still hardcodes the marketplace category list, so an `ApplicationDefinition` with a brand-new `spec.dashboard.category` renders in the marketplace but gets no sidebar entry.
+
+`boot-to-talos` converts a running OS to Talos. It pins the Talos image this repo publishes, but Renovate carries that tag for it, so nothing you change here forces a change there. Renaming the image path would, and nothing would catch it.
+
+`homebrew-tap` builds `cmd/cozypkg` out of this repo, but its formula is deprecated in favour of homebrew-core and pinned to a tag, so only a `--HEAD` install tracks `main`. Moving that command would break it, quietly and for almost nobody.
+
+The rest of the organisation's repositories do not restate anything this one owns: they are either consumed by it or independent of it, so a change here does not reach them.
+
+The release process keeps a **separate** list of repositories, in [`changelog.md`](./changelog.md), checked for tags cut during a release window. That list exists to assemble release notes; this one exists to catch code coupling. They overlap but are not interchangeable, and neither replaces the other.
 
 ## Review Expectations
 

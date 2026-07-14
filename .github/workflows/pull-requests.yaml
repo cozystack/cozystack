@@ -29,6 +29,7 @@ jobs:
       contents: read
     outputs:
       code: ${{ steps.p.outputs.code }}
+      trigger_map: ${{ steps.p.outputs.trigger_map }}
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
@@ -47,6 +48,23 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          # docs/agents/contributing.md carries the downstream trigger map, which
+          # hack/downstream-trigger-map.bats asserts against: every path the map
+          # cites still exists, and its repository list still matches the PR
+          # template. Editing the map alone is a docs-only PR, which would skip the
+          # unit tests and exempt the map from its own guard. This flag lets the
+          # unit-test job opt back in, and only that job: it deliberately does not
+          # feed `code`, so a docs PR still builds nothing.
+          #
+          # Detect the map by its old path too: a rename is reported as the new path
+          # alone, so a PR that moves the map would skip the very test that pins the
+          # literal below to it, and break for whoever pushes next.
+          git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
+          if grep -qxF 'docs/agents/contributing.md' /tmp/changed_norenames.txt; then
+            echo "trigger_map=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "trigger_map=false" >> "$GITHUB_OUTPUT"
           fi
           matrix="$(hack/build-matrix.sh /tmp/changed.txt)"
           echo "Build matrix: $matrix"
@@ -75,8 +93,11 @@ jobs:
     permissions:
       contents: read
     needs: ["plan"]
+    # trigger_map opts a docs-only PR back in when it edits the downstream trigger
+    # map, so hack/downstream-trigger-map.bats still guards it. No other job reads
+    # that flag: a docs PR runs the unit tests and nothing heavier.
     if: |
-      needs.plan.outputs.code == 'true'
+      (needs.plan.outputs.code == 'true' || needs.plan.outputs.trigger_map == 'true')
       && !contains(github.event.pull_request.labels.*.name, 'release')
     steps:
       - name: Checkout code
