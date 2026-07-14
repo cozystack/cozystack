@@ -328,16 +328,60 @@ EOF
 }
 
 @test "Keycloak OIDC stack is healthy" {
-  # keycloakInternalUrl makes oauth2-proxy skip OIDC discovery and route
-  # backend calls (token/jwks/userinfo/logout) through the in-cluster
-  # keycloak Service. Without it the dashboard gatekeeper crashloops on
-  # DNS lookup of keycloak.example.org -- the e2e host placeholder does
-  # not resolve, and under Flux v2.8 kstatus the gatekeeper Deployment
-  # then flips to Failed and stalls the dashboard HelmRelease.
-  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true,"keycloakInternalUrl":"http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"}}}}}}}'
+  # Only oidc.enabled is set here: keycloakInternalUrl defaults to the in-cluster
+  # keycloak Service, which makes oauth2-proxy skip OIDC discovery and route the
+  # backend calls (token/jwks/userinfo/logout) through that Service.
+  kubectl patch package cozystack.cozystack-platform --type merge -p '{"spec":{"components":{"platform":{"values":{"authentication":{"oidc":{"enabled":true}}}}}}}'
 
   timeout 120 sh -ec 'until kubectl get hr -n cozy-keycloak keycloak keycloak-configure keycloak-operator >/dev/null 2>&1; do sleep 1; done'
   kubectl wait hr/keycloak hr/keycloak-configure hr/keycloak-operator -n cozy-keycloak --timeout=20m --for=condition=ready
+
+  # Enabling OIDC swaps the dashboard's token-proxy container for oauth2-proxy,
+  # so the dashboard is the consumer that proves the internal-URL default works.
+  # The install-time `kubectl wait hr --all -A` ran before this test flipped the
+  # flag and only ever saw the token-proxy shape, so nothing has re-checked the
+  # dashboard on the OIDC path.
+  #
+  # Waiting on hr/dashboard directly would be vacuous: it is still Ready=True
+  # from the token-proxy install, so `--for=condition=ready` returns instantly
+  # against the stale condition, before Flux has even consumed the patched
+  # values. Gate on an observable that exists ONLY on the OIDC path instead --
+  # the auth-proxy container appearing in the gatekeeper Deployment -- which is
+  # reached only after the new values are rendered.
+  timeout 600 sh -ec 'until kubectl get deploy/incloud-web-gatekeeper -n cozy-dashboard -o jsonpath="{.spec.template.spec.containers[*].name}" 2>/dev/null | grep -qw auth-proxy; do sleep 5; done' || {
+    echo "=== gatekeeper never re-rendered with the auth-proxy container after enabling OIDC ==="
+    echo "=== the patched values likely never reached the dashboard HelmRelease ==="
+    kubectl get package cozystack.cozystack-platform -o yaml 2>&1 || true
+    kubectl get hr/dashboard -n cozy-dashboard -o yaml 2>&1 || true
+    kubectl get deploy/incloud-web-gatekeeper -n cozy-dashboard -o yaml 2>&1 || true
+    false
+  }
+
+  # Then wait for the ROLLOUT, not for condition=available. The Deployment has
+  # replicas: 1 and maxUnavailable: 25%, which rounds down to 0, so Kubernetes
+  # keeps the old token-proxy pod up while the new one starts: Available stays
+  # True on the strength of the OLD ReplicaSet even as the new auth-proxy pod
+  # crashloops. `rollout status` is the check that only succeeds once the
+  # UPDATED pod is available.
+  #
+  # That is what gives this case teeth: were the default to regress to the
+  # external hostname, oauth2-proxy would do OIDC discovery against
+  # keycloak.example.org -- the e2e host placeholder does not resolve -- and
+  # crashloop, failing the rollout instead of shipping the regression.
+  kubectl rollout status deploy/incloud-web-gatekeeper -n cozy-dashboard --timeout=10m || {
+    echo "=== deploy/incloud-web-gatekeeper rollout did not complete after enabling OIDC ==="
+    kubectl get deploy/incloud-web-gatekeeper -n cozy-dashboard -o yaml 2>&1 || true
+    echo "=== cozy-dashboard pods ==="
+    kubectl get pods -n cozy-dashboard -o wide 2>&1 || true
+    echo "=== auth-proxy logs ==="
+    kubectl logs -n cozy-dashboard -l app.kubernetes.io/name=gatekeeper --all-containers --tail=50 2>&1 || true
+    false
+  }
+
+  # Not the vacuous wait described above: past the rollout gate the HelmRelease
+  # has necessarily been re-reconciled, so Ready here means the whole upgrade
+  # converged -- not just the one Deployment this test watched.
+  kubectl wait hr/dashboard -n cozy-dashboard --timeout=10m --for=condition=ready
 }
 
 @test "Aggregated API rejects Tenant name with dashes" {

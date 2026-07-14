@@ -51,6 +51,34 @@ tests:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8000
 
+  # authentication.oidc.enabled defaults to false while keycloakInternalUrl now
+  # defaults to the in-cluster Service, so THIS pair — OIDC off, internal URL
+  # set — is what most clusters actually render. The internal-URL block is
+  # nested inside the oidc-enabled guard, so it cannot leak into the
+  # token-proxy branch today; pin that, because a refactor which hoists the
+  # block out would otherwise ship silently.
+  - it: oidc-enabled=false ignores a set keycloak-internal-url
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "false"
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+      tokenProxy:
+        image: example.invalid/token-proxy:test
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: token-proxy
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/certs
+
   - it: oidc-enabled=true renders auth-proxy with /ping probes and no startupProbe
     set:
       _cluster:
@@ -74,3 +102,106 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].ports[0].containerPort
           value: 8000
+
+  # keycloak-internal-url arrives on the _cluster channel from
+  # authentication.oidc.keycloakInternalUrl in packages/core/platform. Its
+  # default is the in-cluster Keycloak Service, so the value asserted below is
+  # what a stock cluster ships: oauth2-proxy skips OIDC discovery and talks to
+  # the Service for token/jwks/userinfo/logout, which keeps the dashboard
+  # independent of the root ingress serving keycloak.<host> at startup. The
+  # browser-facing URLs (redirect, login) must stay on the external host —
+  # routing them to a cluster-internal address would send the user's browser to
+  # an unreachable URL.
+  - it: default in-cluster keycloak URL skips discovery and keeps browser URLs external
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-internal-url: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/certs
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --validate-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/userinfo
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redirect-url=https://dashboard.example.org/oauth2/callback
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --login-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
+
+  - it: an explicit keycloak-internal-url override wins over the default
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-internal-url: http://keycloak.example.test:8080/realms/other
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak.example.test:8080/realms/other/protocol/openid-connect/token
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak.example.test:8080/realms/other/protocol/openid-connect/certs
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --validate-url=http://keycloak.example.test:8080/realms/other/protocol/openid-connect/userinfo
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+
+  # The escape hatch: an operator who sets keycloakInternalUrl back to "" gets
+  # the historical shape — full OIDC discovery against the external issuer, no
+  # backend URLs pinned. It must keep working, so pin it.
+  #
+  # --skip-oidc-discovery carries the whole meaning here. All five in-cluster
+  # args live inside one {{- if $keycloakInternalUrl }} block in the template,
+  # so its absence structurally guarantees the absence of the other four; the
+  # notContains assertions below then pin the regression that actually threatens
+  # this branch — the in-cluster default leaking back in. Asserting an arg count
+  # instead would couple this OIDC test to every unrelated gatekeeper flag.
+  - it: empty keycloak-internal-url restores external OIDC discovery
+    set:
+      _cluster:
+        root-host: example.org
+        oidc-enabled: "true"
+        keycloak-internal-url: ""
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --skip-oidc-discovery
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-issuer-url=https://keycloak.example.org/realms/cozy
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=https://keycloak.example.org/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --redeem-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/token
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --oidc-jwks-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/certs
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --validate-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/userinfo
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --backend-logout-url=http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy/protocol/openid-connect/logout?id_token_hint={id_token}

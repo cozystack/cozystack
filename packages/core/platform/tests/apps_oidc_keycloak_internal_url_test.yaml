@@ -1,0 +1,53 @@
+suite: apps.yaml OIDC keycloak-internal-url platform → tenant value wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# authentication.oidc.keycloakInternalUrl rides the _cluster channel as
+# keycloak-internal-url and is read by the dashboard and linstor-gui
+# gatekeepers (packages/system/{dashboard,linstor-gui}/templates/gatekeeper.yaml).
+# A non-empty value switches oauth2-proxy to --skip-oidc-discovery and sends
+# the backend calls (token, jwks, userinfo, logout) straight to the Keycloak
+# Service, so the dashboard no longer depends on the root ingress serving the
+# external Keycloak hostname before it can start. The default must therefore be
+# the in-cluster Service address, and an operator override — including an
+# override back to "" — must still reach the consumers untouched.
+
+tests:
+  - it: writes the in-cluster keycloak Service address by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/cozy"'
+
+  - it: writes the in-cluster default even when OIDC is enabled
+    set:
+      authentication.oidc.enabled: true
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'oidc-enabled:\s*"true"'
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak-http\.cozy-keycloak\.svc:8080/realms/cozy"'
+
+  - it: honors an operator override pointing at a non-standard keycloak placement
+    set:
+      authentication.oidc.enabled: true
+      authentication.oidc.keycloakInternalUrl: http://keycloak.example.test:8080/realms/other
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*"http://keycloak\.example\.test:8080/realms/other"'
+
+  - it: keeps the empty-string escape hatch, restoring external OIDC discovery
+    set:
+      authentication.oidc.enabled: true
+      authentication.oidc.keycloakInternalUrl: ""
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: 'keycloak-internal-url:\s*""'
