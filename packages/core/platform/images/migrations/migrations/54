@@ -38,10 +38,26 @@
 # falls back to the cluster-level value to mirror the parent's
 # `group.storageClass | default .Values.storageClass`.
 #
+# The parent HelmRelease's spec.values keeps its now-unused nodeGroups /
+# nodeHealthCheck keys: the new kubernetes chart schema ignores them (no
+# additionalProperties:false), and stripping them here would rewrite the parent
+# values mid-window and trigger an old-chart re-render. A later cleanup
+# migration can drop them once the whole fleet is past version 55.
+#
 # Idempotent: re-running skips child HRs that already exist and objects already
 # adopted. Strict: any failed create/annotate exits 1 so run-migrations.sh
 # leaves CURRENT_VERSION at 54 and retries on the next upgrade -- best-effort is
 # unsafe because a pool left un-pinned is pruned by the parent upgrade.
+#
+# NOT auto-reversible: downgrading the platform re-renders the OLD kubernetes
+# chart, whose manifest still lists the worker objects now annotated
+# meta.helm.sh/release-name=kubernetes-nodes-<cluster>-<pool>; the parent
+# upgrade then fails Helm ownership validation. To roll back, first re-annotate
+# every adopted object back to the parent release:
+#   kubectl annotate <res> <name> -n <ns> \
+#     meta.helm.sh/release-name=kubernetes-<cluster> --overwrite
+# (and remove the kubernetes-nodes-<cluster>-<pool> HelmReleases) BEFORE
+# downgrading the kubernetes chart.
 
 set -euo pipefail
 
@@ -106,6 +122,14 @@ kubectl get helmrelease --all-namespaces \
       app_name="${cluster}-${group}"
       grp=$(printf '%s' "$groups_json" | jq -c --arg g "$group" '.[$g]')
 
+      # Helm refuses release names longer than 53 characters (cozystack-api
+      # enforces the same cap for natively created CRs). Fail loudly naming the
+      # offending pool rather than creating an HR Helm will reject.
+      if [ "${#child_name}" -gt 53 ]; then
+        echo "  child release name '$child_name' exceeds 53 chars; shorten cluster/pool '$cluster'/'$group'" >&2
+        exit 1
+      fi
+
       child_values=$(printf '%s' "$values" | jq -c \
         --arg cluster "$cluster" \
         --argjson grp "$grp" '
@@ -128,10 +152,37 @@ kubectl get helmrelease --all-namespaces \
          + pick(.; ["version","talos","images"])
         )')
 
+      # Adopt the worker objects the parent rendered for this group BEFORE
+      # creating the child HelmRelease. If the kubernetes-nodes ExternalArtifact
+      # already exists (Phase 2a shipped in an earlier release), helm-controller
+      # can start the child install the moment the HR appears; adopting first
+      # guarantees the keep + release-name annotations are already in place, so
+      # the child install never trips Helm's ownership validation.
+      adopt_one "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+      adopt_one "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+      adopt_one "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+
+      # All KubevirtMachineTemplates for this group carry a 6-hex content-hash
+      # suffix (parent chart: sha256sum | trunc 6): kubernetes-<cluster>-<group>-<hash>.
+      # Anchor on that suffix so pool 'md0' does not also match a sibling pool
+      # 'md0-large-<hash>' (which would mis-adopt it and deadlock the migration).
+      # Adopt every revision (current + any preserved older one still referenced
+      # by an in-flight MachineSet).
+      for kmt in $(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
+                     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+                   grep -E "^kubernetes-${cluster}-${group}-[0-9a-f]{6}$" || true); do
+        adopt_one "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns" "$child_name" "kubernetes-${cluster}"
+      done
+
       if kubectl get helmrelease "$child_name" -n "$ns" >/dev/null 2>&1; then
         echo "  child HelmRelease $child_name already exists, skipping create"
       else
         echo "  creating child HelmRelease $child_name"
+        # HR shape mirrors pkg/registry/apps/application/rest.go
+        # convertApplicationToHelmRelease (interval, maxHistory, RetryOnFailure
+        # strategy + retryInterval, timeouts+disableWait from the kubernetes-nodes
+        # ApplicationDefinition annotations) so an adopted pool is byte-shaped
+        # like a natively created one and self-heals on a failed install.
         jq -cn \
           --arg name "$child_name" --arg ns "$ns" --arg app "$app_name" \
           --arg chart "$CHILD_CHART_REF_NAME" --argjson values "$child_values" '
@@ -150,28 +201,23 @@ kubectl get helmrelease --all-namespaces \
             },
             spec: {
               interval: "5m",
+              maxHistory: 5,
               chartRef: { kind: "ExternalArtifact", name: $chart, namespace: "cozy-system" },
-              install: { timeout: "15m", disableWait: true },
-              upgrade: { timeout: "15m", disableWait: true },
+              install: {
+                timeout: "15m",
+                disableWait: true,
+                strategy: { name: "RetryOnFailure", retryInterval: "30s" }
+              },
+              upgrade: {
+                timeout: "15m",
+                disableWait: true,
+                strategy: { name: "RetryOnFailure", retryInterval: "30s" }
+              },
               valuesFrom: [ { kind: "Secret", name: "cozystack-values" } ],
               values: $values
             }
           }' | kubectl apply --filename -
       fi
-
-      # Adopt the worker objects the parent rendered for this group.
-      adopt_one "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
-      adopt_one "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
-      adopt_one "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
-
-      # All KubevirtMachineTemplates for this group carry a content-hash suffix:
-      # kubernetes-<cluster>-<group>-<hash>. Adopt every one (current + any
-      # preserved older revision still referenced by an in-flight MachineSet).
-      for kmt in $(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
-                     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
-                   grep "^kubernetes-${cluster}-${group}-" || true); do
-        adopt_one "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns" "$child_name" "kubernetes-${cluster}"
-      done
     done
   done
 
