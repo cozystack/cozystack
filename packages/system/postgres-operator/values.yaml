@@ -1,8 +1,29 @@
 cloudnative-pg:
   crds:
     create: true
-  image:
-    tag: "1.27.3"
+  # Image tag intentionally left to the chart's appVersion (1.28.1). Do NOT pin
+  # image.tag to a version the vendored chart's CRDs don't match: an operator
+  # newer than its CRDs writes status fields the CRD prunes (e.g.
+  # status.instanceID.sessionID, added in CNPG 1.27.3), which makes the operator
+  # believe the instance manager restarted and fail EVERY backup cluster-wide
+  # ("instance manager was restarted during backup"). Bump the chart version in
+  # the Makefile to move the operator + CRDs together.
+
+# CloudNativePG Barman Cloud Plugin (github.com/cloudnative-pg/plugin-barman-cloud).
+# Native spec.backup.barmanObjectStore is deprecated in CNPG 1.27 and removed in 1.29,
+# and the `standard` postgresql image variant this platform pins no longer ships the
+# barman-cloud-* binaries. The plugin runs the barman tooling in a sidecar instead, so
+# it must be co-located with the CNPG operator: CNPG discovers plugins by listing
+# Services carrying the cnpg.io/pluginName label *in the operator's own namespace*
+# (cozy-postgres-operator). The subchart renders every object into .Release.Namespace,
+# which cozyhr/Flux set to cozy-postgres-operator, so no namespaceOverride is needed.
+#
+# Requires cert-manager: the subchart mints a self-signed Issuer plus the
+# barman-cloud-server-tls / barman-cloud-client-tls Secrets that carry the mTLS between
+# the operator and the plugin.
+plugin-barman-cloud:
+  crds:
+    create: true
 # Image used by the post-install webhook-readiness Job (see templates/webhook-ready-hook.yaml).
 # Any image with kubectl on PATH works; the Job calls the apiserver service proxy with the
 # hook ServiceAccount's token to confirm the mcluster.cnpg.io webhook is reachable end-to-end

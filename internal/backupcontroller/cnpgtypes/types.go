@@ -19,12 +19,30 @@ import (
 const (
 	GroupName = "postgresql.cnpg.io"
 	Version   = "v1"
+
+	// BarmanGroupName / BarmanVersion identify the Barman Cloud plugin API
+	// (github.com/cloudnative-pg/plugin-barman-cloud). The ObjectStore CRD it
+	// ships carries the S3/barman configuration the driver used to inline into
+	// spec.backup.barmanObjectStore; native barman is deprecated in CNPG 1.27
+	// and removed in 1.29.
+	BarmanGroupName = "barmancloud.cnpg.io"
+	BarmanVersion   = "v1"
+
+	// PluginName is the CNPG-I plugin name the barman-cloud plugin registers
+	// under. It MUST match the plugin Service's cnpg.io/pluginName label so
+	// CNPG routes backup/WAL/recovery through it.
+	PluginName = "barman-cloud.cloudnative-pg.io"
+
+	// BackupMethodPlugin is the postgresql.cnpg.io/Backup spec.method value
+	// that delegates the run to a CNPG-I plugin (here barman-cloud).
+	BackupMethodPlugin = "plugin"
 )
 
 var (
-	GroupVersion  = schema.GroupVersion{Group: GroupName, Version: Version}
-	SchemeBuilder = runtime.NewSchemeBuilder(addKnownTypes)
-	AddToScheme   = SchemeBuilder.AddToScheme
+	GroupVersion       = schema.GroupVersion{Group: GroupName, Version: Version}
+	BarmanGroupVersion = schema.GroupVersion{Group: BarmanGroupName, Version: BarmanVersion}
+	SchemeBuilder      = runtime.NewSchemeBuilder(addKnownTypes)
+	AddToScheme        = SchemeBuilder.AddToScheme
 )
 
 func addKnownTypes(scheme *runtime.Scheme) error {
@@ -32,7 +50,11 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 		&Cluster{}, &ClusterList{},
 		&Backup{}, &BackupList{},
 	)
+	scheme.AddKnownTypes(BarmanGroupVersion,
+		&ObjectStore{}, &ObjectStoreList{},
+	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
+	metav1.AddToGroupVersion(scheme, BarmanGroupVersion)
 	return nil
 }
 
@@ -54,6 +76,21 @@ type ClusterList struct {
 type ClusterSpec struct {
 	Backup    *BackupConfiguration    `json:"backup,omitempty"`
 	Bootstrap *BootstrapConfiguration `json:"bootstrap,omitempty"`
+	// Plugins wires CNPG-I plugins (here barman-cloud) onto the Cluster. The
+	// driver SSA-patches exactly this field for the platform-managed backup
+	// flow, replacing the deprecated spec.backup.barmanObjectStore path.
+	Plugins []PluginConfiguration `json:"plugins,omitempty"`
+}
+
+// PluginConfiguration references a CNPG-I plugin from a Cluster. For
+// barman-cloud, Parameters carries barmanObjectName (the ObjectStore CR name)
+// and optionally serverName (the per-server folder under destinationPath).
+type PluginConfiguration struct {
+	Name string `json:"name"`
+	// IsWALArchiver marks this plugin as the WAL archiver. Exactly one plugin
+	// entry must set it for continuous archiving / PITR to work.
+	IsWALArchiver *bool             `json:"isWALArchiver,omitempty"`
+	Parameters    map[string]string `json:"parameters,omitempty"`
 }
 
 type ClusterStatus struct {
@@ -131,10 +168,46 @@ type BackupList struct {
 type BackupSpec struct {
 	Method  string           `json:"method,omitempty"`
 	Cluster ClusterReference `json:"cluster,omitempty"`
+	// PluginConfiguration selects the CNPG-I plugin that executes the backup
+	// when Method is "plugin". For barman-cloud, Name is the plugin name.
+	PluginConfiguration *BackupPluginConfiguration `json:"pluginConfiguration,omitempty"`
+}
+
+// BackupPluginConfiguration names the plugin a Backup run delegates to.
+type BackupPluginConfiguration struct {
+	Name       string            `json:"name"`
+	Parameters map[string]string `json:"parameters,omitempty"`
 }
 
 type ClusterReference struct {
 	Name string `json:"name,omitempty"`
+}
+
+// ObjectStore is the minimal subset of the barmancloud.cnpg.io/v1 ObjectStore
+// CRD the driver writes. spec.configuration carries the S3/barman settings
+// (the same shape native barmanObjectStore used, minus serverName which the
+// plugin forbids there and takes from the Cluster plugin parameter instead);
+// spec.retentionPolicy is top-level.
+//
+// +kubebuilder:object:root=true
+type ObjectStore struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+	Spec              ObjectStoreSpec `json:"spec,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+type ObjectStoreList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ObjectStore `json:"items"`
+}
+
+type ObjectStoreSpec struct {
+	Configuration BarmanObjectStoreConfiguration `json:"configuration"`
+	// RetentionPolicy is a barman retention expression validated by the plugin
+	// CRD against ^[1-9][0-9]*[dwm]$ (e.g. "30d").
+	RetentionPolicy string `json:"retentionPolicy,omitempty"`
 }
 
 type BackupStatus struct {

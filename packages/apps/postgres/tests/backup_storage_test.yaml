@@ -1,11 +1,11 @@
-suite: backup storage flow (barmanObjectStore gating, chart Secret, bootstrap guards)
+suite: backup storage flow (barman-cloud plugin gating, chart Secret, bootstrap guards)
 
-# Locks in the conditional rendering this PR introduced on the cnpg.io
-# Cluster and the chart-managed <release>-s3-creds Secret:
-#   - the legacy flow renders spec.backup.barmanObjectStore + the Secret
+# Locks in the conditional rendering on the cnpg.io Cluster, the barman-cloud
+# ObjectStore CR, and the chart-managed <release>-s3-creds Secret:
+#   - the legacy flow wires spec.plugins + renders the ObjectStore + the Secret
 #     only when real S3 coordinates are present;
-#   - the platform useSystemBucket flow leaves both out (the CNPG backup
-#     driver SSA-patches the live Cluster at first BackupJob time);
+#   - the platform useSystemBucket flow leaves them out (the CNPG backup
+#     driver SSA-patches spec.plugins + the ObjectStore at first BackupJob time);
 #   - bootstrap.recovery fails fast at render time when it would otherwise
 #     emit a dangling s3Credentials reference (useSystemBucket, or no creds).
 # These are template-rendering contracts, so helm-unittest is the right tool.
@@ -23,23 +23,28 @@ set:
     scheduling: {}
 
 tests:
-  - it: "useSystemBucket=true: chart skips barmanObjectStore and <release>-s3-creds"
+  - it: "useSystemBucket=true: chart skips spec.plugins, ObjectStore and <release>-s3-creds"
     set:
       backup:
         enabled: true
         useSystemBucket: true
     asserts:
       - notExists:
-          path: spec.backup.barmanObjectStore
+          path: spec.plugins
         template: templates/db.yaml
         documentSelector:
           path: kind
           value: Cluster
+      # No chart-rendered ObjectStore in the platform flow (the driver owns it):
+      # db.yaml emits only Cluster + WorkloadMonitor.
+      - hasDocuments:
+          count: 2
+        template: templates/db.yaml
       - hasDocuments:
           count: 0
         template: templates/backup-secret.yaml
 
-  - it: "legacy backup with inline creds: renders barmanObjectStore + <release>-s3-creds"
+  - it: "legacy backup with inline creds: wires spec.plugins + ObjectStore + <release>-s3-creds"
     set:
       backup:
         enabled: true
@@ -47,19 +52,42 @@ tests:
         s3AccessKey: AKIAEXAMPLE
         s3SecretKey: s3cr3t
     asserts:
-      - exists:
+      # The Cluster references the barman-cloud plugin, not native barmanObjectStore.
+      - notExists:
           path: spec.backup.barmanObjectStore
         template: templates/db.yaml
         documentSelector:
           path: kind
           value: Cluster
       - equal:
-          path: spec.backup.barmanObjectStore.s3Credentials.accessKeyId.name
-          value: pg-test-s3-creds
+          path: spec.plugins[0].name
+          value: barman-cloud.cloudnative-pg.io
         template: templates/db.yaml
         documentSelector:
           path: kind
           value: Cluster
+      - equal:
+          path: spec.plugins[0].parameters.barmanObjectName
+          value: pg-test
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      # The ObjectStore carries the S3 credentials reference.
+      - equal:
+          path: metadata.name
+          value: pg-test
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: spec.configuration.s3Credentials.accessKeyId.name
+          value: pg-test-s3-creds
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: ObjectStore
       - hasDocuments:
           count: 1
         template: templates/backup-secret.yaml
@@ -68,7 +96,7 @@ tests:
           value: pg-test-s3-creds
         template: templates/backup-secret.yaml
 
-  - it: "backup enabled, no creds, useSystemBucket=false: barmanObjectStore not rendered"
+  - it: "backup enabled, no creds, useSystemBucket=false: plugin + ObjectStore not rendered"
     set:
       backup:
         enabled: true
@@ -77,11 +105,15 @@ tests:
         s3SecretKey: ""
     asserts:
       - notExists:
-          path: spec.backup.barmanObjectStore
+          path: spec.plugins
         template: templates/db.yaml
         documentSelector:
           path: kind
           value: Cluster
+      # No ObjectStore rendered: db.yaml emits only Cluster + WorkloadMonitor.
+      - hasDocuments:
+          count: 2
+        template: templates/db.yaml
       - hasDocuments:
           count: 0
         template: templates/backup-secret.yaml

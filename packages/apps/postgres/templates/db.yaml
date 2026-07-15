@@ -35,13 +35,15 @@ spec:
   {{- $credSecretName := $credCfg.name | default (printf "%s-s3-creds" .Release.Name) }}
   {{/*
     Platform-managed default flow (useSystemBucket=true):
-      - The chart does NOT render spec.backup.barmanObjectStore. The
-        backup-controller's CNPG driver SSA-patches the live Cluster
-        with destinationPath/endpointURL/credentials at first BackupJob
-        time using field manager "cozystack-cnpg-backup-driver" with
-        ForceOwnership (see internal/backupcontroller/cnpgstrategy_controller.go
-        applyClusterBarmanObjectStore). SSA semantics mean the chart's
-        Helm field manager never owns spec.backup, so a subsequent Flux
+      - The chart does NOT render spec.plugins or the barman-cloud
+        ObjectStore. The backup-controller's CNPG driver SSA-applies a
+        barmancloud.cnpg.io ObjectStore (carrying destinationPath/
+        endpointURL/credentials) and SSA-patches the live Cluster's
+        spec.plugins to reference it at first BackupJob time, using field
+        manager "cozystack-cnpg-backup-driver" with ForceOwnership (see
+        internal/backupcontroller/cnpgstrategy_controller.go
+        applyClusterPluginBackup). SSA semantics mean the chart's Helm
+        field manager never owns spec.plugins, so a subsequent Flux
         re-render of this chart leaves the driver's patch intact — no
         tug-of-war on the live Cluster.
         Coordinates come from a single backupStorage values block in
@@ -49,8 +51,8 @@ spec:
         endpoint-duplication failure mode (an operator switching the
         platform endpoint would otherwise have to update both the
         backupstrategy-controller and this chart).
-      - Consequence: archive_command is not active until the first
-        BackupJob has run. WAL accumulates on the local PVC in the
+      - Consequence: WAL archiving via the plugin is not active until the
+        first BackupJob has run. WAL accumulates on the local PVC in the
         meantime — fine for small / fresh clusters, but admins of large
         Postgres releases switching mid-flight should run an ad-hoc
         BackupJob immediately after enabling the flag.
@@ -76,52 +78,47 @@ spec:
   {{- $credSecretKey = $credCfg.secretAccessKeyKey | default "AWS_SECRET_ACCESS_KEY" }}
   {{- end }}
   {{/*
-    endpointCA references a Secret carrying the CA bundle Barman should
-    trust. Required when the S3 endpoint serves a self-signed certificate
-    (the cozystack default seaweedfs-s3 ingress qualifies). The same
-    reference flows into both spec.backup.barmanObjectStore.endpointCA and
-    spec.externalClusters[].barmanObjectStore.endpointCA so backup *and*
-    recovery can verify TLS - missing it on the externalClusters side made
-    bootstrap.recovery panic in CNPG's instance-manager.
+    endpointCA references a Secret carrying the CA bundle the barman-cloud
+    plugin should trust. Required when the S3 endpoint serves a self-signed
+    certificate (the cozystack default seaweedfs-s3 ingress qualifies). The
+    same reference flows into both the backup ObjectStore's
+    spec.configuration.endpointCA and the recovery ObjectStore's
+    spec.configuration.endpointCA (referenced from externalClusters[].plugin)
+    so backup *and* recovery can verify TLS - missing it on the recovery
+    side made bootstrap.recovery panic in CNPG's instance-manager.
   */}}
   {{- $caCfg := default (dict) .Values.backup.endpointCA }}
   {{- $caKey := $caCfg.key | default "ca.crt" }}
   {{/*
-    barmanObjectStore is chart-rendered only when the legacy path has
+    The barman-cloud plugin is chart-wired only when the legacy path has
     real coordinates:
       - backup.enabled=true AND
       - useSystemBucket=false (platform flow lets the CNPG driver SSA-
-        patch the live Cluster instead) AND
+        patch spec.plugins + the ObjectStore instead) AND
       - destinationPath is non-empty AND either an inline access/secret
         pair is supplied OR an external Secret reference (s3Credentials-
         Secret.name) is set.
     Anything short of that means the user has enabled backup but not yet
-    supplied S3 coordinates — rendering a half-empty barmanObjectStore
-    would just feed CNPG a broken archive_command. Tenants opting into
-    `useSystemBucket: true` keep barmanObjectStore unset until the
+    supplied S3 coordinates — wiring the plugin against a half-empty
+    ObjectStore would just feed CNPG a broken archive_command. Tenants
+    opting into `useSystemBucket: true` keep spec.plugins unset until the
     backup-controller's CNPG driver SSA-patches it on the first BackupJob.
+
+    The S3/barman settings live in the barmancloud.cnpg.io/ObjectStore CR
+    rendered at the bottom of this file (named after the release); the
+    Cluster only references it by name. Native spec.backup.barmanObjectStore
+    is deprecated in CNPG 1.27 and removed in 1.29, and the postgresql image
+    variants this platform pins no longer ship the barman-cloud-* binaries.
   */}}
   {{- $hasInlineCreds := and (ne (default "" .Values.backup.s3AccessKey) "") (ne (default "" .Values.backup.s3SecretKey) "") }}
   {{- $hasLegacyCreds := or $hasInlineCreds (ne (default "" $credCfg.name) "") }}
   {{- $renderBarman := and .Values.backup.enabled (not .Values.backup.useSystemBucket) (ne $destinationPath "") $hasLegacyCreds }}
   {{- if $renderBarman }}
-  backup:
-    barmanObjectStore:
-      destinationPath: {{ $destinationPath }}
-      endpointURL: {{ $endpointURL }}
-      {{- if $caCfg.name }}
-      endpointCA:
-        name: {{ $caCfg.name }}
-        key: {{ $caKey }}
-      {{- end }}
-      s3Credentials:
-        accessKeyId:
-          name: {{ $credSecretName }}
-          key: {{ $credAccessKey }}
-        secretAccessKey:
-          name: {{ $credSecretName }}
-          key: {{ $credSecretKey }}
-    retentionPolicy: {{ .Values.backup.retentionPolicy }}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ .Release.Name }}
   {{- end }}
 
   {{/*
@@ -169,24 +166,17 @@ spec:
       {{- end }}
   externalClusters:
     - name: {{ .Values.bootstrap.oldName }}
-      barmanObjectStore:
-        destinationPath: {{ .Values.backup.destinationPath }}
-        {{- if .Values.bootstrap.serverName }}
-        serverName: {{ .Values.bootstrap.serverName }}
-        {{- end }}
-        endpointURL: {{ .Values.backup.endpointURL }}
-        {{- if $caCfg.name }}
-        endpointCA:
-          name: {{ $caCfg.name }}
-          key: {{ $caKey }}
-        {{- end }}
-        s3Credentials:
-          accessKeyId:
-            name: {{ $credSecretName }}
-            key: {{ $credAccessKey }}
-          secretAccessKey:
-            name: {{ $credSecretName }}
-            key: {{ $credSecretKey }}
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          # References the recovery ObjectStore rendered at the bottom of this
+          # file, which carries the source cluster's S3 coordinates. serverName
+          # (the source's S3 path prefix) rides on the plugin parameter, not the
+          # ObjectStore (the plugin forbids serverName there).
+          barmanObjectName: {{ .Release.Name }}-recovery
+          {{- if .Values.bootstrap.serverName }}
+          serverName: {{ .Values.bootstrap.serverName }}
+          {{- end }}
   {{- end }}
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
@@ -249,3 +239,58 @@ spec:
     app.kubernetes.io/name: postgres.apps.cozystack.io
     app.kubernetes.io/instance: {{ $.Release.Name }}
   version: {{ $.Chart.Version }}
+{{- if $renderBarman }}
+---
+# Backup ObjectStore for the barman-cloud plugin. Carries the S3/barman
+# settings the deprecated spec.backup.barmanObjectStore used to hold; the
+# Cluster references it by name via spec.plugins above. serverName is
+# intentionally omitted (the plugin forbids it here and defaults it to the
+# cluster name, preserving the s3://.../<cluster>/ layout).
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ .Release.Name }}
+spec:
+  retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  configuration:
+    destinationPath: {{ $destinationPath }}
+    endpointURL: {{ $endpointURL }}
+    {{- if $caCfg.name }}
+    endpointCA:
+      name: {{ $caCfg.name }}
+      key: {{ $caKey }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $credSecretName }}
+        key: {{ $credAccessKey }}
+      secretAccessKey:
+        name: {{ $credSecretName }}
+        key: {{ $credSecretKey }}
+{{- end }}
+{{- if .Values.bootstrap.enabled }}
+---
+# Recovery ObjectStore for bootstrap. Points at the source cluster's S3
+# coordinates; referenced from externalClusters[].plugin above. serverName
+# rides on that plugin parameter, not here.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ .Release.Name }}-recovery
+spec:
+  configuration:
+    destinationPath: {{ $destinationPath }}
+    endpointURL: {{ $endpointURL }}
+    {{- if $caCfg.name }}
+    endpointCA:
+      name: {{ $caCfg.name }}
+      key: {{ $caKey }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $credSecretName }}
+        key: {{ $credAccessKey }}
+      secretAccessKey:
+        name: {{ $credSecretName }}
+        key: {{ $credSecretKey }}
+{{- end }}
