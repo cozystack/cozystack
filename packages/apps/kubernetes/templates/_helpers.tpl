@@ -212,7 +212,17 @@ the design's stated authorization boundary (per-tenant kube-apiserver
 = per-tenant identity domain) rather than relying on downstream
 RBAC-shaped conservatism.
 */}}
+{{- /*
+`claims.groups` is statically typed `any` in the apiserver's CEL environment
+(claims is map(string, any)), and the `.exists()` comprehension macro rejects a
+range of type `any` — the apiserver fails AuthenticationConfiguration compilation
+at startup and CrashLoops ("expression of type 'any' cannot be range of a
+comprehension (must be list, map, or dynamic)"). Wrap in dyn() so CEL treats the
+range as dynamic; the `has()` guard still short-circuits when groups is absent.
+Verified on a live tenant apiserver (v1.32) — without dyn() the control plane
+never boots.
+*/ -}}
 {{- define "kubernetes.oidc.groupsClaimValidationExpr" -}}
 {{- $ns := .Release.Namespace -}}
-{{- printf "has(claims.groups) && claims.groups.exists(g, g in [\"%s-view\", \"%s-use\", \"%s-admin\", \"%s-super-admin\"])" $ns $ns $ns $ns -}}
+{{- printf "has(claims.groups) && dyn(claims.groups).exists(g, g in [\"%s-view\", \"%s-use\", \"%s-admin\", \"%s-super-admin\"])" $ns $ns $ns $ns -}}
 {{- end }}
