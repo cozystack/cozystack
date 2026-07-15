@@ -24,29 +24,11 @@ ingress-nginx:
 {{- /* The ingress-nginx controller DaemonSet pins itself to nodes labelled
        node-role.kubernetes.io/ingress-nginx (see cozystack.defaultIngressValues
        nodeSelector). Since Phase 2 moved worker pools into the separate
-       kubernetes-nodes chart, that label is produced only by a KubernetesNodes
-       pool with roles: [ingress-nginx]. Fail fast when this cluster already has
-       worker pools but none carries the ingress role — otherwise the DaemonSet
-       silently schedules nothing. The lookup is empty during `helm template`,
-       lint and unit tests, and on a cluster with no pools yet, so the guard only
-       fires on the positive misconfiguration (pools exist, none is ingress). */}}
-{{- $clusterMds := list }}
-{{- range $md := (lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" .Release.Namespace "").items }}
-{{-   if eq (dig "spec" "clusterName" "" $md) $.Release.Name }}
-{{-     $clusterMds = append $clusterMds $md }}
-{{-   end }}
-{{- end }}
-{{- if $clusterMds }}
-{{-   $hasIngressPool := false }}
-{{-   range $md := $clusterMds }}
-{{-     if hasKey (dig "spec" "template" "metadata" "labels" dict $md) "node-role.kubernetes.io/ingress-nginx" }}
-{{-       $hasIngressPool = true }}
-{{-     end }}
-{{-   end }}
-{{-   if not $hasIngressPool }}
-{{-     fail "addons.ingressNginx.enabled is set but no KubernetesNodes pool for this cluster has roles: [ingress-nginx]. Create a KubernetesNodes pool named <cluster>-<pool> with roles: [ingress-nginx] so the ingress-nginx DaemonSet has nodes to schedule on." }}
-{{-   end }}
-{{- end }}
+       kubernetes-nodes chart, that label is produced by a KubernetesNodes pool
+       with roles: [ingress-nginx]. If no such pool exists the DaemonSet simply
+       schedules nothing (degraded, not failed) — the requirement is documented
+       in NOTES.txt and the release note rather than enforced at render time, so
+       an existing cluster is never flipped from Ready to Failed on upgrade. */}}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
