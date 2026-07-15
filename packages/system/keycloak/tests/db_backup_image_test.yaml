@@ -1,0 +1,53 @@
+suite: keycloak-db image variant tracks backup enablement
+
+# Native barmanObjectStore backups need the barman-cloud-* binaries, which
+# ship only in the CNPG `system` image variant (see templates/db.yaml). The
+# image-variant switch MUST be pinned to `system` exactly when the
+# barmanObjectStore block renders, otherwise a base backup fails with
+# `barman-cloud-backup: executable file not found` (#3300). This suite locks
+# that gate: input (backup.enabled + backup.destinationPath) -> rendered
+# spec.imageName, and asserts the object-store block co-renders with `system`.
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+templates:
+  - templates/db.yaml
+tests:
+  - it: defaults (backups off) render the standard image and no object store
+    set:
+      _cluster: {}
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie
+      - notExists:
+          path: spec.backup.barmanObjectStore
+
+  - it: backups enabled with a destination pin the barman-capable system image
+    set:
+      _cluster: {}
+      backup:
+        enabled: true
+        destinationPath: s3://bucket/keycloak-db/
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:17.7-system-trixie
+      # the variant switch and the object-store gate must agree — system image
+      # is present exactly when the barmanObjectStore renders.
+      - equal:
+          path: spec.backup.barmanObjectStore.destinationPath
+          value: s3://bucket/keycloak-db/
+
+  - it: enabled with an empty destinationPath stays standard (two-part gate)
+    set:
+      _cluster: {}
+      backup:
+        enabled: true
+        destinationPath: ""
+    asserts:
+      - equal:
+          path: spec.imageName
+          value: ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie
+      - notExists:
+          path: spec.backup.barmanObjectStore
