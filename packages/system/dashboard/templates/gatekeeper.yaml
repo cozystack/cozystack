@@ -68,6 +68,8 @@ spec:
             {{- end }}
             - --whitelist-domain=keycloak.{{ $host }}
             - --email-domain=*
+            - --api-route=^/api(/|$)
+            - --api-route=^/apis(/|$)
             - --pass-access-token=true
             - --pass-authorization-header=true
             - --cookie-refresh=3m
