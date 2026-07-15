@@ -75,12 +75,19 @@
 }
 
 @test "Create platform Package and reconcile previous version" {
-  # Minimal, version-stable platform config: networking + publishing only. These
-  # keys have been valid since the 1.4 line, so the same manifest installs on the
-  # baseline AND is what the current chart re-renders on upgrade. Deliberately
-  # lean (no monitoring/seaweedfs bundle) — the seeded canaries don't need them,
-  # and a leaner baseline is faster and less flaky while still exercising the
-  # operators/CRDs/storage/tenant/app upgrade surface.
+  # Version-stable platform config: networking + publishing (valid since the 1.4
+  # line, so the same manifest installs on the baseline AND is re-rendered by the
+  # current chart on upgrade), plus migrations.etcdAdoptSkipBackup.
+  #
+  # etcdAdoptSkipBackup makes the etcd v1alpha2 adoption migration (run during the
+  # upgrade) adopt the live etcd WITHOUT its pre-adoption S3 safety snapshot. That
+  # snapshot is structurally impossible in an e2e sandbox: the Etcd backup
+  # strategy has no caCert field, so it needs a trusted-cert (ACME) external S3
+  # endpoint, which a sandbox on example.org with no DNS/ACME cannot provide
+  # (proven on dev10 — the snapshot only completes against a real ACME S3 host).
+  # The adoption itself (pod/PVC re-ownership, operator swap, etcd 3.5->3.6 roll)
+  # still runs — that is what this lane exercises. Set here (no strict values
+  # schema on either version) so it is in place when the current chart upgrades.
   kubectl apply -f - <<EOF
 apiVersion: cozystack.io/v1alpha1
 kind: Package
@@ -99,6 +106,8 @@ spec:
         publishing:
           host: "example.org"
           apiServerEndpoint: "https://192.168.123.10:6443"
+        migrations:
+          etcdAdoptSkipBackup: true
 EOF
 
   # Configure storage (LINSTOR pool + StorageClasses) and the MetalLB pool in the
@@ -128,14 +137,22 @@ EOF
 }
 
 @test "Configure root tenant (baseline)" {
-  # Enable just enough of the root tenant to host a child tenant + apps: etcd
-  # (tenant control plane) and ingress. Monitoring/seaweedfs are intentionally
-  # left off (see the lean-baseline rationale above).
+  # Mirror a realistic root tenant: etcd (a legacy etcd.aenix.io cluster for the
+  # v1alpha2 adoption migration to exercise on upgrade), ingress, and seaweedfs.
+  # seaweedfs is the historical default (install-cozystack.bats enables it too),
+  # so the baseline resembles a real cluster being upgraded. The etcd-adoption
+  # migration does NOT depend on the seaweedfs backup chain here — that snapshot
+  # is skipped via migrations.etcdAdoptSkipBackup (see the platform Package
+  # above), so we only need the seaweedfs HR itself Ready, not the deeper
+  # S3/bucket/creds projection.
   kubectl patch tenants/root -n tenant-root --type merge \
-    -p '{"spec":{"host":"example.org","ingress":true,"etcd":true,"isolated":true}}'
+    -p '{"spec":{"host":"example.org","ingress":true,"etcd":true,"isolated":true,"seaweedfs":true}}'
 
-  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress tenant-root >/dev/null 2>&1; do sleep 1; done'
-  kubectl wait hr/etcd hr/ingress hr/tenant-root -n tenant-root --timeout=10m --for=condition=ready
+  timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'
+  # seaweedfs installs as a serial chain (seaweedfs-db CNPG -> seaweedfs-system
+  # raft -> seaweedfs wrapper), ~5-6min idle and longer under load; the
+  # tenant-root parent flips Ready only after every child, so gate at 20m.
+  kubectl wait hr/etcd hr/ingress hr/seaweedfs hr/tenant-root -n tenant-root --timeout=20m --for=condition=ready
 }
 
 @test "Create isolated test tenant (baseline)" {
