@@ -89,8 +89,9 @@ under a different Helm release — i.e. the pool name collides with a nodeGroup
 still managed by the parent kubernetes chart (most likely the default `md0`).
 Without this guard the collision surfaces as a cryptic Helm "invalid ownership
 metadata" error at install time. Inert under `helm template`/unittest (lookup
-returns nil with no cluster) and a no-op during migration-52 adoption, which
-re-annotates the MachineDeployment onto this release before it reconciles.
+returns nil with no cluster) and a no-op during the Phase 2b adoption
+migration, which re-annotates the MachineDeployment onto this release before
+it reconciles.
 */}}
 {{- define "kubernetes-nodes.assertNoForeignPool" -}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . -}}

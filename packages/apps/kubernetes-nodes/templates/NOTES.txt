@@ -1,6 +1,6 @@
 Worker node pool "{{ include "kubernetes-nodes.groupName" . }}" for cluster "{{ .Values.cluster }}".
 
-This pool is a separate release from the control plane. Two operational notes:
+This pool is a separate release from the control plane. Three operational notes:
 
 1. Deletion order. Deleting the parent Kubernetes cluster while this pool still
    exists leaves the pool release trying to recreate CAPI objects against a
