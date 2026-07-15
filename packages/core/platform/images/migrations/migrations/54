@@ -1,0 +1,179 @@
+#!/bin/sh
+# Migration 54 --> 55
+# Phase 2 kubernetes chart split: adopt the worker node pools that the
+# monolithic kubernetes chart used to render into per-pool kubernetes-nodes
+# HelmReleases.
+#
+# Before this release, HelmRelease kubernetes-<cluster> rendered the worker
+# KubevirtMachineTemplate / MachineDeployment / MachineHealthCheck / worker
+# WorkloadMonitor for every entry in spec.values.nodeGroups (plus an implicit
+# md0 default when nodeGroups was empty). This release removes those objects
+# from the kubernetes chart (they moved to the kubernetes-nodes chart, one
+# HelmRelease per pool). On upgrade Helm would see them present in the previous
+# kubernetes-<cluster> release manifest but absent in the new one and PRUNE
+# them -- destroying the tenant's running worker VMs.
+#
+# For every parent kubernetes HelmRelease this migration therefore, per pool:
+#   1. creates the child HelmRelease kubernetes-nodes-<cluster>-<pool> (which
+#      cozystack-api reverse-maps to a KubernetesNodes CR by prefix). The child
+#      is created directly as a HelmRelease, not via the aggregated
+#      KubernetesNodes API, because that API's ApplicationDefinition only lands
+#      later in this same upgrade and would 404 from this pre-upgrade hook.
+#   2. re-annotates the existing worker objects onto the child release
+#      (meta.helm.sh/release-name) and pins helm.sh/resource-policy=keep so the
+#      parent kubernetes-<cluster> upgrade -- which now renders control plane
+#      only -- does not prune them during the transition. The child chart then
+#      adopts them byte-identically (proven in PR-2a golden parity; the
+#      KubevirtMachineTemplate content-hash name is preserved so no worker VM
+#      churns).
+#
+# Runs as a pre-upgrade/pre-install hook, i.e. BEFORE any tenant HelmRelease
+# reconciles the new chart, which is the only safe window for the keep +
+# re-annotation to land ahead of the parent's control-plane-only re-render.
+#
+# _cluster and nodeHealthCheck are NOT copied into the child values: _cluster is
+# injected at runtime from the cozystack-values Secret (referenced via the
+# child's valuesFrom, same as every tenant app), and nodeHealthCheck collapses
+# into the child's per-pool maxUnhealthy / nodeStartupTimeout below. storageClass
+# falls back to the cluster-level value to mirror the parent's
+# `group.storageClass | default .Values.storageClass`.
+#
+# Idempotent: re-running skips child HRs that already exist and objects already
+# adopted. Strict: any failed create/annotate exits 1 so run-migrations.sh
+# leaves CURRENT_VERSION at 54 and retries on the next upgrade -- best-effort is
+# unsafe because a pool left un-pinned is pruned by the parent upgrade.
+
+set -euo pipefail
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+CHILD_CHART_REF_NAME="cozystack-kubernetes-nodes-application-kubevirt-kubernetes-nodes"
+
+# The implicit default node group the parent chart's kubernetes.nodeGroups helper
+# injected when spec.values.nodeGroups was empty. Materialised explicitly so a
+# cluster that relied on the default keeps its (ingress-nginx-roled) md0 pool.
+DEFAULT_MD0='{"minReplicas":0,"maxReplicas":10,"instanceType":"u1.medium","diskSize":"20Gi","storageClass":"","roles":["ingress-nginx"],"resources":{},"gpus":[],"kubelet":{}}'
+
+# adopt_one <resource> <object-name> <namespace> <new-release> <expected-old-release>
+adopt_one() {
+  res=$1; obj=$2; ns=$3; new_rel=$4; old_rel=$5
+  if ! kubectl get "$res" "$obj" -n "$ns" >/dev/null 2>&1; then
+    echo "    $res/$obj absent in $ns, skipping"
+    return 0
+  fi
+  cur=$(kubectl get "$res" "$obj" -n "$ns" \
+    -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+  if [ "$cur" = "$new_rel" ]; then
+    echo "    $res/$obj already adopted by $new_rel"
+    return 0
+  fi
+  if [ -n "$cur" ] && [ "$cur" != "$old_rel" ]; then
+    echo "    $res/$obj owned by unexpected release '$cur' (expected '$old_rel'); refusing" >&2
+    return 1
+  fi
+  echo "    adopting $res/$obj -> $new_rel"
+  kubectl annotate "$res" "$obj" -n "$ns" \
+    helm.sh/resource-policy=keep \
+    meta.helm.sh/release-name="$new_rel" \
+    --overwrite
+  kubectl label "$res" "$obj" -n "$ns" \
+    app.kubernetes.io/managed-by=Helm --overwrite
+}
+
+kubectl get helmrelease --all-namespaces \
+  -l apps.cozystack.io/application.kind=Kubernetes -o json |
+  jq -c '.items[] | {ns: .metadata.namespace, name: .metadata.name, values: (.spec.values // {})}' |
+  while IFS= read -r hrjson; do
+    ns=$(printf '%s' "$hrjson" | jq -r '.ns')
+    name=$(printf '%s' "$hrjson" | jq -r '.name')
+    values=$(printf '%s' "$hrjson" | jq -c '.values')
+
+    case "$name" in
+      kubernetes-*) cluster=${name#kubernetes-} ;;
+      *) echo "skipping HelmRelease with unexpected name '$name' in $ns" >&2; continue ;;
+    esac
+    echo "processing cluster '$cluster' (HelmRelease $name in $ns)"
+
+    groups_json=$(printf '%s' "$values" | jq -c '.nodeGroups // {}')
+    if [ "$(printf '%s' "$groups_json" | jq 'length')" -eq 0 ]; then
+      echo "  nodeGroups empty; materialising implicit md0 default"
+      groups_json=$(jq -cn --argjson d "$DEFAULT_MD0" '{md0: $d}')
+    fi
+
+    for group in $(printf '%s' "$groups_json" | jq -r 'keys[]'); do
+      child_name="kubernetes-nodes-${cluster}-${group}"
+      app_name="${cluster}-${group}"
+      grp=$(printf '%s' "$groups_json" | jq -c --arg g "$group" '.[$g]')
+
+      child_values=$(printf '%s' "$values" | jq -c \
+        --arg cluster "$cluster" \
+        --argjson grp "$grp" '
+        def pick(o; ks): reduce ks[] as $k ({}; if (o | has($k)) then . + {($k): o[$k]} else . end);
+        ({cluster: $cluster}
+         + pick($grp; ["minReplicas","maxReplicas","instanceType","diskSize","roles","resources","gpus","kubelet"])
+         # storageClass: per-group value if set and non-empty, else cluster-level
+         # (mirrors the parent `group.storageClass | default .Values.storageClass`).
+         + (if (($grp | has("storageClass")) and ($grp.storageClass != "")) then {storageClass: $grp.storageClass}
+            elif (has("storageClass") and (.storageClass != null)) then {storageClass: .storageClass}
+            else {} end)
+         # effective MHC knobs: per-group override, else cluster-wide nodeHealthCheck
+         + (if ($grp | has("maxUnhealthy")) then {maxUnhealthy: $grp.maxUnhealthy}
+            elif ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("maxUnhealthy"))) then {maxUnhealthy: .nodeHealthCheck.maxUnhealthy}
+            else {} end)
+         + (if ($grp | has("nodeStartupTimeout")) then {nodeStartupTimeout: $grp.nodeStartupTimeout}
+            elif ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("nodeStartupTimeout"))) then {nodeStartupTimeout: .nodeHealthCheck.nodeStartupTimeout}
+            else {} end)
+         # cluster-level inputs the pool templates consume verbatim
+         + pick(.; ["version","talos","images"])
+        )')
+
+      if kubectl get helmrelease "$child_name" -n "$ns" >/dev/null 2>&1; then
+        echo "  child HelmRelease $child_name already exists, skipping create"
+      else
+        echo "  creating child HelmRelease $child_name"
+        jq -cn \
+          --arg name "$child_name" --arg ns "$ns" --arg app "$app_name" \
+          --arg chart "$CHILD_CHART_REF_NAME" --argjson values "$child_values" '
+          {
+            apiVersion: "helm.toolkit.fluxcd.io/v2",
+            kind: "HelmRelease",
+            metadata: {
+              name: $name,
+              namespace: $ns,
+              labels: {
+                "sharding.fluxcd.io/key": "tenants",
+                "apps.cozystack.io/application.kind": "KubernetesNodes",
+                "apps.cozystack.io/application.group": "apps.cozystack.io",
+                "apps.cozystack.io/application.name": $app
+              }
+            },
+            spec: {
+              interval: "5m",
+              chartRef: { kind: "ExternalArtifact", name: $chart, namespace: "cozy-system" },
+              install: { timeout: "15m", disableWait: true },
+              upgrade: { timeout: "15m", disableWait: true },
+              valuesFrom: [ { kind: "Secret", name: "cozystack-values" } ],
+              values: $values
+            }
+          }' | kubectl apply --filename -
+      fi
+
+      # Adopt the worker objects the parent rendered for this group.
+      adopt_one "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+      adopt_one "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+      adopt_one "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns" "$child_name" "kubernetes-${cluster}"
+
+      # All KubevirtMachineTemplates for this group carry a content-hash suffix:
+      # kubernetes-<cluster>-<group>-<hash>. Adopt every one (current + any
+      # preserved older revision still referenced by an in-flight MachineSet).
+      for kmt in $(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
+                     -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+                   grep "^kubernetes-${cluster}-${group}-" || true); do
+        adopt_one "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns" "$child_name" "kubernetes-${cluster}"
+      done
+    done
+  done
+
+# Stamp version via the shared helper so the no-delete label is preserved.
+stamp_cozystack_version 55
