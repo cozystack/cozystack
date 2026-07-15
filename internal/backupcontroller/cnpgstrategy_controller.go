@@ -336,8 +336,9 @@ func cnpgPurgeNeeded(purgedCondition, liveClusterFreshlyRecovered bool) bool {
 
 // cnpgClusterFreshlyRecovered reports whether a live cnpg.io Cluster that
 // carries spec.bootstrap.recovery was produced by THIS RestoreJob's own purge
-// + chart re-render (its creationTimestamp is at or after the job's StartedAt)
-// rather than being left over from an earlier, already-completed restore.
+// + chart re-render (its creationTimestamp is strictly after the job's
+// StartedAt) rather than being left over from an earlier, already-completed
+// restore.
 //
 // Only the former is safe to skip re-purging. A leftover recovery Cluster from
 // a prior restore predates StartedAt and still holds the prior data, so it must
@@ -346,6 +347,21 @@ func cnpgPurgeNeeded(purgedCondition, liveClusterFreshlyRecovered bool) bool {
 // job sets StartedAt on its first reconcile, long before it purges and the
 // chart re-renders), so the timestamp comparison cleanly separates the two.
 //
+// The comparison is strict (created > started), so an exact tie resolves to
+// "not fresh" and the caller purges. That matches the conservative default
+// below: the only classification that must never be wrong is calling a stale
+// leftover "fresh" (which reintroduces the silent no-op), and a fresh Cluster
+// is always created well after StartedAt (see above), never exactly at it.
+//
+// An identity-based alternative was considered - recording the purged Cluster's
+// UID on the TargetPurged condition and comparing UIDs on later reconciles -
+// which is immune to clock skew. It was rejected because it leans on the same
+// status write that the status-write-race path (the whole reason this skip
+// exists) assumes can fail, so it cannot cover that case; the timestamp
+// comparison needs no extra persisted state and the fresh-vs-stale gap
+// (a full purge + re-render cycle) always dwarfs any plausible control-plane
+// clock skew.
+//
 // Returns false when freshness cannot be determined (no recovery bootstrap, or
 // a missing timestamp): the caller then proceeds to purge, which is the safe
 // default for any pre-existing, non-fresh Cluster.
@@ -353,7 +369,7 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 	if !hasRecovery || clusterCreatedAt == nil || restoreStartedAt == nil {
 		return false
 	}
-	return !clusterCreatedAt.Time.Before(restoreStartedAt.Time)
+	return clusterCreatedAt.After(restoreStartedAt.Time)
 }
 
 // applyClusterBarmanObjectStore SSA-patches the live CNPG Cluster's
