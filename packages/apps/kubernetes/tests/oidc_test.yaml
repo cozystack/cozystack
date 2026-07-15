@@ -262,6 +262,25 @@ tests:
       - matchRegex:
           path: stringData["config.yaml"]
           pattern: "- tenant-foo-kubernetes-app"
+      # Cross-tenant isolation gate — the AuthenticationConfiguration
+      # must carry a CEL claimValidationRule keyed on the release's
+      # tenant-scoped groups. Without this rule, any authenticated
+      # cozy-realm user would land at `system:authenticated` on this
+      # tenant's apiserver and get discovery access. See
+      # kubernetes.oidc.groupsClaimValidationExpr in _helpers.tpl.
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: "claimValidationRules:"
+      # The groups range MUST be wrapped in dyn(): claims.groups is statically
+      # `any`, and the apiserver rejects a comprehension over `any` at startup
+      # (CrashLoop). Pinning dyn() here makes a regression fail the unit suite
+      # instead of only surfacing on a live apiserver. Verified on dev3 v1.32.
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'expression: .+has\(claims\.groups\).+dyn\(claims\.groups\)\.exists\(g, g in .+tenant-foo-view.+tenant-foo-use.+tenant-foo-admin.+tenant-foo-super-admin'
+      - matchRegex:
+          path: stringData["config.yaml"]
+          pattern: 'message: "user is not a member of any tenant-foo-\{view,use,admin,super-admin\} group'
 
   - it: System mode injects --authentication-config and the chart-owned volume into the KCP
     release:

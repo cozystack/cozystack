@@ -192,7 +192,28 @@
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.seaweedfs-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.info-application" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
+{{- /* Variant selection mirrors cozystack-engine above: `oidc` when
+       platform-level OIDC is on (extra dependsOn on
+       cozystack.keycloak-operator so the v1.edp.epam.com CRDs are
+       registered before the monitoring chart reconciles), `default`
+       otherwise (no wait on a Package that would not be emitted).
+
+       No component-values override is passed. The platform Grafana's
+       HelmRelease is created by the tenant-root chart's
+       templates/monitoring.yaml (not by PackageReconciler over the
+       monitoring-system component here — that component has no
+       `install:` block), so `Package.spec.components[].values` here
+       would be silently dropped by the reconciler
+       (internal/operator/package_reconciler.go:197-201 skips
+       components without `install:` before ever reaching the
+       hr.Spec.Values assignment). Server-level GrafanaAdmin
+       promotion is out of scope for Phase 1; see
+       docs/oidc-grafana.md. */}}
+{{- if .Values.authentication.oidc.enabled }}
+{{include "cozystack.platform.package" (list "cozystack.monitoring-application" "oidc" $) }}
+{{- else }}
+{{include "cozystack.platform.package" (list "cozystack.monitoring-application" "default" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}

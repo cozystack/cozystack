@@ -195,10 +195,10 @@ expires.
   the apiserver rejects tokens at request time; the admin kubeconfig
   keeps working as break-glass.
 - **`emailVerified` on Keycloak users is a prescriptive requirement,
-  not a chart-enforced one.** Phase 1 does not emit any
-  `claimValidationRules` in the rendered `AuthenticationConfiguration`,
-  so the chart itself is not the gate. The layered guarantees you rely
-  on instead:
+  not a chart-enforced one.** The chart emits a
+  `claimValidationRules` entry keyed on `groups` (see next bullet),
+  but not one keyed on `email_verified`. The layered guarantees you
+  rely on instead:
   1. Provision users with `emailVerified: true` (via `KeycloakRealmUser`
      or the Keycloak UI's email-verify flow) so no unverified identity
      ever holds the email you name in `users[].email`.
@@ -214,6 +214,28 @@ expires.
   the rendered System-mode config would elevate item 3 to a hard gate;
   that is a reasonable follow-up hardening but is out of scope for
   Phase 1.
+
+- **Cross-tenant isolation gate.** The rendered
+  `AuthenticationConfiguration` carries a CEL `claimValidationRules`
+  entry on the `groups` claim that rejects any token whose caller is
+  not a member of at least one of this tenant's four Keycloak groups:
+
+  ```
+  <namespace>-view <namespace>-use <namespace>-admin <namespace>-super-admin
+  ```
+
+  The tenant chart (`packages/apps/tenant/templates/keycloakgroups.yaml`)
+  provisions these groups in the shared `cozy` realm. Without this
+  gate, any authenticated cozy-realm user could point `kubectl
+  oidc-login` at another tenant's cluster, land at
+  `system:authenticated`, and enumerate the discovery surface
+  (`kubectl api-resources`, OpenAPI schemata) — RBAC would default-deny
+  named-resource access, but discovery still leaks. Symmetric with the
+  Grafana-side `allowed_groups` gate on the Monitoring chart's
+  `auth.generic_oauth` block (see `docs/oidc-grafana.md`). CustomConfig
+  mode does NOT get this gate injected — the tenant's own
+  AuthenticationConfiguration is authoritative and the tenant is
+  responsible for their own claim-side guards.
 - **`kubectl` without the `oidc-login` plugin** — the exec block errors
   out client-side; install the plugin.
 

@@ -30,6 +30,7 @@
 {{- if eq .Values.oidc.mode "System" }}
 {{-   $issuer := include "kubernetes.oidc.systemIssuerURL" . | trim }}
 {{-   $audience := include "kubernetes.oidc.clientId" . | trim }}
+{{-   $groupsExpr := include "kubernetes.oidc.groupsClaimValidationExpr" . | trim }}
 {{- /*
 User identity claim: `email`, not `preferred_username`.
 
@@ -46,8 +47,19 @@ Switching the claim to `email` aligns the apiserver-visible identity
 with the operator's declared `users[].email` value. Requires the
 issuer to emit `email` — cozy realm (verified) and every conformant
 OIDC provider do.
+
+claimValidationRules — cross-tenant isolation gate. Without this rule
+any authenticated cozy-realm user (i.e. anyone in the shared platform
+realm) would receive `system:authenticated` on this tenant's
+apiserver. RBAC default-denies, but discovery (`kubectl api-resources`,
+OpenAPI schemata) still leaks. The CEL expression forces at least one
+of the four tenant-scoped groups
+(`<namespace>-{view,use,admin,super-admin}`, provisioned by the tenant
+chart) to be present in the token's `groups` claim. Symmetric with the
+Grafana-side `allowed_groups` gate in the Monitoring chart — see
+docs/oidc-tenant.md and docs/oidc-grafana.md.
 */ -}}
-{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience }}
+{{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimValidationRules:\n  - expression: '%s'\n    message: \"user is not a member of any %s-{view,use,admin,super-admin} group in the cozy realm — this tenant's apiserver only trusts identities the tenant chart has admitted\"\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience $groupsExpr .Release.Namespace }}
 ---
 apiVersion: v1
 kind: Secret

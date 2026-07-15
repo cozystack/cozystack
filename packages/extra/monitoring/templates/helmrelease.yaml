@@ -10,7 +10,11 @@ spec:
     name: cozystack-monitoring-application-default-monitoring-system
     namespace: cozy-system
   interval: 5m
-  timeout: 10m
+  # Aligned with the outer cozyrds `release.cozystack.io/helm-install-timeout: "15m"`
+  # (packages/system/monitoring-rd/cozyrds/monitoring.yaml) so the inner HR does
+  # not fail at 10m while the OIDC users-Job is still inside its
+  # activeDeadlineSeconds: 900 (10m Grafana wait + reconcile budget).
+  timeout: 15m
   install:
     remediation:
       retries: -1

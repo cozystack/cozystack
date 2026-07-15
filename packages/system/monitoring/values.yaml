@@ -87,3 +87,81 @@ vmagent:
   ##   - job_name: "custom"
   ##     static_configs:
   ##       - targets: ["my-service:9090"]
+
+## OIDC authentication for the Grafana instance.
+##
+## Identity mode picks the auth source for `[auth.generic_oauth]`:
+##   None         no OIDC; login form + admin_user/admin_password Secret
+##                stay the only auth path (default).
+##   System       trust the platform `cozy` Keycloak realm via a
+##                per-instance confidential client and audience binding.
+##                Requires the platform-level authentication.oidc.enabled
+##                flag; the chart hard-fails the render otherwise.
+##   CustomConfig trust a tenant-supplied issuer directly (BYO IdP).
+##                Exactly one of `customConfig.config` (inline) or
+##                `customConfig.secretRef.name` (existing Secret) must be
+##                set — the chart fails the render otherwise. `cozy` is
+##                not in the path in this mode.
+##
+## Authorization is app-side: `users` is reconciled into Grafana org
+## membership/roles by a chart-owned post-install/post-upgrade Job.
+## Users not listed here get nothing when they log in — no default org
+## role from group mapping.
+##
+## The admin_user / admin_password Secret stays a documented break-glass
+## path regardless of mode.
+oidc:
+  mode: "None"
+  ## CustomConfig payload — consumed only when `mode: CustomConfig`.
+  ## Exactly one of `config` or `secretRef.name` MUST be set.
+  customConfig:
+    ## Inline map of grafana.ini `[auth.generic_oauth]` keys. Any key
+    ## accepted by Grafana's generic_oauth provider is valid; typical
+    ## keys are `enabled: "true"`, `client_id`, `client_secret`,
+    ## `auth_url`, `token_url`, `api_url`, `scopes`. Grafana defaults
+    ## `enabled: false`, so an inline map without an explicit
+    ## `enabled: "true"` is inert — remember to set it.
+    ##
+    ## The chart merges TWO chart-forced settings on top of this map so
+    ## the users-Job contract holds:
+    ##   * `skip_org_role_sync: "true"` (login never overwrites the
+    ##     Job's org-role assignments);
+    ##   * `oauth_allow_insecure_email_lookup: "true"` (OIDC identity
+    ##     binds to the pre-provisioned local account by email).
+    ## These two keys cannot be overridden — set them explicitly here
+    ## and the chart still wins. `role_attribute_path` would be dead
+    ## config; the Job manages roles.
+    ##
+    ## Mutually exclusive with `customConfig.secretRef.name`.
+    config: {}
+    ## Reference to an operator-managed Secret carrying a ready-made
+    ## `[auth.generic_oauth]` ini fragment in the `auth.ini` key. The
+    ## chart mounts it and Grafana loads it via
+    ## `GF_PATHS_CUSTOM_INI`. Mutually exclusive with
+    ## `customConfig.config`.
+    ##
+    ## IMPORTANT — users-map is NOT supported in this branch: the
+    ## chart cannot inject `skip_org_role_sync=true` /
+    ## `oauth_allow_insecure_email_lookup=true` into a Secret-mounted
+    ## ini fragment, so the users-Job's role assignments would be
+    ## silently overwritten on the next login. Either use
+    ## `customConfig.config` (inline) and let the chart merge the two
+    ## settings, or leave `spec.oidc.users` empty and manage
+    ## authorization inside the mounted ini fragment yourself. The
+    ## chart hard-fails render when both `secretRef.name` and non-empty
+    ## `users` are set.
+    secretRef:
+      name: ""
+  ## Users granted access to this Grafana instance's org. Each entry
+  ## produces one pre-provisioned Grafana account (matched to the OIDC
+  ## login by `email`) and one org membership + role in the release's
+  ## `Main Org.`. Empty by default — no OIDC user gets any role until
+  ## an operator lists them here.
+  ##
+  ## Example:
+  ##   users:
+  ##     - email: alice@example.com
+  ##       role: Admin
+  ##     - email: bob@example.com
+  ##       role: Viewer
+  users: []

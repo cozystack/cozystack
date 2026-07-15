@@ -1,0 +1,110 @@
+{{- /*
+  Phase 1 — System mode: render one per-instance Keycloak client and a
+  per-instance audience client scope inside the platform `cozy` realm.
+
+  The clientId is namespace-prefixed so it is globally unique across
+  the realm; the audience scope binds `id_token.aud` to that clientId
+  so a token minted for one Monitoring instance is rejected by
+  another's Grafana — the per-instance isolation primitive in the
+  absence of per-tenant realms.
+
+  Two distinct group-based gates are wired:
+    * `defaultClientScopes: [groups, <audience>]` on the client causes
+      Keycloak to emit the caller's realm-group membership in the
+      `groups` claim. Grafana's `allowed_groups` in grafana.yaml then
+      rejects any login whose token does not carry at least one of the
+      release's tenant-scoped groups
+      (`<namespace>-{view,use,admin,super-admin}`, provisioned by the
+      tenant chart in packages/apps/tenant). This is the isolation gate
+      that stops tenant-alice from signing into tenant-bob's Grafana.
+    * `spec.oidc.users`, reconciled into Grafana org membership/roles
+      by the users-Job (templates/grafana/oidc-users-job.yaml), is the
+      per-user authorization layer that runs INSIDE Grafana after the
+      Keycloak-side gate has already admitted the login.
+  No KeycloakRealmGroup is provisioned by this chart — group directory
+  ownership stays with the tenant chart. See docs/oidc-grafana.md.
+
+  Nothing is rendered for `mode: CustomConfig` or `mode: None`: in
+  those modes `cozy` is not in the path.
+
+  The `_cluster.oidc-enabled` guard catches the case where an
+  operator toggles `mode: System` without the platform-level OIDC
+  feature (authentication.oidc.enabled) being on. The
+  `v1.edp.epam.com/v1` capability guard turns a missing Keycloak
+  operator CRD into an explicit render error rather than a silent
+  half-rendered state — see monitoring.oidc.assertSystemKeycloakCRD
+  in _helpers.tpl and grafana.yaml where the same assertion gates
+  `auth.generic_oauth` so Grafana never comes up pointing at a
+  client that never gets provisioned.
+*/}}
+{{- $oidc := .Values.oidc | default dict }}
+{{- if eq ($oidc.mode | default "None") "System" }}
+{{-   include "monitoring.oidc.assertSystemEnabled" . }}
+{{-   include "monitoring.oidc.assertSystemKeycloakCRD" . }}
+{{-   $clientId := include "monitoring.oidc.clientId" . }}
+{{-   $scopeName := include "monitoring.oidc.audienceScopeName" . }}
+{{-   $clientSecretName := include "monitoring.oidc.clientSecretName" . }}
+{{-   $grafanaHost := include "monitoring.oidc.grafanaHost" . }}
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClientScope
+metadata:
+  name: {{ $scopeName }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  name: {{ $scopeName }}
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  description: "Per-instance audience for Grafana {{ .Release.Name }}"
+  protocol: openid-connect
+  default: false
+  attributes:
+    "include.in.token.scope": "true"
+  protocolMappers:
+    - name: audience
+      protocol: openid-connect
+      protocolMapper: "oidc-audience-mapper"
+      config:
+        "included.client.audience": {{ $clientId | quote }}
+        "id.token.claim": "true"
+        "access.token.claim": "true"
+        "introspection.token.claim": "true"
+        "lightweight.claim": "false"
+---
+apiVersion: v1.edp.epam.com/v1
+kind: KeycloakClient
+metadata:
+  name: {{ $clientId }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  clientId: {{ $clientId }}
+  name: {{ $clientId }}
+  realmRef:
+    name: keycloakrealm-cozy
+    kind: ClusterKeycloakRealm
+  public: false
+  directAccess: false
+  advancedProtocolMappers: true
+  secret: "${{ $clientSecretName }}:client-secret"
+  webUrl: "https://{{ $grafanaHost }}"
+  redirectUris:
+    - "https://{{ $grafanaHost }}/login/generic_oauth"
+  defaultClientScopes:
+    # Platform-provisioned realm-default scope carrying an
+    # oidc-group-membership-mapper that emits the caller's Keycloak
+    # groups into the `groups` claim of every token. Grafana's
+    # `allowed_groups` reads that claim to gate login on tenant-scoped
+    # group membership (see grafana.yaml). EDP's KeycloakClient does NOT
+    # merge realm-level defaults into `defaultClientScopes` — we must
+    # list it here explicitly, or the claim would be missing and
+    # `allowed_groups` would reject every login.
+    - groups
+    # Per-instance audience: binds `id_token.aud` to this client's
+    # `clientId` so a token minted for another Monitoring release
+    # (tenant-alice's Grafana) is rejected by this Grafana even if the
+    # caller also happens to be a member of this tenant's groups.
+    - {{ $scopeName }}
+  attributes:
+    "post.logout.redirect.uris": "+"
+{{- end }}
