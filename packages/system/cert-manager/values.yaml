@@ -1,0 +1,42 @@
+cert-manager:
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  webhook:
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
+  cainjector:
+    # cainjector loads all ValidatingWebhookConfigurations, APIServices and CRDs
+    # into its informer caches at startup. On a full cozystack install that
+    # working set exceeds 128Mi, so cainjector is OOMKilled during cache
+    # population and CrashLoops before it ever injects a caBundle. Because it
+    # runs as a single leader-elected replica, that stalls CA injection for the
+    # whole cluster: webhook ValidatingWebhookConfigurations keep an empty
+    # caBundle and every admission call fails with
+    # "x509: certificate signed by unknown authority" (failurePolicy: Fail).
+    # Size the limit to the controller's 512Mi and lift the request off the
+    # OOM floor so injection completes deterministically.
+    resources:
+      limits:
+        cpu: 200m
+        memory: 512Mi
+      requests:
+        cpu: 10m
+        memory: 128Mi
+  startupapicheck:
+    resources:
+      limits:
+        cpu: 100m
+        memory: 64Mi
+      requests:
+        cpu: 10m
+        memory: 16Mi
