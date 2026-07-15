@@ -40,12 +40,19 @@ metadata:
     helm.sh/hook-weight: "-5"
     helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
 rules:
+  # MD/MHC/WorkloadMonitor names are known at render time ({{ $base }}), so the
+  # hook can only touch this pool's own objects, not sibling pools or other
+  # clusters sharing the tenant namespace.
   - apiGroups: ["cluster.x-k8s.io"]
     resources: ["machinedeployments", "machinehealthchecks"]
+    resourceNames: ["{{ $base }}"]
     verbs: ["get", "patch"]
   - apiGroups: ["cozystack.io"]
     resources: ["workloadmonitors"]
+    resourceNames: ["{{ $base }}"]
     verbs: ["get", "patch"]
+  # KubevirtMachineTemplates are hash-suffixed, so their names are not known at
+  # render time; list is needed to discover them and cannot be resourceName-scoped.
   - apiGroups: ["infrastructure.cluster.x-k8s.io"]
     resources: ["kubevirtmachinetemplates"]
     verbs: ["get", "list", "patch"]
@@ -127,18 +134,26 @@ spec:
               NS="{{ .Release.Namespace }}"
               BASE="{{ $base }}"
               echo "removing helm.sh/resource-policy from adopted worker objects for ${BASE}"
-              for r in "machinedeployment.cluster.x-k8s.io/${BASE}" \
-                       "machinehealthcheck.cluster.x-k8s.io/${BASE}" \
-                       "workloadmonitor.cozystack.io/${BASE}"; do
-                if kubectl -n "${NS}" get "${r}" >/dev/null 2>&1; then
-                  kubectl -n "${NS}" annotate "${r}" "helm.sh/resource-policy-" 2>/dev/null || true
-                fi
-              done
+              # unpin <resource> — remove the keep annotation only if present, so a
+              # natively-created pool (no annotation) is a no-op while a real
+              # annotate failure (RBAC/apiserver) propagates: set -e fails the Job,
+              # backoffLimit/activeDeadlineSeconds bound the retries, and the failed
+              # Job keeps its logs. Failures are NOT swallowed.
+              unpin() {
+                r=$1
+                kubectl -n "${NS}" get "${r}" >/dev/null 2>&1 || return 0
+                pol=$(kubectl -n "${NS}" get "${r}" \
+                  -o jsonpath='{.metadata.annotations.helm\.sh/resource-policy}')
+                [ -n "${pol}" ] || return 0
+                kubectl -n "${NS}" annotate "${r}" "helm.sh/resource-policy-"
+              }
+              unpin "machinedeployment.cluster.x-k8s.io/${BASE}"
+              unpin "machinehealthcheck.cluster.x-k8s.io/${BASE}"
+              unpin "workloadmonitor.cozystack.io/${BASE}"
               for kmt in $(kubectl -n "${NS}" get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io \
                              -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
                            grep -E "^${BASE}-[0-9a-f]{6}$" || true); do
-                kubectl -n "${NS}" annotate "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io/${kmt}" \
-                  "helm.sh/resource-policy-" 2>/dev/null || true
+                unpin "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io/${kmt}"
               done
               echo "unpin done"
           securityContext:
