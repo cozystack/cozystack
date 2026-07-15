@@ -314,16 +314,32 @@ ${ouroboros_addon}
       resources: {}
       resourcesPreset: micro
   host: ""
-  nodeGroups:
-    md0:
-      diskSize: 20Gi
-      gpus: []
-      instanceType: u1.medium
-      maxReplicas: 10
-      minReplicas: 2
-      resources: {}
-      roles:
-      - ingress-nginx
+  storageClass: replicated
+  version: "${k8s_version}"
+EOF
+
+  # Worker node pool is a separate KubernetesNodes resource since the Phase 2
+  # split. Named "<cluster>-md0" so it produces MachineDeployment
+  # kubernetes-${test_name}-md0 — the same object the pre-split
+  # spec.nodeGroups.md0 produced, which the waits below still key on. Carries
+  # roles: [ingress-nginx] so the ingress-nginx addon has a node to schedule on.
+  kubectl apply -f - <<EOF
+apiVersion: apps.cozystack.io/v1alpha1
+kind: KubernetesNodes
+metadata:
+  name: "${test_name}-md0"
+  namespace: tenant-test
+spec:
+  cluster: "${test_name}"
+${talos_block}
+  diskSize: 20Gi
+  gpus: []
+  instanceType: u1.medium
+  maxReplicas: 10
+  minReplicas: 2
+  resources: {}
+  roles:
+  - ingress-nginx
   storageClass: replicated
   version: "${k8s_version}"
 EOF
