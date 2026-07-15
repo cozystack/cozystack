@@ -37,3 +37,34 @@ tests:
   - it: matches the golden render of the pool objects
     asserts:
       - matchSnapshot: {}
+
+  # GPU and kubelet-override branches live on in nodegroup.yaml after the split
+  # and are content-hash inputs to the KubevirtMachineTemplate; pin them too so
+  # a change to either branch that would rename the KMT (and roll live GPU or
+  # kubelet-tuned worker VMs) fails here. Value sets mirror the PR-2a parity gate.
+  - it: matches the golden render of a GPU pool
+    set:
+      roles: []
+      resources:
+        cpu: "4"
+        memory: 8Gi
+      gpus:
+        - name: nvidia.com/AD102GL_L40S
+    asserts:
+      - matchSnapshot: {}
+
+  - it: matches the golden render of a kubelet-override pool
+    set:
+      roles: []
+      resources:
+        cpu: "2"
+        memory: 4Gi
+      kubelet:
+        systemReservedMemory: 512Mi
+        kubeReservedMemory: 512Mi
+        systemReservedCpu: 100m
+        kubeReservedCpu: 100m
+        evictionHardMemory: 5%
+        evictionSoftMemory: 8%
+    asserts:
+      - matchSnapshot: {}
