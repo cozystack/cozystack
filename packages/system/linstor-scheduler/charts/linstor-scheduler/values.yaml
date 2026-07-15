@@ -86,21 +86,3 @@ nodeSelector: {}
 tolerations: []
 
 affinity: {}
-
-admission:
-  enabled: false
-  replicaCount: 2
-  failurePolicy: Ignore
-  namespaceSelector: {}
-  #  matchExpressions:
-  #    - key: kubernetes.io/metadata.name
-  #      operator: NotIn
-  #      values:
-  #        - kube-system
-  resources: {}
-    # limits:
-    #   cpu: 100m
-    #   memory: 128Mi
-    # requests:
-    #   cpu: 10m
-    #   memory: 64Mi

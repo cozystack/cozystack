@@ -1,5 +1,5 @@
 apiVersion: v2
-appVersion: v0.3.2
+appVersion: v0.3.5
 deprecated: true
 description: 'Deploys a new kubernetes scheduler, configured to take advantage of
   storage system information. If a Pod is using a LINSTOR volume, the scheduler will
@@ -16,4 +16,4 @@ name: linstor-scheduler
 sources:
 - https://github.com/piraeusdatastore/linstor-scheduler-extender
 type: application
-version: 0.2.3
+version: 0.2.5
