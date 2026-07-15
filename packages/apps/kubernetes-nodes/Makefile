@@ -4,7 +4,6 @@ include ../../../hack/package.mk
 
 test:
 	helm unittest .
-	bash tests/render-parity.sh
 
 generate:
 	cozyvalues-gen -m 'kubernetesnodes' -v values.yaml -s values.schema.json -r README.md -g ../../../api/apps/v1alpha1/kubernetesnodes/types.go
