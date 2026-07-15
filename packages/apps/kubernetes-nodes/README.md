@@ -15,9 +15,9 @@ the parent cluster `kubernetes-<cluster>` in the same namespace, plus a
 
 ### Linkage
 
-| Name      | Description                                                                                                                                                                                                                                                      | Type     | Value |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
-| `cluster` | Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-<cluster>`; the KubernetesNodes CR must be named `<cluster>-<pool>`. | `string` | `""`  |
+| Name      | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Type     | Value |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ----- |
+| `cluster` | Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-<cluster>`; the KubernetesNodes CR must be named `<cluster>-<pool>`. The pool name (the part after `<cluster>-`) must not collide with a nodeGroup still managed by the parent kubernetes chart (e.g. the default `md0`), or the render fails on ownership conflict. | `string` | `""`  |
 
 
 ### Common Parameters
