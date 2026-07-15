@@ -66,6 +66,11 @@ jobs:
       head_sha:     ${{ steps.r.outputs.head_sha }}
       run_id:       ${{ steps.r.outputs.run_id }}
       check_run_id: ${{ steps.open.outputs.check_run_id }}
+      # TIA inputs derived from TRUSTED base-repo data (the PR file list and
+      # labels), NOT the fork-controlled merge-ref diff — so suite selection
+      # keeps the same anti-forgery property as the docs-only decision (#3257).
+      changed_b64:  ${{ steps.r.outputs.changed_b64 }}
+      full_e2e:     ${{ steps.r.outputs.full_e2e }}
     steps:
       # Decide the verdict using this step's default (workflow_run) token, which
       # already has the actions:read / pull-requests:read scopes these lookups
@@ -147,6 +152,19 @@ jobs:
               return;
             }
 
+            // Test-Impact Analysis inputs, from the SAME trusted sources as the
+            // docs-only decision above: the base-repo PR file list drives suite
+            // selection (base64 so newlines survive the job output), and the
+            // base-repo PR labels drive the full-e2e override. Deriving these
+            // from `git diff` on the fork-controlled merge ref would let a fork
+            // shape the diff so TIA selects nothing and e2e is skipped — the
+            // same class of bypass #3257 closes. select-e2e.sh fails safe to the
+            // full suite on any unrecognised path, so this can only narrow.
+            const changed = files.map(f => f.filename).join('\n');
+            core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
+            const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
+            core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
+
             // Real run: the `open` step opens an in-progress check-run; `report`
             // concludes it.
             core.setOutput('verdict_status', 'in_progress');
@@ -210,9 +228,21 @@ jobs:
       packages_digest: ${{ steps.push.outputs.packages_digest }}
     steps:
       - name: Set up toolchain (skopeo, flux)
+        env:
+          # Pin the flux CLI instead of install.sh's rolling latest. This is the
+          # one privileged job that runs a remote installer as root right before
+          # the OCIR token is loaded, so it pins where the rest of CI does not;
+          # keep it in step with the flux distro cozystack ships
+          # (packages/system/fluxcd, 2.8.x).
+          FLUX_VERSION: "2.8.6"
         run: |
           command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
-          if ! command -v flux >/dev/null; then s="$(mktemp)"; curl -fsSL https://fluxcd.io/install.sh -o "$s"; sudo bash "$s"; rm -f "$s"; fi
+          if ! command -v flux >/dev/null; then
+            s="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$s"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$s"
+            rm -f "$s"
+          fi
       # The base repo's own merge ref — safe to fetch, not fork-controlled code
       # execution. pr.patch is applied as DATA below; nothing from the tree runs.
       - name: Checkout PR merge ref
@@ -257,6 +287,33 @@ jobs:
           # keychain) each need OCIR auth. Token via stdin, never argv.
           echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
           echo "$OCIR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+      # Trusted allowlist of image repo names. Every OCI archive a fork PR pushes
+      # under ${REGISTRY}/ must be one the BASE tree can itself export — derived
+      # from the base parent (HEAD^1), never the fork's Makefiles, so a fork
+      # cannot mint an arbitrary repo path under the CI registry by renaming an
+      # image (#3262 non-blocking hardening). `make -n` only expands recipes (no
+      # build); COZYSTACK_VERSION is set so the version probe in common-envs.mk
+      # stays dormant. The charset guard in the push loop stays as defence in
+      # depth; this narrows it to the exact expected set.
+      - name: Derive trusted image allowlist (base tree)
+        run: |
+          set -eu
+          base="$(git rev-parse HEAD^1)"
+          # Unique path so a leftover from a crashed/concurrent run on the shared
+          # self-hosted runner can't fail `git worktree add`.
+          bt="$(mktemp -d)/basetree"
+          git worktree add --quiet --detach "$bt" "$base"
+          git -C "$bt" ls-files 'packages/*/*/Makefile' | while IFS= read -r mk; do
+            grep -qE '^image:' "$bt/$mk" || continue
+            make -n -C "$bt/$(dirname "$mk")" image \
+              OCI_EXPORT_DIR=/oci REGISTRY=r COZYSTACK_VERSION=0 2>/dev/null || true
+          done \
+            | grep -oE '(dest=/oci/|oci-archive:/oci/)[a-z0-9._-]+\.oci\.tar' \
+            | sed -E 's#.*/##; s#\.oci\.tar$##' | sort -u > _allow.txt
+          git worktree remove --force "$bt"
+          n="$(wc -l < _allow.txt)"
+          [ "$n" -ge 1 ] || { echo "::error::image allowlist derivation produced no names"; exit 1; }
+          echo "Allowed image repos ($n):"; sed 's/^/  /' _allow.txt
       - name: Push images by digest + packages artifact
         id: push
         env:
@@ -281,10 +338,16 @@ jobs:
             case "$name" in
               *[!a-z0-9._-]*|""|-*) echo "::error::unexpected image archive name: $name"; exit 1;;
             esac
+            # …and against the trusted base-tree allowlist, so a charset-clean but
+            # unexpected name cannot create a junk repo under the CI registry.
+            grep -qxF "$name" _allow.txt || { echo "::error::image '$name' is not in the base-tree allowlist"; exit 1; }
             echo "Pushing $name → ${REGISTRY}/${name}:${IMAGE_TAG}"
-            # skopeo preserves the manifest digest bit-for-bit, so the
+            # --all so a multi-platform build copies the whole manifest list and
+            # its index digest is preserved (else containerimage.digest — the
+            # index digest baked into pr.patch — would not resolve). --preserve-
+            # digests keeps every manifest digest bit-for-bit so the
             # ${REGISTRY}/${name}@sha256:… refs in pr.patch resolve.
-            skopeo copy --preserve-digests "oci-archive:$f" "docker://${REGISTRY}/${name}:${IMAGE_TAG}"
+            skopeo copy --all --preserve-digests "oci-archive:$f" "docker://${REGISTRY}/${name}:${IMAGE_TAG}"
           done
           # Push the fully-patched packages tree — the OCI artifact the in-cluster
           # operator pulls. This uploads data; it runs no code from the tree.
@@ -299,8 +362,9 @@ jobs:
 
   # Run the e2e suite against the pushed closure. NO OCIR push token here — the
   # sandbox pulls images anonymously; the fork's images/scripts run only in this
-  # ephemeral job. Mirrors pull-requests.yaml's in-tree e2e (full suite; a fork
-  # PR has no reliable cross-workflow diff to scope TIA against).
+  # ephemeral job. Mirrors pull-requests.yaml's in-tree e2e, including Chainsaw
+  # Test-Impact Analysis — scoped from resolve's TRUSTED base-repo file list
+  # (not a fork-controlled merge-ref diff), so suite selection can only narrow.
   e2e:
     name: E2E (fork run)
     needs: [resolve, publish]
@@ -393,26 +457,79 @@ jobs:
         run: |
           cd "/tmp/$SANDBOX_NAME"
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
-      - name: Run E2E tests (full suite)
+      # Test-Impact Analysis: select only the Chainsaw suites the PR diff
+      # affects. The changed-file list is resolve's TRUSTED base-repo listFiles
+      # (base64 through the job output), NOT a git diff on the fork-controlled
+      # merge ref — so a fork cannot shape the diff to make TIA select nothing.
+      # select-e2e.sh escalates to the full suite on any unrecognised path, so
+      # this only narrows. Skipped (→ full suite below) on the full-e2e label.
+      - name: Select E2E tests
+        id: select
+        if: ${{ needs.resolve.outputs.full_e2e != 'true' }}
+        env:
+          CHANGED_B64: ${{ needs.resolve.outputs.changed_b64 }}
         run: |
           cd "/tmp/$SANDBOX_NAME"
-          apps_list=$(ls hack/e2e-apps/*.bats | xargs -n1 basename | cut -d. -f1)
-          failed_tests=""
-          for app in $apps_list; do
-            echo "::group::Testing $app"
-            if make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-apps-$app; then
-              echo "::endgroup::"; echo "✅ $app passed"
-            else
-              echo "::endgroup::"; echo "❌ $app failed"
-              failed_tests="$failed_tests $app"
-              echo "::group::Diagnostics for $app"
-              docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
-              docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
-              echo "::endgroup::"
-            fi
-          done
-          if [ -n "$failed_tests" ]; then echo "❌ Failed:$failed_tests"; exit 1; fi
-          echo "✅ All E2E tests passed"
+          printf '%s' "$CHANGED_B64" | base64 -d > /tmp/changed.txt
+          echo "Changed files:"; sed 's/^/  /' /tmp/changed.txt
+          apps="$(./hack/select-e2e.sh /tmp/changed.txt)"
+          echo "Selected apps: ${apps:-<none>}"
+          echo "apps=${apps}" >> "$GITHUB_OUTPUT"
+          if [ -z "${apps}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
+      # §1) — Chainsaw polls each assertion to its own timeout. Full suite when
+      # the full-e2e label skipped selection or the selection is empty.
+      - name: Run E2E tests
+        id: e2e_tests
+        if: ${{ steps.select.outputs.skip != 'true' }}
+        env:
+          SELECTED_APPS: ${{ steps.select.outputs.apps }}
+          FULL_E2E: ${{ needs.resolve.outputs.full_e2e }}
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
+            suites=""        # empty => test-chainsaw runs the whole suite
+            echo "Running full chainsaw suite"
+          else
+            suites="$SELECTED_APPS"
+            echo "Running selected chainsaw suites: $suites"
+          fi
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: COSI bucket state"
+            docker exec "$SANDBOX_NAME" sh -c '
+              kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
+              kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
+              kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
+            ' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ All selected E2E tests passed"
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          cd "/tmp/$SANDBOX_NAME"
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report
+          path: /tmp/${{ env.SANDBOX_NAME }}/_out/chainsaw-report.xml
+          if-no-files-found: ignore
       - name: Collect report
         if: always()
         run: |
