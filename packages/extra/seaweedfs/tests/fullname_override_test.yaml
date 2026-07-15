@@ -1,0 +1,322 @@
+suite: seaweedfs legacy-naming guard
+
+# system/seaweedfs pins the chart-based name, so workloads keep their pre-4.31
+# names (`seaweedfs-master`, `data1-seaweedfs-volume-N`) and an upgrade past the
+# 4.31 rename adopts the running set in place.
+#
+# Two states stop the render instead of adopting: a tenant installed FRESH on
+# 1.5.x (only the renamed volumes exist → PV re-bind, Step 2), and a D-split
+# tenant (both sets present AND the renamed volume servers are live → reconcile
+# the split, Step 3). A duplicate that never served (D-wedged, zero ready
+# replicas) renders through and is adopted.
+#
+# Two helm-unittest quirks the mocks work around:
+#   - The template LISTs both PVCs and StatefulSets, so every mocked provider
+#     must register both list kinds — a fake client errors on an unregistered
+#     LIST rather than returning empty.
+#   - status.readyReplicas is quoted ("1"/"0"): the fake client cannot deep-copy
+#     a bare Go int in a mocked object's status, and the template's `int` coerces
+#     the string back either way.
+
+templates:
+  - templates/seaweedfs.yaml
+
+release:
+  name: seaweedfs
+  namespace: tenant-root
+
+set: &values
+  topology: Simple
+  replicationFactor: 2
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+tests:
+  - it: renders for a net-new install (no SeaweedFS data in the namespace)
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-system
+      # The chart-based name is pinned in system/seaweedfs values, not re-pinned here.
+      - notExists:
+          path: spec.values.seaweedfs.fullnameOverride
+
+  - it: renders for a cluster whose data is on the legacy seaweedfs-* PVCs
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-root
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-system
+
+  - it: renders on a D-wedged cluster (duplicate present but never served) — adopts the legacy set
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-root
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-root
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        # The duplicate volume set exists but never scheduled (anti-affinity):
+        # zero ready replicas, so its PVCs are empty and adoption is safe.
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-root
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-system
+
+  - it: refuses to render on a D-split cluster (duplicate volume servers are live)
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-root
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-root
+        # The duplicate volume set is live: it may hold objects written through
+        # the split endpoint, so adoption would strand them.
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-root
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is running two live SeaweedFS sets.*Stop the split"
+
+  - it: renders for a zoned legacy cluster (volume StatefulSets are per zone)
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-zone-a-0
+            namespace: tenant-root
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-root
+    documentSelector:
+      path: kind
+      value: HelmRelease
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-system
+
+  - it: refuses to render when the data lives only on seaweedfs-system-* PVCs
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-root
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-root
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release.*Re-bind"
+
+  - it: refuses to render on a seaweedfs-system-* cluster detected by its StatefulSet
+    set: *values
+    kubernetesProvider:
+      scheme:
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-root
+            labels:
+              app.kubernetes.io/name: seaweedfs
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-root
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-root
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release.*Re-bind"
