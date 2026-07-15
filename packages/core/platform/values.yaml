@@ -285,10 +285,25 @@ publishing:
     # *.<root-host> + <root-host>). Only the
     # NAME is distributed through the platform values channel — the
     # cert/key material is never broadcast. Leave empty to keep ACME
-    # issuance (solver/issuerName above). This is per-controller and
-    # currently applies to the root tenant only; propagating it to
-    # child tenants requires replicating the Secret into each tenant
-    # namespace (tracked separately).
+    # issuance (solver/issuerName above).
+    #
+    # Child tenants are covered automatically: the platform controller
+    # replicates this Secret into every tenant namespace that runs its own
+    # ingress controller or Gateway, so each per-tenant termination point
+    # serves the wildcard from its own namespace (no cross-namespace Secret
+    # read, no widened tenant RBAC). No extra input — the same name set
+    # here drives both the consumers and the replication. The replica
+    # carries the wildcard private key into each terminating tenant
+    # namespace (the same exposure as the per-host ACME Secret it replaces,
+    # now shared across tenants), and covers a child apex only if the
+    # certificate's SAN list does — a single *.<root-host> does not match
+    # *.<child-apex>, so supply SANs covering the child apexes you serve.
+    # On a freshly-created tenant the replica may land a moment after the
+    # tenant's ingress controller starts. The window is bounded: the
+    # platform controller creates the replica within one reconcile, and
+    # ingress-nginx watches its default-ssl-certificate Secret and adopts
+    # it when it appears (no restart needed). Until then ingress-nginx logs
+    # a warning and serves its built-in certificate.
     wildcardSecretName: ""
     # Rate-limit note: every tenant with gateway=true issues one
     # Certificate for its wildcard + apex hostnames. If many tenants share

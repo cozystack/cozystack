@@ -44,6 +44,18 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch"]
+# WildcardSecretReconciler replicates the operator-provided wildcard TLS
+# Secret from the publishing namespace into each tenant namespace that
+# terminates TLS. This grants the platform controller's own
+# ServiceAccount Secret writes — it does not widen any tenant's RBAC;
+# tenant ingress controllers / Gateways still read only the replica in
+# their own namespace. The read verbs (get/list/watch) are intentionally
+# listed too so this rule fully describes the reconciler's Secret access
+# on its own and keeps working if the broad read-only catch-all rule
+# below is ever narrowed; only create/update/patch/delete are new grants.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 - apiGroups: ['*']
   resources: ['*']
   verbs: ["get", "list", "watch"]

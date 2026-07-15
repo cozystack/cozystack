@@ -4,6 +4,9 @@ NAMESPACE=cozy-system
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 image: image-cozystack-controller
 
 image-cozystack-controller:
