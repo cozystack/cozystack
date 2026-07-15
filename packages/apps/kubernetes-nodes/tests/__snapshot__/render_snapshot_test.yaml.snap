@@ -1,0 +1,155 @@
+matches the golden render of the pool objects:
+  1: |
+    apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+    kind: KubevirtMachineTemplate
+    metadata:
+      name: kubernetes-myk8s-md0-a6ac3e
+      namespace: tenant-test
+    spec:
+      template:
+        spec:
+          virtualMachineBootstrapCheck:
+            checkStrategy: none
+          virtualMachineTemplate:
+            metadata:
+              labels:
+                node-role.kubernetes.io/ingress-nginx: ""
+              namespace: tenant-test
+            spec:
+              dataVolumeTemplates:
+                - metadata:
+                    annotations:
+                      cdi.kubevirt.io/storage.usePopulator: "false"
+                    name: disk-system
+                  spec:
+                    source:
+                      http:
+                        url: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+                    storage:
+                      resources:
+                        requests:
+                          storage: 20Gi
+                      storageClassName: replicated
+              runStrategy: Always
+              template:
+                metadata:
+                  annotations:
+                    kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+                  labels:
+                    apps.cozystack.io/application.group: apps.cozystack.io
+                    apps.cozystack.io/application.kind: Kubernetes
+                    apps.cozystack.io/application.name: myk8s
+                    cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+                    node-role.kubernetes.io/ingress-nginx: ""
+                spec:
+                  domain:
+                    cpu:
+                      cores: 2
+                      sockets: 1
+                      threads: 1
+                    devices:
+                      disks:
+                        - blockSize:
+                            custom:
+                              logical: 512
+                              physical: 4096
+                          disk:
+                            bus: virtio
+                            pciAddress: "0000:07:00.0"
+                          name: system
+                      interfaces:
+                        - bridge: {}
+                          name: default
+                    memory:
+                      guest: 4Gi
+                    resources:
+                      limits:
+                        ephemeral-storage: 2Gi
+                      requests:
+                        ephemeral-storage: "53687091"
+                  evictionStrategy: External
+                  networks:
+                    - name: default
+                      pod: {}
+                  volumes:
+                    - dataVolume:
+                        name: disk-system
+                      name: system
+  2: |
+    apiVersion: cluster.x-k8s.io/v1beta1
+    kind: MachineDeployment
+    metadata:
+      annotations:
+        capacity.cluster-autoscaler.kubernetes.io/cpu: 1800m
+        capacity.cluster-autoscaler.kubernetes.io/memory: 3297Mi
+        cluster.x-k8s.io/cluster-api-autoscaler-node-group-max-size: "3"
+        cluster.x-k8s.io/cluster-api-autoscaler-node-group-min-size: "0"
+      name: kubernetes-myk8s-md0
+      namespace: tenant-test
+    spec:
+      clusterName: kubernetes-myk8s
+      selector:
+        matchLabels:
+          cluster.x-k8s.io/cluster-name: kubernetes-myk8s
+          cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+      strategy:
+        rollingUpdate:
+          maxSurge: 3
+          maxUnavailable: 1
+        type: RollingUpdate
+      template:
+        metadata:
+          labels:
+            cluster.x-k8s.io/cluster-name: kubernetes-myk8s
+            cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+            node-role.kubernetes.io/ingress-nginx: ""
+        spec:
+          bootstrap:
+            configRef:
+              apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+              kind: TalosConfigTemplate
+              name: kubernetes-myk8s-md0
+              namespace: tenant-test
+          clusterName: kubernetes-myk8s
+          infrastructureRef:
+            apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+            kind: KubevirtMachineTemplate
+            name: kubernetes-myk8s-md0-a6ac3e
+            namespace: tenant-test
+          version: v1.35.6
+  3: |
+    apiVersion: cluster.x-k8s.io/v1beta1
+    kind: MachineHealthCheck
+    metadata:
+      name: kubernetes-myk8s-md0
+      namespace: tenant-test
+    spec:
+      clusterName: kubernetes-myk8s
+      maxUnhealthy: 50%
+      nodeStartupTimeout: 10m
+      selector:
+        matchLabels:
+          cluster.x-k8s.io/cluster-name: kubernetes-myk8s
+          cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+      unhealthyConditions:
+        - status: Unknown
+          timeout: 30s
+          type: Ready
+        - status: "False"
+          timeout: 300s
+          type: Ready
+  4: |
+    apiVersion: cozystack.io/v1alpha1
+    kind: WorkloadMonitor
+    metadata:
+      name: kubernetes-myk8s-md0
+      namespace: tenant-test
+    spec:
+      kind: kubernetes
+      minReplicas: 0
+      selector:
+        cluster.x-k8s.io/cluster-name: kubernetes-myk8s
+        cluster.x-k8s.io/deployment-name: kubernetes-myk8s-md0
+        cluster.x-k8s.io/role: worker
+      type: worker
+      version: 0.0.0
