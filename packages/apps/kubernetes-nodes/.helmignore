@@ -1,0 +1,5 @@
+.helmignore
+/logos
+/Makefile
+/hack
+/images/*/*

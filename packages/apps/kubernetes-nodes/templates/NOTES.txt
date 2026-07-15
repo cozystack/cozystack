@@ -1,0 +1,12 @@
+Worker node pool "{{ include "kubernetes-nodes.groupName" . }}" for cluster "{{ .Values.cluster }}".
+
+This pool is a separate release from the control plane. Two operational notes:
+
+1. Deletion order. Deleting the parent Kubernetes cluster while this pool still
+   exists leaves the pool release trying to recreate CAPI objects against a
+   cluster that is being torn down. Delete the KubernetesNodes pools first, then
+   the parent Kubernetes cluster.
+
+2. Version skew. Keep this pool's `version` and `talos.*` in sync with the parent
+   Kubernetes cluster. A pool on a Kubernetes/Talos combination the parent does
+   not run can produce workers the control plane will not admit.
