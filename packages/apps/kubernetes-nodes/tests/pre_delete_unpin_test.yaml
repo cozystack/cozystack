@@ -1,0 +1,87 @@
+suite: pre-delete unpin hook
+templates:
+  - templates/pre-delete-unpin.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - ingress-nginx
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: renders the unpin Job as a pre-delete hook
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-nodes-myk8s-md0-unpin
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: metadata.annotations["helm.sh/hook-delete-policy"]
+          value: before-hook-creation
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: kubernetes-nodes-myk8s-md0-unpin
+
+  - it: runs the unpin Job pod PSS-restricted
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: grants only release-scoped patch RBAC for the adopted worker objects
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: kubernetes-nodes-myk8s-md0-unpin
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["*"]
+            resources: ["*"]
+            verbs: ["*"]
+
+  - it: allows egress to the apiserver for the unpin pod
+    documentSelector:
+      path: kind
+      value: CiliumNetworkPolicy
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-delete
+      - equal:
+          path: spec.endpointSelector.matchLabels["cozystack.io/kubernetes-nodes-unpin"]
+          value: kubernetes-nodes-myk8s-md0
