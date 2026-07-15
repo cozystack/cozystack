@@ -1,0 +1,62 @@
+suite: seaweedfs workload naming is pinned to the chart name
+
+# Upstream chart 4.31 names workloads after the Helm release (`seaweedfs.fullname`)
+# instead of after the chart (`seaweedfs.name`, pre-4.31). The shipped release is
+# `seaweedfs-system`, so the bump silently renamed every StatefulSet/Deployment to
+# `seaweedfs-system-*`. Those names are immutable, so an upgrade cannot rename in
+# place — Helm brings up a second, duplicate set beside the running one while the
+# data stays on the original `data1-seaweedfs-volume-*` PVCs.
+#
+# values.yaml pins `fullnameOverride: seaweedfs` so the rendered names stay
+# chart-based regardless of the release name, matching the convention already used
+# by other system packages (cozy-proxy, flux-operator, linstor-scheduler, ...).
+# These tests pin that contract: names must NOT follow the release name.
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  - it: names the master StatefulSet after the chart, not the release
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-master
+      - equal:
+          path: spec.serviceName
+          value: seaweedfs-master
+
+  - it: names the volume StatefulSet after the chart, so its data PVCs keep the legacy names
+    template: charts/seaweedfs/templates/volume/volume-statefulset.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-volume
+      # Together with the StatefulSet name this yields data1-seaweedfs-volume-N —
+      # the PVC names the running clusters already hold their data on.
+      - equal:
+          path: spec.volumeClaimTemplates[0].metadata.name
+          value: data1
+
+  - it: names the filer StatefulSet after the chart
+    template: charts/seaweedfs/templates/filer/filer-statefulset.yaml
+    asserts:
+      - equal:
+          path: metadata.name
+          value: seaweedfs-filer
+
+  - it: keeps the selector labels release-scoped so adopted pods keep matching
+    template: charts/seaweedfs/templates/master/master-statefulset.yaml
+    asserts:
+      # A StatefulSet selector is immutable: in-place adoption only works because
+      # 4.31 left these labels identical to 4.05.
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/name"]
+          value: seaweedfs
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/instance"]
+          value: seaweedfs-system
+      - equal:
+          path: spec.selector.matchLabels["app.kubernetes.io/component"]
+          value: master
