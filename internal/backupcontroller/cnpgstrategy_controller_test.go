@@ -641,11 +641,11 @@ func TestCNPGClusterFreshlyRecovered(t *testing.T) {
 			want:        false,
 		},
 		{
-			name:        "recovery cluster created exactly at start: fresh (boundary)",
+			name:        "recovery cluster created exactly at start: not fresh (conservative tie -> purge)",
 			hasRecovery: true,
 			createdAt:   &started,
 			startedAt:   &started,
-			want:        true,
+			want:        false,
 		},
 		{
 			name:        "missing cluster creation timestamp: not fresh",
@@ -1596,6 +1596,149 @@ func TestReconcileCNPGRestore_MissingStrategyFailsClosedAfterDeadline(t *testing
 	if !strings.Contains(final.Status.Message, "missing-strategy") {
 		t.Errorf("failure message should name the missing strategy, got %q", final.Status.Message)
 	}
+}
+
+// TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster is the
+// reconcile-level regression test for #3311. The pure-function tests
+// (TestCNPGPurgeNeeded / TestCNPGClusterFreshlyRecovered) lock in the truth
+// table, but the bug lived at the call site: a repeat in-place restore fed the
+// purge decision the wrong signal and skipped the destructive purge, so the
+// job reported Succeeded against untouched data. This drives the real
+// reconcileCNPGRestore path with a fake client and asserts the destructive
+// purge actually fires for a stale leftover recovery Cluster - and, in the
+// mirror case, that a Cluster this restore just re-created is NOT re-purged
+// (the status-write-race protection the guard was originally built for).
+func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+
+	// startedAt anchors the discriminator: a stale leftover Cluster predates
+	// it, a freshly-recovered one postdates it.
+	startedAt := metav1.NewTime(time.Now())
+
+	mkBackupArtifact := func(t *testing.T) *backupsv1alpha1.Backup {
+		t.Helper()
+		snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+		if err != nil {
+			t.Fatalf("marshal snapshot: %v", err)
+		}
+		return &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+			Spec: backupsv1alpha1.BackupSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+				StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+				DriverMetadata: map[string]string{
+					cnpgServerNameKey:      appName,
+					cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+					cnpgBackupNameKey:      cnpgBkName,
+				},
+			},
+			Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+		}
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{
+			Template: strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+			},
+		},
+	}
+	// A completed cnpg.io/Backup with endWal set clears the WAL-archive gate
+	// so the reconcile can reach the purge step.
+	cnpgBackup := &cnpgtypes.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: cnpgBkName},
+		Spec:       cnpgtypes.BackupSpec{Cluster: cnpgtypes.ClusterReference{Name: clusterName}},
+		Status:     cnpgtypes.BackupStatus{Phase: cnpgBackupPhaseComplete, EndWal: "000000010000000000000003"},
+	}
+	mkRecoveryCluster := func(created metav1.Time) *cnpgtypes.Cluster {
+		return &cnpgtypes.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: created},
+			Spec: cnpgtypes.ClusterSpec{
+				Bootstrap: &cnpgtypes.BootstrapConfiguration{
+					Recovery: &cnpgtypes.RecoverySource{Source: appName},
+				},
+			},
+		}
+	}
+	mkClusterPVC := func() *corev1.PersistentVolumeClaim {
+		return &corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName + "-1", Labels: map[string]string{cnpgClusterLabel: clusterName}},
+		}
+	}
+	mkRestoreJob := func() *backupsv1alpha1.RestoreJob {
+		sa := startedAt
+		return &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+			Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+			Status:     backupsv1alpha1.RestoreJobStatus{StartedAt: &sa, Phase: backupsv1alpha1.RestoreJobPhaseRunning},
+		}
+	}
+
+	t.Run("stale leftover recovery cluster from a prior restore is purged", func(t *testing.T) {
+		backup := mkBackupArtifact(t)
+		// creationTimestamp an hour before StartedAt: leftover from a prior restore.
+		stale := metav1.NewTime(startedAt.Add(-time.Hour))
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
+			newPostgresApp(appName, ns), mkRecoveryCluster(stale), mkClusterPVC())
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+
+		// The stale Cluster (and its labelled PVC) must have been purged.
+		err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, &cnpgtypes.Cluster{})
+		if !apierrors.IsNotFound(err) {
+			t.Fatalf("expected stale Cluster to be purged (NotFound), got err=%v", err)
+		}
+		pvcs := &corev1.PersistentVolumeClaimList{}
+		if err := c.List(ctx, pvcs, client.InNamespace(ns), client.MatchingLabels{cnpgClusterLabel: clusterName}); err != nil {
+			t.Fatalf("list PVCs: %v", err)
+		}
+		if len(pvcs.Items) != 0 {
+			t.Fatalf("expected cluster PVCs purged, still have %d", len(pvcs.Items))
+		}
+	})
+
+	t.Run("freshly-recovered cluster from this restore is not re-purged", func(t *testing.T) {
+		backup := mkBackupArtifact(t)
+		// creationTimestamp a minute after StartedAt: this restore's own re-render.
+		fresh := metav1.NewTime(startedAt.Add(time.Minute))
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, cnpgBackup,
+			newPostgresApp(appName, ns), mkRecoveryCluster(fresh))
+		r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+
+		// The freshly-recovered Cluster must survive - re-purging it would
+		// destroy the recovery this restore just started (the status-write-race
+		// protection the guard was built for).
+		got := &cnpgtypes.Cluster{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: clusterName}, got); err != nil {
+			t.Fatalf("expected freshly-recovered Cluster to survive, got err=%v", err)
+		}
+		if !got.DeletionTimestamp.IsZero() {
+			t.Fatalf("freshly-recovered Cluster must not be marked for deletion")
+		}
+	})
 }
 
 // newCNPGStrategyTestClient returns a fake client.Client wired up with
