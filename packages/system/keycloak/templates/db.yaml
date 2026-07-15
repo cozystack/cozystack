@@ -6,7 +6,19 @@ spec:
   instances: 2
   {{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace "keycloak-db" }}
   {{- $image := dig "spec" "imageName" "ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie" $existingCluster }}
-  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-standard-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-standard-trixie" $image }}{{ else }}{{ $image }}{{ end }}
+  {{- /*
+    Backups use the in-tree (native) barmanObjectStore, whose barman-cloud-*
+    binaries ship ONLY in the CNPG `system` image variant. The `standard`
+    variant (default since #2342) omits them, so with `standard` a base backup
+    fails `barman-cloud-backup: executable file not found` and WAL archiving
+    cannot run. When backups are enabled, pin the barman-capable `system`
+    variant; otherwise keep `standard`.
+    TEMPORARY: `system` is deprecated in CNPG 1.27 (removed in 1.29). Remove this
+    once Postgres backups move to the Barman Cloud Plugin — see #3300.
+  */}}
+  {{- $backupOn := and .Values.backup.enabled (not (empty .Values.backup.destinationPath)) }}
+  {{- $variant := ternary "system" "standard" $backupOn }}
+  imageName: {{ if regexMatch ":17\\." $image }}ghcr.io/cloudnative-pg/postgresql:17.7-{{ $variant }}-trixie{{ else if regexMatch ":[0-9]+\\.[0-9]+$" $image }}{{ printf "%s-%s-trixie" $image $variant }}{{ else }}{{ $image }}{{ end }}
   storage:
     size: 20Gi
   {{- if .Values._cluster.scheduling }}
