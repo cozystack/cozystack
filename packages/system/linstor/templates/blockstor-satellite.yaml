@@ -1,0 +1,184 @@
+---
+# blockstor-satellite DaemonSet. Runs on every worker, drives drbdadm +
+# ZFS/LVM reconcile, registers its StoragePools (declared via the
+# StoragePool CRDs) and writes node-scoped Status back to the apiserver.
+#
+# Talos note: unlike the piraeus satellite, this DaemonSet ships NO
+# drbd-module-loader and NO /run/systemd mounts — the siderolabs/drbd
+# Talos extension already provides the DRBD kernel module on the host,
+# consumed here via /lib/modules (ro) + the host kernel. So there is
+# nothing to strip for Talos; the same manifest is correct on Talos and
+# generic Linux.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: blockstor-satellite
+  namespace: {{ .Release.Namespace }}
+---
+# Bug 310: re-introduce the image-baked global_common.conf via a
+# subPath mount layered on top of the hostPath /etc/drbd.d bind, so
+# `drbdadm parse` finds the global config on every invocation.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: blockstor-satellite-drbd-conf
+  namespace: {{ .Release.Namespace }}
+data:
+  global_common.conf: |
+    # blockstor satellite — global_common.conf shim (Bug 310).
+    # Kept minimal: per-resource tuning lives in the rendered .res
+    # files, not here. Mirrors the drbd-utils trixie default.
+    global {
+        usage-count no;
+        udev-always-use-vnr;
+    }
+    common {
+        handlers {}
+        startup {}
+        options {}
+        disk {}
+        net {}
+    }
+---
+# Full CRUD on blockstor.io CRDs + status/finalizers (the satellite
+# writes node-scoped Status via SSA), Secrets (LUKS passphrase),
+# Nodes (Bug 283 InternalIP synthesis), Events, Leases.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: blockstor-satellite
+rules:
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [blockstor.cozystack.io]
+    resources: ["*"]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [blockstor.cozystack.io]
+    resources: ["*/status", "*/finalizers"]
+    verbs: [get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: blockstor-satellite
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: blockstor-satellite
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-satellite
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: blockstor-satellite
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: blockstor-satellite
+    app.kubernetes.io/component: blockstor-satellite
+spec:
+  selector: {matchLabels: {app: blockstor-satellite}}
+  template:
+    metadata:
+      labels:
+        app: blockstor-satellite
+        app.kubernetes.io/component: blockstor-satellite
+    spec:
+      serviceAccountName: blockstor-satellite
+      hostPID: true
+      # hostNetwork so the container's hostname matches the node name
+      # (drbdadm picks the `on <node>` block by hostname) and the
+      # advertised endpoint equals the node IP.
+      hostNetwork: true
+      hostIPC: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - operator: Exists
+      # PoC: run on every node (cozystack e2e nodes are all control-plane;
+      # the Talos drbd extension is present on all of them). tolerations
+      # (op=Exists) above already tolerate the control-plane taint.
+      # Bug 301: short grace, no preStop drain — DRBD kernel state is
+      # host-scoped (Talos extension) and survives the pod; the next
+      # satellite's cleanKernelState sweeps it on startup.
+      terminationGracePeriodSeconds: 10
+      containers:
+        - name: satellite
+          image: {{ .Values.blockstorSatellite.image.repository }}:{{ .Values.blockstorSatellite.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            # drbd's /etc/drbd.conf includes /etc/drbd.d/*.res; the
+            # satellite writes rendered files there. The host backing
+            # is /var/lib/blockstor-drbd.d (writable on Talos; /etc is
+            # read-only).
+            - --state-dir=/etc/drbd.d
+            # Storage pools are declared via StoragePool CRDs (the e2e
+            # prep script creates a `data` pool per node backed by the
+            # `data` zpool on /dev/vdc). No CLI pool flags here.
+            - --health-probe-bind-address=:9101
+          env:
+            - name: NODE_NAME
+              valueFrom: {fieldRef: {fieldPath: spec.nodeName}}
+            - name: POD_IP
+              valueFrom: {fieldRef: {fieldPath: status.podIP}}
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          livenessProbe:
+            httpGet: {path: /healthz, port: 9101}
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /readyz, port: 9101}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          securityContext:
+            privileged: true
+          volumeMounts:
+            # Bug 359: plain bind of host /dev (no mountPropagation) so
+            # zpool create's GPT-rescan partitions land in the host's
+            # devtmpfs and libzfs's open() sees them.
+            - {name: dev, mountPath: /dev}
+            - {name: modules, mountPath: /lib/modules, readOnly: true}
+            - {name: lvm-run, mountPath: /run/lvm}
+            # Bug 359: host udev runtime DB for libzfs/libblkid lookups.
+            - {name: run-udev, mountPath: /run/udev, readOnly: true}
+            - {name: state, mountPath: /var/lib/blockstor-satellite}
+            - {name: pool, mountPath: /var/lib/blockstor-pool}
+            # Bug 325: host-isolated DRBD config dir at
+            # /var/lib/blockstor-drbd.d bound to /etc/drbd.d.
+            - {name: drbd-cfg, mountPath: /etc/drbd.d}
+            - name: drbd-global-conf
+              mountPath: /etc/drbd.d/global_common.conf
+              subPath: global_common.conf
+              readOnly: true
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - {name: dev, hostPath: {path: /dev, type: Directory}}
+        - {name: modules, hostPath: {path: /lib/modules}}
+        - {name: lvm-run, hostPath: {path: /run/lvm, type: DirectoryOrCreate}}
+        - {name: run-udev, hostPath: {path: /run/udev, type: Directory}}
+        - {name: state, hostPath: {path: /var/lib/blockstor-satellite, type: DirectoryOrCreate}}
+        - {name: pool, hostPath: {path: /var/lib/blockstor-pool, type: DirectoryOrCreate}}
+        - {name: drbd-cfg, hostPath: {path: /var/lib/blockstor-drbd.d, type: DirectoryOrCreate}}
+        - name: drbd-global-conf
+          configMap:
+            name: blockstor-satellite-drbd-conf
+            items:
+              - {key: global_common.conf, path: global_common.conf}

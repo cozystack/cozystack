@@ -1,27 +1,49 @@
-suite: cozy-linstor image pins
+suite: cozy-linstor blockstor image pins
 release:
   name: linstor
   namespace: cozy-linstor
+
+# Every image this package ships must be pinned by digest (tag@sha256:...) so a
+# moving upstream tag can never silently change what runs. blockstor-* are the
+# published ghcr.io/cozystack/blockstor-* release images; linstor-csi is reused
+# unchanged and pinned on the LinstorCluster CSI podTemplates.
 tests:
-  - it: pins the controller and CSI to the cozystack-built images
+  - it: pins blockstor-apiserver by digest
+    template: templates/blockstor-apiserver.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/blockstor-apiserver:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: pins blockstor-controller by digest
+    template: templates/blockstor-controller.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/blockstor-controller:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: pins blockstor-satellite by digest
+    template: templates/blockstor-satellite.yaml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: '^ghcr\.io/cozystack/blockstor-satellite:[^@]+@sha256:[0-9a-f]{64}$'
+
+  - it: pins the reused linstor-csi by digest on the LinstorCluster
     template: templates/cluster.yaml
     documentSelector:
       path: kind
       value: LinstorCluster
     asserts:
       - matchRegex:
-          path: spec.controller.podTemplate.spec.containers[0].image
-          pattern: '^ghcr\.io/cozystack/cozystack/piraeus-server:[^@]+@sha256:[0-9a-f]{64}$'
-      - matchRegex:
           path: spec.csiController.podTemplate.spec.containers[0].image
           pattern: '^ghcr\.io/cozystack/cozystack/linstor-csi:[^@]+@sha256:[0-9a-f]{64}$'
-
-  - it: pins the satellite to the cozystack-built piraeus-server image
-    template: templates/satellites-cozy.yaml
-    documentSelector:
-      path: kind
-      value: LinstorSatelliteConfiguration
-    asserts:
-      - matchRegex:
-          path: spec.podTemplate.spec.containers[0].image
-          pattern: '^ghcr\.io/cozystack/cozystack/piraeus-server:[^@]+@sha256:[0-9a-f]{64}$'

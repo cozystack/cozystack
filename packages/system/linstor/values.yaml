@@ -1,7 +1,38 @@
+# Which storage control plane this package deploys.
+#
+#   linstor   — the Java linstor-controller driven by piraeus-operator
+#               (the default, and what every existing cluster runs).
+#   blockstor — blockstor's controller/apiserver/satellite, with
+#               piraeus-operator in EXTERNAL mode so it only drives
+#               linstor-csi. EXPERIMENTAL.
+#
+# Both backends serve the same CSI wire shape through the same
+# linstor-csi build, so the StorageClasses (provisioner
+# linstor.csi.linbit.com) and every PV bound to them are unchanged by
+# the choice. That is what makes switching an existing cluster a values
+# change rather than a reprovision — see the migration guide.
+backend: linstor
+
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
     tag: v1.6.0@sha256:70ddd1a66fbc1ea58078f4645fc572ab8e2e189dbb4d9a5f9ca43d5663106483
+
+# Blockstor images are component-versioned: they are released from the
+# blockstor repository and carry ITS version, so a cozystack release
+# must not retag them to the cozystack version.
+blockstorController:
+  image:
+    repository: ghcr.io/cozystack/blockstor-controller
+    tag: 0.1.17@sha256:19b5733565e4bbe9510eecae8d47a181e72e07009b3d565848e8ccf1cd9393e8
+blockstorApiserver:
+  image:
+    repository: ghcr.io/cozystack/blockstor-apiserver
+    tag: 0.1.17@sha256:102cf8c8d431f3b6714bca53752327ae8bb793b2d5ebed3aae47d51a85805f26
+blockstorSatellite:
+  image:
+    repository: ghcr.io/cozystack/blockstor-satellite
+    tag: 0.1.17@sha256:8bd15bca47f33464eaf489884c33fd50ef2574a0ad856ab5ab9b921186a98bea
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -10,6 +41,9 @@ linstor:
     enabled: true
     minutes: 30
     allowCleanup: true
+# linstor-csi is REUSED unchanged — blockstor serves the same CSI
+# wire-shape, so the existing StorageClasses (provisioner
+# linstor.csi.linbit.com) keep working.
 linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi

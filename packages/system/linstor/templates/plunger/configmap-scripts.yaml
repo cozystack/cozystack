@@ -1,9 +1,0 @@
-{{- $files := .Files.Glob "hack/plunger/*.sh" -}}
-{{/* TODO Add checksum of scripts to the pod selectors */}}
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: linstor-plunger
-  namespace: cozy-linstor
-data: {{- $files.AsConfig | nindent 2 }}

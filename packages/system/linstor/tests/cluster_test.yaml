@@ -1,75 +1,88 @@
-suite: LinstorCluster controller resources and liveness hardening
+suite: LinstorCluster external mode (blockstor backend)
 
-# Pins the controller-pod surface this package adds on top of the
-# piraeus-operator defaults. The operator merges spec.controller.podTemplate
-# into the generated linstor-controller Deployment as a strategic merge patch
-# (containers merged by name, struct fields merged field-by-field), so:
-#   - resources.requests guarantee the JVM gets scheduled CPU/memory so it can
-#     answer GET /health under node CPU contention (no limits: avoid throttling
-#     / OOM-killing the JVM);
-#   - the livenessProbe override carries ONLY the timing fields (timeoutSeconds,
-#     failureThreshold) relaxed from the operator defaults (1s / 3) so a JVM GC
-#     pause or CPU contention does not trip a liveness kill. The httpGet target
-#     (GET /health on the api port) is intentionally NOT overridden — it is
-#     supplied by the operator, and re-stating it risks a wrong path/scheme.
+# Pins the LinstorCluster surface this package renders after LINSTOR was
+# replaced by Blockstor. piraeus-operator runs in EXTERNAL mode: it deploys no
+# in-cluster linstor-controller and instead points linstor-csi at the blockstor
+# apiserver (spec.externalController.url), issuing the CSI client certs from the
+# blockstor-api-ca Issuer (spec.apiTLS). Controller-level DRBD tuning is carried
+# in spec.properties, which the operator applies to the external controller over
+# the LINSTOR REST API. There must be NO spec.controller block (no in-cluster
+# controller / plunger sidecar) in this mode.
 
 templates:
   - templates/cluster.yaml
 
 tests:
-  - it: "linstor-controller container carries CPU and memory requests (no limits)"
+  - it: "renders a LinstorCluster pointed at the external blockstor apiserver"
     asserts:
       - isKind:
           of: LinstorCluster
       - equal:
-          path: spec.controller.podTemplate.spec.containers[0].name
-          value: linstor-controller
+          path: spec.externalController.url
+          value: https://blockstor-apiserver.cozy-linstor.svc:3371
       - equal:
-          path: spec.controller.podTemplate.spec.containers[0].resources.requests.cpu
-          value: 250m
+          path: spec.apiTLS.certManager.name
+          value: blockstor-api-ca
       - equal:
-          path: spec.controller.podTemplate.spec.containers[0].resources.requests.memory
-          value: 700Mi
-      - notExists:
-          path: spec.controller.podTemplate.spec.containers[0].resources.limits
+          path: spec.apiTLS.certManager.kind
+          value: Issuer
 
-  - it: "linstor-controller liveness probe relaxes timing but leaves httpGet to the operator"
+  - it: "runs in external mode — no in-cluster linstor-controller / plunger"
     asserts:
-      - equal:
-          path: spec.controller.podTemplate.spec.containers[0].livenessProbe.timeoutSeconds
-          value: 5
-      - equal:
-          path: spec.controller.podTemplate.spec.containers[0].livenessProbe.failureThreshold
-          value: 6
       - notExists:
-          path: spec.controller.podTemplate.spec.containers[0].livenessProbe.httpGet
+          path: spec.controller
+      - notExists:
+          path: spec.internalTLS
 
-  - it: "resource and liveness knobs are values-driven"
+  - it: "carries controller-level DRBD Net tuning as properties"
+    asserts:
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/Net/verify-alg
+            value: "crc32c"
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/Net/timeout
+            value: "100"
+
+  - it: "auto-diskful properties are values-driven"
+    asserts:
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/auto-diskful
+            value: "30"
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/auto-diskful-allow-cleanup
+            value: "true"
+
+  - it: "auto-diskful properties are dropped when disabled"
     set:
-      controller:
-        resources:
-          requests:
-            cpu: 500m
-            memory: 1Gi
-        livenessProbe:
-          timeoutSeconds: 10
-          failureThreshold: 9
+      linstor:
+        autoDiskful:
+          enabled: false
     asserts:
-      - equal:
-          path: spec.controller.podTemplate.spec.containers[0].resources.requests.cpu
-          value: 500m
-      - equal:
-          path: spec.controller.podTemplate.spec.containers[0].resources.requests.memory
-          value: 1Gi
-      - equal:
-          path: spec.controller.podTemplate.spec.containers[0].livenessProbe.timeoutSeconds
-          value: 10
-      - equal:
-          path: spec.controller.podTemplate.spec.containers[0].livenessProbe.failureThreshold
-          value: 9
+      - notContains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/auto-diskful
+            value: "30"
+      # Net tuning is unconditional and stays regardless of auto-diskful.
+      - contains:
+          path: spec.properties
+          content:
+            name: DrbdOptions/Net/verify-alg
+            value: "crc32c"
 
-  - it: "controller image pin is preserved alongside the new fields"
+  - it: "the reused linstor-csi image pin is preserved on the CSI podTemplates"
     asserts:
       - matchRegex:
-          path: spec.controller.podTemplate.spec.containers[0].image
-          pattern: "^ghcr\\.io/cozystack/cozystack/piraeus-server:"
+          path: spec.csiController.podTemplate.spec.containers[0].image
+          pattern: "^ghcr\\.io/cozystack/cozystack/linstor-csi:"
+      - matchRegex:
+          path: spec.csiNode.podTemplate.spec.containers[0].image
+          pattern: "^ghcr\\.io/cozystack/cozystack/linstor-csi:"

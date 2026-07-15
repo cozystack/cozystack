@@ -1,0 +1,92 @@
+---
+# blockstor controller — runs the reconcilers for the blockstor.io
+# CRDs (ResourceDefinitions / Resources / Snapshots / StoragePools /
+# Nodes). The REST API is split out into the separate apiserver
+# Deployment; the controller runs with --enable-rest-api=false.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: blockstor-controller
+  namespace: {{ .Release.Namespace }}
+---
+# Cluster-wide read on core API + full RW on the blockstor.io CRDs.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: blockstor-controller
+rules:
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [blockstor.cozystack.io]
+    resources: ["*"]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [blockstor.cozystack.io]
+    resources: ["*/status", "*/finalizers"]
+    verbs: [get, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: blockstor-controller
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: blockstor-controller
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-controller
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blockstor-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: blockstor-controller
+    app.kubernetes.io/component: blockstor-controller
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: blockstor-controller}}
+  template:
+    metadata:
+      labels:
+        app: blockstor-controller
+        app.kubernetes.io/component: blockstor-controller
+    spec:
+      serviceAccountName: blockstor-controller
+      containers:
+        - name: manager
+          image: {{ .Values.blockstorController.image.repository }}:{{ .Values.blockstorController.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            # REST API lives in the separate apiserver Deployment —
+            # controller only runs reconcilers.
+            - --enable-rest-api=false
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=0
+            - --leader-elect=false
+          ports:
+            - {name: health, containerPort: 8081}
+          readinessProbe:
+            httpGet: {path: /readyz, port: 8081}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: 8081}
+            initialDelaySeconds: 15
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {cpu: 500m, memory: 256Mi}
