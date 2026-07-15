@@ -135,24 +135,6 @@ enable the ingress-nginx addon, either supply an explicit nodeGroup with
 autoscaler will bring the default md0 up in response to the ingress-nginx
 controller Pods becoming Pending on install.
 */}}
-{{- define "kubernetes.nodeGroups" -}}
-{{- if .Values.nodeGroups -}}
-{{ toYaml .Values.nodeGroups }}
-{{- else -}}
-md0:
-  minReplicas: 0
-  maxReplicas: 10
-  instanceType: "u1.medium"
-  diskSize: 20Gi
-  storageClass: ""
-  roles:
-  - ingress-nginx
-  resources: {}
-  gpus: []
-  kubelet: {}
-{{- end -}}
-{{- end }}
-
 {{/*
 OIDC clientId for the per-cluster Keycloak public client (mode: System).
 
