@@ -330,11 +330,21 @@ authentication:
     enabled: false
     insecureSkipVerify: false
     keycloakExtraRedirectUri: ""
-    # Internal URL to access KeyCloak realm for backend-to-backend requests (bypasses external DNS).
-    # When set, oauth2-proxy uses --skip-oidc-discovery and routes all backend calls (token, jwks,
-    # userinfo, logout) through this URL while keeping browser redirects on the external URL.
-    # Example: http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy
-    keycloakInternalUrl: ""
+    # In-cluster URL of the KeyCloak realm, used for backend-to-backend requests. oauth2-proxy runs
+    # with --skip-oidc-discovery and sends every backend call (token, jwks, userinfo, logout) to this
+    # URL, while browser-facing redirects keep pointing at the external host.
+    #
+    # This is the default path: the bundled KeyCloak is the only supported provider, so those calls
+    # have no reason to leave the cluster. Taking the external hostname instead would route them
+    # through public DNS and the root ingress — which does not serve yet on a fresh install, leaving
+    # the dashboard permanently down.
+    #
+    # The keycloak-http Service has no TLS listener, so these backend calls travel as plaintext HTTP
+    # between pods, as keycloak-configure's own admin calls to the same address already do.
+    #
+    # Override only for a KeyCloak that does not live at the standard in-cluster address. Setting it
+    # to an empty string restores full OIDC discovery against the external issuer.
+    keycloakInternalUrl: "http://keycloak-http.cozy-keycloak.svc:8080/realms/cozy"
 # Gateway API configuration
 gateway:
   # Enable Gateway API support across the platform. When true:
