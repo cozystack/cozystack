@@ -872,7 +872,14 @@ We must preserve all previous KubevirtMachineTemplates until a MachineSet refere
 {{- $oldKubevirtmachinetemplates := dict }}
 {{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" .Release.Namespace "").items }}
 {{- range $or := $kmt.metadata.ownerReferences }}
-{{- if and (eq $or.kind "Cluster") (eq $or.name $.Release.Name) }}
+{{- /* Only re-emit KubevirtMachineTemplates that belong to THIS release. The
+       Cluster ownerReference alone is not enough: worker pools split out into
+       kubernetes-nodes releases share the same CAPI Cluster ownerReference, so
+       without the release-name scoping this block would re-emit a pool's KMT
+       (annotated meta.helm.sh/release-name=kubernetes-nodes-<cluster>-<pool>)
+       and the next upgrade of this release would fail Helm ownership
+       validation. */}}
+{{- if and (eq $or.kind "Cluster") (eq $or.name $.Release.Name) (eq (dig "annotations" "meta.helm.sh/release-name" "" $kmt.metadata) $.Release.Name) }}
 {{- range $ms := $mss }}
 {{- if and (eq $ms.spec.template.spec.infrastructureRef.kind "KubevirtMachineTemplate") (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
 {{- if not (has $kmt.metadata.name $kubevirtmachinetemplateNames) }}
