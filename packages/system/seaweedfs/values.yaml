@@ -45,6 +45,28 @@ seaweedfs:
       timeoutSeconds: 30
     readinessProbe:
       timeoutSeconds: 30
+    # The upstream subchart pins the master to a HARD hostname anti-affinity
+    # (requiredDuringSchedulingIgnoredDuringExecution). With the 3-replica
+    # StatefulSet above, that makes the master unschedulable on clusters with
+    # fewer than three nodes: the surplus master Pods stay Pending forever, so
+    # `helm install --wait` never returns and Flux loops install/uninstall —
+    # the whole S3 stack never comes up. Soften it to a strong preference
+    # (weight 100) so the masters still spread across distinct nodes whenever
+    # the cluster has them, while single- and dual-node clusters can still
+    # bring the master up. Same posture already used for the s3 component
+    # below. Selector and topologyKey are unchanged from the subchart default;
+    # only required -> preferred.
+    affinity: |
+      podAntiAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+                  app.kubernetes.io/instance: {{ .Release.Name }}
+                  app.kubernetes.io/component: master
+              topologyKey: kubernetes.io/hostname
   volume:
     replicas: 2
     resizeHook:
