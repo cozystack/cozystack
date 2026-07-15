@@ -12,3 +12,5 @@ update:
 	helm repo update cnpg
 	helm pull cnpg/cloudnative-pg --untar --untardir charts --version 0.26.1
 	rm -rf charts/cloudnative-pg/charts
+	helm pull cnpg/plugin-barman-cloud --untar --untardir charts --version 0.7.0
+	rm -rf charts/plugin-barman-cloud/charts

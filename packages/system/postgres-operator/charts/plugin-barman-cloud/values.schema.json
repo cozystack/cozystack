@@ -1,0 +1,327 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+    "additionalArgs": {
+      "additionalProperties": true,
+      "description": "Additional arguments to be added to the operator's args list.",
+      "items": {
+        "required": []
+      },
+      "required": []
+    },
+    "additionalEnv": {
+      "additionalProperties": true,
+      "description": "Array containing extra environment variables which can be templated.",
+      "items": {
+        "required": []
+      },
+      "required": []
+    },
+    "affinity": {
+      "additionalProperties": true,
+      "description": "Affinity for the operator to be installed.",
+      "required": []
+    },
+    "certificate": {
+      "properties": {
+        "createClientCertificate": {
+          "default": true,
+          "description": "Specifies whether the client certificate should be created.",
+          "type": "boolean"
+        },
+        "createServerCertificate": {
+          "default": true,
+          "description": "Specifies whether the server certificate should be created.",
+          "type": "boolean"
+        },
+        "duration": {
+          "default": "2160h",
+          "description": "The duration of the certificates.",
+          "type": "string"
+        },
+        "issuerName": {
+          "default": "selfsigned-issuer",
+          "description": "The name of the issuer to use for the certificates.",
+          "type": "string"
+        },
+        "renewBefore": {
+          "default": "360h",
+          "description": "The renew before time for the certificates.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "commonAnnotations": {
+      "additionalProperties": true,
+      "description": "Annotations to be added to all other resources.",
+      "required": []
+    },
+    "containerSecurityContext": {
+      "description": "Container Security Context.",
+      "properties": {
+        "allowPrivilegeEscalation": {
+          "default": false,
+          "type": "boolean"
+        },
+        "capabilities": {
+          "properties": {
+            "drop": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  }
+                ],
+                "required": []
+              },
+              "type": "array"
+            }
+          },
+          "required": [],
+          "type": "object"
+        },
+        "readOnlyRootFilesystem": {
+          "default": true,
+          "type": "boolean"
+        },
+        "runAsGroup": {
+          "default": 10001,
+          "type": "integer"
+        },
+        "runAsUser": {
+          "default": 10001,
+          "type": "integer"
+        },
+        "seccompProfile": {
+          "properties": {
+            "type": {
+              "default": "RuntimeDefault",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "crds": {
+      "properties": {
+        "create": {
+          "default": true,
+          "description": "Specifies whether the CRDs should be created when installing the chart.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "dnsPolicy": {
+      "default": "",
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "default": "",
+      "type": "string"
+    },
+    "global": {
+      "description": "Global values are values that can be accessed from any chart or subchart by exactly the same name.",
+      "required": [],
+      "type": "object"
+    },
+    "hostNetwork": {
+      "default": false,
+      "type": "boolean"
+    },
+    "image": {
+      "properties": {
+        "pullPolicy": {
+          "default": "IfNotPresent",
+          "type": "string"
+        },
+        "registry": {
+          "default": "ghcr.io",
+          "type": "string"
+        },
+        "repository": {
+          "default": "cloudnative-pg/plugin-barman-cloud",
+          "type": "string"
+        },
+        "tag": {
+          "default": "",
+          "description": "Overrides the image tag whose default is the chart appVersion.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "imagePullSecrets": {
+      "additionalProperties": true,
+      "items": {
+        "required": []
+      },
+      "required": []
+    },
+    "nameOverride": {
+      "default": "",
+      "type": "string"
+    },
+    "namespaceOverride": {
+      "default": "",
+      "type": "string"
+    },
+    "nodeSelector": {
+      "additionalProperties": true,
+      "description": "Nodeselector for the operator to be installed.",
+      "required": []
+    },
+    "podAnnotations": {
+      "additionalProperties": true,
+      "description": "Annotations to be added to the pod.",
+      "required": []
+    },
+    "podLabels": {
+      "additionalProperties": true,
+      "description": "Labels to be added to the pod.",
+      "required": []
+    },
+    "podSecurityContext": {
+      "description": "Security Context for the whole pod.",
+      "properties": {
+        "runAsNonRoot": {
+          "default": true,
+          "type": "boolean"
+        },
+        "seccompProfile": {
+          "properties": {
+            "type": {
+              "default": "RuntimeDefault",
+              "type": "string"
+            }
+          },
+          "required": [],
+          "type": "object"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "priorityClassName": {
+      "default": "",
+      "description": "Priority indicates the importance of a Pod relative to other Pods.",
+      "type": "string"
+    },
+    "rbac": {
+      "properties": {
+        "create": {
+          "default": true,
+          "description": "Specifies whether Role and RoleBinding should be created.",
+          "type": "boolean"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "replicaCount": {
+      "default": 1,
+      "type": "integer"
+    },
+    "resources": {
+      "additionalProperties": true,
+      "required": []
+    },
+    "service": {
+      "properties": {
+        "ipFamilies": {
+          "description": "Sets the families that should be supported and the order in which they should be applied to ClusterIP as well. Can be IPv4 and/or IPv6.",
+          "items": {
+            "enum": [
+              "IPv4",
+              "IPv6"
+            ],
+            "required": []
+          },
+          "type": "array"
+        },
+        "ipFamilyPolicy": {
+          "default": "",
+          "description": "Set the ip family policy to configure dual-stack see [Configure dual-stack](https://kubernetes.io/docs/concepts/services-networking/dual-stack/#services)",
+          "type": "string"
+        },
+        "name": {
+          "default": "barman-cloud",
+          "description": "DO NOT CHANGE THE SERVICE NAME as it is currently used to generate the certificate\nand can not be configured",
+          "type": "string"
+        },
+        "port": {
+          "default": 9090,
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "serviceAccount": {
+      "properties": {
+        "create": {
+          "default": true,
+          "description": "Specifies whether the service account should be created.",
+          "type": "boolean"
+        },
+        "name": {
+          "default": "",
+          "description": "The name of the service account to use.\nIf not set and create is true, a name is generated using the fullname template.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "sidecarImage": {
+      "properties": {
+        "registry": {
+          "default": "ghcr.io",
+          "type": "string"
+        },
+        "repository": {
+          "default": "cloudnative-pg/plugin-barman-cloud-sidecar",
+          "type": "string"
+        },
+        "tag": {
+          "default": "",
+          "description": "Overrides the image tag whose default is the chart appVersion.",
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "tolerations": {
+      "additionalProperties": true,
+      "description": "Tolerations for the operator to be installed.",
+      "items": {
+        "required": []
+      },
+      "required": []
+    },
+    "topologySpreadConstraints": {
+      "additionalProperties": true,
+      "description": "Topology Spread Constraints for the operator to be installed.",
+      "items": {
+        "required": []
+      },
+      "required": []
+    },
+    "updateStrategy": {
+      "additionalProperties": true,
+      "description": "Update strategy for the operator.\nref: https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#strategy",
+      "required": []
+    }
+  },
+  "required": [],
+  "type": "object"
+}
