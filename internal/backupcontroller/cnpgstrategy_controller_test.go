@@ -549,43 +549,122 @@ func TestBuildPostgresAppRestorePatch_NoSecretRefIsSkipped(t *testing.T) {
 // freshly-recovered Cluster on a status-update failure. The controller used
 // to rely solely on a Status condition: if the post-purge Status().Update
 // raced or failed, the next reconcile would re-purge the just-restored
-// Cluster, destroying recovery progress. Cross-checking the live Cluster's
-// bootstrap.recovery makes the second purge a no-op.
+// Cluster, destroying recovery progress. Cross-checking that the live
+// Cluster is a *freshly-recovered* one (bootstrap.recovery + created after
+// the job started) makes that second purge a no-op - while still purging a
+// stale recovery Cluster left over from an earlier completed restore, so a
+// repeat in-place restore is not a silent no-op.
 func TestCNPGPurgeNeeded(t *testing.T) {
 	cases := []struct {
-		name            string
-		purgedCondition bool
-		hasRecovery     bool
-		want            bool
+		name                        string
+		purgedCondition             bool
+		liveClusterFreshlyRecovered bool
+		want                        bool
 	}{
 		{
-			name:            "fresh restore, old cluster still in place: purge",
-			purgedCondition: false,
-			hasRecovery:     false,
-			want:            true,
+			name:                        "fresh restore, old cluster still in place: purge",
+			purgedCondition:             false,
+			liveClusterFreshlyRecovered: false,
+			want:                        true,
 		},
 		{
-			name:            "purge already recorded: skip",
-			purgedCondition: true,
-			hasRecovery:     false,
-			want:            false,
+			name:                        "purge already recorded: skip",
+			purgedCondition:             true,
+			liveClusterFreshlyRecovered: false,
+			want:                        false,
 		},
 		{
-			name:            "live cluster already recovered (status write raced): skip - the bug fix",
-			purgedCondition: false,
-			hasRecovery:     true,
-			want:            false,
+			name:                        "live cluster freshly recovered by this restore (status write raced): skip",
+			purgedCondition:             false,
+			liveClusterFreshlyRecovered: true,
+			want:                        false,
 		},
 		{
-			name:            "both true: skip (post-purge steady state)",
-			purgedCondition: true,
-			hasRecovery:     true,
-			want:            false,
+			name:                        "stale recovery cluster from a previous completed restore: purge (repeat-restore fix)",
+			purgedCondition:             false,
+			liveClusterFreshlyRecovered: false,
+			want:                        true,
+		},
+		{
+			name:                        "both true: skip (post-purge steady state)",
+			purgedCondition:             true,
+			liveClusterFreshlyRecovered: true,
+			want:                        false,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := cnpgPurgeNeeded(tc.purgedCondition, tc.hasRecovery)
+			got := cnpgPurgeNeeded(tc.purgedCondition, tc.liveClusterFreshlyRecovered)
+			if got != tc.want {
+				t.Errorf("got %v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCNPGClusterFreshlyRecovered locks in the signal that separates a
+// recovery Cluster THIS restore just produced from one left over by an
+// earlier completed restore. The repeat-in-place-restore bug was exactly a
+// stale recovery Cluster (created before StartedAt) being mistaken for a
+// freshly-recovered one and skipping the purge.
+func TestCNPGClusterFreshlyRecovered(t *testing.T) {
+	started := metav1.NewTime(time.Now())
+	after := metav1.NewTime(started.Add(time.Minute))
+	before := metav1.NewTime(started.Add(-time.Hour))
+
+	cases := []struct {
+		name        string
+		hasRecovery bool
+		createdAt   *metav1.Time
+		startedAt   *metav1.Time
+		want        bool
+	}{
+		{
+			name:        "no recovery bootstrap: not fresh",
+			hasRecovery: false,
+			createdAt:   &after,
+			startedAt:   &started,
+			want:        false,
+		},
+		{
+			name:        "recovery cluster created after start (our own purge re-render): fresh",
+			hasRecovery: true,
+			createdAt:   &after,
+			startedAt:   &started,
+			want:        true,
+		},
+		{
+			name:        "recovery cluster created before start (leftover from previous restore): not fresh",
+			hasRecovery: true,
+			createdAt:   &before,
+			startedAt:   &started,
+			want:        false,
+		},
+		{
+			name:        "recovery cluster created exactly at start: fresh (boundary)",
+			hasRecovery: true,
+			createdAt:   &started,
+			startedAt:   &started,
+			want:        true,
+		},
+		{
+			name:        "missing cluster creation timestamp: not fresh",
+			hasRecovery: true,
+			createdAt:   nil,
+			startedAt:   &started,
+			want:        false,
+		},
+		{
+			name:        "missing job start timestamp: not fresh",
+			hasRecovery: true,
+			createdAt:   &after,
+			startedAt:   nil,
+			want:        false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := cnpgClusterFreshlyRecovered(tc.hasRecovery, tc.createdAt, tc.startedAt)
 			if got != tc.want {
 				t.Errorf("got %v want %v", got, tc.want)
 			}
@@ -898,7 +977,7 @@ func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
 	}
 }
 
-// TestClusterHasRecoveryBootstrap_TerminatingCluster locks in the
+// TestRecoveryBootstrapClusterState_TerminatingCluster locks in the
 // DeletionTimestamp guard. Without it, a Cluster CR mid-deletion (after
 // purgeExistingCluster fired r.Delete but cnpg.io's finalizers haven't
 // drained yet) would get treated as "still has bootstrap" by the
@@ -907,7 +986,7 @@ func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
 // might SSA-merge the chart's bootstrap.recovery onto the terminating
 // CR and cnpg-operator's bootstrap-immutability check would drop the
 // change, leaving the cluster on the original initdb spec.
-func TestClusterHasRecoveryBootstrap_TerminatingCluster(t *testing.T) {
+func TestRecoveryBootstrapClusterState_TerminatingCluster(t *testing.T) {
 	now := metav1.Now()
 	t.Run("terminating cluster reports not-yet-recovered", func(t *testing.T) {
 		cluster := &cnpgtypes.Cluster{
@@ -925,18 +1004,22 @@ func TestClusterHasRecoveryBootstrap_TerminatingCluster(t *testing.T) {
 		}
 		c := newCNPGStrategyTestClient(t, cluster)
 		r := &RestoreJobReconciler{Client: c}
-		got, err := r.clusterHasRecoveryBootstrap(context.Background(), "tenant", "postgres-app")
+		got, createdAt, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if got {
 			t.Fatalf("expected false for terminating cluster, got true")
 		}
+		if createdAt != nil {
+			t.Fatalf("expected nil createdAt for terminating cluster, got %v", createdAt)
+		}
 	})
 
-	t.Run("live recovery cluster reports recovered", func(t *testing.T) {
+	t.Run("live recovery cluster reports recovered with creation timestamp", func(t *testing.T) {
+		created := metav1.NewTime(time.Now().Add(-time.Hour))
 		cluster := &cnpgtypes.Cluster{
-			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app"},
+			ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", CreationTimestamp: created},
 			Spec: cnpgtypes.ClusterSpec{
 				Bootstrap: &cnpgtypes.BootstrapConfiguration{
 					Recovery: &cnpgtypes.RecoverySource{Source: "pg-src"},
@@ -945,24 +1028,30 @@ func TestClusterHasRecoveryBootstrap_TerminatingCluster(t *testing.T) {
 		}
 		c := newCNPGStrategyTestClient(t, cluster)
 		r := &RestoreJobReconciler{Client: c}
-		got, err := r.clusterHasRecoveryBootstrap(context.Background(), "tenant", "postgres-app")
+		got, createdAt, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !got {
 			t.Fatalf("expected true for live recovery cluster, got false")
 		}
+		if createdAt == nil {
+			t.Fatalf("expected non-nil createdAt for live recovery cluster")
+		}
 	})
 
 	t.Run("missing cluster reports not-yet", func(t *testing.T) {
 		c := newCNPGStrategyTestClient(t)
 		r := &RestoreJobReconciler{Client: c}
-		got, err := r.clusterHasRecoveryBootstrap(context.Background(), "tenant", "postgres-app")
+		got, createdAt, err := r.recoveryBootstrapClusterState(context.Background(), "tenant", "postgres-app")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if got {
 			t.Fatalf("expected false for missing cluster, got true")
+		}
+		if createdAt != nil {
+			t.Fatalf("expected nil createdAt for missing cluster, got %v", createdAt)
 		}
 	})
 }
