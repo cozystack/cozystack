@@ -95,7 +95,7 @@ See the reference for components utilized in this service:
 
 - **Remote-accessible LINSTOR StorageClasses are auto-propagated to tenants** (v1.5): infra-cluster LINSTOR StorageClasses whose `linstor.csi.linbit.com/allowRemoteVolumeAccess` is not `"false"` are created inside each tenant under the same name (provisioned by `csi.kubevirt.io`). **Upgrade caveat:** delete any *manually created* tenant StorageClass whose name collides with a propagated infra class (e.g. a hand-made `replicated`) before upgrading, or the propagated class cannot be created and the tenant CSI release will not converge. Infra classes that must stay node-local need `allowRemoteVolumeAccess: "false"` set explicitly — an absent annotation is treated as remote-accessible. Propagation is evaluated at HelmRelease render time, so classes added or removed on the infra cluster after a tenant exists propagate only on that tenant's next reconcile.
 
-> The top-level `storageClass` field is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it. The per-node-group `nodeGroups[name].storageClass` field is intentionally **not** annotated immutable: it is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
+> The top-level `storageClass` field is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it. The per-pool worker `storageClass` now lives on the `KubernetesNodes` resource (see the `kubernetes-nodes` chart).
 
 ## Parameters
 
@@ -318,63 +318,6 @@ The following instanceType resources are provided by Cozystack:
 | `u1.nano`        | 1     | 512Mi  |
 | `u1.small`       | 1     | 2Gi    |
 | `u1.xlarge`      | 4     | 16Gi   |
-
-### Kubelet Resource Reservations
-
-Each node group supports a `kubelet` object that configures how much memory and CPU the kubelet reserves for the host OS and the Kubernetes/system components running on the worker node.
-
-When `systemReservedMemory` or `kubeReservedMemory` are left empty, they are **auto-computed** using the following formula:
-
-1. Determine the **effective memory** of the node:
-   - If `resources.memory` is explicitly set, use that value.
-   - Otherwise, look up the `instanceType` and use its `memory.guest` value.
-   - If neither is available, the reservation falls back to the minimum (256Mi).
-2. Calculate **5%** of the effective memory (in MiB, rounded down).
-3. **Clamp** the result to the range **[256Mi, 1Gi]**:
-   - Nodes with 5 GiB or less get the minimum 256Mi reservation.
-   - Nodes with 20 GiB or more get the maximum 1Gi reservation.
-
-Both `systemReservedMemory` and `kubeReservedMemory` receive the same auto-computed value by default.
-
-CPU reservations (`systemReservedCpu`, `kubeReservedCpu`) follow the same pattern: **5%** of effective CPU, clamped to **[50m, 500m]**. Both are auto-computed when left empty.
-
-#### Kubelet Defaults
-
-| Parameter | Default | Description |
-| --- | --- | --- |
-| `systemReservedMemory` | auto-computed | Memory reserved for host OS |
-| `kubeReservedMemory` | auto-computed | Memory reserved for kubelet and container runtime |
-| `systemReservedCpu` | auto-computed | CPU reserved for host OS |
-| `kubeReservedCpu` | auto-computed | CPU reserved for kubelet and container runtime |
-| `evictionHardMemory` | `7%` | Hard eviction threshold for memory |
-| `evictionSoftMemory` | `10%` | Soft eviction threshold for memory |
-| `evictionSoftGracePeriod` | `1m30s` *(hardcoded)* | Duration a soft eviction threshold must be breached before triggering eviction |
-| `evictionMinimumReclaim` | `256Mi` *(hardcoded)* | Minimum amount of memory reclaimed per eviction action |
-
-Eviction thresholds can be specified as percentages (e.g., `7%`) or absolute values (e.g., `200Mi`). Both thresholds must use the same unit type. The hard threshold must be strictly less than the soft threshold.
-
-The `evictionSoftGracePeriod` and `evictionMinimumReclaim` parameters are currently hardcoded in the chart template and cannot be overridden through values.
-
-#### Capacity Annotation
-
-When kubelet resource reservations are configured, both the `capacity.cluster-autoscaler.kubernetes.io/memory` and `capacity.cluster-autoscaler.kubernetes.io/cpu` annotations on MachineDeployments report **allocatable** values instead of total node resources. Memory allocatable subtracts system-reserved, kube-reserved, and eviction-hard. CPU allocatable subtracts system-reserved and kube-reserved. This aligns the annotations with the values the cluster autoscaler uses in its scaling calculations.
-
-Upgrading from a version without this feature may cause the autoscaler to see reduced per-node capacity after the annotations are updated, which can trigger additional scale-up operations. No action is typically required — the new values reflect the actual memory available for workload scheduling.
-
-> **Note:** When neither `resources.memory` nor `instanceType` is set, eviction thresholds (default 7% hard / 10% soft) are still enforced by the kubelet at runtime, but the capacity annotation is not rendered. Without this annotation, the cluster-autoscaler has no visibility into these reservations and may over-schedule the node until evictions fire.
-
-#### Example: Override kubelet reservations
-
-```yaml
-nodeGroups:
-  md0:
-    instanceType: "u1.large"
-    kubelet:
-      systemReservedMemory: "256Mi"
-      kubeReservedMemory: "256Mi"
-      evictionHardMemory: "500Mi"
-      evictionSoftMemory: "1Gi"
-```
 
 ### U Series: Universal
 
