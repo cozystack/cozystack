@@ -44,13 +44,50 @@ wait_for() {
   done
 }
 
+# controller_reachable: true only while the linstor-controller Service has at
+# least one *ready* endpoint. The linstor CLI below dials that Service
+# (linstor+ssl://linstor-controller:3371), and a ClusterIP is routable only once
+# its Service has a ready backend -- otherwise the dial fails with
+# "[Errno 113] No route to host" (EHOSTUNREACH). In the core Endpoints object the
+# ready set is .subsets[].addresses (peers not yet ready sit in
+# .subsets[].notReadyAddresses), so a non-empty addresses list is exactly
+# ">=1 ready backend". Missing object / API error -> empty -> not reachable.
+controller_reachable() {
+  [ -n "$(kubectl get endpoints linstor-controller -n cozy-linstor \
+    -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
+}
+
 wait_for "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
 wait_for "linstor-controller Deployment to be Available" \
   deployment/linstor-controller -n cozy-linstor --for=condition=available
 
-echo "[post-install-prep] waiting for 3 LINSTOR nodes Online"
-timeout 300 sh -ec 'until [ $(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list | grep -c Online) -eq 3 ]; do sleep 2; done'
+# Wait for 3 satellites to register Online, but gate every probe on a ready
+# controller Service endpoint. The "Deployment Available" check above is a
+# one-shot gate that goes stale: the controller carries
+# reloader.stakater.com/auto=true and mounts the cert-manager-issued API-TLS
+# Secret (see packages/system/linstor/templates/cluster.yaml). When cert-manager
+# (re)writes that Secret during bring-up, reloader rolls the single-replica
+# controller, dropping its Service to zero ready endpoints *after* Available
+# already passed. A blind CLI dial into that window is what surfaced as the
+# tolerated "[Errno 113] No route to host" churn. Probing only while the Service
+# is routable removes that churn at the root -- a mid-loop reload re-waits for
+# the endpoint instead of erroring -- while "Online == 3" stays the real
+# satellite-convergence assertion. The dedicated 300s budget is preserved from
+# the previous `timeout 300`; `set -e` is disabled inside an until-condition, so
+# a not-yet-reachable controller does not abort the script.
+echo "[post-install-prep] waiting for linstor-controller endpoint + 3 LINSTOR nodes Online"
+node_deadline=$(( $(date +%s) + 300 ))
+until controller_reachable \
+  && [ "$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor node list 2>/dev/null | grep -c Online)" -eq 3 ]; do
+  if [ "$(date +%s)" -ge "$node_deadline" ]; then
+    echo "[post-install-prep] timed out waiting for linstor-controller endpoint + 3 LINSTOR nodes Online" >&2
+    kubectl get endpoints linstor-controller -n cozy-linstor -o wide >&2 || true
+    kubectl get pods -n cozy-linstor -o wide >&2 || true
+    exit 1
+  fi
+  sleep 2
+done
 
 echo "[post-install-prep] creating LINSTOR storage pools (parallel across nodes)"
 created_pools=$(kubectl exec -n cozy-linstor deploy/linstor-controller -- linstor sp l -s data --pastable | awk '$2 == "data" {printf " " $4} END{printf " "}')
