@@ -22,9 +22,6 @@ type ConfigSpec struct {
 	// +kubebuilder:default:="replicated"
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas >= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
-	// +kubebuilder:default:={}
-	NodeGroups map[string]NodeGroup `json:"nodeGroups,omitempty"`
 	// Kubernetes major.minor version to deploy
 	// +kubebuilder:default:="v1.35"
 	Version Version `json:"version"`
@@ -43,9 +40,6 @@ type ConfigSpec struct {
 	// Talos worker image configuration.
 	// +kubebuilder:default:={}
 	Talos Talos `json:"talos"`
-	// MachineHealthCheck tuning for worker node groups.
-	// +kubebuilder:default:={}
-	NodeHealthCheck NodeHealthCheck `json:"nodeHealthCheck"`
 	// OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.
 	// +kubebuilder:default:={}
 	Oidc OIDC `json:"oidc"`
@@ -165,11 +159,6 @@ type FluxCDAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
-type GPU struct {
-	// Name of GPU, such as "nvidia.com/AD102GL_L40S".
-	Name string `json:"name"`
-}
-
 type GPUOperatorAddon struct {
 	// Enable GPU Operator.
 	// +kubebuilder:default:=false
@@ -236,23 +225,6 @@ type KonnectivityServer struct {
 	ResourcesPreset ResourcesPreset `json:"resourcesPreset"`
 }
 
-type Kubelet struct {
-	// Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
-	// +kubebuilder:default:="7%"
-	EvictionHardMemory string `json:"evictionHardMemory,omitempty"`
-	// Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
-	// +kubebuilder:default:="10%"
-	EvictionSoftMemory string `json:"evictionSoftMemory,omitempty"`
-	// CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedCpu string `json:"kubeReservedCpu,omitempty"`
-	// Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
-	KubeReservedMemory string `json:"kubeReservedMemory,omitempty"`
-	// CPU reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedCpu string `json:"systemReservedCpu,omitempty"`
-	// Memory reserved for host OS. Auto-computed from instanceType if empty.
-	SystemReservedMemory string `json:"systemReservedMemory,omitempty"`
-}
-
 type MonitoringAgentsAddon struct {
 	// Enable monitoring agents.
 	// +kubebuilder:default:=false
@@ -260,44 +232,6 @@ type MonitoringAgentsAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
-}
-
-type NodeGroup struct {
-	// System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
-	// +kubebuilder:default:="20Gi"
-	DiskSize resource.Quantity `json:"diskSize"`
-	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
-	Gpus []GPU `json:"gpus,omitempty"`
-	// Virtual machine instance type.
-	// +kubebuilder:default:="u1.medium"
-	InstanceType string `json:"instanceType"`
-	// Kubelet resource reservations for this node group.
-	Kubelet Kubelet `json:"kubelet,omitempty"`
-	// Maximum number of replicas.
-	// +kubebuilder:default:=10
-	MaxReplicas int `json:"maxReplicas"`
-	// Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
-	MaxUnhealthy string `json:"maxUnhealthy,omitempty"`
-	// Minimum number of replicas.
-	// +kubebuilder:default:=0
-	MinReplicas int `json:"minReplicas"`
-	// Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
-	NodeStartupTimeout string `json:"nodeStartupTimeout,omitempty"`
-	// Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored for that node group (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.
-	Resources Resources `json:"resources,omitempty"`
-	// List of node roles.
-	Roles []string `json:"roles,omitempty"`
-	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
-	StorageClass string `json:"storageClass,omitempty"`
-}
-
-type NodeHealthCheck struct {
-	// Maximum number of unhealthy nodes tolerated per node group before remediation is paused. The MHC admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is to express the value as a percentage. Default "50%" leaves headroom for transient unhealthy nodes during the kubeadm-to-Talos rollover and slow first boots from factory.talos.dev. Drop to "0%" once the fleet is stable on Talos workers.
-	// +kubebuilder:default:="50%"
-	MaxUnhealthy string `json:"maxUnhealthy"`
-	// Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).
-	// +kubebuilder:default:="10m"
-	NodeStartupTimeout string `json:"nodeStartupTimeout"`
 }
 
 type OIDC struct {
