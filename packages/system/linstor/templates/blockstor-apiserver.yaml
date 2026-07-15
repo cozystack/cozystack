@@ -1,0 +1,126 @@
+---
+# blockstor apiserver — the LINSTOR-compatible REST front end split out
+# of the controller binary. linstor-csi (external mode) and the
+# `linstor` CLI dial it. Three replicas behind a Service.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: blockstor-apiserver
+  namespace: {{ .Release.Namespace }}
+---
+# CRUD on the blockstor.io CRDs + Secrets for the encryption-passphrase
+# path. No status / finalizers / events / leases (REST handlers don't
+# write those).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: blockstor-apiserver
+rules:
+  - apiGroups: [blockstor.cozystack.io]
+    resources: ["*"]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [get, list, watch, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: blockstor-apiserver
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: blockstor-apiserver
+subjects:
+  - kind: ServiceAccount
+    name: blockstor-apiserver
+    namespace: {{ .Release.Namespace }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: blockstor-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: blockstor-apiserver
+    app.kubernetes.io/component: blockstor-apiserver
+spec:
+  replicas: 3
+  selector: {matchLabels: {app: blockstor-apiserver}}
+  template:
+    metadata:
+      labels:
+        app: blockstor-apiserver
+        app.kubernetes.io/component: blockstor-apiserver
+    spec:
+      serviceAccountName: blockstor-apiserver
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels: {app: blockstor-apiserver}
+      containers:
+        - name: apiserver
+          image: {{ .Values.blockstorApiserver.image.repository }}:{{ .Values.blockstorApiserver.image.tag }}
+          imagePullPolicy: IfNotPresent
+          args:
+            # Plain-HTTP debug listener — NOT exposed by the Service,
+            # reachable only via `kubectl port-forward` to a pod.
+            - --rest-bind-address=:3370
+            # Mutual-TLS listener — the ONLY port the Service exposes.
+            # Requires + verifies client certs against the mounted CA;
+            # hot-reloads cert/key/CA on cert-manager rotation.
+            - --tls-bind-address=:3371
+            - --tls-cert-file=/etc/blockstor/tls/tls.crt
+            - --tls-key-file=/etc/blockstor/tls/tls.key
+            - --tls-client-ca-file=/etc/blockstor/tls/ca.crt
+            - --health-probe-bind-address=:8081
+            - --metrics-bind-address=0
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: {fieldRef: {fieldPath: metadata.namespace}}
+          ports:
+            - {name: rest-tls, containerPort: 3371}
+            - {name: rest-debug, containerPort: 3370}
+            - {name: health, containerPort: 8081}
+          volumeMounts:
+            - name: api-tls
+              mountPath: /etc/blockstor/tls
+              readOnly: true
+          readinessProbe:
+            httpGet: {path: /readyz, port: health}
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: {path: /healthz, port: health}
+            initialDelaySeconds: 15
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 65532
+            allowPrivilegeEscalation: false
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+          resources:
+            requests: {cpu: 50m, memory: 128Mi}
+            limits: {cpu: 500m, memory: 512Mi}
+      volumes:
+        - name: api-tls
+          secret:
+            secretName: blockstor-apiserver-server-tls
+---
+# mTLS-only Service: exposes ONLY :3371. The plain-HTTP debug port
+# (3370) is deliberately NOT listed. Clients dial
+# https://blockstor-apiserver.cozy-linstor.svc:3371 presenting a client
+# cert. This DNS MUST match LinstorCluster.spec.externalController.url
+# and a serving-cert SAN.
+apiVersion: v1
+kind: Service
+metadata:
+  name: blockstor-apiserver
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/component: blockstor-apiserver
+spec:
+  selector: {app: blockstor-apiserver}
+  ports:
+    - {name: rest-tls, port: 3371, targetPort: 3371}
