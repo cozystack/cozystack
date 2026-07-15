@@ -1,5 +1,20 @@
 linstor-scheduler:
   fullnameOverride: linstor-scheduler
+  # Pin the linstor-scheduler-extender image to v0.3.5. The chart's appVersion
+  # (v0.3.2) ships a scheduler-admission webhook that decodes every pod through
+  # a stale vendored k8s.io/api (v0.25) and re-encodes it, stripping any field
+  # unknown to that schema — including initContainers[].restartPolicy — from
+  # ALL pods cluster-wide (empty objectSelector, no namespaceSelector). That
+  # breaks native/restartable sidecars, which the CloudNativePG barman-cloud
+  # plugin relies on for WAL archiving/backups, so CNPG instance Pods are
+  # rejected ("startupProbe forbidden without restartPolicy=Always").
+  # linstor-scheduler-extender v0.3.5 (piraeus PR #19) rewrites the webhook to
+  # emit a targeted RFC 6902 JSON patch that only sets spec.schedulerName,
+  # preserving every other pod field. Required for the barman-cloud plugin to
+  # work. See https://github.com/piraeusdatastore/piraeus-operator/issues/1025
+  extender:
+    image:
+      tag: v0.3.5
   linstor:
     endpoint: "https://linstor-controller.cozy-linstor.svc:3371"
     clientSecret: "linstor-client-tls"
