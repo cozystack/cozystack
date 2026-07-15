@@ -179,6 +179,12 @@ cozy_cleanup() {
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
   # test so a single selector reaps them all.
   kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
+  # Delete worker node pools (KubernetesNodes) before the parent Kubernetes CR:
+  # the pool owns the workers and its pre-delete hook unpins the adopted objects
+  # so uninstall is clean. Chainsaw does not track this imperatively applied CR,
+  # so cozy_cleanup must reap it too.
+  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
@@ -231,7 +237,11 @@ run_kubernetes_test() {
     local k8s_version
     k8s_version=$(yq "$version_expr" packages/apps/kubernetes/files/versions.yaml)
 
-  # Clean up stale resources from a previous failed retry
+  # Clean up stale resources from a previous failed retry. Delete the worker
+  # pool (KubernetesNodes) before the parent Kubernetes CR so a rerun re-creates
+  # the MachineDeployment instead of no-op'ing on a surviving child HelmRelease.
+  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
+  kubectl -n tenant-test wait kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --for=delete --timeout=2m 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io "${test_name}" --for=delete --timeout=2m 2>/dev/null || true
 
@@ -1034,6 +1044,9 @@ EOF
   # IP) and the local kubeconfig.
   kubectl -n tenant-test delete service "kubernetes-${test_name}-e2e-lb" --ignore-not-found --wait=false 2>/dev/null || true
   rm -f "tenantkubeconfig-${test_name}"
+  # Delete the worker pool (KubernetesNodes) before the parent Kubernetes CR so
+  # its pre-delete unpin hook runs and the child HelmRelease does not leak.
+  kubectl -n tenant-test delete kubernetesnodeses.apps.cozystack.io "${test_name}-md0" --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io "${test_name}" --ignore-not-found --wait=false 2>/dev/null || true
 
 }
