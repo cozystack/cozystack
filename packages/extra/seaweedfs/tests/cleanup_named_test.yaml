@@ -1,0 +1,48 @@
+suite: seaweedfs cleanup hook covers a non-default instance name
+
+# SeaweedFS is a user-creatable kind, so an instance can run under a name other
+# than `seaweedfs`. On delete, the post-delete hook must remove that instance's
+# secrets under BOTH schemes it could carry: the adopted chart-based `seaweedfs-*`
+# and the renamed `seaweedfs.fullname`-based names. For a non-default release the
+# fullname helper appends the chart name, so a fresh-1.5.x `archive` instance's
+# secrets are `archive-system-seaweedfs-*` — not `archive-system-*`. This pins
+# that the hook derives the renamed name instead of hardcoding the default.
+
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: archive
+  namespace: tenant-root
+
+set: &values
+  topology: Simple
+  replicationFactor: 2
+  _namespace:
+    host: example.org
+    ingress: tenant-root
+  _cluster:
+    issuer-name: letsencrypt-prod
+    solver: http01
+
+tests:
+  - it: grants delete on the renamed (archive-system-seaweedfs-*) and adopted (seaweedfs-*) secrets
+    set: *values
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: archive-system-seaweedfs-ca-cert
+      - contains:
+          path: rules[1].resourceNames
+          content: archive-system-seaweedfs-db-secret
+      # The adopted chart-based scheme is the same for every instance.
+      - contains:
+          path: rules[1].resourceNames
+          content: seaweedfs-ca-cert
+      # The old hardcoded default name must NOT appear for a non-default instance.
+      - notContains:
+          path: rules[1].resourceNames
+          content: archive-system-ca-cert

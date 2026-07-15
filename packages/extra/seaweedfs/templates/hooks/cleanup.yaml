@@ -1,3 +1,14 @@
+{{- /* The 4.31 chart names the fresh-install secrets after seaweedfs.fullname of
+     the child `<name>-system` release: `seaweedfs-system` for the default
+     instance, `<name>-system-seaweedfs` for a non-default one (the helper appends
+     the chart name when the release name does not contain it). Compute it here so
+     the cleanup covers both without hardcoding the default. */ -}}
+{{- $childRelease := printf "%s-system" .Release.Name }}
+{{- $renamedFull := $childRelease }}
+{{- if not (contains "seaweedfs" $childRelease) }}
+{{-   $renamedFull = printf "%s-seaweedfs" $childRelease }}
+{{- end }}
+{{- $renamedFull = $renamedFull | trunc 63 | trimSuffix "-" }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -29,14 +40,27 @@ rules:
     verbs: ["get", "delete"]
     resourceNames:
       - {{ .Release.Name }}-s3-ingress-tls
-      - {{ .Release.Name }}-system-admin-cert
-      - {{ .Release.Name }}-system-ca-cert
-      - {{ .Release.Name }}-system-client-cert
-      - {{ .Release.Name }}-system-filer-cert
-      - {{ .Release.Name }}-system-master-cert
-      - {{ .Release.Name }}-system-volume-cert
-      - {{ .Release.Name }}-system-worker-cert
-      - {{ .Release.Name }}-system-db-secret
+      # Renamed 4.31 naming (a tenant installed fresh on 1.5.x kept these).
+      - {{ $renamedFull }}-admin-cert
+      - {{ $renamedFull }}-ca-cert
+      - {{ $renamedFull }}-client-cert
+      - {{ $renamedFull }}-filer-cert
+      - {{ $renamedFull }}-master-cert
+      - {{ $renamedFull }}-volume-cert
+      - {{ $renamedFull }}-worker-cert
+      - {{ $renamedFull }}-db-secret
+      # Adopted chart-based naming: before 4.31 the chart ignored the release name,
+      # so these are seaweedfs-* for every release, and system/seaweedfs pins that
+      # name back. Only one of the two schemes exists on a given tenant; listing
+      # both keeps the delete exhaustive.
+      - seaweedfs-admin-cert
+      - seaweedfs-ca-cert
+      - seaweedfs-client-cert
+      - seaweedfs-filer-cert
+      - seaweedfs-master-cert
+      - seaweedfs-volume-cert
+      - seaweedfs-worker-cert
+      - seaweedfs-db-secret
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -118,6 +142,6 @@ spec:
               kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/name=seaweedfs,app.kubernetes.io/instance={{ .Release.Name }}-system --ignore-not-found --wait=false \
                 || echo "WARNING: SeaweedFS PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
               echo "Deleting orphaned SeaweedFS cert/db secrets for {{ .Release.Name }}..."
-              kubectl delete secret -n {{ .Release.Namespace }} {{ .Release.Name }}-s3-ingress-tls {{ .Release.Name }}-system-admin-cert {{ .Release.Name }}-system-ca-cert {{ .Release.Name }}-system-client-cert {{ .Release.Name }}-system-filer-cert {{ .Release.Name }}-system-master-cert {{ .Release.Name }}-system-volume-cert {{ .Release.Name }}-system-worker-cert {{ .Release.Name }}-system-db-secret --ignore-not-found --wait=false \
+              kubectl delete secret -n {{ .Release.Namespace }} {{ .Release.Name }}-s3-ingress-tls {{ $renamedFull }}-admin-cert {{ $renamedFull }}-ca-cert {{ $renamedFull }}-client-cert {{ $renamedFull }}-filer-cert {{ $renamedFull }}-master-cert {{ $renamedFull }}-volume-cert {{ $renamedFull }}-worker-cert {{ $renamedFull }}-db-secret seaweedfs-admin-cert seaweedfs-ca-cert seaweedfs-client-cert seaweedfs-filer-cert seaweedfs-master-cert seaweedfs-volume-cert seaweedfs-worker-cert seaweedfs-db-secret --ignore-not-found --wait=false \
                 || echo "WARNING: SeaweedFS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2
               echo "SeaweedFS cleanup complete."
