@@ -8,19 +8,21 @@
 
   Gating: rendered only when both `backup.enabled` and `backup.schedule`
   are non-empty. `backup.enabled=true` alone is the documented way to
-  bootstrap `archive_command` on the source cluster (the BackupClass
-  driver SSA-merges spec.backup.barmanObjectStore with ForceOwnership);
-  leaving `backup.schedule=""` lets users opt into archive without also
-  getting a chart-emitted ScheduledBackup that competes with their
-  BackupClass policy. CNPG admission rejects an empty `schedule` field,
-  so the gate keeps invalid manifests from reaching the cluster.
+  bootstrap WAL archiving on the source cluster (the BackupClass driver
+  SSA-applies the barman-cloud ObjectStore and SSA-patches spec.plugins
+  with ForceOwnership); leaving `backup.schedule=""` lets users opt into
+  archive without also getting a chart-emitted ScheduledBackup that
+  competes with their BackupClass policy. CNPG admission rejects an empty
+  `schedule` field, so the gate keeps invalid manifests from reaching the
+  cluster.
 
   Also excluded when `backup.useSystemBucket=true`: in that flow the
-  Cluster's `spec.backup.barmanObjectStore` is intentionally left unset
-  until the BackupClass driver SSA-patches it at first BackupJob time, so
-  a chart-emitted ScheduledBackup would fire against a Cluster with no
-  backup configuration and fail. This mirrors the ClickHouse
-  `useSystemBucket` gates on the chart-managed backup resources.
+  Cluster's `spec.plugins` (and its barman-cloud ObjectStore) are
+  intentionally left unset until the BackupClass driver SSA-applies them
+  at first BackupJob time, so a chart-emitted ScheduledBackup would fire
+  against a Cluster with no backup configuration and fail. This mirrors
+  the ClickHouse `useSystemBucket` gates on the chart-managed backup
+  resources.
 */}}
 {{- if and .Values.backup.enabled .Values.backup.schedule (not .Values.backup.useSystemBucket) }}
 ---
@@ -31,6 +33,9 @@ metadata:
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
   backupOwnerReference: self
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
   cluster:
     name: {{ .Release.Name }}
 {{- end }}

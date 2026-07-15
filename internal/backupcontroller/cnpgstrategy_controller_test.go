@@ -874,13 +874,12 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsReturnsExisting(t *testing.T) {
 	}
 }
 
-// TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster locks in the
-// precondition added for the smaller blocker on applyClusterBarmanObjectStore:
-// when the live cnpg.io Cluster has not yet been rendered by the chart, the
-// driver must surface NotFound (so the caller can retry-with-backoff)
-// instead of issuing a doomed SSA Apply that would be rejected by the API
-// server for missing required Cluster fields.
-func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
+// TestApplyClusterPluginBackup_NotFoundOnMissingCluster locks in the
+// precondition on applyClusterPluginBackup: when the live cnpg.io Cluster has
+// not yet been rendered by the chart, the driver must surface NotFound (so the
+// caller can retry-with-backoff) instead of issuing a doomed SSA Apply that
+// would be rejected by the API server for missing required Cluster fields.
+func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 	c := newCNPGStrategyTestClient(t)
 	r := &BackupJobReconciler{Client: c}
 	tmpl := &strategyv1alpha1.CNPGTemplate{
@@ -889,7 +888,7 @@ func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
-	err := r.applyClusterBarmanObjectStore(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
+	err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1270,10 +1269,13 @@ func testCNPGScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// TestApplyClusterBarmanObjectStore_PatchesExistingCluster confirms the
-// precondition does not regress the happy path: when the Cluster exists
-// the driver still SSA-patches spec.backup.barmanObjectStore.
-func TestApplyClusterBarmanObjectStore_PatchesExistingCluster(t *testing.T) {
+// TestApplyClusterPluginBackup_PatchesExistingCluster confirms the happy path:
+// when the Cluster exists the driver SSA-applies an ObjectStore CR carrying the
+// barman configuration and SSA-patches the Cluster's spec.plugins to reference
+// it via the barman-cloud plugin (the plugin replaces the deprecated native
+// spec.backup.barmanObjectStore). serverName must land on the Cluster plugin
+// parameter, never inside the ObjectStore configuration (the plugin forbids it).
+func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	cluster := &cnpgtypes.Cluster{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app"},
 	}
@@ -1286,22 +1288,46 @@ func TestApplyClusterBarmanObjectStore_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
-	if err := r.applyClusterBarmanObjectStore(context.Background(), "tenant", "postgres-app", tmpl, "postgres-app"); err != nil {
+	if err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// The ObjectStore CR carries destinationPath + retentionPolicy and no serverName.
+	store := &cnpgtypes.ObjectStore{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "postgres-app"}, store); err != nil {
+		t.Fatalf("get ObjectStore after apply: %v", err)
+	}
+	if store.Spec.Configuration.DestinationPath != "s3://bucket/x/" {
+		t.Errorf("ObjectStore destinationPath: got %q", store.Spec.Configuration.DestinationPath)
+	}
+	if store.Spec.RetentionPolicy != "30d" {
+		t.Errorf("ObjectStore retentionPolicy: got %q", store.Spec.RetentionPolicy)
+	}
+	if store.Spec.Configuration.ServerName != "" {
+		t.Errorf("ObjectStore configuration must not carry serverName (plugin forbids it); got %q", store.Spec.Configuration.ServerName)
+	}
+
+	// The Cluster references the ObjectStore through spec.plugins, with
+	// serverName on the plugin parameter and isWALArchiver=true.
 	got := &cnpgtypes.Cluster{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(cluster), got); err != nil {
 		t.Fatalf("get cluster after patch: %v", err)
 	}
-	if got.Spec.Backup == nil || got.Spec.Backup.BarmanObjectStore == nil {
-		t.Fatalf("expected spec.backup.barmanObjectStore to be set, got %+v", got.Spec.Backup)
+	if len(got.Spec.Plugins) != 1 {
+		t.Fatalf("expected exactly one plugin entry, got %+v", got.Spec.Plugins)
 	}
-	if got.Spec.Backup.BarmanObjectStore.DestinationPath != "s3://bucket/x/" {
-		t.Errorf("destinationPath: got %q", got.Spec.Backup.BarmanObjectStore.DestinationPath)
+	p := got.Spec.Plugins[0]
+	if p.Name != cnpgtypes.PluginName {
+		t.Errorf("plugin name: got %q, want %q", p.Name, cnpgtypes.PluginName)
 	}
-	if got.Spec.Backup.RetentionPolicy != "30d" {
-		t.Errorf("retentionPolicy: got %q", got.Spec.Backup.RetentionPolicy)
+	if p.IsWALArchiver == nil || !*p.IsWALArchiver {
+		t.Errorf("expected isWALArchiver=true, got %v", p.IsWALArchiver)
+	}
+	if got := p.Parameters[barmanObjectNameParam]; got != "postgres-app" {
+		t.Errorf("plugin barmanObjectName: got %q, want %q", got, "postgres-app")
+	}
+	if got := p.Parameters[barmanServerNameParam]; got != "tenant-app" {
+		t.Errorf("plugin serverName: got %q, want %q", got, "tenant-app")
 	}
 }
 
