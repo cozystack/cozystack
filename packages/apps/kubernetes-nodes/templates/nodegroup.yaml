@@ -29,6 +29,7 @@
 {{- end }}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
+{{- include "kubernetes-nodes.assertNoForeignPool" . }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- $group := dict
       "minReplicas" .Values.minReplicas
@@ -510,16 +511,17 @@ spec:
 ---
 {{- /*
 We must preserve all previous KubevirtMachineTemplates for THIS pool until a
-MachineSet stops referencing them. Scoped to this pool's own hash-named KMTs
-(prefix kubernetes-<cluster>-<group>-) so sibling kubernetes-nodes releases in
-the same namespace never re-emit and fight over each other's templates.
+MachineSet stops referencing them. Scoped by the meta.helm.sh/release-name
+annotation to this pool's own release, so sibling kubernetes-nodes releases in
+the same namespace never re-emit and fight over each other's templates. A bare
+name prefix is unsafe here: pool "gpu" would match sibling "gpu-large"'s
+hash-named KMTs; the release-name annotation is exact.
 */ -}}
 {{- $mss := (lookup "cluster.x-k8s.io/v1beta1" "MachineSet" $.Release.Namespace "").items }}
-{{- $kmtPrefix := printf "%s-%s-" $clusterName $groupName }}
 {{- $oldKubevirtmachinetemplates := dict }}
 {{- range $kmt := (lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" $.Release.Namespace "").items }}
 {{- range $or := $kmt.metadata.ownerReferences }}
-{{- if and (eq $or.kind "Cluster") (eq $or.name $clusterName) (hasPrefix $kmtPrefix $kmt.metadata.name) }}
+{{- if and (eq $or.kind "Cluster") (eq $or.name $clusterName) (eq (dig "annotations" "meta.helm.sh/release-name" "" $kmt.metadata) $.Release.Name) }}
 {{- range $ms := $mss }}
 {{- if and (eq $ms.spec.template.spec.infrastructureRef.kind "KubevirtMachineTemplate") (eq $ms.spec.template.spec.infrastructureRef.name $kmt.metadata.name) }}
 {{- if not (has $kmt.metadata.name $kubevirtmachinetemplateNames) }}

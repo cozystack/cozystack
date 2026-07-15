@@ -10,3 +10,9 @@ This pool is a separate release from the control plane. Two operational notes:
 2. Version skew. Keep this pool's `version` and `talos.*` in sync with the parent
    Kubernetes cluster. A pool on a Kubernetes/Talos combination the parent does
    not run can produce workers the control plane will not admit.
+
+3. Pool name. The pool name (the part after `<cluster>-` in the KubernetesNodes
+   name) must not collide with a nodeGroup still managed by the parent kubernetes
+   chart — most importantly the implicit default `md0`. A collision makes this
+   release fail on a Helm ownership conflict against the parent-owned objects.
+   The chart guards this at render time with a clear error.

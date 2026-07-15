@@ -82,3 +82,25 @@ clusters in one namespace from colliding on a pool named e.g. `md0`.
 {{- end -}}
 {{- trimPrefix $prefix .Release.Name -}}
 {{- end -}}
+
+{{/*
+Fail early with a clear message if this pool's MachineDeployment already exists
+under a different Helm release — i.e. the pool name collides with a nodeGroup
+still managed by the parent kubernetes chart (most likely the default `md0`).
+Without this guard the collision surfaces as a cryptic Helm "invalid ownership
+metadata" error at install time. Inert under `helm template`/unittest (lookup
+returns nil with no cluster) and a no-op during migration-52 adoption, which
+re-annotates the MachineDeployment onto this release before it reconciles.
+*/}}
+{{- define "kubernetes-nodes.assertNoForeignPool" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
+{{- $groupName := include "kubernetes-nodes.groupName" . -}}
+{{- $mdName := printf "%s-%s" $clusterName $groupName -}}
+{{- $existing := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" .Release.Namespace $mdName -}}
+{{- if $existing -}}
+{{- $owner := dig "annotations" "meta.helm.sh/release-name" "" $existing.metadata -}}
+{{- if and $owner (ne $owner .Release.Name) -}}
+{{- fail (printf "kubernetes-nodes: MachineDeployment %q in namespace %q is already managed by release %q, not this pool release %q — the pool name collides with a nodeGroup still managed by the parent kubernetes chart. Rename the pool or remove it from the parent Kubernetes CR's nodeGroups first." $mdName .Release.Namespace $owner .Release.Name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
