@@ -41,8 +41,8 @@ permissions:
 
 jobs:
   # Decide whether this is a fork PR that needs e2e, resolve its PR number and
-  # head SHA, and open the pending "E2E Tests" check-run so the PR is not
-  # mergeable until we conclude it. Every decision is derived from data the fork
+  # head SHA, and post the pending "E2E Tests" commit status so the PR is not
+  # mergeable until `report` concludes it. Every decision is derived from data the fork
   # cannot forge — the workflow_run conclusion, the base-repo PR list, and the
   # base-repo PR file list — NOT from the presence/absence of an artifact the
   # fork's own build controls. Fail-closed if the fork build failed or the
@@ -60,23 +60,24 @@ jobs:
       contents: read
       actions: read
       pull-requests: read
+      statuses: write
     outputs:
       should_run:   ${{ steps.r.outputs.should_run }}
       pr_number:    ${{ steps.r.outputs.pr_number }}
       head_sha:     ${{ steps.r.outputs.head_sha }}
       run_id:       ${{ steps.r.outputs.run_id }}
-      check_run_id: ${{ steps.open.outputs.check_run_id }}
       # TIA inputs derived from TRUSTED base-repo data (the PR file list and
       # labels), NOT the fork-controlled merge-ref diff — so suite selection
       # keeps the same anti-forgery property as the docs-only decision (#3257).
       changed_b64:  ${{ steps.r.outputs.changed_b64 }}
       full_e2e:     ${{ steps.r.outputs.full_e2e }}
     steps:
-      # Decide the verdict using this step's default (workflow_run) token, which
-      # already has the actions:read / pull-requests:read scopes these lookups
-      # need. It creates NO check-run — the next step publishes the verdict as
-      # the COZYSTACK_CI app so the app token stays scoped to checks:write only.
-      - name: Resolve fork PR and decide verdict
+      # Decide the verdict and post the "E2E Tests" commit status directly, with
+      # this job's default (workflow_run) token — it already has the actions:read
+      # / pull-requests:read scopes the lookups need, plus statuses:write from the
+      # job permissions. A commit status (not a check-run) is the merge gate; see
+      # pull-requests.yaml's e2e-report and docs/agents/e2e-testing.md §10.
+      - name: Resolve fork PR and post "E2E Tests" status
         id: r
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
@@ -87,7 +88,7 @@ jobs:
           script: |
             const { HEAD_SHA, RUN_ID, CONCLUSION } = process.env;
             const { owner, repo } = context.repo;
-            // Validate the SHA before it flows into a check-run / image tag.
+            // Validate the SHA before it flows into a status target / image tag.
             if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
               core.setFailed(`unexpected head_sha '${HEAD_SHA}'`);
               return;
@@ -95,18 +96,21 @@ jobs:
             core.setOutput('head_sha', HEAD_SHA);
             core.setOutput('run_id', String(RUN_ID));
 
-            // Record a terminal verdict for the `open` step to publish as a
-            // completed check-run. This step never creates a check itself.
-            const decide = (conclusion, summary) => {
-              core.setOutput('verdict_status', 'completed');
-              core.setOutput('verdict_conclusion', conclusion);
-              core.setOutput('verdict_summary', summary);
+            const target_url = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const setStatus = (state, description) => github.rest.repos.createCommitStatus({
+              owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests', description, target_url,
+            });
+            // Post a TERMINAL status (docs-only success / fail-closed failure) and
+            // stop — no privileged run needed. `report` never runs for these
+            // (guarded on should_run).
+            const decide = async (state, description) => {
+              await setStatus(state, description);
               core.setOutput('should_run', 'false');
             };
 
-            // Fork build did not succeed → fail the required check (fail-closed).
+            // Fork build did not succeed → fail the required status (fail-closed).
             if (CONCLUSION !== 'success') {
-              decide('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
+              await decide('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
               return;
             }
 
@@ -121,7 +125,7 @@ jobs:
             const pr = assoc.data.find(p => p.state === 'open');
             const prNumber = pr ? String(pr.number) : '';
             if (!/^[0-9]+$/.test(prNumber)) {
-              decide('failure', `no open PR for ${HEAD_SHA}`);
+              await decide('failure', `no open PR for ${HEAD_SHA}`);
               return;
             }
             core.setOutput('pr_number', prNumber);
@@ -136,7 +140,7 @@ jobs:
             });
             const hasNonDocs = files.some(f => !f.filename.startsWith('docs/'));
             if (!hasNonDocs) {
-              decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
+              await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
               return;
             }
 
@@ -148,7 +152,7 @@ jobs:
               { owner, repo, run_id: RUN_ID, per_page: 100 },
             );
             if (!arts.some(a => a.name === 'pr-patch')) {
-              decide('failure', 'expected pr-patch artifact is missing — the fork build did not complete');
+              await decide('failure', 'expected pr-patch artifact is missing — the fork build did not complete');
               return;
             }
 
@@ -165,50 +169,10 @@ jobs:
             const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
             core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
 
-            // Real run: the `open` step opens an in-progress check-run; `report`
-            // concludes it.
-            core.setOutput('verdict_status', 'in_progress');
-            core.setOutput('verdict_summary', 'Running e2e in the privileged fork workflow…');
+            // Real run: post a pending status now; `report` flips it to the
+            // terminal state after publish + e2e.
+            await setStatus('pending', 'Running e2e in the privileged fork workflow…');
             core.setOutput('should_run', 'true');
-
-      # Skipped when `resolve` set-failed on a bad SHA (fail-closed: no check →
-      # "E2E Tests" stays unreported → PR not mergeable).
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          repositories: ${{ github.event.repository.name }}
-          permission-checks: write
-      # Publish the verdict as the COZYSTACK_CI app so the check-run lands in the
-      # app's own check-suite — matching the same-repo e2e-report path and the
-      # branch-protection pin (see pull-requests.yaml e2e-report comment and
-      # docs/agents/e2e-testing.md §10). Creating it with the default token would
-      # file it under an arbitrary GitHub Actions suite (a labeler).
-      - name: Open "E2E Tests" check-run (as app)
-        id: open
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
-        env:
-          STATUS:     ${{ steps.r.outputs.verdict_status }}
-          CONCLUSION: ${{ steps.r.outputs.verdict_conclusion }}
-          SUMMARY:    ${{ steps.r.outputs.verdict_summary }}
-          HEAD_SHA:   ${{ steps.r.outputs.head_sha }}
-        with:
-          github-token: ${{ steps.app-token.outputs.token }}
-          script: |
-            const { STATUS, CONCLUSION, SUMMARY, HEAD_SHA } = process.env;
-            const { owner, repo } = context.repo;
-            const params = {
-              owner, repo, name: 'E2E Tests', head_sha: HEAD_SHA,
-              status: STATUS,
-              output: { title: 'E2E Tests', summary: SUMMARY },
-            };
-            if (STATUS === 'completed') params.conclusion = CONCLUSION;
-            const cr = await github.rest.checks.create(params);
-            // Only the real (in-progress) run is handed to `report` to conclude.
-            if (STATUS === 'in_progress') core.setOutput('check_run_id', String(cr.data.id));
 
   # Push the fork-built image archives to OCIR by digest and flux-push the
   # digest-pinned packages tree. Only trusted binaries touch the fork's content
@@ -549,9 +513,9 @@ jobs:
         if: always()
         run: rm -rf "/tmp/$SANDBOX_NAME"
 
-  # Conclude the required "E2E Tests" check-run opened by `resolve`. Always runs
-  # (so a failed publish/e2e still turns the check red rather than leaving it
-  # stuck in-progress). success only when the e2e job passed.
+  # Flip the pending "E2E Tests" commit status posted by `resolve` to its
+  # terminal state. Always runs (so a failed publish/e2e turns the status red
+  # rather than leaving it stuck pending). success only when the e2e job passed.
   report:
     name: Report fork E2E status
     needs: [resolve, publish, e2e]
@@ -559,52 +523,32 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      statuses: write
     steps:
-      # The pending check-run was opened by the COZYSTACK_CI app in `resolve`;
-      # checks.update must run as the same app, so mint its token here too.
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          repositories: ${{ github.event.repository.name }}
-          permission-checks: write
-      - name: Conclude "E2E Tests" check-run
+      - name: Report "E2E Tests" commit status
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
-          CHECK_RUN_ID:   ${{ needs.resolve.outputs.check_run_id }}
           PUBLISH_RESULT: ${{ needs.publish.result }}
           E2E_RESULT:     ${{ needs.e2e.result }}
           HEAD_SHA:       ${{ needs.resolve.outputs.head_sha }}
+          RUN_URL:        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const { CHECK_RUN_ID, PUBLISH_RESULT, E2E_RESULT, HEAD_SHA } = process.env;
+            const { PUBLISH_RESULT, E2E_RESULT, HEAD_SHA, RUN_URL } = process.env;
             const { owner, repo } = context.repo;
-            let conclusion, summary;
+            let state, description;
             if (E2E_RESULT === 'success') {
-              conclusion = 'success';
-              summary = 'fork e2e passed (privileged run)';
+              state = 'success';
+              description = 'fork e2e passed (privileged run)';
             } else if (PUBLISH_RESULT !== 'success') {
-              conclusion = 'failure';
-              summary = `image/artifact publish did not succeed (result: ${PUBLISH_RESULT})`;
+              state = 'failure';
+              description = `image/artifact publish did not succeed (result: ${PUBLISH_RESULT})`;
             } else {
-              conclusion = 'failure';
-              summary = `fork e2e did not pass (result: ${E2E_RESULT})`;
+              state = 'failure';
+              description = `fork e2e did not pass (result: ${E2E_RESULT})`;
             }
-            if (CHECK_RUN_ID) {
-              await github.rest.checks.update({
-                owner, repo, check_run_id: Number(CHECK_RUN_ID),
-                status: 'completed', conclusion,
-                output: { title: 'E2E Tests', summary },
-              });
-            } else {
-              await github.rest.checks.create({
-                owner, repo, name: 'E2E Tests', head_sha: HEAD_SHA,
-                status: 'completed', conclusion,
-                output: { title: 'E2E Tests', summary },
-              });
-            }
-            core.info(`E2E Tests → ${conclusion}: ${summary}`);
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests',
+              description, target_url: RUN_URL,
+            });
+            core.info(`E2E Tests → ${state}: ${description}`);

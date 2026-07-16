@@ -877,16 +877,23 @@ jobs:
   # Fork PRs skip this job; e2e-fork.yaml concludes "E2E Tests" for them, so a
   # fork PR stays "Expected"/not-mergeable until the privileged run reports.
   #
-  # The check-run is published with the COZYSTACK_CI GitHub App token, NOT the
-  # default GITHUB_TOKEN. A token-created check-run is owned by the app that made
-  # it and GitHub files it under that app's check-suite; with the default token
-  # (the "GitHub Actions" app) a floating check-run attaches to an arbitrary
-  # GitHub Actions suite for the SHA — in practice the earliest one, a tiny
-  # labeler workflow — so "E2E Tests" rendered under "PR size label". Publishing
-  # as the app gives the check its own dedicated suite (shown under the app's
-  # name) and is stricter: only the CI app can satisfy the gate, not any Actions
-  # workflow. REQUIRES main branch protection to require "E2E Tests" from this
-  # app's id (not app_id 15368) — see docs/agents/e2e-testing.md §10.
+  # The required "E2E Tests" merge gate is published as a COMMIT STATUS with the
+  # default GITHUB_TOKEN (+ statuses:write) — NOT as a job, and NOT as a
+  # check-run.
+  #   - Not a job: a *skipped* required job counts as passed by branch
+  #     protection, which is how fork PRs used to merge with e2e never run
+  #     (#3257). A status is "success" only when this job posts it; a
+  #     never-posted required status stays "Expected" and blocks the merge.
+  #   - Not a check-run: a check-run made with the default token floats into an
+  #     arbitrary GitHub Actions check-suite (it rendered under "PR size label"),
+  #     and an app-token check-run needs the app granted checks:write. A commit
+  #     status has neither problem — branch protection matches it by context name
+  #     and it carries no check-suite grouping. Safe with the default token: a
+  #     fork's pull_request token is read-only and cannot post a status, so only
+  #     same-repo runs (this job, guarded !fork) and the privileged workflow_run
+  #     in e2e-fork.yaml can set it.
+  # REQUIRES main branch protection to require the "E2E Tests" status context —
+  # see docs/agents/e2e-testing.md §10.
   e2e-report:
     name: "Report E2E status"
     needs: ["plan", "e2e"]
@@ -894,56 +901,49 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      statuses: write
     steps:
-      - name: Generate GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
-        with:
-          app-id: ${{ secrets.COZYSTACK_CI_APP_ID }}
-          private-key: ${{ secrets.COZYSTACK_CI_PRIVATE_KEY }}
-          owner: cozystack
-          repositories: ${{ github.event.repository.name }}
-          permission-checks: write
-      - name: Conclude "E2E Tests" check-run
+      - name: Report "E2E Tests" commit status
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         env:
           PLAN_RESULT: ${{ needs.plan.result }}
           CODE: ${{ needs.plan.outputs.code }}
           E2E_RESULT: ${{ needs.e2e.result }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         with:
-          github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const { PLAN_RESULT, CODE, E2E_RESULT, HEAD_SHA } = process.env;
-            let conclusion, summary;
+            const { PLAN_RESULT, CODE, E2E_RESULT, HEAD_SHA, RUN_URL } = process.env;
+            let state, description;
             if (PLAN_RESULT !== 'success') {
-              conclusion = 'failure';
-              summary = `plan job did not succeed (result: ${PLAN_RESULT})`;
+              state = 'failure';
+              description = `plan job did not succeed (result: ${PLAN_RESULT})`;
             } else if (CODE !== 'true') {
-              conclusion = 'success';
-              summary = 'docs-only PR — e2e not required';
+              state = 'success';
+              description = 'docs-only PR — e2e not required';
             } else if (E2E_RESULT === 'success') {
-              conclusion = 'success';
-              summary = 'in-tree e2e passed';
+              state = 'success';
+              description = 'in-tree e2e passed';
             } else {
-              conclusion = 'failure';
-              summary = `in-tree e2e did not pass (result: ${E2E_RESULT})`;
+              state = 'failure';
+              description = `in-tree e2e did not pass (result: ${E2E_RESULT})`;
             }
             try {
-              await github.rest.checks.create({
+              await github.rest.repos.createCommitStatus({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                name: 'E2E Tests',
-                head_sha: HEAD_SHA,
-                status: 'completed',
-                conclusion,
-                output: { title: 'E2E Tests', summary },
+                sha: HEAD_SHA,
+                state,
+                context: 'E2E Tests',
+                description,
+                target_url: RUN_URL,
               });
             } catch (err) {
-              // The 'E2E Tests' check-run is the required merge gate. If we
-              // cannot publish it, fail loudly and fail-closed: setFailed keeps
-              // the job (and thus the gate) red so the PR stays non-mergeable.
-              core.setFailed(`Failed to report E2E Tests check-run: ${err}`);
+              // The 'E2E Tests' status is the required merge gate. If we cannot
+              // publish it, fail loudly and fail-closed: setFailed keeps the job
+              // red and the required status unreported ("Expected"), so the PR
+              // stays non-mergeable.
+              core.setFailed(`Failed to report E2E Tests status: ${err}`);
               return;
             }
-            core.info(`E2E Tests → ${conclusion}: ${summary}`);
+            core.info(`E2E Tests → ${state}: ${description}`);
