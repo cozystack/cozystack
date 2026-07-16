@@ -62,6 +62,44 @@
               }
             }
           },
+          "image": {
+            "description": "Worker OS image source for this node group. Default (omitted): import over HTTP from the cluster-wide talos.* Image Factory. Set `image.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing group re-images that group.",
+            "type": "object",
+            "properties": {
+              "builtin": {
+                "description": "Clone a golden image from the worker image catalog.",
+                "type": "object",
+                "properties": {
+                  "schematicID": {
+                    "description": "Talos schematic ID of the golden to clone. Defaults to the cluster-wide talos.schematicID.",
+                    "type": "string"
+                  },
+                  "version": {
+                    "description": "Talos version of the golden to clone. Defaults to the cluster-wide talos.version.",
+                    "type": "string"
+                  }
+                }
+              },
+              "factory": {
+                "description": "Import from an Image Factory / mirror (default).",
+                "type": "object",
+                "properties": {
+                  "imageFactoryURL": {
+                    "description": "Base URL of the Image Factory serving the boot raw image. Defaults to the cluster-wide talos.imageFactoryURL. No trailing slash. NOTE: this redirects only the worker boot-disk import; the in-guest upgrade installer image is always sourced from the cluster-wide talos.installerRepository, so an air-gapped node group must also have talos.installerRepository pointed at a reachable registry.",
+                    "type": "string"
+                  },
+                  "schematicID": {
+                    "description": "Talos schematic ID. Defaults to the cluster-wide talos.schematicID.",
+                    "type": "string"
+                  },
+                  "version": {
+                    "description": "Talos version. Defaults to the cluster-wide talos.version.",
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
           "instanceType": {
             "description": "Virtual machine instance type.",
             "type": "string",
