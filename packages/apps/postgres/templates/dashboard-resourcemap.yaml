@@ -20,6 +20,36 @@ rules:
   resourceNames:
   - {{ .Release.Name }}-credentials
   verbs: ["get", "list", "watch"]
+# <release>.tenant-ca is deliberately NOT granted here, and the reason is the
+# difference between granting a NAME and granting an OBJECT.
+#
+# This Role names Secrets. A name grant conveys whatever occupies the name, and
+# the CA-extraction controller cannot promise what that is: it refuses to
+# overwrite a Secret at the canonical name that it did not create, precisely
+# because such a Secret may hold key material, and surfaces the refusal as a
+# CACertSecretCollision Warning. Granting the name would hand the tenant read on
+# exactly the object the controller just refused to touch — the collision guard
+# would still fire, and be useless.
+#
+# A dash-separated name would make that acute rather than theoretical:
+# <release>-tenant-ca is exactly what CNPG's <release>-ca resolves to for a
+# sibling app named "<app>-tenant", so the name could hold a key-BEARING CA and
+# this Role would convey it. The canonical name's dot rules that out by
+# construction — no engine can produce a dotted name — leaving the general
+# argument, which is enough on its own: a name grant is gated on a string, and
+# the controller cannot promise what the string holds.
+#
+# The trust anchor reaches the tenant through core.cozystack.io/tenantsecrets
+# instead, which the base tenant roles already grant and which gates on the
+# internal.cozystack.io/tenantresource LABEL — computed by the lineage webhook
+# from this app's ApplicationDefinition selectors, and stamped only on an object
+# that carries internal.cozystack.io/tenant-ca. A foreign Secret squatting on the
+# name carries neither, so it is never surfaced. The label path is gated on what
+# the platform vouched for; a name grant is gated on a string.
+#
+# kafka's resourcemap does grant its CA Secrets by name. That is where this was
+# almost copied from, and it is not a model to follow: the same pattern is how
+# kafka's clients-CA private key became tenant-readable.
 - apiGroups:
   - cozystack.io
   resources:

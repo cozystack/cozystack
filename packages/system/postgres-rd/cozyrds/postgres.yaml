@@ -34,11 +34,24 @@ spec:
     #      helm.toolkit.fluxcd.io/name: "{reqs[0]['metadata','name']}"
 
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "version"], ["spec", "tls"], ["spec", "postgresql"], ["spec", "postgresql", "parameters"], ["spec", "postgresql", "parameters", "max_connections"], ["spec", "quorum"], ["spec", "quorum", "minSyncReplicas"], ["spec", "quorum", "maxSyncReplicas"], ["spec", "users"], ["spec", "databases"], ["spec", "backup"], ["spec", "backup", "enabled"], ["spec", "backup", "useSystemBucket"], ["spec", "backup", "retentionPolicy"], ["spec", "backup", "destinationPath"], ["spec", "backup", "endpointURL"], ["spec", "backup", "schedule"], ["spec", "backup", "s3AccessKey"], ["spec", "backup", "s3SecretKey"], ["spec", "backup", "s3CredentialsSecret"], ["spec", "backup", "s3CredentialsSecret", "name"], ["spec", "backup", "s3CredentialsSecret", "accessKeyIDKey"], ["spec", "backup", "s3CredentialsSecret", "secretAccessKeyKey"], ["spec", "backup", "endpointCA"], ["spec", "backup", "endpointCA", "name"], ["spec", "backup", "endpointCA", "key"], ["spec", "bootstrap"], ["spec", "bootstrap", "enabled"], ["spec", "bootstrap", "recoveryTime"], ["spec", "bootstrap", "oldName"], ["spec", "bootstrap", "serverName"]]
+  # CNPG creates its CA Secret itself — <release>-ca, holding ca.crt next to the
+  # CA private key — and offers no way to label it, so the trust anchor is
+  # declared by name here. The CA-extraction controller lifts ca.crt alone into
+  # the key-free <release>.tenant-ca Secret; the include selector below then
+  # makes that projection readable by the tenant.
+  caCert:
+    sourceSecretName: "{{ .release }}-ca"
+    sourceKey: ca.crt
   secrets:
     exclude: []
     include:
       - resourceNames:
           - postgres-{{ .name }}-credentials
+      # The key-free trust anchor the CA-extraction controller publishes. This
+      # is the single, engine-agnostic selector every converged engine shares;
+      # it carries no per-release name templating.
+      - matchLabels:
+          internal.cozystack.io/tenant-ca: "true"
   services:
     exclude: []
     include:

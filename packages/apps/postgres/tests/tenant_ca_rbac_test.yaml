@@ -1,0 +1,84 @@
+suite: postgres trust-anchor RBAC
+
+# What a client needs to verify this cluster's TLS is ca.crt — and nothing else.
+#
+# CNPG creates its own <release>-ca Secret and stores the CA PRIVATE KEY
+# (ca.key) in it alongside the certificate, so read access to it would let the
+# holder issue certificates for anything. It can never be granted to a tenant.
+# The CA-extraction controller exists to break that coupling: it lifts ca.crt
+# alone into the key-free <release>.tenant-ca.
+#
+# This suite pins how that object is NOT delivered. The trust anchor reaches the
+# tenant through core.cozystack.io/tenantsecrets, which gates on the
+# tenantresource label the lineage webhook computes from this app's definition —
+# so it conveys an object the platform vouched for. This Role grants Secrets by
+# NAME, which conveys whatever occupies the name, and the two are not
+# interchangeable:
+#
+#   - the controller refuses to overwrite a Secret at the canonical name that it
+#     did not create, because such a Secret may hold key material;
+#   - a name grant would then hand the tenant read on the very object that guard
+#     just refused to touch, so the guard would fire and buy nothing.
+#
+# This was acute while the projection was <release>-tenant-ca: that name is what
+# CNPG's <release>-ca resolves to for a sibling app named "<app>-tenant", so it
+# could hold a key-BEARING CA. The canonical name's dot ended that by
+# construction — application names are DNS-1035 labels and cannot contain a dot,
+# so no engine can produce this name for any app name. Stated in the past tense
+# deliberately: the dot is not decoration, and a future reader must not "tidy" it
+# back into a dash on the strength of a comment that reads as if the collision
+# were still live.
+
+release:
+  name: pg-test
+  namespace: tenant-test
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+tests:
+  # The dashboard Role stays scoped to credentials. Adding the trust anchor here
+  # would look harmless and would defeat the collision guard, so its absence is
+  # pinned rather than left to reviewer memory.
+  - it: grants tenant use-subjects read on the credentials Secret only
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules
+          content:
+            apiGroups:
+              - ""
+            resources:
+              - secrets
+            resourceNames:
+              - pg-test-credentials
+            verbs: ["get", "list", "watch"]
+
+  # Index-free on purpose: an assertion bound to rules[1] follows the position
+  # rather than the rule, and would silently point elsewhere the moment a rule
+  # was inserted above it. Select the secrets rule by what it is.
+  - it: never grants a name that a key-bearing CA can occupy
+    documentIndex: 0
+    asserts:
+      # CNPG's own CA. One word away from the projection, and it holds ca.key.
+      - notContains:
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
+          content: pg-test-ca
+      # The canonical projection name. Not granted here BY DESIGN: it is delivered
+      # by label through tenantsecrets, which conveys an object the platform
+      # vouched for, rather than by name, which conveys whatever occupies it.
+      - notContains:
+          path: rules[?(@.resources[0] == "secrets")].resourceNames
+          content: pg-test.tenant-ca
+
+  # The grant is only worth anything if it reaches the tenant's subjects.
+  - it: binds the Role to the tenant use-subjects
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: pg-test-dashboard-resources

@@ -177,13 +177,17 @@ The tri-state `tls.enabled` controls whether the chart injects `serverAltDNSName
 
 **Retrieving the CA bundle** for client verification:
 
-CNPG bundles the CA certificate in every user-credentials Secret it creates under the key `ca.crt`. Retrieve it from the `<release>-credentials` Secret, which is already accessible to tenants via the dashboard RBAC:
+The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, created for every release and delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
 
 ```bash
 kubectl --context <ctx> --namespace <tenant> \
-  get secret <release>-credentials \
+  get tenantsecret <release>.tenant-ca \
   --output jsonpath='{.data.ca\.crt}' | base64 --decode
 ```
+
+`<release>.tenant-ca` is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. CNPG creates its own `<release>-ca` Secret, but that one stores the CA **private key** (`ca.key`) alongside the certificate — read access to it would let the holder issue certificates for anything, so it is never granted to a tenant.
+
+It is reached through `tenantsecrets` rather than by reading the Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for (those the application's definition selects), whereas a direct grant on the name would convey whatever happens to occupy that name.
 
 **Connecting with full verification** (psql example):
 

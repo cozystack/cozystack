@@ -124,6 +124,121 @@ spec:
           apiVersion: batch/v1
           kind: Job
           name: postgres-test-init-job
+
+  # The trust anchor a client verifies against, checked against the live
+  # operator rather than against our own beliefs about it.
+  #
+  # This is the only independent witness the CA-extraction feature has. Its unit
+  # tests build CNPG's CA Secret from a fixture that encodes the same assumption
+  # the shipped ApplicationDefinition encodes ("{{ .release }}-ca", key ca.crt),
+  # so the two agree by construction and cannot catch each other being wrong.
+  # Only a real CNPG can say whether that name and key are right, and only a real
+  # apiserver can say whether the lineage webhook actually promotes the
+  # projection to a tenant-readable object.
+  - name: verify-tenant-ca-projection
+    try:
+    # Postgres never opts out of TLS: CNPG mints its CA regardless of the
+    # chart's tls flag, so the projection is expected on this plain fixture.
+    #
+    # The labels are the assertion that matters. tenant-ca is stamped by the
+    # controller; tenantresource is stamped by the LINEAGE WEBHOOK, computed
+    # from the ApplicationDefinition's spec.secrets — the new matchLabels
+    # include. It is "true" only if the whole chain held: definition selects the
+    # label, webhook admitted the object, verdict came out positive. Nothing
+    # short of a live cluster proves that link.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: postgres-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # The projection must be the CA and ONLY the CA. Everything below is
+    # deterministic once the assert above has passed, so it runs without retry.
+    - script:
+        content: |
+          set -eu
+
+          # Exactly one key, and it is ca.crt. Any second key is a leak in the
+          # making: the source this was lifted from carries a private key.
+          keys=$(kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca \
+            -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right bytes: the projection's ca.crt is CNPG's ca.crt.
+          # This is what pins "{{ .release }}-ca" to reality — if CNPG ever
+          # renames its CA Secret, the controller finds nothing and this fails.
+          src=$(kubectl -n "$NAMESPACE" get secret postgres-test-ca -o jsonpath='{.data.ca\.crt}')
+          proj=$(kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca -o jsonpath='{.data.ca\.crt}')
+          if [ -z "$src" ]; then
+            echo "CNPG's postgres-test-ca has no ca.crt — the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          if [ "$src" != "$proj" ]; then
+            echo "projection does not carry CNPG's CA certificate" >&2
+            exit 1
+          fi
+
+          # And the point of the whole exercise: the source carries the CA
+          # PRIVATE KEY, the projection must not. Asserting the source really
+          # does hold ca.key keeps this honest — if CNPG ever stopped storing it
+          # there, this check would otherwise pass while proving nothing.
+          if ! kubectl -n "$NAMESPACE" get secret postgres-test-ca \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'ca.key'; then
+            echo "CNPG's CA Secret no longer carries ca.key — this check has stopped proving anything" >&2
+            exit 1
+          fi
+          if kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'ca.key'; then
+            echo "projection leaked the CA private key" >&2
+            exit 1
+          fi
+
+          # Belt and braces on the bytes themselves: no PEM key header of any
+          # flavour survived into the tenant-readable object.
+          if kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The delivery path the README actually tells a tenant to use, run as
+          # the command the README prints. Everything above reads the raw Secret,
+          # which only an admin can do — it proves the projection's SHAPE and
+          # nothing about whether a tenant can reach it.
+          #
+          # core.cozystack.io/tenantsecrets serves only objects labelled
+          # tenantresource=true, and that label is the lineage webhook's verdict,
+          # computed from this app's ApplicationDefinition selectors. So this
+          # query 404s unless the whole chain held: the definition selects
+          # tenant-ca, the webhook admitted the projection, and the verdict came
+          # out positive. It is the one assertion that exercises the registry
+          # rather than inspecting its input.
+          anchor=$(kubectl -n "$NAMESPACE" get tenantsecret postgres-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # And the negative that gives the positive its meaning: the registry
+          # must NOT serve CNPG's key-bearing CA. It carries no tenant-ca label,
+          # so the definition does not select it and the webhook marks it
+          # tenantresource=false. If this ever starts resolving, the label path
+          # has stopped gating on the platform's verdict.
+          if kubectl -n "$NAMESPACE" get tenantsecret postgres-test-ca >/dev/null 2>&1; then
+            echo "CNPG's key-bearing CA is being served as a tenant secret" >&2
+            exit 1
+          fi
+        check:
+          ($error == null): true
 # The Postgres CR itself was applied by chainsaw and is deleted (and waited
 # on) automatically during cleanup — no explicit teardown step needed.
 ---

@@ -17,9 +17,12 @@ spec:
   # admission webhook, which is why the chart no longer renders a cert-manager
   # chain — the operator owns the chain end-to-end.
   #
-  # Trust anchor for clients: the ca.crt key present in every user-credentials
-  # Secret CNPG creates (e.g. <release>-credentials). Mount that key into
-  # client pods to verify TLS.
+  # Trust anchor for clients: the <release>.tenant-ca Secret, an Opaque object
+  # holding ca.crt and nothing else. The CA-extraction controller
+  # (internal/controller/cacert) publishes it per release by lifting ca.crt out
+  # of CNPG's own <release>-ca — which cannot be handed to a client directly,
+  # because CNPG stores the CA PRIVATE KEY (ca.key) in it. Mount ca.crt from
+  # <release>.tenant-ca into client pods to verify TLS.
   certificates:
     serverAltDNSNames:
       - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}
