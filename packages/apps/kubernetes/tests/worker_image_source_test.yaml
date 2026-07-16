@@ -1,0 +1,249 @@
+suite: per-node-group worker image source (image.builtin / image.factory)
+
+# Exercises the disk-system source selection in templates/cluster.yaml:
+#   - image omitted / image.factory -> HTTP import from the Image Factory;
+#   - image.builtin                 -> CDI clone of the golden DataVolume in
+#                                      cozy-public (talos-worker-<schematicID>-<version>).
+# The golden DataVolume and the CAPI LIST kinds are mocked via kubernetesProvider;
+# lookup() is otherwise empty under `helm template`. The default talos.* is
+# schematicID ce4c98…/v1.13.6, so the default golden name is
+# talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6.
+
+templates:
+  - templates/cluster.yaml
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+    "cluster.x-k8s.io/v1beta1/MachineSet":
+      gvr: {group: cluster.x-k8s.io, version: v1beta1, resource: machinesets}
+      namespaced: true
+    "infrastructure.cluster.x-k8s.io/v1alpha1/KubevirtMachineTemplate":
+      gvr: {group: infrastructure.cluster.x-k8s.io, version: v1alpha1, resource: kubevirtmachinetemplates}
+      namespaced: true
+    "cdi.kubevirt.io/v1beta1/DataVolume":
+      gvr: {group: cdi.kubevirt.io, version: v1beta1, resource: datavolumes}
+      namespaced: true
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+    # Dummy CAPI objects so the MachineSet / KubevirtMachineTemplate LIST kinds
+    # (old-template-preservation loop) are registered with the fake client.
+    - kind: MachineSet
+      apiVersion: cluster.x-k8s.io/v1beta1
+      metadata: {name: ignored-ms, namespace: tenant-test}
+      spec: {template: {spec: {infrastructureRef: {kind: Other, name: ignored}}}}
+    - kind: KubevirtMachineTemplate
+      apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+      metadata: {name: ignored-kmt, namespace: tenant-test}
+    # The golden for the default talos.* (present, so builtin clones succeed).
+    # storage 6Gi mirrors the catalog default, so the diskSize>=golden guard has
+    # a size to compare against.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        namespace: cozy-public
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 6Gi
+
+tests:
+  - it: image omitted imports over HTTP from the cluster talos.* factory (back-compat)
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations
+          value:
+            cdi.kubevirt.io/storage.usePopulator: "false"
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: empty image.factory imports over HTTP from the cluster talos.* factory
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            factory: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: image.factory overrides import from the given mirror / schematic / version
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            factory:
+              imageFactoryURL: https://mirror.internal
+              schematicID: deadbeef
+              version: v1.14.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://mirror.internal/image/deadbeef/v1.14.0/openstack-amd64.raw.xz
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: empty image.builtin clones the cluster-default golden and omits usePopulator
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.namespace
+          value: cozy-public
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].metadata.annotations
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: image.builtin with an explicit schematicID/version clones that golden
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin:
+              schematicID: ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515
+              version: v1.13.6
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  - it: image.builtin fails the render when the requested golden is absent
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin:
+              schematicID: doesnotexist
+              version: v9.9.9
+    asserts:
+      - failedTemplate:
+          errorPattern: 'image\.builtin requested golden DataVolume "talos-worker-doesnotexist-v9\.9\.9" not found in cozy-public'
+
+  - it: setting both image.builtin and image.factory fails the render
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin: {}
+            factory: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'set only one of image\.builtin or image\.factory'
+
+  - it: image.builtin fails when the worker diskSize is smaller than the golden storage
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 4Gi
+          roles: [ingress-nginx]
+          image:
+            builtin: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'diskSize 4Gi is smaller than golden image .* storage 6Gi'
+
+  # Regression guard for the no-worker-roll invariant: an image-omitted group must
+  # render a KubevirtMachineTemplate whose content-hash name is stable. If a future
+  # change to the image-selection block alters the rendered KMT, this pinned hash
+  # rotates and forces a conscious update — the signal that existing workers would
+  # roll. The fixture matches the reconcile-Job hash test in talos_templates_test.yaml.
+  - it: image-omitted group keeps a stable KubevirtMachineTemplate content hash
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources:
+            cpu: 8
+            memory: 16Gi
+          kubelet: {}
+          gpus: []
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-k8s-md0-767d86
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
