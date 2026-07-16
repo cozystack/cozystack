@@ -34,15 +34,60 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch"]
-# WildcardSecretReconciler replicates the operator-provided wildcard TLS
-# Secret from the publishing namespace into each tenant namespace that
-# terminates TLS. This grants the platform controller's own
-# ServiceAccount Secret writes — it does not widen any tenant's RBAC;
-# tenant ingress controllers / Gateways still read only the replica in
-# their own namespace. The read verbs (get/list/watch) are intentionally
-# listed too so this rule fully describes the reconciler's Secret access
-# on its own and keeps working if the broad read-only catch-all rule
-# below is ever narrowed; only create/update/patch/delete are new grants.
+# Two reconcilers share this single Secret write grant; both scope the
+# platform controller's own ServiceAccount only and widen no tenant's RBAC.
+#
+#  - WildcardSecretReconciler replicates the operator-provided wildcard TLS
+#    Secret from the publishing namespace into each tenant namespace that
+#    terminates TLS; tenant ingress controllers / Gateways still read only the
+#    replica in their own namespace.
+#  - CACertReconciler projects an application's CA certificate into the key-free
+#    "<release>.tenant-ca" Secret of the same namespace, and deletes that
+#    projection when the application stops publishing a CA (the owner reference
+#    to the HelmRelease only collects it when the whole application goes away).
+#    It only ever deletes a Secret it created itself.
+#
+# The read verbs (get/list/watch) are listed explicitly so the rule fully
+# describes both reconcilers' Secret access on its own and keeps working if the
+# broad read-only catch-all rule below is ever narrowed; create/update/patch/
+# delete are the new grants.
+#
+# BLAST RADIUS — this grant is cluster-wide write on every Secret, and it is
+# worth being explicit about why it cannot be narrower and what it therefore
+# costs.
+#
+# Why it cannot be narrower. RBAC can scope a verb to a namespace, to a
+# resource, or to an exact resourceName — and to nothing else. It has no notion
+# of a name suffix or a label selector, which is what both reconcilers actually
+# need:
+#   - the objects are named per release ("<release>.tenant-ca", the wildcard
+#     replica), so the set is unbounded and every name is minted at runtime;
+#   - they land in tenant namespaces, which are themselves created dynamically,
+#     so no namespace list can be enumerated when this ClusterRole is rendered;
+#   - resourceNames could not express it even if the names were known: RBAC
+#     ignores resourceNames for create, list and watch, which is most of what
+#     these reconcilers do.
+# So a Secret write grant here is all-Secrets-everywhere or nothing.
+#
+# What it costs. A compromise of the cozystack-controller ServiceAccount is a
+# compromise of every Secret in the cluster — including the CA private keys the
+# CA-extraction controller exists to keep away from tenants. The controller's own
+# code is what confines it: the CA reconciler lifts exactly one whitelisted key,
+# re-guards the bytes on every write, and only ever deletes a Secret it created
+# itself. That is a code-level confinement of an RBAC-level power, which is
+# strictly weaker than not holding the power — the honest reading is that the
+# guard is the boundary, and the RBAC is not.
+#
+# In context, the delta is smaller than it first looks: this same SA already
+# holds ['*'] on cozystack.io (which is how applications, and thus their
+# Secrets, are created in the first place) and cluster-wide read on every
+# resource. It is a platform-tier identity before this rule is reached, and the
+# write verbs do not move it to a new tier.
+#
+# If that ever needs to change, the shape is a SEPARATE ServiceAccount holding
+# only the Secret verbs, with the two Secret-writing reconcilers moved onto it
+# and off this one — which is a process/manager split, not an RBAC edit, and so
+# deliberately not attempted here.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]

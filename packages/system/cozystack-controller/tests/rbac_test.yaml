@@ -1,4 +1,4 @@
-suite: cozystack-controller ClusterRole grants the wildcard-replication secrets write
+suite: cozystack-controller ClusterRole grants the shared Secret write
 templates:
   - templates/rbac.yaml
 
@@ -6,14 +6,17 @@ release:
   name: cozystack-controller
   namespace: cozy-system
 
-# The WildcardSecret reconciler replicates the operator wildcard TLS Secret
-# into tenant namespaces, so the platform controller's ServiceAccount needs
-# Secret write verbs (read was already covered by the catch-all rule). This
-# rule gates the whole feature, so pin it. It scopes the platform
-# controller's own SA only — it does not widen any tenant's RBAC.
+# One Secret write grant on the platform controller's ClusterRole serves two
+# reconcilers: WildcardSecret replicates the operator wildcard TLS Secret into
+# tenant namespaces, and CACert writes — and withdraws — the key-free
+# "<release>.tenant-ca" projection. Read was already covered by the catch-all
+# rule; the write verbs (including "delete", which lets CACert withdraw a
+# projection and lets WildcardSecret prune a stale replica) are the new grants.
+# This rule gates both features, so pin it. It scopes the platform controller's
+# own ServiceAccount only — it does not widen any tenant's RBAC.
 
 tests:
-  - it: grants secrets get/list/watch/create/update/patch/delete on the ClusterRole
+  - it: grants the ClusterRole every verb both reconcilers need, including delete
     documentSelector:
       path: kind
       value: ClusterRole
@@ -27,3 +30,15 @@ tests:
             apiGroups: [""]
             resources: ["secrets"]
             verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+  - it: does not grant a blanket wildcard verb on secrets
+    documentSelector:
+      path: kind
+      value: ClusterRole
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["*"]
