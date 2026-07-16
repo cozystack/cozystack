@@ -18,26 +18,19 @@ spec:
         cnpg.io/cluster: keycloak-db
   {{- end }}
   {{- end }}
-  {{- if and .Values.backup.enabled .Values.backup.destinationPath }}
   {{- $credSecret := .Values.backup.existingSecretName | default "keycloak-db-backup-s3-creds" }}
-  backup:
-    barmanObjectStore:
-      destinationPath: {{ .Values.backup.destinationPath | quote }}
-      {{- with .Values.backup.endpointURL }}
-      endpointURL: {{ . | quote }}
-      {{- end }}
-      s3Credentials:
-        accessKeyId:
-          name: {{ $credSecret }}
-          key: AWS_ACCESS_KEY_ID
-        secretAccessKey:
-          name: {{ $credSecret }}
-          key: AWS_SECRET_ACCESS_KEY
-      data:
-        compression: gzip
-      wal:
-        compression: gzip
-    retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  {{- if and .Values.backup.enabled .Values.backup.destinationPath }}
+  # Barman Cloud plugin. The S3/barman settings live in the ObjectStore CR
+  # rendered at the bottom of this file; the Cluster only references it by name.
+  # Native spec.backup.barmanObjectStore is deprecated in CNPG 1.27 and removed
+  # in 1.29, and the standard image variant keycloak-db pins no longer ships the
+  # barman-cloud-* binaries. The plugin runs them in a sidecar, so keycloak-db
+  # stays on the standard variant (no need for the deprecated system variant).
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: keycloak-db
   {{- end }}
   monitoring:
     enablePodMonitor: true
@@ -45,3 +38,28 @@ spec:
   inheritedMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
+{{- if and .Values.backup.enabled .Values.backup.destinationPath }}
+---
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: keycloak-db
+spec:
+  retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  configuration:
+    destinationPath: {{ .Values.backup.destinationPath | quote }}
+    {{- with .Values.backup.endpointURL }}
+    endpointURL: {{ . | quote }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ $credSecret }}
+        key: AWS_ACCESS_KEY_ID
+      secretAccessKey:
+        name: {{ $credSecret }}
+        key: AWS_SECRET_ACCESS_KEY
+    data:
+      compression: gzip
+    wal:
+      compression: gzip
+{{- end }}
