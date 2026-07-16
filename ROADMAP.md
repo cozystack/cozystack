@@ -2,7 +2,7 @@
 
 **Status:** Living document — updated quarterly by the maintainers.
 **Horizon:** May 2026 – May 2028 (two-year forward window).
-**Last updated:** 2026-05-18.
+**Last updated:** 2026-07-16.
 
 This document describes where Cozystack is heading. It is the authoritative
 public roadmap. The granular issue-level view lives in
@@ -130,8 +130,10 @@ Cozystack is shaped as a layered offering:
 - `v1.3` — storage-aware scheduling via LINSTOR extender, LINSTOR GUI, VM
   default images, app-level observability, S3 metering, cross-namespace VM
   restore.
-- `v1.4` (rc) — backup strategies, Flux 2.8, new `cozystack-ui`, cozy-tls,
+- `v1.4` — backup strategies, Flux 2.8, new `cozystack-ui`, cozy-tls,
   Redis TLS, app scheduling, CI/e2e hardening.
+- `v1.5` — shipped (latest stable line).
+- `v1.6` — in release-candidate.
 
 ### 3.2 Roadmap items already completed
 
@@ -160,7 +162,7 @@ delivered:
 - Selecting managed application versions (#1246) — rescheduled to Q3 2026.
 - Grafana dashboard with SLA for each service (#1262) — rescheduled to
   Q3 2026.
-- API Gateway support (#1265) — rescheduled to Q3 2026.
+- API Gateway support (#1265) — closed.
 - Distroless images (#1261) — Q3 2026.
 - Automated platform updates (#1266) — Q3 2026.
 
@@ -206,7 +208,7 @@ contract.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | Close in-flight items #1246 #1247 #1262 #1265. Cut `v1.5.0`. Publish `API Stability Policy` (alpha/beta/stable lanes, deprecation window). Scope the **GitOps Engine Abstraction** CzEP — decouple package delivery from the underlying engine so Flux remains the default while a second engine becomes feasible. |
+| 2026 Q3 | Close in-flight items #1246 #1247 #1262. Cut `v1.5.0`. Publish `API Stability Policy` (alpha/beta/stable lanes, deprecation window). Scope the **GitOps Engine Abstraction** CzEP — decouple package delivery from the underlying engine so Flux remains the default while a second engine becomes feasible. |
 | 2026 Q4 | Distroless images (#1261). Automated platform updates (#1266). Public **Release Trains** policy: `stable`, `fast`, `LTS`. Public support matrix for Kubernetes / host OS / Cilium / KubeVirt / storage backends / **GitOps engines**. **Argo CD experimental support** as an alternative GitOps engine — package model adapts `Package` / `PackageSource` to `Application` / `ApplicationSet` semantics; documented as `experimental` and opt-in at install time. |
 | 2027 Q1 | **Cozystack 2.0** — backwards-compatibility contract published; major API revision based on production feedback; HA control-plane improvements (stretched control plane, multi-AZ, etcd backup automation). **Argo CD support reaches alpha** — supported install path for greenfield clusters; not yet a migration target for existing Flux-based deployments. |
 | 2027 Q2 | `Platform Health API` covering operator, packages, GitOps engine (Flux or Argo CD), storage, networking, backups, ingress, auth. Explicit lifecycle states for apps, backups, restores, VMs, tenant clusters. **Argo CD support reaches beta** — feature parity with Flux for tenant app delivery, including `ApplicationSet` patterns for multi-tenant fan-out. |
@@ -235,13 +237,14 @@ Conformance Suite** that third parties can certify against.
 Incubation, then Graduated, and supports downstream commercial users in
 audited environments. **This is the largest single track in the roadmap.**
 
-Cozystack's security work is structured around eight external frameworks plus
+Cozystack's security work is structured around ten external frameworks plus
 one internal program. Each is treated as a sub-project with concrete tasks.
 
-#### 3.1 OpenSSF Best Practices Badge (Metal series)
+#### Track 3.1 — OpenSSF Best Practices Badge (Metal series)
 
 The legacy and still-required "Passing / Silver / Gold" badge program.
-CNCF expects Passing as a minimum for Incubation and Gold for Graduation.
+CNCF Graduation requires only the Passing badge; Silver and Gold are suggested,
+not required, and are self-chosen targets here.
 
 | Quarter | Target | Concrete tasks |
 |---|---|---|
@@ -249,9 +252,10 @@ CNCF expects Passing as a minimum for Incubation and Gold for Graduation.
 | 2026 Q4 | **Silver** (55 additional criteria) | DCO or CLA documented and enforced, two-person review for substantive changes (already required), branch protection on all release branches, automated `golangci-lint` + `gosec` on every PR (extend coverage), documented coding standards, documented release-signing process, signed Git tags for releases, security policy with vulnerability disclosure timeline, README references security policy, contribution metadata documented (size, scope, review). |
 | 2027 Q2 | **Gold** (23 additional criteria) | Documented secure-design / threat model, fuzzing for critical components (blockstor, custom-scheduler, controllers), public SAST findings management, dynamic analysis (`go vet -race`, kube-conformance), CI-driven dependency-license check (FOSSA/ScanCode), reproducible builds for container images, branch protection includes required signed commits where supported. |
 
-#### 3.2 OSPS Baseline (Open Source Project Security Baseline)
+#### Track 3.2 — OSPS Baseline (Open Source Project Security Baseline)
 
-The new (Feb 2026) maturity-model framework that is replacing "Gold-only"
+The maturity-model framework — launched Feb 2025, current version dated
+2026-02 — that is replacing "Gold-only"
 thinking. Has three levels organized by project maturity. Cozystack already
 qualifies for L3 by user-base; the work is bringing controls up to spec.
 
@@ -275,10 +279,11 @@ The eight control families (each ID `OSPS-XX-YY`):
 The repository ships an `OSPS-BASELINE.md` self-assessment that maps every
 control to evidence and is regenerated on each release.
 
-#### 3.3 OpenSSF Scorecard
+#### Track 3.3 — OpenSSF Scorecard
 
-Automated weekly checks producing a numeric score. CNCF expects ≥ 7.0 for
-Incubation and ≥ 8.0 for Graduated.
+Automated weekly checks producing a numeric score. CNCF sets no numeric
+Scorecard threshold for either tier; the levels below are self-chosen targets
+(around ≥ 7.0 by Incubation, ≥ 8.0 toward Graduated).
 
 | Quarter | Target | Concrete tasks |
 |---|---|---|
@@ -287,9 +292,11 @@ Incubation and ≥ 8.0 for Graduated.
 | 2027 Q2 | **≥ 8.0** | SAST integration, fuzzing presence, CII Best Practices score reflection. |
 | 2027 Q4 | **≥ 9.0** | All applicable checks pass; only systemic exceptions remain documented. |
 
-#### 3.4 SLSA — Supply-chain Levels for Software Artifacts
+#### Track 3.4 — SLSA — Supply-chain Levels for Software Artifacts
 
-Build-side integrity. CNCF Graduation expects SLSA Build L3.
+Build-side integrity, tracked against the current SLSA v1.2 specification
+(Build track). SLSA is not a stated CNCF graduation requirement; Build L3 is a
+self-chosen aspirational target.
 
 | Quarter | Target | Concrete tasks |
 |---|---|---|
@@ -297,7 +304,7 @@ Build-side integrity. CNCF Graduation expects SLSA Build L3.
 | 2026 Q4 | **Build L2** | Hosted-build platform (GitHub Actions OIDC + slsa-github-generator). Authenticated provenance with signed `_provenance` files. |
 | 2027 Q3 | **Build L3** | Hardened build platform: isolated build steps, non-falsifiable provenance, no human override of build pipeline; reusable workflows audited; secrets handled via OIDC short-lived tokens only. |
 
-#### 3.5 CNCF CLOMonitor
+#### Track 3.5 — CNCF CLOMonitor
 
 CNCF-wide automated check dashboard. Must be all-green for Incubation review.
 
@@ -305,7 +312,7 @@ CNCF-wide automated check dashboard. Must be all-green for Incubation review.
 |---|---|
 | 2026 Q3 | Verify all CLOMonitor checks. Address gaps: project metadata, governance, security policy, adopters file completeness, contributor ladder, license, code of conduct, OpenSSF badge, artifact signing, SBOM. |
 
-#### 3.6 CNCF Security Self-Assessment + Third-Party Audit
+#### Track 3.6 — CNCF Security Self-Assessment + Third-Party Audit
 
 | Quarter | Deliverables |
 |---|---|
@@ -313,24 +320,25 @@ CNCF-wide automated check dashboard. Must be all-green for Incubation review.
 | 2027 Q3 | Engage a **third-party audit** (e.g. Ada Logics with OSTIF funding, or NCC Group). Scope: core controllers, blockstor, custom scheduler, multi-tenancy boundaries, supply chain. Required for Graduated tier. |
 | 2027 Q4 | Publish audit results and remediation status. Triage findings into milestones. |
 
-#### 3.7 EU Cyber Resilience Act (CRA)
+#### Track 3.7 — EU Cyber Resilience Act (CRA)
 
 The CRA's reporting obligations apply from **11 September 2026**; full
-obligations from **11 December 2027**. Cozystack itself, as a non-commercial
-OSS project, is technically a *contributor* under CRA Article 23, not a
-*manufacturer*. But downstream commercial vendors who package Cozystack are
+obligations from **11 December 2027**. Cozystack itself, as an OSS project,
+falls under the *open-source software steward* regime of CRA Article 24
+("Obligations of open-source software stewards"), not the *manufacturer*
+obligations. But downstream commercial vendors who package Cozystack are
 manufacturers. We document the project so that downstream compliance is
 tractable.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | Publish a **`CRA-COMPLIANCE.md`** describing: (a) the project's status as an OSS contributor under Article 23, (b) the CVE coordinated-disclosure process aligning with CRA timelines (24h initial / 72h info / 14d final after fix or workaround for actively exploited issues), (c) SBOM availability per release. |
+| 2026 Q3 | Publish a **`CRA-COMPLIANCE.md`** describing: (a) the project's status as an open-source software steward under Article 24, (b) the CVE coordinated-disclosure process aligning with CRA timelines (24h initial / 72h info / 14d final after fix or workaround for actively exploited issues), (c) SBOM availability per release. |
 | 2026 Q3 | Adopt **CSAF VEX** for vulnerability advisories. Publish each advisory as a CSAF JSON file alongside the GHSA. |
 | 2026 Q4 | SBOM in **SPDX** and **CycloneDX** formats published with every release; signed with cosign. |
 | 2027 Q1 | Document the **shared-responsibility matrix** between Cozystack maintainers and downstream commercial vendors for incident response. |
 | 2027 Q4 | Verify the disclosure pipeline against CRA timeline obligations with a tabletop exercise. |
 
-#### 3.8 SOC 2 (Process Readiness, not Certification)
+#### Track 3.8 — SOC 2 (Process Readiness, not Certification)
 
 An OSS project does not get SOC 2 itself — services do. We deliver a **process
 evidence pack** that any commercial Cozystack distributor can use in their
@@ -342,7 +350,7 @@ own SOC 2 audit.
 | 2027 Q3 | **Type II evidence-collection automation** — GitHub Actions snapshot monthly evidence (permission grants, branch-protection state, release-signing logs, CVE triage decisions) to `SOC2-EVIDENCE/`. |
 | 2027 Q4 | Tabletop exercise with downstream Cozystack distributors to validate the evidence pack supports their audits. |
 
-#### 3.9 PCI DSS v4.0.1 (Reference Architecture)
+#### Track 3.9 — PCI DSS v4.0.1 (Reference Architecture)
 
 A `PCI-DSS.md` reference architecture for deploying Cozystack as a CDE
 (Cardholder Data Environment).
@@ -352,14 +360,14 @@ A `PCI-DSS.md` reference architecture for deploying Cozystack as a CDE
 | 2027 Q2 | Publish `reference-architectures/pci-dss-v4/` containing: network segmentation (Cilium NetworkPolicy + Kubernetes NetworkPolicy), MFA enforcement (OIDC config), audit-log architecture (Cozystack audit log + Loki + immutable retention), vulnerability-management workflow, secure-defaults documentation, key-management (External Secrets Operator + HashiCorp Vault / OpenBao), responsibility matrix. |
 | 2027 Q3 | Validate the reference architecture with a friendly PCI QSA review. |
 
-#### 3.10 ISO/IEC 5230 (OpenChain) — License Compliance
+#### Track 3.10 — ISO/IEC 5230 (OpenChain) — License Compliance
 
 | Quarter | Deliverables |
 |---|---|
 | 2026 Q4 | **OpenChain self-certification** — `LICENSE-COMPLIANCE.md` documenting the project's SPDX-correct license metadata, third-party license inventory (auto-generated from `go.mod` and Helm chart dependencies), and license-clearing workflow for new dependencies. |
 | 2027 Q1 | Automated license-policy gate in CI (`fossa`/`scancode`). |
 
-#### 3.11 Internal Security Programs
+#### Track 3.11 — Internal Security Programs
 
 **Vulnerability response.** Formalize the **Cozystack Security Response
 Team** with rotating on-call.
@@ -398,7 +406,7 @@ Team** with rotating on-call.
 - 2027 Q3: **Fuzzing** for security-sensitive components: REST parsers,
   CRD validators, controller reconcilers (oss-fuzz integration).
 
-#### 3.12 Certifications Roll-up
+#### Track 3.12 — Certifications Roll-up
 
 | Cert / Badge | 2026 Q3 | 2026 Q4 | 2027 Q1 | 2027 Q2 | 2027 Q3 | 2027 Q4 | 2028 Q1+ |
 |---|---|---|---|---|---|---|---|
@@ -588,7 +596,7 @@ documents, marketing assets, training content, and event materials.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (current: v1.2, v1.3, v1.4-rc; future: stable / LTS / fast). |
+| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (current: v1.4, v1.5, v1.6-rc; future: stable / LTS / fast). |
 | 2026 Q3 | **Install & upgrade docs** brought to production quality for every supported host OS profile (Talos Tier-1; Ubuntu / Debian / Flatcar Tier-2). |
 | 2026 Q4 | **Auto-generated API reference** from CRDs and `cozystack-api` OpenAPI spec, published per release. Tested code samples — every code block in docs runs in CI against a live cluster, broken samples block release. |
 | 2026 Q4 | **Operator's Handbook** — production-grade runbook collection for common operations: cluster upgrades, tenant onboarding, backup restore, DR exercises, storage migration, network troubleshooting. |
@@ -705,11 +713,12 @@ Categories are defined by **specifications, not implementations**. Linux
 became Linux because of POSIX, LSB, FHS, and stable kernel ABIs that allowed
 distributions to multiply. Kubernetes became Kubernetes because of OCI,
 CRI, CSI, CNI, the Operator pattern, and a Conformance Program that
-distinguished compliant distributions from incompatible ones. Docker had a
-superb reference implementation but lost the runtime category because the
-governance over the interface (OCI/CRI) was opened to the community while
-the reference implementation stayed closed. The lesson is consistent: own
-the specification, let the ecosystem own the implementations.
+distinguished compliant distributions from incompatible ones. Docker actually
+contributed its reference implementations to the community — containerd to the
+CNCF and runc to the OCI — yet Docker Engine still lost the Kubernetes runtime
+slot, because it never implemented the CRI interface and dockershim was
+eventually removed. The lesson is consistent: own the specification, let the
+ecosystem own the implementations.
 
 This section enumerates the specifications Cozystack should define and own,
 the specifications Cozystack should adopt and champion, the bodies it should
@@ -979,7 +988,7 @@ evolve in a direction Cozystack benefits from.
 | **CNI** (Container Network Interface) | Networking | Adopted via Cilium | Cilium maintainer engagement. |
 | **CDI** (Container Device Interface) | Device sharing | Adopted via Talos 1.13 default | Use for first-class GPU device sharing. |
 | **Kubernetes Gateway API** | Ingress next-gen | `gateway-api-crds` in `packages/system`; needs roll-out | Move tenant ingress to Gateway API as default by 2027 Q2. |
-| **MCS-API** (Multi-Cluster Services) | Cross-cluster services | Available via Cilium 1.20 | Adopt as soon as Cilium 1.20 upgrade completes. |
+| **MCS-API** (Multi-Cluster Services) | Cross-cluster services | Beta in Cilium since ~1.17–1.18 | Adopt once the platform's Cilium baseline reaches a release with stable MCS-API support. |
 | **OpenAPI 3.1** | API specs | Adopted for `cozystack-api` | Auto-publish per release (paired with Track 12.2). |
 | **OpenTelemetry** | Observability | Partially adopted (metrics) | Extend to traces and logs by 2027 Q1. |
 | **CloudEvents** | Event-driven workflows | Not adopted | Adopt for Marketplace lifecycle hooks by 2027 Q1. |
@@ -1258,8 +1267,9 @@ goal:
   this document. The current Project V2 board remains the granular
   issue-level source of truth for in-quarter work; this document gives the
   multi-quarter view.
-- Material changes to the roadmap are proposed via a CzEP (Cozystack
-  Enhancement Proposal) in
+- The initial roadmap (this document) is ratified via a maintainer roadmap
+  review on this PR; thereafter, material changes to the roadmap are proposed
+  via a CzEP (Cozystack Enhancement Proposal) in
   [cozystack/community/design-proposals](https://github.com/cozystack/community/tree/main/design-proposals).
 - The document is versioned in `git` history; major revisions are tagged.
 
