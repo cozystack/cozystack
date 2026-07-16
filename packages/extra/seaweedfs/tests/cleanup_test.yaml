@@ -10,9 +10,13 @@ release:
 # (data1-seaweedfs-system-volume-{0,1}) and the cert-manager TLS / db
 # secrets are left orphaned. The post-delete hook renders a Job (plus its
 # RBAC) that deletes the volume PVCs by label and the secrets by name.
-# All names are templated from .Release.Name: the leaked resources use the
-# {{ .Release.Name }}-system prefix because seaweedfs.yaml renders the
-# StatefulSet/cert HelmRelease as "{{ .Release.Name }}-system".
+# Secrets are cleaned under BOTH naming schemes: the native
+# {{ .Release.Name }}-system-* prefix (fresh installs) and the adopted
+# chart-name-based seaweedfs-* prefix (clusters upgraded past the 4.31
+# rename, where seaweedfs.yaml pins fullnameOverride=seaweedfs). Only one
+# set exists on a given cluster; the hook lists both so cleanup stays
+# exhaustive. PVCs are deleted by the app.kubernetes.io/instance label,
+# which is {{ .Release.Name }}-system under either naming.
 
 tests:
   - it: renders the cleanup ServiceAccount as a post-delete hook
@@ -33,7 +37,7 @@ tests:
           path: metadata.annotations["helm.sh/hook-delete-policy"]
           value: before-hook-creation,hook-succeeded
 
-  - it: grants delete on PVCs and only the 9 named secrets
+  - it: grants delete on PVCs and only the named secrets under both naming schemes
     documentSelector:
       path: kind
       value: Role
@@ -63,6 +67,14 @@ tests:
               - seaweedfs-system-volume-cert
               - seaweedfs-system-worker-cert
               - seaweedfs-system-db-secret
+              - seaweedfs-admin-cert
+              - seaweedfs-ca-cert
+              - seaweedfs-client-cert
+              - seaweedfs-filer-cert
+              - seaweedfs-master-cert
+              - seaweedfs-volume-cert
+              - seaweedfs-worker-cert
+              - seaweedfs-db-secret
 
   - it: binds the cleanup Role to the cleanup ServiceAccount
     documentSelector:
@@ -152,7 +164,7 @@ tests:
           pattern: 'kubectl delete pvc -n tenant-root -l app\.kubernetes\.io/name=seaweedfs,app\.kubernetes\.io/instance=seaweedfs-system --ignore-not-found --wait=false'
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: 'kubectl delete secret -n tenant-root seaweedfs-s3-ingress-tls seaweedfs-system-admin-cert seaweedfs-system-ca-cert seaweedfs-system-client-cert seaweedfs-system-filer-cert seaweedfs-system-master-cert seaweedfs-system-volume-cert seaweedfs-system-worker-cert seaweedfs-system-db-secret --ignore-not-found --wait=false'
+          pattern: 'kubectl delete secret -n tenant-root seaweedfs-s3-ingress-tls seaweedfs-system-admin-cert seaweedfs-system-ca-cert seaweedfs-system-client-cert seaweedfs-system-filer-cert seaweedfs-system-master-cert seaweedfs-system-volume-cert seaweedfs-system-worker-cert seaweedfs-system-db-secret seaweedfs-admin-cert seaweedfs-ca-cert seaweedfs-client-cert seaweedfs-filer-cert seaweedfs-master-cert seaweedfs-volume-cert seaweedfs-worker-cert seaweedfs-db-secret --ignore-not-found --wait=false'
       # The PVC selector must NOT filter by component: the volume StatefulSet sets
       # app.kubernetes.io/component to volume / volume-<pool> / volume-<zone>[-<pool>]
       # depending on topology, so a component clause would leave non-default pools and
