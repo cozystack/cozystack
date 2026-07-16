@@ -417,7 +417,7 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" }}/{{ $.Values.talos.schematicID }}:{{ .talosVersion }}
+                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" }}/{{ .talosSchematicID }}:{{ .talosVersion }}
                           wipe: false
                         features:
                           rbac: true
@@ -535,11 +535,33 @@ spec:
 {{- /* Render the Job spec, then hash it to a name suffix so the immutable
        Job is churn-free across upgrades (see the header comment). Mirrors
        the KubevirtMachineTemplate content-hash idiom in cluster.yaml. */}}
+{{- /* Resolve this group's worker image (schematicID, version) from .group.image
+       — the same selection templates/cluster.yaml uses for the boot disk — so the
+       in-guest Talos installer image matches the OS this group actually booted.
+       Defaults to the cluster-wide talos.*; a group with image.builtin / image.factory
+       pins its own flavor and version so an in-guest upgrade does not flip it back to
+       the cluster default. */}}
+{{- /* hasKey, not truthiness: an empty builtin/factory map means "the cluster
+       talos.* defaults", and Go templates treat an empty map as false. Mirrors
+       the resolution in cluster.yaml. */}}
+{{- $grpImg := $group.image | default dict }}
+{{- $grpSchematicID := $.Values.talos.schematicID }}
+{{- $grpVersion := $talosVersion }}
+{{- if hasKey $grpImg "builtin" }}
+{{-   $b := $grpImg.builtin | default dict }}
+{{-   $grpSchematicID = $b.schematicID | default $.Values.talos.schematicID }}
+{{-   $grpVersion = $b.version | default $talosVersion }}
+{{- else if hasKey $grpImg "factory" }}
+{{-   $f := $grpImg.factory | default dict }}
+{{-   $grpSchematicID = $f.schematicID | default $.Values.talos.schematicID }}
+{{-   $grpVersion = $f.version | default $talosVersion }}
+{{- end }}
 {{- $jobContext := deepCopy $ }}
 {{- $_ := set $jobContext "group" $group }}
 {{- $_ := set $jobContext "groupName" $groupName }}
 {{- $_ := set $jobContext "kubeletVersion" $kubeletVersion }}
-{{- $_ := set $jobContext "talosVersion" $talosVersion }}
+{{- $_ := set $jobContext "talosVersion" $grpVersion }}
+{{- $_ := set $jobContext "talosSchematicID" $grpSchematicID }}
 {{- $_ := set $jobContext "podCIDR" $podCIDR }}
 {{- $_ := set $jobContext "serviceCIDR" $serviceCIDR }}
 {{- $_ := set $jobContext "dnsDomain" $dnsDomain }}
