@@ -26,8 +26,8 @@ include ../../../hack/package.mk
 # and update both lines below; resolve the new image digest with
 #   crane digest ghcr.io/lexfrei/ouroboros:<new-tag>
 # and update values.yaml.
-OUROBOROS_CHART_VERSION ?= 0.8.0
-OUROBOROS_CHART_DIGEST ?= sha256:b57255ef65a8eace361bf0e4eb93637e6a45315bc7744746b2e16ffa5bdd3744
+OUROBOROS_CHART_VERSION ?= 0.8.1
+OUROBOROS_CHART_DIGEST ?= sha256:40fd5b639ff73594989856076eab5dfbd0dfab8ee16d1cab915756e24b54458b
 
 test:
 	helm unittest .
@@ -38,6 +38,11 @@ update:
 	# version. A digest mismatch (someone bumped DIGEST without
 	# bumping VERSION, or vice versa) trips the assert and aborts.
 	helm pull oci://ghcr.io/lexfrei/charts/ouroboros@$(OUROBOROS_CHART_DIGEST) --untar --untardir charts
+	# Pulling by digest also leaves an empty directory named after the
+	# digest ref next to the untarred chart. Git ignores empty directories
+	# so it never shows as drift, which is exactly why it lingers
+	# unnoticed; drop it so `make update` leaves the tree clean.
+	rm -rf "charts/ouroboros@$(OUROBOROS_CHART_DIGEST)"
 	@actual_version=$$(awk '/^version:/ {print $$2}' charts/ouroboros/Chart.yaml | tr -d '"'); \
 	if [ "$$actual_version" != "$(OUROBOROS_CHART_VERSION)" ]; then \
 	  echo "ERROR: pulled chart Chart.yaml version=$$actual_version but Makefile OUROBOROS_CHART_VERSION=$(OUROBOROS_CHART_VERSION). Bump both in lockstep."; \

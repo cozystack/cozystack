@@ -47,6 +47,77 @@ tests:
           path: spec.template.spec.containers[0].args
           content: --log-level=info
 
+  # The upstream chart owns this contract and tests it across every mode;
+  # these pins exist because cozystack is the kind of consumer the
+  # contract protects — helm-controller applies server-side, and
+  # server-side apply is the only path on which a mode-gated strategy
+  # breaks. Up to chart 0.8.0 the strategy was rendered only in
+  # external-dns mode, as type: Recreate. Switching a live release into
+  # that mode laid Recreate on top of the rollingUpdate block the
+  # apiserver defaults onto any Deployment created without one, and the
+  # apiserver rejected it with "spec.strategy.rollingUpdate: Forbidden:
+  # may not be specified when strategy `type` is 'Recreate'". A
+  # client-side helm upgrade clears rollingUpdate via retainKeys and
+  # never reproduces it, so no local render catches a regression here.
+  #
+  # cozystack pins coredns on the host and coredns-import for tenants,
+  # and configures external-dns nowhere, so the break is not reachable
+  # from any shipped configuration — this is a latent break and the pins
+  # are defence in depth for a user-settable value. All three modes are
+  # asserted, external-dns included: it is the only mode that ever
+  # rendered Recreate, so a bump that re-gates the block would slip past
+  # a coredns-only suite unnoticed.
+  - it: renders a no-surge RollingUpdate strategy, never Recreate — the mode-switch upgrade path is server-side-apply-only and breaks on any other shape
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  - it: renders that same strategy in coredns-import mode — the mode tenants actually run
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: coredns-import
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
+  # The mode that rendered type: Recreate up to 0.8.0, and the only one a
+  # transition into which could trip the rejection. A re-gate that
+  # restored Recreate here while leaving the coredns paths on
+  # RollingUpdate would satisfy every other case in this file.
+  - it: renders that same strategy in external-dns mode — the one mode that previously rendered Recreate
+    template: charts/ouroboros/templates/controller-deployment.yaml
+    set:
+      ouroboros:
+        controller:
+          mode: external-dns
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
+
   - it: writes into the kube-system/coredns Corefile by default (host mode)
     template: charts/ouroboros/templates/controller-deployment.yaml
     asserts:
