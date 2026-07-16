@@ -29,7 +29,7 @@ spec:
   storage:
     resources:
       requests:
-        storage: {{ .storage | default $.Values.storage | default "4Gi" }}
+        storage: {{ .storage | default $.Values.storage | default "6Gi" | quote }}
     {{- with .storageClass | default $.Values.storageClass }}
     storageClassName: {{ . | quote }}
     {{- end }}
