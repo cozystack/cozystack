@@ -20,18 +20,42 @@ resources:
     memory: 64Mi
   limits:
     cpu: 500m
-    memory: 128Mi
+    # Cold-start floor. This is the limit a freshly-created Pod runs under until
+    # the VPA admission webhook has had a chance to rewrite it (see vpa below).
+    # The manager's steady-state working set is ~250Mi (the VPA's own
+    # recommendation), so a 128Mi floor OOMKills the operator on any start where
+    # the webhook does not mutate the Pod in time — e.g. a Deployment recreated
+    # out of band, or the webhook briefly unavailable during an upgrade. Keep
+    # this at or above the observed working set so the operator never depends on
+    # VPA timing merely to avoid a crash loop; the VPA still scales it further
+    # under real load up to maxAllowed.
+    memory: 256Mi
 
 vpa:
   enabled: true
   updateMode: Auto
   minAllowed:
     cpu: 100m
-    memory: 128Mi
+    # Matches the cold-start limit floor above so the VPA never recommends BELOW
+    # the manager's ~250Mi working set.
+    memory: 256Mi
   # maxAllowed is the VPA's scaling CEILING, deliberately well above the static
-  # resources.limits above (128Mi): with updateMode: Auto the VPA rewrites the
+  # resources.limits above (256Mi): with updateMode: Auto the VPA rewrites the
   # Pod's request/limit up to this bound under real load. Do NOT "align" it down
-  # to the 128Mi limit — that would cap the autoscaler's headroom.
+  # to the 256Mi limit — that would cap the autoscaler's headroom.
   maxAllowed:
     cpu: 1000m
     memory: 1Gi
+
+# Image for the pre-upgrade selector-migration hook Job (see
+# templates/pre-upgrade-selector-fix.yaml). Only needs a kubectl binary. The tag
+# is digest-pinned so an upstream retag does not change what runs across the
+# fleet; refresh by resolving the current manifest-list digest
+# (`docker manifest inspect docker.io/clastix/kubectl:v1.32`) and updating
+# `digest` below. Same image the postgres-operator webhook-ready hook pins.
+# renovate: datasource=docker depName=docker.io/clastix/kubectl
+kubectlImage:
+  repository: docker.io/clastix/kubectl
+  tag: v1.32
+  digest: sha256:b9ef7d8dbe65bcc81a46c09b8dc7543103055021c4f43287bf59e92a8f4fe05c
+  pullPolicy: IfNotPresent

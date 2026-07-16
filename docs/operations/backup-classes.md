@@ -27,7 +27,7 @@ The FoundationDB strategy CR is rendered by the chart so admins can reference it
 
 ### Endpoint format per driver
 
-Different operators expect different endpoint shapes; the strategy templates rendered by `backupstrategy-controller` adapt the single `backupStorage.endpoint` value (a full URL like `http://seaweedfs-s3.tenant-root.svc:8333`) to each consumer's contract:
+Different operators expect different endpoint shapes; the strategy templates rendered by `backupstrategy-controller` resolve one S3 endpoint (via the `backupstrategy-controller.endpoint` helper) and adapt it to each consumer's contract. For a provisioned bucket (`provisionBucket: true`, the default) the endpoint is **derived from the COSI bucket's system-credentials Secret** (`backupStorage.systemSecretName`) and forced to `https://` — the external S3 ingress with an ACME cert, the only endpoint the backup operators can verify. SeaweedFS's in-cluster S3 serves TLS on `:8333` behind the self-signed "SeaweedFS CA", and the Etcd Strategy S3 schema has no `caCert` field, so the in-cluster endpoint cannot be targeted directly. The `backupStorage.endpoint` chart value (a full URL like `http://seaweedfs-s3.tenant-root.svc:8333`) is the **fallback**, used for external S3 (`provisionBucket: false`) and for offline `helm template`/pre-reconcile renders where the Secret lookup returns nothing. The resolved endpoint is adapted per consumer:
 
 | Driver | Strategy template field | Form |
 |--------|-------------------------|------|
@@ -38,7 +38,7 @@ Different operators expect different endpoint shapes; the strategy templates ren
 | Velero          | `BackupStorageLocation.spec.config.s3Url` | full URL (scheme preserved) |
 | ClickHouse sidecar | `S3_ENDPOINT` env | bare host:port (from projected Secret) |
 
-The projected `cozy-backups-creds.endpoint` key is **stripped of scheme** so chart-emitted sidecars (ClickHouse) consume it directly. Drivers that need the full URL pull from `backupStorage.endpoint` in chart values, not from the Secret.
+The projected `cozy-backups-creds.endpoint` key is **stripped of scheme** so chart-emitted sidecars (ClickHouse) consume it directly. Drivers that need the full URL receive the resolved endpoint described above — derived from the COSI system Secret (forced `https://`) for a provisioned bucket, or the `backupStorage.endpoint` fallback for external S3.
 
 VM-driven (Velero) backups land in the same `cozy-backups` bucket under the `velero/` prefix. A `BackupStorageLocation` named `cozy-default` is shipped by the `backupstrategy-controller` chart (`packages/system/backupstrategy-controller/templates/velero-bsl.yaml`) so endpoint/bucket/region come from the same `backupStorage` values block used by Strategy CRs and the projector.
 
@@ -135,7 +135,7 @@ spec:
 | `provisionBucket` | Toggle creation of the in-cluster `apps.cozystack.io/Bucket` CR. Set `false` for external S3 (see [Disabling the platform-managed bucket](#disabling-the-platform-managed-bucket)). |
 | `bucketName` | K8s name of the Bucket CR + lookup key for the COSI BucketClaim. The actual S3 bucket name is the COSI-assigned UUID, surfaced through `BucketClaim.status.bucketName`. |
 | `bucketNameOverride` | Escape hatch for offline `helm template` renders — bypasses the live-cluster BucketClaim lookup. Leave empty in production. |
-| `endpoint` | S3 endpoint baked into every default strategy CR + the Velero BSL. Switching to `https://` silently enables TLS in the MariaDB strategy — ensure the CA bundle is reachable to the relevant operator/driver Pods before flipping it. |
+| `endpoint` | **Fallback** S3 endpoint. For a provisioned bucket the strategy CRs + Velero BSL derive the endpoint from the COSI system Secret (external ACME ingress, forced `https://`) instead; this value is used only for external S3 (`provisionBucket: false`) and offline renders. For external S3, switching it to `https://` enables TLS in the MariaDB/FoundationDB strategies — ensure the CA bundle is reachable to the relevant operator/driver Pods first. |
 | `region` | Re-projected into `cozy-backups-creds` on the next reconcile. Pod-restart required for chart-emitted clients consuming the region via env (ClickHouse sidecar today). |
 | `forcePathStyle` | Path-style addressing; SeaweedFS S3 requires it, AWS S3 typically doesn't. |
 | `systemSecretName` | Name of the human-friendly Secret produced by the Bucket app (or pre-created manually for external S3). The projector also accepts the raw COSI Secret format. |

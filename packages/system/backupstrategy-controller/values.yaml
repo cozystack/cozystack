@@ -47,11 +47,26 @@ backupStorage:
   # name independent of .bucketName above, and the BucketClaim status
   # is the only authoritative source.
   bucketNameOverride: ""
-  # endpoint is wired into every default Strategy CR at chart-render time.
-  # Switching to an https:// URL silently enables TLS in the MariaDB
-  # strategy (tls.enabled is computed from the scheme). Make sure the CA
-  # bundle is reachable to the operator (mariadb's tls.caSecretKeyRef, the
-  # FDB pod ca-cert volume, Velero's BSL caCert field) before flipping it.
+  # endpoint is the S3 endpoint URL shared by every default Strategy CR, the
+  # Velero BSL and the controller Deployment. For a provisioned bucket
+  # (provisionBucket: true, the default) it is NOT used verbatim: the
+  # "backupstrategy-controller.endpoint" helper derives the real endpoint from
+  # the COSI bucket's system credentials Secret (backupStorage.systemSecretName)
+  # and forces https://, because Cozystack's SeaweedFS runs with
+  # enableSecurity=true and serves TLS on :8333 behind the self-signed
+  # "SeaweedFS CA". The COSI-advertised endpoint is the external S3 ingress
+  # (ACME cert), which every consumer can verify — unlike the in-cluster
+  # service, whose CA is not plumbed to the backup operators and which the Etcd
+  # Strategy's S3 schema (no caCert field) cannot target at all.
+  #
+  # This value is the FALLBACK, used only when the derivation cannot run:
+  #   - provisionBucket: false (external S3) — set it to your S3 endpoint,
+  #     scheme included; it is used verbatim (the MariaDB/FDB strategies compute
+  #     their secure flag from the scheme, so https:// enables TLS there — make
+  #     the CA bundle reachable to those operators before pointing at a
+  #     self-signed external endpoint);
+  #   - offline `helm template` / unit renders and the pre-reconcile first
+  #     install, where the Secret lookup returns nothing.
   endpoint: http://seaweedfs-s3.tenant-root.svc.cozy.local:8333
   # region is re-projected into cozy-backups-creds on the next reconcile
   # (1-minute tick for system namespaces, on-demand for tenant namespaces).

@@ -30,6 +30,6 @@ spec:
   config:
     region: {{ .Values.backupStorage.region | quote }}
     s3ForcePathStyle: {{ .Values.backupStorage.forcePathStyle | quote }}
-    s3Url: {{ .Values.backupStorage.endpoint | quote }}
+    s3Url: {{ include "backupstrategy-controller.endpoint" . | quote }}
 {{- end }}
 {{- end }}
