@@ -107,8 +107,11 @@ spec:
     The S3/barman settings live in the barmancloud.cnpg.io/ObjectStore CR
     rendered at the bottom of this file (named after the release); the
     Cluster only references it by name. Native spec.backup.barmanObjectStore
-    is deprecated in CNPG 1.27 and removed in 1.29, and the postgresql image
-    variants this platform pins no longer ship the barman-cloud-* binaries.
+    is deprecated in CNPG 1.27 and removed in 1.29. The bare (system-flavor)
+    image tags this chart pins still ship the barman-cloud-* binaries the
+    native path needs (unlike the `standard` variant keycloak-db pins), but
+    the system flavor is deprecated upstream, so this chart moves to the
+    plugin as well.
   */}}
   {{- $hasInlineCreds := and (ne (default "" .Values.backup.s3AccessKey) "") (ne (default "" .Values.backup.s3SecretKey) "") }}
   {{- $hasLegacyCreds := or $hasInlineCreds (ne (default "" $credCfg.name) "") }}
