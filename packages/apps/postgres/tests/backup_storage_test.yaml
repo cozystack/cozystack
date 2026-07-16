@@ -118,6 +118,65 @@ tests:
           count: 0
         template: templates/backup-secret.yaml
 
+  - it: "bootstrap recovery: externalClusters[].plugin + a -recovery ObjectStore (serverName on the plugin param, not the ObjectStore)"
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+        endpointURL: https://s3.example:9000
+      bootstrap:
+        enabled: true
+        oldName: old-pg
+        serverName: old-server
+    asserts:
+      # Recovery uses the barman-cloud plugin, not the removed externalClusters[].barmanObjectStore.
+      - notExists:
+          path: spec.externalClusters[0].barmanObjectStore
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - equal:
+          path: spec.externalClusters[0].plugin.name
+          value: barman-cloud.cloudnative-pg.io
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      - equal:
+          path: spec.externalClusters[0].plugin.parameters.barmanObjectName
+          value: pg-test-recovery
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      # serverName rides on the plugin parameter...
+      - equal:
+          path: spec.externalClusters[0].plugin.parameters.serverName
+          value: old-server
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
+      # ...and the -recovery ObjectStore carries the source S3 config but MUST NOT set
+      # serverName inside spec.configuration (the plugin forbids it there).
+      - equal:
+          path: spec.configuration.destinationPath
+          value: s3://bucket/pg-test/
+        template: templates/db.yaml
+        documentSelector:
+          path: metadata.name
+          value: pg-test-recovery
+      - notExists:
+          path: spec.configuration.serverName
+        template: templates/db.yaml
+        documentSelector:
+          path: metadata.name
+          value: pg-test-recovery
+
   - it: "bootstrap + useSystemBucket: render fails fast (lock in existing guard)"
     template: templates/db.yaml
     set:
