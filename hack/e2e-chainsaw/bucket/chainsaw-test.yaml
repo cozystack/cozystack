@@ -14,6 +14,13 @@ spec:
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: bucket-test
+  # The child release renders the -credentials Secrets and fails its render
+  # until the COSI BucketInfo Secrets exist (#3247), so on a hang this is
+  # where the retry loop and its failure message are visible.
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: bucket-test-system
   - describe:
       apiVersion: objectstorage.k8s.io/v1alpha1
       kind: BucketClaim
@@ -76,6 +83,54 @@ spec:
           status:
             accessGranted: true
 
+  # The human-friendly -credentials Secrets are rendered by the child
+  # (bucket-system) release from the COSI BucketInfo Secrets. The COSI
+  # driver provisions those asynchronously, so the child release fails its
+  # render (and is retried by remediation) until they appear — a bucket is
+  # only done when the child release converges to Ready and both projected
+  # Secrets exist (#3247: they used to stay missing forever when the COSI
+  # Secret appeared after the release's last render).
+  - name: wait-credentials-projected
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-test-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bucket-test-admin-credentials
+            labels:
+              apps.cozystack.io/user-secret: "true"
+          data:
+            (accessKey != null): true
+            (secretKey != null): true
+            (endpoint != null): true
+            (bucketName != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bucket-test-viewer-credentials
+            labels:
+              apps.cozystack.io/user-secret: "true"
+          data:
+            (accessKey != null): true
+            (secretKey != null): true
+            (endpoint != null): true
+            (bucketName != null): true
+
   - name: verify-s3-access
     try:
     - script:
@@ -85,16 +140,15 @@ spec:
           workdir=$(mktemp -d)
           trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
 
-          # Extract credentials for both users
-          kubectl -n "$NAMESPACE" get secret bucket-test-admin \
-            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/admin.json"
-          kubectl -n "$NAMESPACE" get secret bucket-test-viewer \
-            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/viewer.json"
-          ADMIN_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/admin.json")
-          ADMIN_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/admin.json")
-          VIEWER_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/viewer.json")
-          VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/viewer.json")
-          BUCKET_NAME=$(jq -r '.spec.bucketName' "$workdir/admin.json")
+          # Extract credentials for both users from the projected -credentials
+          # Secrets (not the raw COSI BucketInfo), so this step proves the
+          # user-facing Secrets carry working keys (#3247).
+          sec() { kubectl -n "$NAMESPACE" get secret "$1" -o "jsonpath={.data.$2}" | base64 -d; }
+          ADMIN_ACCESS_KEY=$(sec bucket-test-admin-credentials accessKey)
+          ADMIN_SECRET_KEY=$(sec bucket-test-admin-credentials secretKey)
+          VIEWER_ACCESS_KEY=$(sec bucket-test-viewer-credentials accessKey)
+          VIEWER_SECRET_KEY=$(sec bucket-test-viewer-credentials secretKey)
+          BUCKET_NAME=$(sec bucket-test-admin-credentials bucketName)
 
           # Port-forward to the S3 endpoint; cleaned up by the trap
           kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
