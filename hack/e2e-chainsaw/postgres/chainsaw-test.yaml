@@ -126,3 +126,90 @@ spec:
           name: postgres-test-init-job
 # The Postgres CR itself was applied by chainsaw and is deleted (and waited
 # on) automatically during cleanup — no explicit teardown step needed.
+---
+# Full barman-cloud backup -> to-copy RestoreJob round-trip, driving the
+# validated example scripts (examples/backups/postgres) as the harness so the
+# test and the documented flow can never drift. run-all.sh runs Bucket ->
+# source Postgres + sentinel row -> CNPG strategy + BackupClass -> ad-hoc
+# BackupJob (waits Succeeded) -> empty target Postgres + to-copy RestoreJob
+# (waits Succeeded) and asserts the sentinel round-tripped through S3 into the
+# restored copy — the in-cluster witness that a barman-cloud plugin backup is
+# both taken and restorable end to end.
+#
+# GATED OUT OF CI (opt in with POSTGRES_E2E_S3_ROUNDTRIP=1). The backup path
+# cannot succeed in the kind e2e environment:
+#   - the barman-cloud sidecar backs up to the bucket's EXTERNAL ingress
+#     endpoint (from the BucketInfo Secret); in CI that is the s3.example.org
+#     placeholder, which the source Postgres Pod can neither route to nor
+#     TLS-validate;
+#   - the in-cluster seaweedfs-s3.tenant-root:8333 endpoint serves HTTPS with a
+#     self-signed cert — the ObjectStore CAN trust it (run-all.sh copies
+#     seaweedfs-system-ca-cert into <app>-cnpg-backup-ca and wires endpointCA),
+#     but the e2e tenant is created with isolated: true
+#     (hack/e2e-install-cozystack.bats), so the Cilium tenant policy blocks the
+#     source Pod from reaching tenant-root's seaweedfs.
+# The round-trip therefore only works against a reachable, CA-trusted S3
+# endpoint (a real cluster). Chainsaw v0.2.15 has no conditional Test-level
+# skip, so the gate is a plain in-script conditional that exits 0 in CI with the
+# skip reason in the log — the same file runs un-gated on a real cluster with
+# just the env var set.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: postgres-2-backup-roundtrip
+spec:
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: postgres-pg-src
+  - describe:
+      apiVersion: postgresql.cnpg.io/v1
+      kind: Cluster
+      name: postgres-pg-src
+  - describe:
+      apiVersion: barmancloud.cnpg.io/v1
+      kind: ObjectStore
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  # The barman-cloud backup/WAL work runs in the cnpg Cluster Pods' sidecar; a
+  # failed upload or TLS handshake leaves its error only in that Pod's log.
+  - podLogs:
+      selector: cnpg.io/cluster=postgres-pg-src
+      tail: 200
+  steps:
+  - name: run
+    try:
+    - script:
+        timeout: 25m
+        content: |
+          set -eu
+          if [ "${POSTGRES_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
+            echo "# S3 backup/restore round-trip gated out of CI: no reachable,"
+            echo "# CA-trusted S3 endpoint in kind (see comment in this file). Set"
+            echo "# POSTGRES_E2E_S3_ROUNDTRIP=1 on a real cluster to run it."
+            exit 0
+          fi
+          cd ../../..
+          [ -x examples/backups/postgres/run-all.sh ] || { echo "postgres backup example scripts not found at examples/backups/postgres" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" examples/backups/postgres/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    # Idempotent — a no-op when the round-trip was gated out. Resumes the
+    # driver-suspended HelmReleases before deleting the RestoreJob so the apps
+    # are not stranded, then removes every resource the harness created
+    # (chainsaw did not apply them, so they are not part of automatic cleanup).
+    - description: backup-flow cleanup
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/postgres/cleanup.sh
