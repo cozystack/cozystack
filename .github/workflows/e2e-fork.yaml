@@ -292,9 +292,11 @@ jobs:
           # A non-docs fork PR must have exported at least one image; an empty
           # download means the build silently produced nothing — fail rather than
           # push an empty closure and let e2e install a stale/mismatched tree.
-          count=$(ls _out/oci/*.oci.tar 2>/dev/null | wc -l)
-          [ "$count" -ge 1 ] || { echo "::error::no OCI image archives to push"; exit 1; }
-          for f in _out/oci/*.oci.tar; do
+          # Glob into an array (nullglob → empty on no match); `ls *.tar | wc -l`
+          # would list the cwd when the glob expands to nothing and pass the guard.
+          archives=(_out/oci/*.oci.tar)
+          [ "${#archives[@]}" -ge 1 ] || { echo "::error::no OCI image archives to push"; exit 1; }
+          for f in "${archives[@]}"; do
             name="$(basename "$f" .oci.tar)"
             # The archive basename becomes a registry repo path — the fork picked
             # the filename, so validate it against a strict charset before it
