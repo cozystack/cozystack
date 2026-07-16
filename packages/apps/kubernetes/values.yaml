@@ -76,6 +76,19 @@ storageClass: replicated
 ## @field {string} [evictionHardMemory]="7%" - Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
 ## @field {string} [evictionSoftMemory]="10%" - Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
 
+## @typedef {struct} WorkerImageBuiltin - Boot this node group's workers by CDI clone of a golden image from the opt-in worker image catalog (packages/system/kubernetes-worker-image) in cozy-public. The catalog package must be enabled (bundles.enabledPackages) and hold a matching (schematicID, version) entry, otherwise the tenant render fails. A clone is a storage-layer CSI copy, so N workers no longer each stream the OS image over HTTP.
+## @field {string} [schematicID] - Talos schematic ID of the golden to clone. Defaults to the cluster-wide talos.schematicID.
+## @field {string} [version] - Talos version of the golden to clone. Defaults to the cluster-wide talos.version.
+
+## @typedef {struct} WorkerImageFactory - Boot this node group's workers by importing the Talos OS image over HTTP from an Image Factory (public, self-hosted, or caching mirror). This is the bring-your-own path and the default when `image` is omitted.
+## @field {string} [version] - Talos version. Defaults to the cluster-wide talos.version.
+## @field {string} [schematicID] - Talos schematic ID. Defaults to the cluster-wide talos.schematicID.
+## @field {string} [imageFactoryURL] - Base URL of the Image Factory serving the boot raw image. Defaults to the cluster-wide talos.imageFactoryURL. No trailing slash. NOTE: this redirects only the worker boot-disk import; the in-guest upgrade installer image is always sourced from the cluster-wide talos.installerRepository, so an air-gapped node group must also have talos.installerRepository pointed at a reachable registry.
+
+## @typedef {struct} WorkerImage - Worker OS image source for a node group. Set exactly one of `builtin` or `factory`; when the whole field is omitted the workers import over HTTP using the cluster-wide talos.* defaults (equivalent to an empty `factory`). The disk-system source is derived entirely from this field, so a group with `image` omitted renders identically to a chart without this feature — adopting the feature never rolls existing workers. Editing this field on an existing node group changes the rendered source and therefore re-images (rolls) that group, the same as changing any other image reference.
+## @field {*WorkerImageBuiltin} [builtin] - Clone a golden image from the worker image catalog.
+## @field {*WorkerImageFactory} [factory] - Import from an Image Factory / mirror (default).
+
 ## @typedef {struct} NodeGroup - Worker node group configuration.
 ## @field {int} minReplicas=0 - Minimum number of replicas.
 ## @field {int} maxReplicas=10 - Maximum number of replicas.
@@ -90,6 +103,7 @@ storageClass: replicated
 ## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
 ## @field {string} [maxUnhealthy] - Per-group override for `nodeHealthCheck.maxUnhealthy`. When unset, the cluster-wide `nodeHealthCheck.maxUnhealthy` applies. Accepts a bare integer ("0", "1", ...) or an integer percentage ("0%", "50%").
 ## @field {string} [nodeStartupTimeout] - Per-group override for `nodeHealthCheck.nodeStartupTimeout`. When unset, the cluster-wide `nodeHealthCheck.nodeStartupTimeout` applies.
+## @field {WorkerImage} [image] - Worker OS image source for this node group. Default (omitted): import over HTTP from the cluster-wide talos.* Image Factory. Set `image.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing group re-images that group.
 
 ## @param {map[string]NodeGroup} nodeGroups - Worker nodes configuration map. When left empty, a default node group `md0` is emitted with `minReplicas: 0` and `roles: [ingress-nginx]` — the MachineDeployment renders but provisions no workers until an unschedulable Pod triggers the cluster-autoscaler (or an operator scales the group manually). Enabling `addons.ingressNginx.enabled: true` on a CR with default `nodeGroups: {}` therefore requires either supplying a nodeGroup with `roles: [ingress-nginx]` and `minReplicas >= 1`, or waiting for the autoscaler to bring up the default md0 in response to the ingress-nginx controller Pods becoming Pending. Provide your own groups to take full control — they are not merged with the default, so you may name and omit groups freely.
 nodeGroups: {}
