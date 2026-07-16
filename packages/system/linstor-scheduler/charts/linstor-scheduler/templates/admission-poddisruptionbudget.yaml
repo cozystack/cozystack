@@ -1,0 +1,19 @@
+{{- if and .Values.admission.enabled .Values.podDisruptionBudget.enabled }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "linstor-scheduler.admissionFullname" . }}
+  labels:
+    {{- include "linstor-scheduler.admissionLabels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "linstor-scheduler.admissionSelectorLabels" . | nindent 6 }}
+  {{- if .Values.podDisruptionBudget.minAvailable }}
+  minAvailable: {{ .Values.podDisruptionBudget.minAvailable }}
+  {{- end }}
+  {{- if .Values.podDisruptionBudget.maxUnavailable }}
+  maxUnavailable: {{ .Values.podDisruptionBudget.maxUnavailable }}
+  {{- end }}
+{{- end }}

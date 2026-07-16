@@ -3,10 +3,28 @@ Scheduler {{ include "linstor-scheduler.fullname" . }} deployed!
 Used LINSTOR URL: {{ include "linstor-scheduler.linstorEndpoint" .}}
 
 Please run `helm test {{ .Release.Name }}` to ensure it's properly working.
+{{ if .Values.admission.enabled -}}
+The optional admission webhook is enabled: Pods using LINSTOR-backed PersistentVolumeClaims
+are automatically scheduled by {{ include "linstor-scheduler.fullname" . }}, so you
+do not need to set schedulerName by hand. To schedule a Pod that does not use a
+LINSTOR volume, set its schedulerName explicitly:
 
+---
+spec:
+  schedulerName: {{ include "linstor-scheduler.fullname" . }}
+---
+{{- if eq .Values.admission.createTLS "" }}
+{{ if not .Values.admission.tls.caBundle }}
+NOTE: admission.createTLS is "" and admission.tls.caBundle is empty. Unless an
+external controller injects the webhook's caBundle, the API server cannot reach
+the webhook and Pods will be scheduled WITHOUT the mutation (failurePolicy: {{ .Values.admission.failurePolicy }}).
+{{- end }}
+{{- end }}
+{{- else -}}
 Specify the scheduler on your pods to start smart scheduling based on your Persistent Volumes:
 
 ---
 spec:
   schedulerName: {{ include "linstor-scheduler.fullname" . }}
 ---
+{{- end }}

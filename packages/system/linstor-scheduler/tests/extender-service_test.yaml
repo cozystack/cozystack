@@ -33,3 +33,30 @@ tests:
       - equal:
           path: spec.selector["app.kubernetes.io/component"]
           value: scheduler
+
+  # Cozystack downstream patch strips distribution suffixes (e.g. +k3s1) from the
+  # kube-scheduler image tag via the kubeVersion helper, so the tag resolves to a
+  # real registry.k8s.io image on k3s/rke2/Talos. Pin it so a future revendor
+  # cannot silently drop the fix.
+  - it: base kube-scheduler image tag carries no distribution suffix
+    set:
+      linstor-scheduler.scheduler.image.compatibleKubernetesRelease: v1.31.0+k3s1
+    template: charts/linstor-scheduler/templates/deployment.yaml
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: :v1\.31\.0$
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: \+
+
+  # Node-drain safety: once admission pods are isolated from the base PDB, a
+  # single scheduler replica under the base minAvailable:1 PDB would make its
+  # node undrainable (disruptionsAllowed 0). Two replicas keep it drainable and
+  # give real HA via leader election.
+  - it: base scheduler runs two replicas so its node stays drainable
+    template: charts/linstor-scheduler/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
