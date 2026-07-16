@@ -98,6 +98,10 @@ type ApplicationDefinitionRelease struct {
 	// that the CEL compiles or that the referenced apiVersion/kind CRD is
 	// installed; a bad expression or a not-yet-installed CRD makes the
 	// HelmRelease hang until its timeout (the backstop).
+	// Upstream evaluates these only when the Helm action itself has wait
+	// enabled, so the release.cozystack.io/helm-install-disable-wait annotation
+	// makes them a silent no-op whatever waitStrategy says: the HelmRelease
+	// reports Ready as soon as helm applies the CR, with no error or warning.
 	// +optional
 	HealthCheckExprs []kustomize.CustomHealthCheck `json:"healthCheckExprs,omitempty"`
 }

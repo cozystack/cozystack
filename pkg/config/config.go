@@ -51,6 +51,11 @@ const HelmUpgradeTimeoutAnnotation = "release.cozystack.io/helm-upgrade-timeout"
 // becoming Ready, which cannot happen during install, so the release never
 // settles. DisableWait lets it settle while the addon HelmReleases and the
 // reconcile Job converge asynchronously.
+//
+// This takes precedence over spec.release.healthCheckExprs: upstream evaluates
+// CEL health expressions only when the Helm action has wait enabled, so a kind
+// setting both gets no health gating at all, silently. Prefer dropping this
+// annotation over adding expressions that will never run.
 const HelmInstallDisableWaitAnnotation = "release.cozystack.io/helm-install-disable-wait"
 
 // helmTimeoutPattern mirrors the CRD validation pattern used by Flux
