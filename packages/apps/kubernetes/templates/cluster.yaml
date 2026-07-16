@@ -89,51 +89,79 @@ spec:
       {{- end }}
       runStrategy: Always
       dataVolumeTemplates:
-      {{- /* Prefer a CDI storage-layer clone of the shared golden Talos image in
-             cozy-public (packages/system/kubernetes-worker-image) over a per-worker
-             HTTP import: the clone is a CSI copy, so N workers no longer each stream
-             the OS image across the pod network — the source of the kubernetes-*
-             e2e node-join flake (cozystack/cozystack#3231) and a per-worker Image
-             Factory dependency in production. The golden is named
-             talos-worker-<schematicID>-<version>; keep in sync with that package's
-             templates/dv.yaml.
+      {{- /* Each node group selects its worker OS image source via .group.image
+             (the WorkerImage union in values.yaml); every field defaults to the
+             cluster-wide talos.*:
+               * image omitted / image.factory — import the raw image over HTTP from
+                 the Talos Image Factory (or a mirror): one download per worker.
+               * image.builtin — CDI storage-layer clone of a golden image in the
+                 opt-in worker image catalog (packages/system/kubernetes-worker-image)
+                 in cozy-public, named talos-worker-<schematicID>-<version>. A clone
+                 is a CSI copy, so N workers no longer each stream the OS image across
+                 the pod network — the source of the kubernetes-* e2e node-join flake
+                 (cozystack/cozystack#3231) and a per-worker Factory dependency.
 
-             Existing node groups are never migrated: this whole template is
-             content-hashed to name the KubevirtMachineTemplate (see the KMT block
-             below), so changing the source (or the usePopulator annotation below)
-             would roll every worker. When a MachineDeployment for this group already
-             exists, re-emit the source type its live KMT already uses (http stays
-             http, clone stays clone) so the render — and the hash — is unchanged.
-             Only a brand new group (no live MD) adopts the clone, and only when the
-             matching golden exists; otherwise it falls back to the HTTP import.
-             lookup() is empty under `helm template`, so renders/unit-tests always
-             take the HTTP path. */}}
-      {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($.Values.talos.imageFactoryURL | trimSuffix "/") $.Values.talos.schematicID $.Values.talos.version }}
-      {{- $goldenName := printf "talos-worker-%s-%s" $.Values.talos.schematicID $.Values.talos.version }}
-      {{- $liveSourceType := "" }}
-      {{- $liveMD := lookup "cluster.x-k8s.io/v1beta1" "MachineDeployment" $.Release.Namespace (printf "%s-%s" $.Release.Name .groupName) }}
-      {{- if $liveMD }}
-      {{-   $ref := dig "spec" "template" "spec" "infrastructureRef" (dict) $liveMD }}
-      {{-   if and (dig "name" "" $ref) (eq (dig "kind" "" $ref) "KubevirtMachineTemplate") }}
-      {{-     $liveKMT := lookup "infrastructure.cluster.x-k8s.io/v1alpha1" "KubevirtMachineTemplate" $.Release.Namespace (dig "name" "" $ref) }}
-      {{-     range (dig "spec" "template" "spec" "virtualMachineTemplate" "spec" "dataVolumeTemplates" (list) $liveKMT) }}
-      {{-       if eq (dig "metadata" "name" "" .) "disk-system" }}
-      {{-         if hasKey (dig "spec" "source" (dict) .) "pvc" }}{{- $liveSourceType = "pvc" }}{{- else if hasKey (dig "spec" "source" (dict) .) "http" }}{{- $liveSourceType = "http" }}{{- end }}
-      {{-       end }}
+             The disk-system source is derived purely from .group.image, so it is
+             deterministic across re-renders: with image omitted a group renders
+             byte-identically to the pre-feature chart (its workers do not roll on
+             upgrade), and there is no cluster-state-driven flip to guard against.
+             Because the source is content-hashed into the KubevirtMachineTemplate
+             name (see the KMT block below), intentionally changing .group.image on an
+             existing group reimages that group — expected, like editing any
+             workload's image. lookup() is empty under `helm template`, so a builtin
+             group's golden must be mocked in unit tests. */}}
+      {{- /* Use hasKey, not truthiness: builtin/factory may be present but empty
+             ({} means "clone / import with the cluster talos.* defaults"), and Go
+             templates treat an empty map as false. */}}
+      {{- $img := .group.image | default dict }}
+      {{- if and (hasKey $img "builtin") (hasKey $img "factory") }}{{- fail (printf "nodeGroup %q: set only one of image.builtin or image.factory" .groupName) }}{{- end }}
+      {{- $reqSchematicID := $.Values.talos.schematicID }}
+      {{- $reqVersion := $.Values.talos.version }}
+      {{- $reqFactoryURL := $.Values.talos.imageFactoryURL }}
+      {{- $useClone := false }}
+      {{- if hasKey $img "builtin" }}
+      {{-   $builtin := $img.builtin | default dict }}
+      {{-   $useClone = true }}
+      {{-   $reqSchematicID = $builtin.schematicID | default $.Values.talos.schematicID }}
+      {{-   $reqVersion = $builtin.version | default $.Values.talos.version }}
+      {{- else if hasKey $img "factory" }}
+      {{-   $factory := $img.factory | default dict }}
+      {{-   $reqSchematicID = $factory.schematicID | default $.Values.talos.schematicID }}
+      {{-   $reqVersion = $factory.version | default $.Values.talos.version }}
+      {{-   $reqFactoryURL = $factory.imageFactoryURL | default $.Values.talos.imageFactoryURL }}
+      {{- end }}
+      {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
+      {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
+      {{- /* A builtin group whose golden is absent fails loudly here rather than
+             silently importing over HTTP with no fallback. And because a CDI clone
+             target must be at least as large as its source, a worker diskSize below
+             the golden's storage would fail the clone at runtime — reject it at
+             render when the golden's size is known (lookup is empty under
+             `helm template`, so this guard is a no-op there). */}}
+      {{- if $useClone }}
+      {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
+      {{-   if not $goldenDV }}
+      {{-     fail (printf "nodeGroup %q: image.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this group to image.factory." .groupName $goldenName) }}
+      {{-   end }}
+      {{-   $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
+      {{-   if $goldenStorage }}
+      {{-     $workerDisk := .group.diskSize | default "20Gi" | toString }}
+      {{-     $workerBytes := include "cozy-lib.resources.toFloat" $workerDisk | float64 }}
+      {{-     $goldenBytes := include "cozy-lib.resources.toFloat" ($goldenStorage | toString) | float64 }}
+      {{-     if lt $workerBytes $goldenBytes }}
+      {{-       fail (printf "nodeGroup %q: diskSize %s is smaller than golden image %q storage %s — a CDI clone target must be at least the source size. Raise diskSize to %s or larger." .groupName $workerDisk $goldenName ($goldenStorage | toString) ($goldenStorage | toString)) }}
       {{-     end }}
       {{-   end }}
       {{- end }}
-      {{- $useClone := eq $liveSourceType "pvc" }}
-      {{- if not $liveMD }}{{- if lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}{{- $useClone = true }}{{- end }}{{- end }}
       - metadata:
           name: disk-system
-          {{- /* usePopulator=false stays ONLY on the HTTP/import path (and thus on
-                 every existing group, pinned to its live source above): it preserves
-                 the legacy import behaviour and keeps the rendered DV — hence the KMT
-                 hash — byte-identical, so existing workers never roll. The clone path
-                 omits it so CDI's populator performs a storage-layer CSI clone of the
-                 golden (verified on dev10: temp PVC CSI-cloned + resized, no
-                 host-assisted upload pod) instead of a slower pod-network copy. */}}
+          {{- /* usePopulator=false stays ONLY on the HTTP/import path: it preserves
+                 the legacy import behaviour and keeps an image-omitted DV — hence the
+                 KMT hash — byte-identical to the pre-feature render, so those workers
+                 never roll on upgrade. The clone path omits it so CDI's populator
+                 performs a storage-layer CSI clone of the golden (verified on dev10:
+                 temp PVC CSI-cloned + resized, no host-assisted upload pod) instead
+                 of a slower pod-network copy. */}}
           {{- if not $useClone }}
           annotations:
             cdi.kubevirt.io/storage.usePopulator: "false"
