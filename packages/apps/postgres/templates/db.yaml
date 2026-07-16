@@ -251,7 +251,9 @@ kind: ObjectStore
 metadata:
   name: {{ .Release.Name }}
 spec:
+  {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  {{- end }}
   configuration:
     destinationPath: {{ $destinationPath }}
     endpointURL: {{ $endpointURL }}

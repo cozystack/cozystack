@@ -45,7 +45,9 @@ kind: ObjectStore
 metadata:
   name: keycloak-db
 spec:
+  {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
+  {{- end }}
   configuration:
     destinationPath: {{ .Values.backup.destinationPath | quote }}
     {{- with .Values.backup.endpointURL }}

@@ -96,6 +96,25 @@ tests:
           value: pg-test-s3-creds
         template: templates/backup-secret.yaml
 
+  - it: "empty retentionPolicy is omitted from the ObjectStore (plugin CRD rejects \"\")"
+    # The barman-cloud ObjectStore CRD validates retentionPolicy against
+    # ^[1-9][0-9]*[dwm]$, so an explicit empty value must be omitted rather than
+    # rendered as retentionPolicy: "" (which the API server rejects).
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        retentionPolicy: ""
+    asserts:
+      - notExists:
+          path: spec.retentionPolicy
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: ObjectStore
+
   - it: "backup enabled, no creds, useSystemBucket=false: plugin + ObjectStore not rendered"
     set:
       backup:
