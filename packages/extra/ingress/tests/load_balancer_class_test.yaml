@@ -1,0 +1,69 @@
+suite: ingress loadBalancerClass wiring
+templates:
+  - templates/nginx-ingress.yaml
+release:
+  name: ingress
+
+# publishing.loadBalancerClass is a host-publishing setting carried in
+# _cluster.load-balancer-class. It must land on the external-facing (host)
+# ingress Service only — host-scoped like expose-external-ips and
+# proxy-protocol. These assertions pin that scope: a tenant ingress must NOT
+# inherit the host's loadBalancerClass, or its Service would be claimed by an
+# LB controller the tenant never asked for.
+tests:
+  - it: sets loadBalancerClass on the host ingress LoadBalancer Service
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    release:
+      namespace: tenant-root
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: LoadBalancer
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass
+          value: metallb.io/metallb
+
+  - it: does not leak the host loadBalancerClass onto a tenant ingress
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        load-balancer-class: metallb.io/metallb
+    release:
+      namespace: tenant-foo
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: LoadBalancer
+      - notExists:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass
+
+  - it: keeps the externalIPs path untouched by loadBalancerClass
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+        expose-external-ips: 203.0.113.10
+        load-balancer-class: metallb.io/metallb
+    release:
+      namespace: tenant-root
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: ClusterIP
+      - notExists:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass
+
+  - it: omits loadBalancerClass on the host ingress when none is configured
+    set:
+      _cluster:
+        expose-ingress: tenant-root
+    release:
+      namespace: tenant-root
+    asserts:
+      - equal:
+          path: spec.values.ingress-nginx.controller.service.type
+          value: LoadBalancer
+      - notExists:
+          path: spec.values.ingress-nginx.controller.service.loadBalancerClass

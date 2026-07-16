@@ -1,0 +1,29 @@
+suite: apps.yaml publishing.loadBalancerClass → _cluster wiring
+templates:
+  - templates/apps.yaml
+
+release:
+  name: cozy-platform
+  namespace: cozy-system
+
+# publishing.loadBalancerClass selects which LoadBalancer controller handles the
+# host ingress Service. It reaches the host ingress-nginx through
+# _cluster.load-balancer-class in the cozystack-values Secret (the same path
+# expose-external-ips and proxy-protocol travel). These assertions pin that the
+# value lands in the Secret; without them the host ingress would silently never
+# see the configured loadBalancerClass.
+
+tests:
+  - it: writes an empty load-balancer-class by default
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*load-balancer-class:\s*""'
+
+  - it: writes the load-balancer-class when publishing.loadBalancerClass is set
+    set:
+      publishing.loadBalancerClass: metallb.io/metallb
+    asserts:
+      - matchRegex:
+          path: stringData["values.yaml"]
+          pattern: '(?m)^\s*load-balancer-class:\s*"metallb\.io/metallb"'
