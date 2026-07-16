@@ -125,6 +125,12 @@ spec:
         bundles:
           enabledPackages:
             - cozystack.external-dns-application
+            # Golden Talos worker image catalog: the kubernetes suites set
+            # nodeGroups.md0.image.builtin, so workers CDI-clone the golden in
+            # cozy-public instead of each importing the OS image over HTTP. The
+            # golden imports once from the factory (the single #3231 exposure),
+            # replacing the removed per-worker talos-image-cache mirror.
+            - cozystack.kubernetes-worker-image
 EOF
 
   # Launch storage + LB configuration in the background. It waits for its

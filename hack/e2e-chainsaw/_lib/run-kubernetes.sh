@@ -252,6 +252,27 @@ YAML
 )
   fi
 
+  # The kubernetes-worker-image catalog imports the golden Talos worker image into
+  # cozy-public once; the md0 nodeGroup below clones it (spec.nodeGroups.md0.image.
+  # builtin). This single factory import is the one #3231 exposure left after the
+  # per-worker talos-image-cache was dropped, so wait for it to finish importing
+  # here — a factory stall surfaces as a clear, self-contained failure instead of an
+  # opaque node-join timeout downstream, and the Kubernetes render (which fails when
+  # the golden is absent) is guaranteed a created source. The catalog HR is already
+  # Ready (install gate), so this waits only for the import phase to reach Succeeded.
+  echo "--- waiting for the golden Talos worker image(s) in cozy-public to import ---"
+  # Capture the DataVolume list inside the until condition and reuse it for the
+  # wait, so a transient get between "exists" and "wait" cannot skip the import
+  # check with an empty list.
+  timeout 12m sh -ec '
+    until dvs=$(kubectl -n cozy-public get datavolume -o name 2>/dev/null | grep talos-worker-); [ -n "$dvs" ]; do
+      echo "golden DataVolume not created yet; waiting..."; sleep 5
+    done
+    for dv in $dvs; do
+      echo "waiting for $dv import (phase=Succeeded)..."
+      kubectl -n cozy-public wait "$dv" --for=jsonpath="{.status.phase}"=Succeeded --timeout=10m
+    done'
+
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
@@ -310,6 +331,12 @@ ${ouroboros_addon}
     md0:
       diskSize: 20Gi
       gpus: []
+      # Boot workers by CDI-cloning the shared golden Talos image in cozy-public
+      # (kubernetes-worker-image catalog, enabled in e2e-install-cozystack.bats)
+      # instead of a per-worker HTTP import — this exercises the clone path and the
+      # #3231 mitigation. builtin: {} clones the cluster talos.* default golden.
+      image:
+        builtin: {}
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 2
