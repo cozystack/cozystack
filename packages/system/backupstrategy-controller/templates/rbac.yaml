@@ -97,10 +97,12 @@ rules:
 # barman-cloud plugin ObjectStore CRs: the CNPG driver SSA-applies one per
 # platform-managed Cluster to carry the S3/barman configuration that native
 # spec.backup.barmanObjectStore used to hold (deprecated in CNPG 1.27, removed
-# in 1.29). Delete lets the RestoreJob purge clean them up alongside the Cluster.
+# in 1.29). The driver owner-references each ObjectStore to its Cluster, so
+# Kubernetes garbage-collects it when the Cluster is deleted (app teardown or
+# the RestoreJob purge) — the driver never deletes it itself, hence no delete verb.
 - apiGroups: ["barmancloud.cnpg.io"]
   resources: ["objectstores"]
-  verbs: ["get", "list", "watch", "create", "patch", "update", "delete"]
+  verbs: ["get", "list", "watch", "create", "patch", "update"]
 # Secrets: the BackupJob/RestoreJob reconcilers project the platform-managed
 # S3 credentials Secret from the backupStorage.namespace (tenant-root by
 # default) into each tenant namespace as cozy-backups-creds. The verbs are

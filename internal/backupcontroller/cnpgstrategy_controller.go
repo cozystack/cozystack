@@ -84,9 +84,9 @@ const (
 	// Wall-clock cap on how long the WALArchiveReady gate can stay False
 	// before the RestoreJob is marked Failed. The gate fires before the
 	// destructive purge to confirm the backup's endWal is in object
-	// storage; if the source's lastArchivedWAL never advances, archive_-
-	// command on the source is broken (no barmanObjectStore on the
-	// Cluster, S3 outage, bad credentials, etc.) - waiting longer won't
+	// storage; if the source's lastArchivedWAL never advances, WAL
+	// archiving on the source is broken (no barman-cloud plugin wired on
+	// the Cluster, S3 outage, bad credentials, etc.) - waiting longer won't
 	// fix it. This is independent of cnpgDefaultRestoreDeadline because
 	// archive lag and recovery time scale with completely different
 	// inputs: the gate clears in seconds for any healthy cluster
@@ -405,6 +405,19 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 	// same s3://.../<serverName>/ path the native barmanObjectStore used.
 	objStoreName := clusterName
 	objStore := newObjectStorePatch(namespace, objStoreName)
+	// Own the ObjectStore by the live Cluster so Kubernetes garbage-collects it
+	// when the Cluster is deleted (tenant app teardown, or the RestoreJob purge).
+	// The platform flow does not chart-render this ObjectStore, so without an
+	// owner reference it would otherwise be orphaned in the tenant namespace.
+	// Owner and owned are in the same namespace, as GC requires.
+	controller := true
+	objStore.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: cnpgtypes.GroupVersion.String(),
+		Kind:       "Cluster",
+		Name:       existing.Name,
+		UID:        existing.UID,
+		Controller: &controller,
+	}}
 	objStore.Spec = cnpgtypes.ObjectStoreSpec{
 		Configuration:   *buildBarmanObjectStore(t.BarmanObjectStore, ""),
 		RetentionPolicy: t.BarmanObjectStore.RetentionPolicy,
@@ -709,7 +722,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		// bootstrap.initdb -> bootstrap.recovery swap with "Only one
 		// bootstrap". helm-controller then drops into an UpgradeFailed /
 		// RollbackFailed loop whose rollbacks strip the SSA-applied
-		// spec.backup.barmanObjectStore - which stops archive_command
+		// spec.plugins (and its ObjectStore) - which stops WAL archiving
 		// and pins lastArchivedWAL at "" forever. By gating before the
 		// patch, the HelmRelease stays untouched while we wait, the
 		// source primary keeps archiving, and the chart's failure-loop
@@ -741,7 +754,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 				time.Since(cond.LastTransitionTime.Time) > walDeadline {
 				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
 					"WAL archive did not catch up to the backup endWal within %s: %s "+
-						"(check that the source cnpg.io/Cluster has spec.backup.barmanObjectStore set and archive_command is shipping WALs to object storage; override via spec.options.walArchiveTimeoutSeconds)",
+						"(check that the source cnpg.io/Cluster has the barman-cloud plugin wired - spec.plugins referencing an ObjectStore - and is shipping WALs to object storage; override via spec.options.walArchiveTimeoutSeconds)",
 					walDeadline, walMessage))
 			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
@@ -887,11 +900,13 @@ func (r *RestoreJobReconciler) resolveCNPGRestoreTarget(restoreJob *backupsv1alp
 // patchPostgresAppForRestore writes the restore-related fields into the
 // target Postgres app instance spec. The chart already exposes these knobs;
 // once the HelmRelease re-renders, the cnpg.io Cluster picks up
-// bootstrap.recovery and externalClusters[].barmanObjectStore.
+// bootstrap.recovery and externalClusters[].plugin referencing the
+// chart-rendered recovery ObjectStore.
 //
 // Credentials are forwarded as a Secret reference (spec.backup.s3CredentialsSecret),
 // not as cleartext keys. The controller never reads the Secret itself; the
-// chart wires the named Secret straight into barmanObjectStore.s3Credentials.
+// chart wires the named Secret into the recovery ObjectStore's
+// spec.configuration.s3Credentials.
 // This keeps S3 access keys out of the Postgres CR .spec, etcd, audit logs,
 // and any tenant-readable copies.
 //
@@ -954,10 +969,11 @@ func buildPostgresAppRestorePatch(
 			SecretAccessKeyKey: credsRef.SecretAccessKeyKey,
 		}
 	}
-	// endpointCA flows into both the chart's spec.backup.barmanObjectStore
-	// and externalClusters[].barmanObjectStore. The recovery path
-	// specifically needs it - without a trusted CA the cnpg-instance-manager
-	// panics in InitInfo.loadBackup when it can't verify the seaweedfs cert.
+	// endpointCA flows into both the chart's backup ObjectStore
+	// (spec.configuration.endpointCA) and the recovery ObjectStore referenced
+	// from externalClusters[].plugin. The recovery path specifically needs it -
+	// without a trusted CA the cnpg-instance-manager panics in
+	// InitInfo.loadBackup when it can't verify the seaweedfs cert.
 	patched.Spec.Backup.EndpointCA = postgresapp.EndpointCA{}
 	if caRef != nil && caRef.SecretRef.Name != "" {
 		patched.Spec.Backup.EndpointCA = postgresapp.EndpointCA{

@@ -1366,7 +1366,7 @@ func testCNPGScheme(t *testing.T) *runtime.Scheme {
 // parameter, never inside the ObjectStore configuration (the plugin forbids it).
 func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	cluster := &cnpgtypes.Cluster{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "cluster-uid-123"},
 	}
 	c := newCNPGStrategyTestClient(t, cluster)
 	r := &BackupJobReconciler{Client: c}
@@ -1391,6 +1391,16 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	}
 	if store.Spec.RetentionPolicy != "30d" {
 		t.Errorf("ObjectStore retentionPolicy: got %q", store.Spec.RetentionPolicy)
+	}
+	// The ObjectStore must be owner-referenced to the Cluster so Kubernetes GC
+	// removes it when the Cluster is deleted (no orphan in the platform flow,
+	// where the chart does not render this ObjectStore).
+	if len(store.OwnerReferences) != 1 {
+		t.Fatalf("expected exactly one ownerReference on the ObjectStore, got %+v", store.OwnerReferences)
+	}
+	own := store.OwnerReferences[0]
+	if own.Kind != "Cluster" || own.Name != "postgres-app" || own.UID != "cluster-uid-123" {
+		t.Errorf("ObjectStore ownerReference: got kind=%q name=%q uid=%q, want Cluster/postgres-app/cluster-uid-123", own.Kind, own.Name, own.UID)
 	}
 	if store.Spec.Configuration.ServerName != "" {
 		t.Errorf("ObjectStore configuration must not carry serverName (plugin forbids it); got %q", store.Spec.Configuration.ServerName)
