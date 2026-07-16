@@ -13,14 +13,54 @@ metadata:
     {{- include "ouroboros.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.controller.replicaCount }}
-  {{- if eq $mode "external-dns" }}
-  # Recreate strategy: external-dns mode has no leader-election, so the
-  # default RollingUpdate (maxSurge=25% rounds to 1 with replicaCount=1)
-  # would briefly run two reconcilers during chart upgrades and produce
-  # the exact Get-Update race the replicaCount > 1 chart-fail prevents.
+  {{- /* The controller has no leader-election in any mode and no serving
+         path (no ports, no probes), so surging a second pod during a
+         rollout buys no availability anywhere. In external-dns mode it
+         actively hurts: that reconciler Updates DNSEndpoints with no
+         conflict retry, so two overlapping reconcilers race on
+         Get->Update. The coredns paths wrap Get->Update in
+         RetryOnConflict and converge instead, which is why only
+         external-dns rejects replicaCount > 1 above — that asymmetry is
+         deliberate, do not extend the guard to coredns. The default
+         maxSurge=25% rounds to 1 on a single replica and keeps the old
+         pod fully live and reconciling until the new one reports Ready.
+
+         maxSurge=0 is deliberately NOT claimed to be Recreate-equivalent
+         exclusivity: the surge budget counts rs.Spec.Replicas (desired),
+         not live pods, so once the old ReplicaSet's desired count hits 0
+         the new pod is created even though the old one may still be
+         Terminating. rolloutRecreate gates scale-up on oldPodsRunning;
+         the rolling path has no equivalent. What maxSurge=0 does
+         guarantee is enough here: the old pod is sent SIGTERM at
+         scale-down, before the new pod is created, and SIGTERM cancels
+         the reconciler context (see signalContext in cmd/ouroboros), so
+         the old reconciler has stopped well before the new pod finishes
+         starting and syncing its caches. Overlapping *reconcile* is what
+         matters, and that window is effectively nil. Nothing is lost by
+         the gap either: CoreDNS keeps serving the last written Corefile,
+         and the controller reconciles from scratch at startup.
+
+         Rendered for every mode on purpose. While this block was gated
+         on external-dns, switching controller.mode on a live release
+         mutated spec.strategy, adding type: Recreate on top of the
+         rollingUpdate block that the apiserver defaults onto any
+         Deployment created without one:
+           spec.strategy.rollingUpdate: Forbidden: may not be specified
+           when strategy `type` is 'Recreate'
+         That rejection fires only under server-side apply, so a
+         `helm upgrade` does not reproduce it — DeploymentSpec.Strategy
+         carries patchStrategy:"retainKeys", so a client-side strategic
+         merge clears rollingUpdate on the way through. Server-side apply
+         has no such retainKeys step and the two fields collide; Flux's
+         helm-controller applies server-side by default. Rendering the
+         same RollingUpdate block in every mode means a mode switch
+         changes no strategy field at all, so the combination cannot
+         arise on any transition. */}}
   strategy:
-    type: Recreate
-  {{- end }}
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       {{- include "ouroboros.selectorLabels" . | nindent 6 }}

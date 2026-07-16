@@ -112,7 +112,7 @@ controller:
     # Renovate-cut bump to a brand-new tag may temporarily render an image
     # reference that 404s on pull until Google's mirror picks it up.
     repository: mirror.gcr.io/alpine/kubectl
-    tag: "1.36.0"
+    tag: "1.36.1"
     pullPolicy: IfNotPresent
   # -- Informer resync period. Doubles as the worst-case event-to-reconcile
   # latency when the underlying Ingress watch silently dies (kamaji-managed
@@ -242,7 +242,7 @@ externalDns:
     # Renovate-cut bump to a brand-new tag may temporarily render an image
     # reference that 404s on pull until Google's mirror picks it up.
     repository: mirror.gcr.io/alpine/kubectl
-    tag: "1.36.0"
+    tag: "1.36.1"
     pullPolicy: IfNotPresent
 
 # -- Optional /etc/hosts DaemonSet (alt to CoreDNS).
