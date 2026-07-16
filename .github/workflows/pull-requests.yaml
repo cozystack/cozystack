@@ -201,11 +201,14 @@ jobs:
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
           # Fork PRs get no registry credentials, so instead of pushing, build
-          # each image to _out/oci/<name>.oci.tar and upload it below; the
-          # privileged e2e-fork.yaml workflow_run pushes them by digest. Empty on
-          # same-repo PRs → normal push path. Setting it also forces PUSH/LOAD
-          # off in common-envs.mk (#3257).
-          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && '_out/oci' || '' }}
+          # each image to <workspace>/_out/oci/<name>.oci.tar and upload it below;
+          # the privileged e2e-fork.yaml workflow_run pushes them by digest. Empty
+          # on same-repo PRs → normal push path. Setting it also forces PUSH/LOAD
+          # off in common-envs.mk (#3257). Must be ABSOLUTE (workspace-rooted):
+          # the build runs `make -C <pkg>`, so buildx resolves a relative dest
+          # against the package dir — the archive would land in <pkg>/_out/oci and
+          # miss the repo-root _out/oci the upload reads.
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
       - name: Capture digest patch fragment
         id: frag
         env:
@@ -292,7 +295,7 @@ jobs:
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
           # Fork PR: export to OCI archive instead of pushing (see build job).
-          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && '_out/oci' || '' }}
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
       - name: Build Talos nocloud disk
         run: make -C packages/core/talos talos-nocloud
       - name: Capture Talos patch fragment
@@ -468,7 +471,7 @@ jobs:
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
           IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
-          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && '_out/oci' || '' }}
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
       # Fork PR only: upload the operator image OCI archive for e2e-fork.yaml.
       - name: Upload installer OCI image archive (fork PR)
         if: ${{ github.event.pull_request.head.repo.fork }}
