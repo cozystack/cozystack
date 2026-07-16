@@ -39,7 +39,8 @@ kubectl -n "$NAMESPACE" delete postgres.apps.cozystack.io "$PG_SRC_NAME" "$PG_TA
 
 log_substep "Deleting per-app backup Secrets..."
 kubectl -n "$NAMESPACE" delete secret \
-    "${PG_SRC_NAME}-cnpg-backup-creds" "${PG_SRC_NAME}-cnpg-backup-ca" --ignore-not-found
+    "${PG_SRC_NAME}-cnpg-backup-creds" "${PG_SRC_NAME}-cnpg-backup-ca" \
+    "${PG_TARGET_NAME}-cnpg-backup-creds" "${PG_TARGET_NAME}-cnpg-backup-ca" --ignore-not-found
 
 log_substep "Deleting Bucket..."
 kubectl -n "$NAMESPACE" delete bucket.apps.cozystack.io "$BUCKET_NAME" --ignore-not-found

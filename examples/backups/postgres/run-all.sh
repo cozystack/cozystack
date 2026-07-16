@@ -61,24 +61,32 @@ print_header "Step 05a: Materialise the Secrets the barman-cloud ObjectStore ref
 # The chart (05) and the strategy (10) both reference <app>-cnpg-backup-creds
 # and <app>-cnpg-backup-ca. The barman-cloud sidecar reads AWS_ACCESS_KEY_ID /
 # AWS_SECRET_ACCESS_KEY from the creds Secret and trusts ca.crt from the CA
-# Secret when talking to a self-signed S3 endpoint.
-kubectl -n "$NAMESPACE" create secret generic "${PG_SRC_NAME}-cnpg-backup-creds" \
-    --from-literal="AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}" \
-    --from-literal="AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}" \
-    --dry-run=client -o yaml | kubectl apply -f -
-
-if [[ -n "$S3_CA_SECRET" ]]; then
-    log_substep "Copying S3 CA ${S3_CA_NAMESPACE}/${S3_CA_SECRET}[${S3_CA_KEY}] -> ${PG_SRC_NAME}-cnpg-backup-ca..."
-    CA_PEM=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" \
-        -o jsonpath="{.data.${S3_CA_KEY//./\\.}}" | base64 -d)
-    [[ -n "$CA_PEM" ]] || { log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} has no ${S3_CA_KEY}"; exit 1; }
-    kubectl -n "$NAMESPACE" create secret generic "${PG_SRC_NAME}-cnpg-backup-ca" \
-        --from-literal="ca.crt=${CA_PEM}" \
+# Secret when talking to a self-signed S3 endpoint. The strategy template
+# renders the names against whichever application it drives, so a restore
+# TARGET needs its own pair too (materialised again in step 30 below).
+# kubectl apply (not create) so a stale pair from an earlier run is corrected.
+materialise_backup_secrets() {
+    local app="$1"
+    kubectl -n "$NAMESPACE" create secret generic "${app}-cnpg-backup-creds" \
+        --from-literal="AWS_ACCESS_KEY_ID=${S3_ACCESS_KEY}" \
+        --from-literal="AWS_SECRET_ACCESS_KEY=${S3_SECRET_KEY}" \
         --dry-run=client -o yaml | kubectl apply -f -
-else
-    log_warning "S3_CA_SECRET empty: the manifests still reference ${PG_SRC_NAME}-cnpg-backup-ca."
-    log_warning "Remove endpointCA from 05/10 by hand when the S3 endpoint uses a public CA."
-fi
+
+    if [[ -n "$S3_CA_SECRET" ]]; then
+        log_substep "Copying S3 CA ${S3_CA_NAMESPACE}/${S3_CA_SECRET}[${S3_CA_KEY}] -> ${app}-cnpg-backup-ca..."
+        local ca_pem
+        ca_pem=$(kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" \
+            -o jsonpath="{.data.${S3_CA_KEY//./\\.}}" | base64 -d)
+        [[ -n "$ca_pem" ]] || { log_error "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} has no ${S3_CA_KEY}"; exit 1; }
+        kubectl -n "$NAMESPACE" create secret generic "${app}-cnpg-backup-ca" \
+            --from-literal="ca.crt=${ca_pem}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+    else
+        log_warning "S3_CA_SECRET empty: the manifests still reference ${app}-cnpg-backup-ca."
+        log_warning "Remove endpointCA from 05/10 by hand when the S3 endpoint uses a public CA."
+    fi
+}
+materialise_backup_secrets "$PG_SRC_NAME"
 
 print_header "Step 05b: Deploy source Postgres '${PG_SRC_NAME}' and wait for it to be healthy"
 subst 05-postgres-src.yaml | kubectl -n "$NAMESPACE" apply -f -
@@ -119,6 +127,10 @@ if [[ "${SKIP_RESTORE:-0}" == "1" ]]; then
 fi
 
 print_header "Step 30/40: Restore to a copy '${PG_TARGET_NAME}' and wait for Succeeded"
+# The strategy template renders <app>-cnpg-backup-creds / -ca against the
+# TARGET application during a restore, so the target needs its own Secret pair
+# (same S3 coordinates as the source's archive).
+materialise_backup_secrets "$PG_TARGET_NAME"
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/30-postgres-target.yaml"
 # Let the target's first install settle before the RestoreJob driver suspends
 # its HelmRelease — suspending an HR mid-install races helm-controller.
