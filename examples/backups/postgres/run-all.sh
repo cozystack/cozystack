@@ -13,7 +13,7 @@
 # through S3 into the restored copy.
 #
 # Override NAMESPACE / endpoint / CA via the environment; see 00-helpers.sh.
-# hack/e2e-chainsaw/postgres/ drives this file behind POSTGRES_E2E_S3_ROUNDTRIP.
+# hack/e2e-chainsaw/postgres/ drives this file as postgres-2-backup-roundtrip.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

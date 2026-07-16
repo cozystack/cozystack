@@ -34,4 +34,4 @@ NAMESPACE=tenant-root examples/backups/postgres/cleanup.sh
 
 ## Automated e2e
 
-The Chainsaw suite at `hack/e2e-chainsaw/postgres/` drives this same `run-all.sh` as a second, opt-in test (`postgres-2-backup-roundtrip`). It is gated out of CI because kind has no reachable, CA-trusted S3 endpoint; run it on a real cluster with `POSTGRES_E2E_S3_ROUNDTRIP=1`.
+The Chainsaw suite at `hack/e2e-chainsaw/postgres/` drives this same `run-all.sh` as a second test (`postgres-2-backup-roundtrip`), selected by CI whenever the postgres app (or these scripts) change and on every release cut. It runs in `tenant-root` against the in-cluster seaweedfs endpoint — the isolated e2e tenant cannot reach it across the Cilium egress policy, and the external ingress endpoint is an unroutable placeholder in the sandbox.
