@@ -1,0 +1,228 @@
+{{/*
+  cozystack-publish-ca-cert-writer-policy
+
+  Restricts who may write a CA-source Secret on the CA-extraction
+  controller's label-driven leg. A core Secret labelled
+  internal.cozystack.io/publish-ca-cert is a trust-anchor SOURCE: the
+  extraction controller lifts its ca.crt into the tenant-readable
+  <release>.tenant-ca projection. That label is the whole attribution on
+  that leg, and it sits on an ordinary Secret — so any principal that can
+  create or update a Secret in the namespace could otherwise forge a source
+  (a Secret with the publish-ca-cert + publish-ca-cert-release labels and an
+  attacker ca.crt) or tamper an existing one (rewrite its ca.crt while
+  leaving the labels intact), and thereby swap the trust anchor a tenant is
+  handed as vouched. This is the platform-side control that closes that gap;
+  the controller itself keeps the declared leg authoritative so a labelled
+  Secret can never override an operator-declared CA.
+
+  Who that principal is NOT, today: the tenant. The base tenant roles grant
+  no verb on core Secrets at all — their wildcards are scoped to
+  apps.cozystack.io and friends — so RBAC, not this policy, is what closes
+  the tenant-shaped version of the hole. This policy is defence in depth
+  against a widened role, an operator, or any controller holding namespace
+  Secret write. Said plainly because the distinction decides how loudly to
+  react if it is ever weakened: a change here is not currently the last line.
+
+  RESIDUAL, and it survives this policy: cert-manager is a confused deputy.
+  The gate pins WHO writes, not WHAT is written, and the publish label rides
+  Certificate.spec.secretTemplate.labels — so anyone who can author a
+  Certificate makes cert-manager, the allowed writer, mint a labelled source
+  with an attacker-chosen ca.crt, and the write passes. Not reachable today
+  (no tenant-facing role grants cert-manager.io/certificates create/update;
+  the only namespaced Roles touching that group are Helm cleanup hooks bound
+  to their own ServiceAccounts), but it is the assumption to re-check before
+  exposing Certificates, or secretTemplate.labels, to tenant-supplied values.
+  A "bring your own certificate" feature would reopen this silently.
+
+  Rule: a Secret carrying internal.cozystack.io/publish-ca-cert may be
+  created or updated ONLY by cert-manager's controller ServiceAccount. Every
+  other principal is denied. cert-manager is the sole legitimate writer:
+  it is the only component that mints these Secrets (the label rides
+  Certificate.spec.secretTemplate.labels, which cert-manager applies), and
+  its own issuance and rotation are that same ServiceAccount, so they pass.
+  The extraction controller only READS sources, so it needs no allowance.
+
+  Coverage — both attack shapes:
+   - Forge-new (CREATE of a labelled Secret) is matched because the new
+     object carries the label.
+   - Tamper-existing (UPDATE of a labelled Secret's data, labels intact) is
+     matched because the new object still carries the label; and a
+     relabel-away evasion (UPDATE that strips the label) is matched because
+     the OLD object carried it. So neither shape can dodge the check.
+
+  Out of scope — three things this policy must never match, by construction:
+   - The declared-leg source (CloudNativePG's <release>-ca): it carries no
+     publish-ca-cert label, so the match condition is false and CNPG writes
+     it freely.
+   - The projection (<release>.tenant-ca): it carries
+     internal.cozystack.io/tenant-ca, a DIFFERENT label, so the extraction
+     controller writes it freely.
+   - Any Secret without the publish-ca-cert label: never matched.
+
+  DELETE is INTENTIONALLY ungated (operations are CREATE + UPDATE only), and
+  that is a deliberate design decision, not an oversight:
+   - This policy protects INTEGRITY — it stops a forged or tampered source
+     from becoming a tenant's trust anchor. Deleting a source cannot forge an
+     anchor: the extraction controller treats an absent recorded source as
+     merely-absent, not an opt-out, so it FREEZES the projection at its last
+     good value and waits. Losing a source is therefore an availability
+     concern (a stalled rotation), addressed by ordinary Secret RBAC, not an
+     integrity one for this policy to carry.
+   - Gating DELETE would also be actively harmful. A DELETE-matching VAP is
+     evaluated for the garbage-collector and the namespace-controller too —
+     see cozystack-no-delete-guardrail
+     (packages/core/platform/templates/deletion-protection.yaml), which uses
+     exactly that to block deletion — so a cert-manager-only DELETE gate here
+     would stop those system principals from cleaning the source up during
+     tenant/namespace teardown, wedging namespaces in Terminating with no
+     natural bypass. Fail-closed on DELETE is the wrong trade.
+
+  FRAGILE SEAM — the allowed writer is pinned as a literal:
+  system:serviceaccount:cozy-cert-manager:cert-manager. That is the
+  controller ServiceAccount of the shipped cert-manager package
+  (packages/system/cert-manager, installed with releaseName "cert-manager"
+  into namespace "cozy-cert-manager"; the controller Deployment resolves
+  serviceAccountName to "cert-manager"). If cert-manager is repackaged, its
+  release renamed, or its ServiceAccount/namespace moved, THIS allow-list
+  must move with it: a wrong identity here silently breaks the entire label
+  leg the moment an engine converges onto it (cert-manager's own writes get
+  denied), or silently leaves the hole open (the real writer no longer
+  matches, so nothing is enforced). Keep it in lockstep with the
+  cert-manager package.
+
+  The AUTHORITY for those coordinates is
+  packages/core/platform/sources/cert-manager.yaml, which pins
+  install.namespace: cozy-cert-manager and install.releaseName: cert-manager
+  on the cert-manager component. Change them there, change them here.
+
+  Deriving the identity instead of pinning it was considered. It is not
+  available — recorded here so the next reader does not re-litigate it:
+
+   1. There is nothing to derive FROM. That PackageSource is a static file:
+      templates/sources.yaml emits it with {{ $.Files.Get $path }} and no
+      tpl, so no value reaches it and the coordinates are literals, not
+      settings. Deriving would mean introducing a value, threading it
+      through the cozystack-values Secret into _cluster (the only channel
+      this chart has — see values.yaml), and reading it here. The literal
+      would then exist in core/platform's apps.yaml AND still in
+      sources/cert-manager.yaml: two copies to keep in sync instead of one,
+      plus a cross-chart contract. That is not a single source of truth, it
+      is a second one.
+   2. A render-time lookup cannot substitute. helm-controller re-renders on
+      chart/values digest changes; a lookup result is invisible to that
+      digest, so the policy would silently keep whatever identity happened
+      to be true at the last render.
+
+  (gateway-hostname-policy.yaml in this same chart also pins a cert-manager
+  identity as a literal, twice. That is where the convention comes from, not
+  a justification for it — two hardcodes do not make a third correct. The
+  reason this one stays a literal is (1) and (2) above.)
+
+  IF THAT CHANGES: should cert-manager's namespace and release name ever
+  become a real platform value — one the cert-manager package itself is
+  installed from, rather than a literal in a static PackageSource — this
+  policy should derive the writer from it and this comment should go. The
+  objection is availability, not principle.
+
+  Until then the seam is guarded rather than merely described:
+  hack/check-publish-ca-cert-writer-pin.bats renders the cert-manager
+  package the way the platform installs it and fails if the pin below does
+  not name the ServiceAccount its controller actually runs as. A rename, a
+  namespace move or a ServiceAccount change reddens CI instead of silently
+  disarming this policy. Keep that test alive; it is the only thing that
+  makes the literal safe.
+
+  DISASTER RECOVERY — a restore of a labelled Secret is DENIED, and that is
+  a real operational edge, not a hypothetical. The policy carries no
+  namespace or object selector and validationActions is [Deny], so it is
+  evaluated for every writer: a Velero restore, or a kubectl apply from a
+  backup, runs as the restorer's identity, which is not cert-manager, and
+  is refused.
+
+  This is recoverable but NOT free, and the cost is worth stating plainly.
+  The labelled Secret is the output of a cert-manager Certificate; restore
+  the Certificate and cert-manager mints a fresh CA within seconds, and the
+  extraction controller republishes the new anchor. But it is a NEW CA — the
+  restored one is not what comes back. Leaf certificates restored from the
+  same backup were signed by the OLD CA, and their Secrets carry no publish
+  label so they restore untouched: until they are re-issued, they no longer
+  verify against the anchor the tenant now holds.
+
+  So, to restore the ORIGINAL CA byte-for-byte, drop the binding below for
+  the duration of the restore and recreate it afterwards (deleting the
+  ValidatingAdmissionPolicyBinding disables enforcement; the policy itself
+  can stay). Otherwise, expect the CA to roll and force a re-issue of the
+  leaves that were signed by it.
+
+  failurePolicy is Fail: a Secret whose write cannot be evaluated is denied,
+  not admitted — fail-closed, as a trust-anchor control must be. It is also
+  what makes the DR edge above bite, and that trade is deliberate: a
+  trust-anchor source admitted because the policy could not be evaluated is
+  the failure this exists to prevent.
+*/}}
+{{- $certManagerWriter := "system:serviceaccount:cozy-cert-manager:cert-manager" }}
+{{- $publishLabel := "internal.cozystack.io/publish-ca-cert" }}
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: cozystack-publish-ca-cert-writer-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+    - apiGroups: [""]
+      apiVersions: ["v1"]
+      operations: ["CREATE", "UPDATE"]
+      resources: ["secrets"]
+  matchConditions:
+  # Only labelled CA sources are gated. On UPDATE the old object is checked
+  # too, so stripping the label to dodge the rule is itself caught.
+  - name: is-ca-source
+    expression: >-
+      (has(object.metadata.labels) && {{ $publishLabel | quote }} in object.metadata.labels)
+      || (oldObject != null && has(oldObject.metadata.labels) && {{ $publishLabel | quote }} in oldObject.metadata.labels)
+  validations:
+  # Allowed iff the writer is cert-manager's controller ServiceAccount.
+  - expression: request.userInfo.username == {{ $certManagerWriter | quote }}
+    messageExpression: >-
+      {{ printf "a Secret labelled %s is a tenant trust-anchor source and may only be written by cert-manager (%s); " $publishLabel $certManagerWriter | quote }} + request.userInfo.username + " is not permitted to create or modify it"
+    reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: cozystack-publish-ca-cert-writer-policy
+  labels:
+    internal.cozystack.io/managed-by-cozystack: ""
+spec:
+  policyName: cozystack-publish-ca-cert-writer-policy
+  validationActions: [Deny]
+  # Narrow the policy's REACH to labelled Secrets, at the constraint level rather
+  # than only inside the CEL.
+  #
+  # matchConstraints above must match all core Secrets — a label cannot be
+  # expressed there — so without this the policy is EVALUATED for every Secret
+  # write in the cluster, and failurePolicy: Fail turns any CEL compile or
+  # evaluation error into a cluster-wide denial of Secret writes: kube-system,
+  # ServiceAccount tokens, Helm release state, everything. Fail-closed is right
+  # for a trust-anchor control and wrong as a blast radius for the entire
+  # cluster's Secrets.
+  #
+  # Coverage is unchanged, because admission evaluates objectSelector against BOTH
+  # oldObject and newObject and matches if EITHER does — the same semantics the
+  # CA-extraction controller relies on for the lineage webhook. Forge-new matches
+  # on the new object; tamper-existing matches on both; a relabel-away UPDATE that
+  # strips the label still matches on the OLD one, so the evasion the
+  # matchCondition catches cannot slip past the selector either. The
+  # matchCondition stays as it is: it is the precise gate, this is the cheap one.
+  #
+  # Same shape as cozystack-no-delete-guardrail
+  # (packages/core/platform/templates/deletion-protection.yaml).
+  matchResources:
+    objectSelector:
+      matchExpressions:
+      - key: {{ $publishLabel | quote }}
+        operator: Exists

@@ -1,0 +1,140 @@
+suite: cozystack-publish-ca-cert-writer-policy VAP
+templates:
+  - templates/publish-ca-cert-writer-policy.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# A live-admission e2e (forge-new rejected, tamper-existing rejected,
+# cert-manager allowed, the three must-not-match cases) waits for the first
+# engine to converge onto the label leg. Until then this pins the render and
+# the match logic: the policy gates the right objects, by the right label, for
+# the right operations, and pins the exact cert-manager identity — a wrong pin
+# there is the one failure that silently breaks the label leg or leaves the
+# hole open.
+
+tests:
+  - it: renders the ValidatingAdmissionPolicy and its Binding
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: cozystack-publish-ca-cert-writer-policy
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-publish-ca-cert-writer-policy
+      - documentIndex: 1
+        equal:
+          path: spec.validationActions[0]
+          value: Deny
+
+  - it: is fail-closed and gates core Secret CREATE and UPDATE
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.failurePolicy
+          value: Fail
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups[0]
+          value: ""
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: secrets
+      - contains:
+          path: spec.matchConstraints.resourceRules[0].operations
+          content: CREATE
+      - contains:
+          path: spec.matchConstraints.resourceRules[0].operations
+          content: UPDATE
+
+  - it: matches only the publish-ca-cert source label, on the new and the old object
+    documentIndex: 0
+    asserts:
+      # Pinned by EXACT STRING, like validations[0] below, and for a sharper
+      # reason than tidiness.
+      #
+      # This expression decides WHAT the policy gates. Loose patterns —
+      # "mentions publish-ca-cert", "does not mention tenant-ca", "mentions
+      # oldObject" — are all still satisfied when the || between the two clauses
+      # becomes &&, and that single character disables the policy entirely on
+      # CREATE: oldObject is null there, so the condition is false, nothing is
+      # matched, and forge-new (the primary attack this exists to stop) is
+      # silently allowed. Verified: the whole suite stays green through that
+      # regression while the policy protects nothing.
+      #
+      # Nothing else would catch it either. The bats pin-check reads only the
+      # writer literal, and the label leg has no producer yet, so no e2e
+      # exercises the policy. This assertion is the only witness, so it is exact
+      # — an expression that is not character-for-character this one is a
+      # different policy and must be re-reasoned, not pattern-matched.
+      - equal:
+          path: spec.matchConditions[0].expression
+          value: '(has(object.metadata.labels) && "internal.cozystack.io/publish-ca-cert" in object.metadata.labels) || (oldObject != null && has(oldObject.metadata.labels) && "internal.cozystack.io/publish-ca-cert" in oldObject.metadata.labels)'
+      # The gate keys on publish-ca-cert (the SOURCE label) and never on the
+      # projection's tenant-ca label, which must stay writable by the controller.
+      # Redundant against the exact pin above, kept because it names the property.
+      - notMatchRegex:
+          path: spec.matchConditions[0].expression
+          pattern: 'internal\.cozystack\.io/tenant-ca'
+
+  - it: allows only cert-manager's controller ServiceAccount to write a source
+    documentIndex: 0
+    asserts:
+      # This asserts the identity reaches the rendered policy intact — that the
+      # template wires it into validations[0] and does not, say, drop it into a
+      # matchCondition where it would gate nothing.
+      #
+      # It does NOT check that the identity is CORRECT, and cannot: the pin and
+      # this assertion are both constants in this chart, so they agree with each
+      # other by construction and would go on agreeing after cert-manager was
+      # renamed or moved. The real writer lives in packages/system/cert-manager,
+      # installed by packages/core/platform/sources/cert-manager.yaml — two other
+      # charts, which helm-unittest cannot render from here.
+      #
+      # hack/check-publish-ca-cert-writer-pin.bats is the check that closes that:
+      # it renders cert-manager the way the platform installs it and fails if the
+      # pin below does not name the ServiceAccount the controller actually runs
+      # as. If you change the pin, change it there too — that test is the one
+      # that would have caught you.
+      - equal:
+          path: spec.validations[0].expression
+          value: 'request.userInfo.username == "system:serviceaccount:cozy-cert-manager:cert-manager"'
+      - equal:
+          path: spec.validations[0].reason
+          value: Forbidden
+
+  # The binding, not the policy, is what bounds how much of the cluster a
+  # fail-closed gate can take down with it.
+  #
+  # matchConstraints cannot express a label, so the policy matches every core
+  # Secret; without this selector, a CEL error under failurePolicy: Fail denies
+  # Secret writes cluster-wide — kube-system, SA tokens, Helm release state.
+  # Narrowing here costs no coverage: admission evaluates objectSelector against
+  # both oldObject and newObject and matches if either does, so a relabel-away
+  # UPDATE still matches on the old object.
+  - it: evaluates only for Secrets that carry the source label
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ValidatingAdmissionPolicyBinding
+      - equal:
+          path: spec.matchResources.objectSelector.matchExpressions[0].key
+          value: internal.cozystack.io/publish-ca-cert
+      # Exists, not a value match: a source whose label is flipped to "false"
+      # must stay gated, exactly as the matchCondition keys on the label's
+      # presence rather than its value.
+      - equal:
+          path: spec.matchResources.objectSelector.matchExpressions[0].operator
+          value: Exists
