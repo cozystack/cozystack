@@ -1,0 +1,83 @@
+suite: per-node-group worker image — in-guest upgrade installer
+
+# The talos-reconcile Job builds each node group's install.image from that
+# group's resolved (schematicID, version) — image.builtin / image.factory, or
+# the cluster talos.* when omitted — so an in-guest upgrade reinstalls the OS
+# the group actually booted rather than flipping it back to the cluster default.
+
+templates:
+  - templates/talos/talos-reconcile-job.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+kubernetesProvider:
+  scheme:
+    "instancetype.kubevirt.io/v1beta1/VirtualMachineClusterInstancetype":
+      gvr: {group: instancetype.kubevirt.io, version: v1beta1, resource: virtualmachineclusterinstancetypes}
+      namespaced: false
+  objects:
+    - kind: VirtualMachineClusterInstancetype
+      apiVersion: instancetype.kubevirt.io/v1beta1
+      metadata: {name: u1.medium}
+
+tests:
+  - it: install.image pins the group's per-group schematicID/version
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            factory:
+              schematicID: deadbeef
+              version: v1.14.0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/deadbeef:v1\.14\.0'
+        documentSelector: {path: kind, value: Job}
+
+  - it: install.image falls back to the cluster talos.* when image is omitted
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515:v1\.13\.6'
+        documentSelector: {path: kind, value: Job}
+
+  - it: install.image pins a builtin group's schematicID/version
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin:
+              schematicID: cafebabe
+              version: v1.15.0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/cafebabe:v1\.15\.0'
+        documentSelector: {path: kind, value: Job}
