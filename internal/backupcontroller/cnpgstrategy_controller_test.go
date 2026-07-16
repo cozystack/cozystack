@@ -1430,6 +1430,33 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	}
 }
 
+// TestEnsureCNPGBackup_UsesPluginMethod locks in that driver-initiated backups
+// go through the barman-cloud plugin. spec.method / spec.pluginConfiguration is
+// the single field that routes the run: if it regressed to the default
+// (barmanObjectStore) method, CNPG would run the legacy method against a Cluster
+// that no longer has one and every platform backup would fail.
+func TestEnsureCNPGBackup_UsesPluginMethod(t *testing.T) {
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+	}
+	c := newCNPGStrategyTestClient(t, j)
+	r := &BackupJobReconciler{Client: c}
+
+	bk, err := r.ensureCNPGBackup(context.Background(), j, "postgres-app")
+	if err != nil {
+		t.Fatalf("ensureCNPGBackup: %v", err)
+	}
+	if bk.Spec.Method != cnpgtypes.BackupMethodPlugin {
+		t.Errorf("Backup spec.method: got %q, want %q", bk.Spec.Method, cnpgtypes.BackupMethodPlugin)
+	}
+	if bk.Spec.PluginConfiguration == nil || bk.Spec.PluginConfiguration.Name != cnpgtypes.PluginName {
+		t.Errorf("Backup spec.pluginConfiguration: got %+v, want name=%q", bk.Spec.PluginConfiguration, cnpgtypes.PluginName)
+	}
+	if bk.Spec.Cluster.Name != "postgres-app" {
+		t.Errorf("Backup spec.cluster.name: got %q, want postgres-app", bk.Spec.Cluster.Name)
+	}
+}
+
 // TestReconcileCNPG_StartedAtPreservedAcrossStaleCache locks in the bug fix
 // for the StartedAt race called out in the branch review: a second reconcile
 // with a stale local copy (which observes StartedAt==nil) must NOT advance
