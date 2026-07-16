@@ -177,8 +177,9 @@ delivered:
   Kubernetes API with `ApplicationDefinition`-based dynamic discovery.
 - **ccp** — Cozystack Claude Plugins marketplace for AI-assisted platform
   operations.
-- **security-scanner** — automated CVE pipeline (Trivy) across the whole
-  organization with maintainer triage workflow.
+- **security-scanner** *(private, maintainer-only — kept private for security
+  reasons)* — automated CVE pipeline (Trivy) across the whole organization
+  with maintainer triage workflow.
 - **standalone-trustd** — Talos `trustd` extracted as a standalone
   certificate-signing service.
 - **cozystack-scheduler** — custom scheduler hooks for workload-aware
