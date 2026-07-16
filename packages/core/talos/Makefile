@@ -15,8 +15,8 @@ image-talos:
 	set -e; \
 	SRC=docker-archive:../../../_out/assets/installer-amd64.tar; \
 	$(if $(strip $(OCI_EXPORT_DIR)),mkdir -p "$(OCI_EXPORT_DIR)"; skopeo copy "$$SRC" "oci-archive:$(OCI_EXPORT_DIR)/talos.oci.tar:$(IMAGE_TAG)",skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(IMAGE_TAG)); \
-	if [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
-	if [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:latest; fi
+	if [ -z "$(OCI_EXPORT_DIR)" ] && [ "$(PUBLISH_VERSIONED)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:$(TALOS_VERSION); fi; \
+	if [ -z "$(OCI_EXPORT_DIR)" ] && [ "$(PUBLISH_FLOATING)" = "1" ]; then skopeo copy "$$SRC" docker://$(REGISTRY)/talos:latest; fi
 
 image-matchbox:
 	test -f ../../../_out/assets/kernel-amd64 || make talos-kernel

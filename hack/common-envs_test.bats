@@ -60,3 +60,19 @@
   pushes=$(echo "$out" | grep 'docker://' | grep -v '"0" = "1"' || true)
   if [ -n "$pushes" ]; then echo "FAIL: talos pushes an ungated image under OCI_EXPORT_DIR: $pushes"; false; fi
 }
+
+@test "OCI_EXPORT_DIR suppresses release tags/pushes even with PUBLISH_*=1 (#3262 hardening)" {
+  # The B2-class trap is latent: PUBLISH_* are 0 on fork PRs (the only export
+  # case today), so force them on to prove the OCI_EXPORT_DIR gate holds anyway.
+  # image-tags package: only the pr IMAGE_TAG survives — a versioned + :latest
+  # multi-tag OCI archive holds >1 manifest and `skopeo copy oci-archive:` refuses it.
+  out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  tags=$(echo "$out" | grep -c -- '--tag' || true)
+  [ "$tags" -eq 1 ]
+  if echo "$out" | grep -q -- ':latest'; then echo "FAIL: image-tags emits :latest under OCI_EXPORT_DIR"; false; fi
+  # talos: its versioned/floating skopeo copies are additionally gated on an
+  # empty OCI_EXPORT_DIR (`[ -z … ]`), so no ungated docker:// push survives export.
+  tout=$(make -n -C packages/core/talos image OCI_EXPORT_DIR=/tmp/ocitest PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  pushes=$(echo "$tout" | grep 'docker://' | grep -vF '[ -z ' || true)
+  if [ -n "$pushes" ]; then echo "FAIL: talos pushes an ungated image under OCI_EXPORT_DIR with PUBLISH_*=1: $pushes"; false; fi
+}

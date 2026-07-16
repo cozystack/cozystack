@@ -102,8 +102,14 @@ comma := ,
 # caught loudly by the fork build's `if-no-files-found: error` upload.
 oci-output = $(if $(strip $(OCI_EXPORT_DIR)), --output type=oci$(comma)dest=$(OCI_EXPORT_DIR)/$(subst /,-,$(1)).oci.tar)
 
+# image-tags <image-name> [<versioned-tag>] — the --tag/--output flags for one
+# image. Under OCI_EXPORT_DIR the versioned/floating tags are suppressed: a
+# multi-`--tag` `--output type=oci` build writes every ref into the archive's
+# index.json, and `skopeo copy oci-archive:<f>` then refuses it ("more than one
+# image in oci"). PUBLISH_* are 0 on fork PRs (the only export case today), so
+# this is belt-and-suspenders for that trap.
 define image-tags
---tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest)$(call oci-output,$(1))
+--tag $(REGISTRY)/$(1):$(IMAGE_TAG)$(if $(strip $(OCI_EXPORT_DIR)),,$(if $(filter 1,$(PUBLISH_VERSIONED)),$(if $(filter-out $(IMAGE_TAG),$(strip $(2))), --tag $(REGISTRY)/$(1):$(strip $(2))))$(if $(filter 1,$(PUBLISH_FLOATING)), --tag $(REGISTRY)/$(1):latest))$(call oci-output,$(1))
 endef
 
 # cache-args <image-name> [<cache-tag>]
