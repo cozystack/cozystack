@@ -366,7 +366,7 @@
           "default": ""
         },
         "serverName": {
-          "description": "Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.",
+          "description": "Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.",
           "type": "string",
           "default": ""
         }

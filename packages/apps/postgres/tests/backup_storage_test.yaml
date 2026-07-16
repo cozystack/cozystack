@@ -73,6 +73,15 @@ tests:
         documentSelector:
           path: kind
           value: Cluster
+      # The WAL-archive S3 prefix is pinned explicitly to the release name and
+      # must never change on a live cluster (the driver preserves it).
+      - equal:
+          path: spec.plugins[0].parameters.serverName
+          value: pg-test
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
       # The ObjectStore carries the S3 credentials reference.
       - equal:
           path: metadata.name
@@ -195,6 +204,32 @@ tests:
         documentSelector:
           path: metadata.name
           value: pg-test-recovery
+
+  - it: "bootstrap recovery without serverName: plugin serverName defaults to oldName (native parity)"
+    # Native CNPG defaulted an absent serverName to the externalClusters entry
+    # name (= oldName); the barman-cloud plugin defaults it to the NEW cluster's
+    # name, which would read the wrong S3 prefix. The chart must therefore
+    # always emit serverName, defaulting to oldName.
+    set:
+      backup:
+        enabled: true
+        useSystemBucket: false
+        s3AccessKey: AKIAEXAMPLE
+        s3SecretKey: s3cr3t
+        destinationPath: s3://bucket/pg-test/
+        endpointURL: https://s3.example:9000
+      bootstrap:
+        enabled: true
+        oldName: old-pg
+        serverName: ""
+    asserts:
+      - equal:
+          path: spec.externalClusters[0].plugin.parameters.serverName
+          value: old-pg
+        template: templates/db.yaml
+        documentSelector:
+          path: kind
+          value: Cluster
 
   - it: "bootstrap + useSystemBucket: render fails fast (lock in existing guard)"
     template: templates/db.yaml

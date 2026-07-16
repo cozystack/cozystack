@@ -31,6 +31,9 @@ spec:
       isWALArchiver: true
       parameters:
         barmanObjectName: keycloak-db
+        # Pin the WAL-archive S3 prefix explicitly (the plugin would default it
+        # to the Cluster name anyway); it must never change on a live cluster.
+        serverName: keycloak-db
   {{- end }}
   monitoring:
     enablePodMonitor: true

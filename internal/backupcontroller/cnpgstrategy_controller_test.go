@@ -967,7 +967,7 @@ func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
-	err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
+	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1360,6 +1360,78 @@ func testCNPGScheme(t *testing.T) *runtime.Scheme {
 
 // TestApplyClusterPluginBackup_PatchesExistingCluster confirms the happy path:
 // when the Cluster exists the driver SSA-applies an ObjectStore CR carrying the
+// The serverName is the S3 WAL-archive path prefix; changing it on a live
+// Cluster splits the archive across two prefixes and breaks the eventual
+// restore with "WAL not found". A Cluster that already has the barman-cloud
+// plugin attached must therefore keep its effective serverName — the explicit
+// parameter when present, its own name (the plugin's default) when the plugin
+// is attached without one — and only a Cluster with no plugin at all takes the
+// strategy template's value.
+func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
+	explicit := true
+	cases := []struct {
+		name       string
+		plugins    []cnpgtypes.PluginConfiguration
+		wantServer string
+	}{
+		{
+			name: "explicit live serverName wins over the strategy's",
+			plugins: []cnpgtypes.PluginConfiguration{{
+				Name:          cnpgtypes.PluginName,
+				IsWALArchiver: &explicit,
+				Parameters:    map[string]string{barmanObjectNameParam: "postgres-app", barmanServerNameParam: "postgres-app"},
+			}},
+			wantServer: "postgres-app",
+		},
+		{
+			name: "plugin attached without serverName defaults to the cluster name",
+			plugins: []cnpgtypes.PluginConfiguration{{
+				Name:          cnpgtypes.PluginName,
+				IsWALArchiver: &explicit,
+				Parameters:    map[string]string{barmanObjectNameParam: "postgres-app"},
+			}},
+			wantServer: "postgres-app",
+		},
+		{
+			name:       "no plugin attached: the strategy's serverName applies",
+			plugins:    nil,
+			wantServer: "strategy-name",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &cnpgtypes.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "cluster-uid-123"},
+			}
+			cluster.Spec.Plugins = tc.plugins
+			c := newCNPGStrategyTestClient(t, cluster)
+			r := &BackupJobReconciler{Client: c}
+			tmpl := &strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
+			}
+
+			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.wantServer {
+				t.Fatalf("effective serverName = %q, want %q", got, tc.wantServer)
+			}
+
+			patched := &cnpgtypes.Cluster{}
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "postgres-app"}, patched); err != nil {
+				t.Fatalf("get Cluster after apply: %v", err)
+			}
+			if len(patched.Spec.Plugins) != 1 {
+				t.Fatalf("expected exactly one plugin entry, got %+v", patched.Spec.Plugins)
+			}
+			if s := patched.Spec.Plugins[0].Parameters[barmanServerNameParam]; s != tc.wantServer {
+				t.Fatalf("patched plugin serverName = %q, want %q", s, tc.wantServer)
+			}
+		})
+	}
+}
+
 // barman configuration and SSA-patches the Cluster's spec.plugins to reference
 // it via the barman-cloud plugin (the plugin replaces the deprecated native
 // spec.backup.barmanObjectStore). serverName must land on the Cluster plugin
@@ -1377,7 +1449,7 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
-	if err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
+	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

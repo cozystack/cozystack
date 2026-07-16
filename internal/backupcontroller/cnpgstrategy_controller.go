@@ -209,7 +209,8 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		serverName = clusterName
 	}
 
-	if err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName); err != nil {
+	effectiveServerName, err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// HelmRelease has not yet rendered the Cluster (fresh app, or
 			// the operator restart wiped its informer cache). Surface the
@@ -228,6 +229,11 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
 		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to attach barman-cloud plugin to Cluster: %v", err))
+	}
+	if effectiveServerName != serverName {
+		logger.Info("preserving the live Cluster's barman serverName over the strategy template's",
+			"cluster", clusterName, "live", effectiveServerName, "strategy", serverName)
+		serverName = effectiveServerName
 	}
 
 	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName)
@@ -392,10 +398,21 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 // hard validation error (CNPG's Cluster CRD has many required fields the
 // driver does not set), so we surface the precondition explicitly and let
 // the caller treat it as a retryable wait.
-func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) error {
+// applyClusterPluginBackup returns the serverName the Cluster effectively
+// archives under. A live Cluster that already has the barman-cloud plugin
+// attached (chart-rendered, or a previous BackupJob) keeps its current
+// serverName even when the strategy template names a different one: the
+// serverName is the S3 path prefix of the WAL archive, and flipping it
+// mid-stream splits the archive across two prefixes — WALs around the flip
+// land under the old prefix while the base backup indexes under the new one,
+// and the eventual restore fails with "WAL not found".
+func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) (string, error) {
 	existing := &cnpgtypes.Cluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, existing); err != nil {
-		return err
+		return "", err
+	}
+	if live := currentBarmanServerName(existing); live != "" {
+		serverName = live
 	}
 
 	// The ObjectStore is named after the Cluster (distinct kind, same
@@ -423,12 +440,32 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 		RetentionPolicy: t.BarmanObjectStore.RetentionPolicy,
 	}
 	if err := r.Patch(ctx, objStore, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
-		return fmt.Errorf("apply ObjectStore %s/%s: %w", namespace, objStoreName, err)
+		return "", fmt.Errorf("apply ObjectStore %s/%s: %w", namespace, objStoreName, err)
 	}
 
 	patch := newCNPGClusterPatch(namespace, clusterName)
 	patch.Spec.Plugins = []cnpgtypes.PluginConfiguration{buildBarmanPlugin(objStoreName, serverName)}
-	return r.Patch(ctx, patch, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership)
+	if err := r.Patch(ctx, patch, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
+		return "", err
+	}
+	return serverName, nil
+}
+
+// currentBarmanServerName returns the serverName the Cluster's barman-cloud
+// plugin currently archives under: the explicit plugin parameter when set, the
+// Cluster's own name when the plugin is attached without one (the plugin's
+// documented default), and "" when the plugin is not attached at all.
+func currentBarmanServerName(c *cnpgtypes.Cluster) string {
+	for _, p := range c.Spec.Plugins {
+		if p.Name != cnpgtypes.PluginName {
+			continue
+		}
+		if name := p.Parameters[barmanServerNameParam]; name != "" {
+			return name
+		}
+		return c.Name
+	}
+	return ""
 }
 
 // ensureCNPGBackup creates a one-shot postgresql.cnpg.io/Backup CR labelled

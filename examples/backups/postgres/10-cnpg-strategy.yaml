@@ -9,7 +9,12 @@ metadata:
   name: cnpg-strategy-default
 spec:
   template:
-    serverName: "{{ .Application.metadata.name }}"
+    # serverName (the WAL-archive S3 prefix) is intentionally NOT set: the
+    # driver preserves whatever prefix the live cnpg.io Cluster already
+    # archives under (the chart pins it to the Helm release name,
+    # postgres-<app>), and only a cluster with no plugin attached would take a
+    # strategy-supplied value. Setting a different name here would be ignored
+    # for chart-managed clusters and would only cause confusion.
     barmanObjectStore:
       # destinationPath uses the COSI BucketClaim's actual bucket name (look
       # it up via `kubectl -n <ns> get bucketclaim bucket-<name> -o
