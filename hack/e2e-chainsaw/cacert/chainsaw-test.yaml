@@ -38,6 +38,33 @@ spec:
           label="internal.cozystack.io/publish-ca-cert"
           certmgr="system:serviceaccount:cozy-cert-manager:cert-manager"
 
+          cleanup() {
+            # This suite runs against the shared, pre-existing tenant-test
+            # namespace (hack/e2e-chainsaw/.chainsaw.yaml), and Chainsaw only
+            # reclaims namespaces and objects IT applied — everything here is
+            # created by kubectl inside this script step, so nothing is
+            # auto-reclaimed and it must be pruned by hand. That is why the trap
+            # is armed BEFORE the RBAC apply below: a partial apply (Role created,
+            # RoleBinding rejected) would otherwise leak the privileged Role into
+            # the shared namespace. vap-ca-source-forged is deleted too: it does
+            # not exist when the deny path holds, but it is created precisely when
+            # the policy regresses and the test fails, and a leaked forged source
+            # must not outlive the run. Deletes are NOT masked with `|| true`
+            # (docs/agents/e2e-testing.md forbids it): every delete runs even if
+            # an earlier one errors (each records the failure instead of aborting
+            # the trap under set -e), the test's own exit status is preserved, and
+            # a genuine cleanup failure fails the step.
+            status=$?
+            rc=0
+            kubectl -n "$ns" delete secret vap-ca-source-seed --ignore-not-found || rc=1
+            kubectl -n "$ns" delete secret vap-ca-source-forged --ignore-not-found || rc=1
+            kubectl -n "$ns" delete rolebinding vap-probe-ca-source --ignore-not-found || rc=1
+            kubectl -n "$ns" delete role vap-probe-ca-source --ignore-not-found || rc=1
+            if [ "$status" -ne 0 ]; then exit "$status"; fi
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
           # Grant the tenant default SA Secret write, so the probe requests
           # reach ADMISSION (the VAP) instead of stopping at RBAC. Without this
           # a Forbidden from RBAC would masquerade as the policy's denial and
@@ -67,25 +94,6 @@ spec:
             name: default
             namespace: ${ns}
           EOF
-
-          cleanup() {
-            # Chainsaw only reclaims what it applied; these were created via
-            # kubectl inside this script step, so prune them by hand. Deletes are
-            # NOT masked with `|| true` (docs/agents/e2e-testing.md forbids it):
-            # every delete runs even if an earlier one errors (each records the
-            # failure instead of aborting the trap under set -e), the test's own
-            # exit status is preserved, and a genuine cleanup failure fails the
-            # step — so the Secret-write RoleBinding this test grants can never
-            # leak into the next suite.
-            status=$?
-            rc=0
-            kubectl -n "$ns" delete secret vap-ca-source-seed --ignore-not-found || rc=1
-            kubectl -n "$ns" delete rolebinding vap-probe-ca-source --ignore-not-found || rc=1
-            kubectl -n "$ns" delete role vap-probe-ca-source --ignore-not-found || rc=1
-            if [ "$status" -ne 0 ]; then exit "$status"; fi
-            exit "$rc"
-          }
-          trap cleanup EXIT
 
           as_tenant="kubectl --as=system:serviceaccount:${ns}:default \
             --as-group=system:serviceaccounts \
