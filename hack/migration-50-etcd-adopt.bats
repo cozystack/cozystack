@@ -207,6 +207,12 @@ lineno() {
   cat "$FAKE_CMDLOG"
   [ "$rc" -ne 0 ]
   grep -qF -- "refusing to adopt" "$WORK/out"
+  # The refusal must tell the operator how to actually take the hatch. Naming
+  # ETCD_ADOPT_SKIP_BACKUP alone was unactionable advice for the entire life of
+  # this migration: nothing can set a var on a Helm-hook Job, so the message has
+  # to name the Package CR path that renders it.
+  grep -qF -- "package.cozystack.io cozystack.cozystack-platform" "$WORK/out"
+  grep -qF -- "etcdAdoptSkipBackup: true" "$WORK/out"
   # Nothing destructive must have run: no scale-down, no --apply, no version stamp.
   ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
   ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
@@ -569,6 +575,41 @@ tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
   # Adoption still runs and stamps: scale down -> --apply -> scale up -> stamp.
   grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "ETCD_ADOPT_SKIP_BACKUP=true is honoured, not silently ignored" {
+  prep
+  # The platform renders this var through migrations.etcdAdoptSkipBackup and
+  # always emits "1", but an operator setting it by hand will reasonably type
+  # "true". An exact match on "1" would accept that, show it in the Job spec and
+  # do nothing — a safety valve that is set but silently ignored is worse than
+  # one that was never offered, because the operator believes they opted in.
+  export ETCD_ADOPT_SKIP_BACKUP=true
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--skip-backup"
+  ! echo "$apply" | grep -qF -- "--backup-s3-endpoint"
+  ! grep -qF -- "STAGE " "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "an unrecognised ETCD_ADOPT_SKIP_BACKUP value does NOT skip the snapshot" {
+  prep
+  # Skipping the snapshot on live etcd must require an affirmative answer. A
+  # typo, a stray value, or a future template bug rendering something unexpected
+  # must fall back to the safe side and still take the snapshot.
+  export ETCD_ADOPT_SKIP_BACKUP=banana
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  ! echo "$apply" | grep -qF -- "--skip-backup"
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
   rm -rf "$WORK"
 }
 

@@ -2,6 +2,20 @@
 {{- $shouldRunMigrationHook := false }}
 {{- $currentVersion := 0 }}
 {{- $targetVersion := .Values.migrations.targetVersion | int }}
+{{- /*
+  Resolve migrations.etcdAdoptSkipBackup to the exact string migration 50
+  matches. Two hazards, both silent:
+    - the key is absent on a Platform Package that predates it, so `dig` supplies
+      the default rather than letting the whole platform render fail;
+    - the script tests for "1", so a bare bool renders "true" and the hatch is
+      accepted, displayed in the Job spec, and ignored. Normalise through a
+      string so a bool, a quoted "true" out of the Package CR's Values JSON, or
+      a numeric 1 all land on the same answer.
+  Anything unrecognised (nil, garbage) resolves to "0": taking the hatch must
+  require an affirmative spelling, never a typo.
+*/}}
+{{- $skipBackupRaw := dig "etcdAdoptSkipBackup" false .Values.migrations }}
+{{- $skipBackup := has (lower (printf "%v" $skipBackupRaw)) (list "1" "true" "yes") }}
 {{- $configMap := lookup "v1" "ConfigMap" .Release.Namespace "cozystack-version" }}
 {{- if $configMap }}
   {{- $currentVersion = dig "data" "version" "0" $configMap | int }}
@@ -38,6 +52,11 @@ spec:
               value: {{ $currentVersion | quote }}
             - name: TARGET_VERSION
               value: {{ $targetVersion | quote }}
+            # Always emitted, including the "0" default, so the Job spec states
+            # the cluster's safety posture outright: an operator reading the Job
+            # can see whether the snapshot was skipped without diffing values.
+            - name: ETCD_ADOPT_SKIP_BACKUP
+              value: {{ $skipBackup | ternary "1" "0" | quote }}
       restartPolicy: Never
 ---
 apiVersion: rbac.authorization.k8s.io/v1

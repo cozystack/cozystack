@@ -29,7 +29,46 @@ DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 # than turn "no backup storage" into a total upgrade block, an operator who
 # accepts adopting live etcd WITHOUT a snapshot can set ETCD_ADOPT_SKIP_BACKUP=1
 # to pass etcd-migrate's --skip-backup. Default 0 keeps the fail-loud behaviour.
+# The platform renders this from migrations.etcdAdoptSkipBackup
+# (templates/migration-hook.yaml), which is the only route an operator has:
+# nothing else can set a var on a Helm-hook Job. Keep the two in lockstep —
+# an unreachable hatch is what the failure messages below used to advertise.
 SKIP_BACKUP="${ETCD_ADOPT_SKIP_BACKUP:-0}"
+
+# _is_true accepts the spellings an operator can plausibly arrive at. The
+# platform renders this var through migrations.etcdAdoptSkipBackup and always
+# emits "1"/"0", so the extra spellings are for the hand-set paths (running this
+# image directly, or a Job edited in place) where "true" is the natural thing to
+# type. A safety valve that is set but silently ignored is the worst outcome
+# here — worse than one that is not offered at all — so recognise the obvious
+# spellings rather than only the documented one. Everything else, including
+# typos, stays false: skipping the snapshot must need an affirmative answer.
+_is_true() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _print_skip_backup_hatch spells out how to actually take the hatch. Naming the
+# env var alone is useless advice: this Job is a Helm hook rendered by the
+# platform chart, so an operator cannot set the variable directly and nothing
+# they can edit survives the next render. The Package CR is the only supported
+# route (it is cluster-scoped; the platform chart's own values sit under
+# components.platform). Deliberately not sold as a quick fix — it is a values
+# change plus a re-reconcile, and it must be reverted afterwards.
+_print_skip_backup_hatch() {
+  echo "    kubectl edit package.cozystack.io cozystack.cozystack-platform" >&2
+  echo "    spec:" >&2
+  echo "      components:" >&2
+  echo "        platform:" >&2
+  echo "          values:" >&2
+  echo "            migrations:" >&2
+  echo "              etcdAdoptSkipBackup: true" >&2
+  echo "    Flux then re-renders the platform chart and re-runs this hook, which adopts" >&2
+  echo "    every legacy etcd WITHOUT a snapshot. Set it back to false once the upgrade" >&2
+  echo "    completes, or the next etcd migration will skip its snapshot too." >&2
+}
 
 # Shared cozystack-version stamp helper. Every migration >= 42 must stamp via
 # this (labeled, no-delete-guarded) helper rather than a hand-rolled apply — the
@@ -571,10 +610,11 @@ fi
 # ETCD_ADOPT_SKIP_BACKUP=1 escape hatch; any inbound ETCD_MIGRATE_BACKUP_ARGS is
 # overwritten here on purpose (it can never suppress the snapshot).
 if [ "$LEGACY_COUNT" -gt 0 ]; then
-  if [ "$SKIP_BACKUP" = "1" ]; then
-    echo "WARNING: ETCD_ADOPT_SKIP_BACKUP=1 — adopting live etcd WITHOUT a pre-adoption" >&2
-    echo "  safety snapshot, by explicit operator request. A botched adoption on a" >&2
-    echo "  tenant control-plane etcd is UNRECOVERABLE with no snapshot." >&2
+  if _is_true "$SKIP_BACKUP"; then
+    echo "WARNING: migrations.etcdAdoptSkipBackup is set — adopting live etcd WITHOUT a" >&2
+    echo "  pre-adoption safety snapshot, by explicit operator request. A botched adoption" >&2
+    echo "  on a tenant control-plane etcd is UNRECOVERABLE with no snapshot. Reset the" >&2
+    echo "  flag to false once this upgrade is through." >&2
     ETCD_MIGRATE_BACKUP_ARGS="--skip-backup"
   else
     echo "Resolving platform-managed S3 snapshot target ('${PLATFORM_STRATEGY}' strategy)..."
@@ -590,7 +630,8 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
       echo "  cozy-backups Bucket and the backupstrategy-controller are healthy, then re-run." >&2
       echo "  If this cluster intentionally has no backup storage (backups disabled," >&2
       echo "  external S3 without staged creds, or SeaweedFS not yet ready) and you accept" >&2
-      echo "  adopting live etcd WITHOUT a snapshot, re-run with ETCD_ADOPT_SKIP_BACKUP=1." >&2
+      echo "  adopting live etcd WITHOUT a snapshot, take the escape hatch:" >&2
+      _print_skip_backup_hatch
       exit 1
     fi
   fi
@@ -659,7 +700,7 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
   # etcd-migrate's per-namespace snapshot Job mounts PLATFORM_CREDS_SECRET there.
   # Skipped entirely when ETCD_ADOPT_SKIP_BACKUP=1 (no snapshot Job runs, so no
   # creds are needed) — adoption below still proceeds.
-  if [ "$SKIP_BACKUP" != "1" ]; then
+  if ! _is_true "$SKIP_BACKUP"; then
     echo "=== staging snapshot credentials ('${PLATFORM_CREDS_SECRET}') into adopted namespaces ==="
     while read -r ns name; do
       [ -n "$ns" ] || continue

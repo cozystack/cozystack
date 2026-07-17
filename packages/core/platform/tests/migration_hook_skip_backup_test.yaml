@@ -1,0 +1,139 @@
+suite: migrations.etcdAdoptSkipBackup reaches the migration Job as the value the script matches
+templates:
+  - templates/migration-hook.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+# The Job only renders when the cozystack-version ConfigMap reports a version
+# BELOW migrations.targetVersion. Under plain `helm template` (and therefore
+# `helm lint`/CI) lookup returns nil and the whole hook is skipped, so the env
+# block is unreachable without mocking the ConfigMap — which is precisely why
+# this template had no coverage and shipped an unreachable escape hatch.
+kubernetesProvider:
+  scheme:
+    "v1/ConfigMap":
+      gvr:
+        version: "v1"
+        resource: "configmaps"
+      namespaced: true
+  objects:
+    - kind: ConfigMap
+      apiVersion: v1
+      metadata:
+        name: cozystack-version
+        namespace: cozy-system
+      data:
+        version: "52"
+tests:
+  # The trap this suite exists for: migration 50 tests the env var against the
+  # literal string "1". A bare bool renders "true", which the script does not
+  # match, so the hatch would appear in the Job spec and silently do nothing —
+  # the worst outcome for a safety valve an operator reaches for when stuck.
+  # Assert the RENDERED VALUE, never merely that the var exists.
+  - it: renders ETCD_ADOPT_SKIP_BACKUP=1 (not "true") when the flag is enabled
+    set:
+      migrations:
+        enabled: true
+        etcdAdoptSkipBackup: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].name
+          value: ETCD_ADOPT_SKIP_BACKUP
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: "1"
+
+  - it: renders ETCD_ADOPT_SKIP_BACKUP=0 when the flag is explicitly disabled
+    set:
+      migrations:
+        enabled: true
+        etcdAdoptSkipBackup: false
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: "0"
+
+  # A Platform Package predating this knob carries no such key. The chart's own
+  # values.yaml supplies the default on merge, but the template must not depend
+  # on that: a nil here would fail the render of the ENTIRE platform chart and
+  # brick every upgrade — far worse than the hatch being unavailable.
+  - it: renders cleanly and OFF when the key is absent entirely (pre-existing Package CR)
+    set:
+      migrations:
+        enabled: true
+        etcdAdoptSkipBackup: null
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: "0"
+
+  # Values arrive as JSON from the Package CR, where a quoted "true" is an easy
+  # mistake. It must take the hatch rather than silently render "0".
+  - it: accepts a stringified true from the Package CR Values JSON
+    set:
+      migrations:
+        enabled: true
+        etcdAdoptSkipBackup: "true"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: "1"
+
+  # The dangerous direction must require an affirmative spelling: anything
+  # unrecognised resolves to "0" rather than being treated as truthy.
+  - it: treats an unrecognised value as OFF, never as an accidental skip
+    set:
+      migrations:
+        enabled: true
+        etcdAdoptSkipBackup: "banana"
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[3].value
+          value: "0"
+
+  # The pre-existing env contract must survive: the script reads all four.
+  - it: keeps NAMESPACE/CURRENT_VERSION/TARGET_VERSION alongside the new var
+    set:
+      migrations:
+        enabled: true
+        etcdAdoptSkipBackup: true
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[0].name
+          value: NAMESPACE
+      - equal:
+          path: spec.template.spec.containers[0].env[1].name
+          value: CURRENT_VERSION
+      - equal:
+          path: spec.template.spec.containers[0].env[1].value
+          value: "52"
+      - equal:
+          path: spec.template.spec.containers[0].env[2].name
+          value: TARGET_VERSION
+
+  - it: emits no Job at all when migrations are disabled
+    set:
+      migrations:
+        enabled: false
+        etcdAdoptSkipBackup: true
+    asserts:
+      - hasDocuments:
+          count: 0
