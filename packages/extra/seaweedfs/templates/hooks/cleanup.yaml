@@ -182,8 +182,25 @@ spec:
               # but still installs. Deleting on name alone would take a different
               # app's database.
               echo "Deleting SeaweedFS filer-metadata database for {{ .Release.Name }}..."
-              owner=$(kubectl get cluster.postgresql.cnpg.io -n {{ .Release.Namespace }} seaweedfs-db \
-                        -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)
+              # Reading ownership must FAIL the Job on error, not fall through. `|| true`
+              # would turn a Forbidden, a timeout or any API error into an empty owner,
+              # take the "nothing to reclaim" branch below, and let the Job complete —
+              # orphaning the keep-protected Cluster this hook exists to reclaim, with
+              # nothing else that will ever collect it. Only a genuine NotFound counts
+              # as absence; every other failure aborts so the Job retries.
+              owner_err=/tmp/seaweedfs-db-owner-err
+              if owner=$(kubectl get cluster.postgresql.cnpg.io -n {{ .Release.Namespace }} seaweedfs-db \
+                          -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>"$owner_err"); then
+                :
+              elif grep -qi 'not found' "$owner_err"; then
+                owner=""
+              else
+                cat "$owner_err" >&2
+                echo "ERROR: failed to read Cluster/seaweedfs-db ownership for {{ .Release.Name }}; refusing to assume it is absent. Failing so the Job retries." >&2
+                rm -f "$owner_err"
+                exit 1
+              fi
+              rm -f "$owner_err"
               if [ -z "$owner" ]; then
                 echo "No Cluster/seaweedfs-db owned by a Helm release here; nothing to reclaim."
               elif [ "$owner" != "{{ .Release.Name }}-db" ]; then

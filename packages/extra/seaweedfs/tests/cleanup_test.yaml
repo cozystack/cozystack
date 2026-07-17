@@ -217,3 +217,13 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'delete cluster\.postgresql\.cnpg\.io[^|]*\|\| echo'
+      # Reading ownership must ALSO fail closed. `|| true` on the get would turn a
+      # Forbidden or timeout into an empty owner, take the "nothing to reclaim"
+      # branch, and orphan the keep-protected Cluster. Only a genuine NotFound is
+      # treated as absence; every other error aborts the Job.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'failed to read Cluster/seaweedfs-db ownership'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "release-name.}' 2>/dev/null \\|\\| true"
