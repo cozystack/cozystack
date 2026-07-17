@@ -1,0 +1,57 @@
+suite: bucket child release COSI Secret watch wiring
+templates:
+  - templates/helmrelease.yaml
+
+release:
+  name: my-bucket
+  namespace: tenant-root
+
+set:
+  _namespace:
+    host: example.org
+
+tests:
+  # The child release only re-renders (and so only projects the -credentials
+  # Secrets, see #3247) because every per-user COSI BucketInfo Secret is a
+  # watched valuesFrom reference. optional is load-bearing: the Secret does
+  # not exist until the COSI driver grants the BucketAccess.
+  - it: references each user's COSI BucketInfo Secret in valuesFrom as an optional watch trigger
+    set:
+      users:
+        admin: {}
+        viewer:
+          readonly: true
+    asserts:
+      - contains:
+          path: spec.valuesFrom
+          content:
+            kind: Secret
+            name: my-bucket-admin
+            valuesKey: BucketInfo
+            optional: true
+      - contains:
+          path: spec.valuesFrom
+          content:
+            kind: Secret
+            name: my-bucket-viewer
+            valuesKey: BucketInfo
+            optional: true
+      - contains:
+          path: spec.valuesFrom
+          content:
+            kind: Secret
+            name: cozystack-values
+      - lengthEqual:
+          path: spec.valuesFrom
+          count: 3
+
+  - it: keeps only cozystack-values in valuesFrom when the bucket has no users
+    asserts:
+      - lengthEqual:
+          path: spec.valuesFrom
+          count: 1
+      - contains:
+          path: spec.valuesFrom
+          content:
+            kind: Secret
+            name: cozystack-values

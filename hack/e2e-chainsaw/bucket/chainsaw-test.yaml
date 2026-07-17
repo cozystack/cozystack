@@ -14,6 +14,13 @@ spec:
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: bucket-test
+  # The child release projects the -credentials Secrets from the COSI
+  # BucketInfo Secrets (#3247), so on a hang this is where a stuck or
+  # never-triggered upgrade is visible.
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: bucket-test-system
   - describe:
       apiVersion: objectstorage.k8s.io/v1alpha1
       kind: BucketClaim
@@ -76,6 +83,58 @@ spec:
           status:
             accessGranted: true
 
+  # The human-friendly -credentials Secrets are projected by the child
+  # (bucket-test-system) release from the COSI BucketInfo Secrets. The COSI
+  # driver provisions those asynchronously — usually after the child's first
+  # render — and the projection only happens because the parent lists the
+  # BucketInfo Secrets in the child's valuesFrom, which makes helm-controller
+  # re-render the child when they appear (#3247: before that wiring the
+  # -credentials Secrets stayed missing forever). The 6m budget covers the
+  # interval-based fallback reconcile (child interval is 5m) in case the
+  # watch event is missed; the watch path converges in seconds.
+  - name: wait-credentials-projected
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bucket-test-admin-credentials
+            labels:
+              apps.cozystack.io/user-secret: "true"
+          data:
+            (accessKey != null): true
+            (secretKey != null): true
+            (endpoint != null): true
+            (bucketName != null): true
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: bucket-test-viewer-credentials
+            labels:
+              apps.cozystack.io/user-secret: "true"
+          data:
+            (accessKey != null): true
+            (secretKey != null): true
+            (endpoint != null): true
+            (bucketName != null): true
+    # A projected Secret alone is not the regression guard: the child release
+    # must also have settled Ready, or remediation is still churning.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: bucket-test-system
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
   - name: verify-s3-access
     try:
     - script:
@@ -85,16 +144,15 @@ spec:
           workdir=$(mktemp -d)
           trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true; rm -rf "$workdir"' EXIT
 
-          # Extract credentials for both users
-          kubectl -n "$NAMESPACE" get secret bucket-test-admin \
-            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/admin.json"
-          kubectl -n "$NAMESPACE" get secret bucket-test-viewer \
-            -o jsonpath='{.data.BucketInfo}' | base64 -d > "$workdir/viewer.json"
-          ADMIN_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/admin.json")
-          ADMIN_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/admin.json")
-          VIEWER_ACCESS_KEY=$(jq -r '.spec.secretS3.accessKeyID' "$workdir/viewer.json")
-          VIEWER_SECRET_KEY=$(jq -r '.spec.secretS3.accessSecretKey' "$workdir/viewer.json")
-          BUCKET_NAME=$(jq -r '.spec.bucketName' "$workdir/admin.json")
+          # Extract credentials for both users from the projected -credentials
+          # Secrets (not the raw COSI BucketInfo), so this step proves the
+          # user-facing Secrets carry working keys (#3247).
+          sec() { kubectl -n "$NAMESPACE" get secret "$1" -o "jsonpath={.data.$2}" | base64 -d; }
+          ADMIN_ACCESS_KEY=$(sec bucket-test-admin-credentials accessKey)
+          ADMIN_SECRET_KEY=$(sec bucket-test-admin-credentials secretKey)
+          VIEWER_ACCESS_KEY=$(sec bucket-test-viewer-credentials accessKey)
+          VIEWER_SECRET_KEY=$(sec bucket-test-viewer-credentials secretKey)
+          BUCKET_NAME=$(sec bucket-test-admin-credentials bucketName)
 
           # Port-forward to the S3 endpoint; cleaned up by the trap
           kubectl port-forward service/seaweedfs-s3 -n tenant-root 8333:8333 >/dev/null 2>&1 &
