@@ -69,11 +69,21 @@ spec:
           EOF
 
           cleanup() {
-            # || true each delete: the trap runs under set -eu, and one
-            # transient delete failure must not skip the remaining cleanup.
-            kubectl -n "$ns" delete secret vap-ca-source-seed --ignore-not-found || true
-            kubectl -n "$ns" delete rolebinding vap-probe-ca-source --ignore-not-found || true
-            kubectl -n "$ns" delete role vap-probe-ca-source --ignore-not-found || true
+            # Chainsaw only reclaims what it applied; these were created via
+            # kubectl inside this script step, so prune them by hand. Deletes are
+            # NOT masked with `|| true` (docs/agents/e2e-testing.md forbids it):
+            # every delete runs even if an earlier one errors (each records the
+            # failure instead of aborting the trap under set -e), the test's own
+            # exit status is preserved, and a genuine cleanup failure fails the
+            # step — so the Secret-write RoleBinding this test grants can never
+            # leak into the next suite.
+            status=$?
+            rc=0
+            kubectl -n "$ns" delete secret vap-ca-source-seed --ignore-not-found || rc=1
+            kubectl -n "$ns" delete rolebinding vap-probe-ca-source --ignore-not-found || rc=1
+            kubectl -n "$ns" delete role vap-probe-ca-source --ignore-not-found || rc=1
+            if [ "$status" -ne 0 ]; then exit "$status"; fi
+            exit "$rc"
           }
           trap cleanup EXIT
 
