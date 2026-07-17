@@ -22,13 +22,27 @@ state_dir="${FAKE_CMDLOG%/*}"
 # arg_after KEY -- echoes the token following KEY in the argument vector.
 arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
 
-# Strategy CR JSON (rendered with real S3 coordinates by the backupstrategy-
-# controller; forcePathStyle true => the script must add --backup-s3-force-path-style).
+# Strategy CR JSON as the version being upgraded FROM rendered it. The endpoint
+# is the static v1.5.x default: plaintext against SeaweedFS's :8333 TLS listener,
+# i.e. unusable. The script must NOT take its endpoint from here when the
+# projected Secret advertises the real one. FAKE_STRATEGY=0 models the other
+# v1.5.x shape, where the CR was never rendered at all (its template is guarded
+# by a bucketName lookup that races the BucketClaim on first install).
 strategy_json='{"spec":{"template":{"destination":{"s3":{"endpoint":"http://seaweedfs-s3.tenant-root.svc.cozy.local:8333","bucket":"cozy-backups-7f3a","region":"us-east-1","forcePathStyle":true}}}}}'
 # cozy-backups-creds as eagerly projected into cozy-velero (carries owner/anno
 # metadata the stage copy must strip, plus the AWS_* keys). It also carries a
 # tenantresource label here so the test can prove the stage copy strips it.
-creds_json='{"apiVersion":"v1","kind":"Secret","metadata":{"name":"cozy-backups-creds","namespace":"cozy-velero","resourceVersion":"123","uid":"abc","ownerReferences":[{"name":"projector"}],"labels":{"internal.cozystack.io/tenantresource":"true"},"annotations":{"reconcile.io/x":"y"}},"data":{"AWS_ACCESS_KEY_ID":"QUtJQUVYQU1QTEU=","AWS_SECRET_ACCESS_KEY":"c2VjcmV0a2V5"}}'
+#
+# The projector writes the COSI bucket's own coordinates alongside the AWS_*
+# keys: endpoint (a BARE HOST — the external, ACME-certed S3 ingress),
+# bucketName, region, forcePathStyle. Those describe the live bucket regardless
+# of which version rendered the charts, so they are what resolve_platform_backup_args
+# must prefer. FAKE_CREDS_COORDS=0 drops them to model the admin-managed
+# external-S3 case (provisionBucket: false), where the Strategy CR stays
+# authoritative and its scheme must be preserved verbatim.
+creds_coords='"endpoint":"czMuZXhhbXBsZS5jb20=","bucketName":"Y296eS1iYWNrdXBzLTdmM2E=","region":"dXMtZWFzdC0x","forcePathStyle":"dHJ1ZQ==",'
+[ "${FAKE_CREDS_COORDS:-1}" = "1" ] || creds_coords=''
+creds_json='{"apiVersion":"v1","kind":"Secret","metadata":{"name":"cozy-backups-creds","namespace":"cozy-velero","resourceVersion":"123","uid":"abc","ownerReferences":[{"name":"projector"}],"labels":{"internal.cozystack.io/tenantresource":"true"},"annotations":{"reconcile.io/x":"y"}},"data":{'"$creds_coords"'"AWS_ACCESS_KEY_ID":"QUtJQUVYQU1QTEU=","AWS_SECRET_ACCESS_KEY":"c2VjcmV0a2V5"}}'
 
 emit_clusters_name() { printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns name; do [ -n "$ns" ] && printf 'etcdcluster.etcd.aenix.io/%s\n' "$name"; done; }
 emit_clusters_jsonpath() { printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns name; do [ -n "$ns" ] && printf '%s %s\n' "$ns" "$name"; done; }

@@ -71,8 +71,12 @@ lineno() {
   [ "$rc" -eq 0 ]
 
   # --apply carries the platform-derived S3 destination, NOT --skip-backup.
+  # The endpoint is derived from the projected Secret's bare host and forced to
+  # https, NOT taken from the Strategy CR — the CR is rendered by the version we
+  # are upgrading FROM and its plaintext in-cluster default cannot be reached.
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
-  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
+  ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
   echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
   echo "$apply" | grep -qF -- "--backup-s3-credentials-secret=cozy-backups-creds"
   echo "$apply" | grep -qF -- "--backup-s3-region=us-east-1"
@@ -185,7 +189,9 @@ lineno() {
 
 @test "no resolvable destination hard-fails without scaling or adopting" {
   prep
+  # Neither source resolves: no Strategy CR AND no projected coordinates.
   export FAKE_STRATEGY=0
+  export FAKE_CREDS_COORDS=0
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
@@ -196,6 +202,47 @@ lineno() {
   ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
   ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
   ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "absent Strategy CR still resolves from the projected coordinates" {
+  prep
+  # The v1.5.x shape where strategy-etcd-default.yaml never rendered: its
+  # `if $bucketName` guard lookup raced the BucketClaim the same chart creates,
+  # and helm lookup does not re-run on reconcile. Before deriving coordinates
+  # from the projected Secret this was a total upgrade block with no reachable
+  # escape (ETCD_ADOPT_SKIP_BACKUP is not plumbed through the migration hook).
+  export FAKE_STRATEGY=0
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  ! grep -qF -- "refusing to adopt" "$WORK/out"
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
+  echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
+  echo "$apply" | grep -qF -- "--backup-s3-region=us-east-1"
+  echo "$apply" | grep -qF -- "--backup-s3-force-path-style"
+  ! echo "$apply" | grep -qF -- "--skip-backup"
+  grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "external S3 (no projected endpoint) keeps the Strategy CR endpoint verbatim" {
+  prep
+  # provisionBucket: false — the admin's .Values.backupStorage.endpoint is
+  # authoritative and may legitimately be plaintext against a private store, so
+  # the CR's scheme must survive: we must not force https on a non-COSI target.
+  export FAKE_CREDS_COORDS=0
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
   rm -rf "$WORK"
 }
 
@@ -247,6 +294,7 @@ lineno() {
   # creds / SeaweedFS not ready) is no longer a total upgrade block when the
   # operator opts into skipping the snapshot.
   export FAKE_STRATEGY=0
+  export FAKE_CREDS_COORDS=0
   export ETCD_ADOPT_SKIP_BACKUP=1
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?

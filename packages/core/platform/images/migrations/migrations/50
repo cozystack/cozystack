@@ -211,30 +211,88 @@ ensure_wildcard_sans() {
   done
 }
 
+# secret_val echoes one base64 key from a Secret JSON blob, whitespace-trimmed.
+# A trailing newline in the Secret data would otherwise ride into a URL and
+# break it (the same normalization backupstrategy-controller.endpoint applies).
+secret_val() {
+  printf '%s' "$1" | jq -r --arg k "$2" '.data[$k] // ""' \
+    | base64 -d 2>/dev/null | tr -d '[:space:]'
+}
+
 # resolve_platform_backup_args echoes the etcd-migrate --backup-s3-* flags for
 # the platform-managed safety snapshot, or returns non-zero if the target
-# cannot be resolved (no cozy-default etcd strategy, or no projected creds).
-# Read-only — safe in dry-run. The authoritative endpoint/bucket/region come
-# from the live cozy-default-etcd Strategy CR (rendered with real coordinates
-# by the backupstrategy-controller), so this never drifts from the bucket the
-# regular backups use.
+# cannot be resolved. Read-only — safe in dry-run.
+#
+# The coordinates come from the PROJECTED CREDENTIALS SECRET, not from the live
+# cozy-default-etcd Strategy CR, because this runs as a PRE-upgrade hook: every
+# chart-rendered resource on the cluster still belongs to the version we are
+# upgrading FROM, and cannot be trusted to describe a reachable target.
+#
+# On a v1.5.x cluster the live Strategy CR is wrong in one of two ways, and the
+# platform upgrade is gated behind this snapshot, so neither can self-heal
+# first (the fixed backupstrategy-controller chart only reconciles AFTER the
+# upgrade this hook blocks):
+#
+#   1. Absent. strategy-etcd-default.yaml is guarded by `if $bucketName`, whose
+#      helper `lookup`s the BucketClaim status. The BucketClaim is created by
+#      that same chart, so on first render the lookup is empty and the Strategy
+#      is silently skipped. Helm lookup only runs at install/upgrade time, so a
+#      cluster that reached 1.5.x in one hop never grows the CR on reconcile.
+#   2. Present, carrying the static default http://seaweedfs-s3...svc:8333.
+#      Cozystack ships SeaweedFS with enableSecurity=true, so :8333 is a TLS
+#      listener — plaintext against it fails the handshake and every snapshot
+#      dies. The Etcd Strategy's S3 schema has no caCert/insecureSkipVerify, so
+#      the self-signed in-cluster endpoint is unusable at ANY scheme; a trusted
+#      -cert endpoint is required.
+#
+# PLATFORM_CREDS_SECRET is produced by the projector from the COSI-provisioned
+# bucket's system credentials — bucket provisioning, not chart values — so it
+# describes the live bucket regardless of the version that rendered the chart.
+# It advertises the external S3 ingress (ACME cert) as a bare host, and that
+# ingress is always TLS, so we force https:// exactly as the 1.6 chart helper
+# backupstrategy-controller.endpoint does. We already had to read this Secret
+# for the AWS keys, so this adds no new dependency.
+#
+# The Strategy CR remains the fallback for the admin-managed external-S3 case
+# (provisionBucket: false), where .Values.backupStorage.endpoint is
+# authoritative and may legitimately be plaintext against a private object
+# store. That path is detected by the absence of a projected endpoint.
 resolve_platform_backup_args() {
-  local cr ep bucket region fps
-  cr=$(kubectl get etcds.strategy.backups.cozystack.io "$PLATFORM_STRATEGY" -o json 2>/dev/null) || return 1
-  [ -n "$cr" ] || return 1
-  ep=$(printf '%s' "$cr"     | jq -r '.spec.template.destination.s3.endpoint // ""')
-  bucket=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.bucket // ""')
-  region=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.region // ""')
-  fps=$(printf '%s' "$cr"    | jq -r '.spec.template.destination.s3.forcePathStyle // false')
-  [ -n "$ep" ] && [ -n "$bucket" ] || return 1
+  local creds ep bucket region fps
   # The credentials Secret must already exist with BOTH AWS keys so the snapshot
   # agent can authenticate. Validate both up front: a Secret missing one key
   # would otherwise abort etcd-migrate AFTER the operator/cert mutations have
   # begun (creds staged, operator scaled to 0).
-  local creds
   creds=$(kubectl -n "$PLATFORM_CREDS_NS" get secret "$PLATFORM_CREDS_SECRET" -o json 2>/dev/null) || return 1
   printf '%s' "$creds" | jq -e '(.data.AWS_ACCESS_KEY_ID // "")     | length > 0' >/dev/null 2>&1 || return 1
   printf '%s' "$creds" | jq -e '(.data.AWS_SECRET_ACCESS_KEY // "") | length > 0' >/dev/null 2>&1 || return 1
+
+  ep=$(secret_val "$creds" endpoint)
+  bucket=$(secret_val "$creds" bucketName)
+  region=$(secret_val "$creds" region)
+  fps=$(secret_val "$creds" forcePathStyle)
+
+  if [ -n "$ep" ]; then
+    # Projected (COSI) endpoint: a bare host fronted by the always-TLS S3
+    # ingress. Strip any scheme a future producer might emit, then force https.
+    ep="${ep#https://}"; ep="${ep#http://}"
+    ep="https://${ep}"
+  fi
+
+  # Fall back to the Strategy CR for anything the projected Secret did not
+  # supply — notably the external-S3 case, which has no projected endpoint.
+  if [ -z "$ep" ] || [ -z "$bucket" ]; then
+    local cr
+    cr=$(kubectl get etcds.strategy.backups.cozystack.io "$PLATFORM_STRATEGY" -o json 2>/dev/null) || cr=""
+    if [ -n "$cr" ]; then
+      [ -n "$ep" ]     || ep=$(printf '%s' "$cr"     | jq -r '.spec.template.destination.s3.endpoint // ""')
+      [ -n "$bucket" ] || bucket=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.bucket // ""')
+      [ -n "$region" ] || region=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.region // ""')
+      [ -n "$fps" ]    || fps=$(printf '%s' "$cr"    | jq -r '.spec.template.destination.s3.forcePathStyle // false')
+    fi
+  fi
+  [ -n "$ep" ] && [ -n "$bucket" ] || return 1
+
   local args="--backup-s3-endpoint=${ep} --backup-s3-bucket=${bucket}"
   args="${args} --backup-s3-credentials-secret=${PLATFORM_CREDS_SECRET}"
   args="${args} --backup-s3-key=${SNAPSHOT_KEY_PREFIX}"
