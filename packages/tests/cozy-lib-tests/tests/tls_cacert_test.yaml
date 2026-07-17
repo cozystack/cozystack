@@ -316,15 +316,17 @@ tests:
       - isNotNullOrEmpty:
           path: stringData["ca.crt"]
 
-  - it: accepts a certificate even when the literal text PRIVATE KEY appears outside a PEM header
+  - it: rejects a certificate wrapped in a friendlyName preamble as a structural failure
     templates:
-      - templates/tests/tls-cacert-params.yaml
+      - templates/tests/tls-cacert.yaml
     set:
-      useParams: true
-      name: my.tenant-ca
-      namespace: tenant-acme
-      # "PRIVATE KEY" here is in a friendlyName line, not a PEM header — a free
-      # substring guard would wrongly reject this valid, key-free certificate.
+      # The helper emits caCert VERBATIM, so it must refuse anything that is not
+      # certificate blocks and whitespace — a preamble line would otherwise reach
+      # the tenant trust anchor unaltered. This case is also where the private-key
+      # guard proves it does not false-positive: "PRIVATE KEY" here is in a
+      # friendlyName line, not a PEM header, so the failure is the STRUCTURAL
+      # certificate-block error, not the key-material error. A free substring
+      # guard would have produced the wrong message.
       caCert: |
         Bag Attributes: friendlyName=acme PRIVATE KEY authority
         -----BEGIN CERTIFICATE-----
@@ -339,10 +341,58 @@ tests:
         L/I7Ek4FlYbzy9kZu/MXqlE=
         -----END CERTIFICATE-----
     asserts:
-      - isKind:
-          of: Secret
-      - isNotNullOrEmpty:
-          path: stringData["ca.crt"]
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # The chart-side analog of the CA-extraction controller's write-path guard: the
+  # regex is anchored to the WHOLE value, so a certificate that parses but carries
+  # bytes before or after the block cannot smuggle them into the verbatim-emitted
+  # trust anchor. The controller strips such bytes (it can re-encode); a Helm
+  # template can only refuse the value, which it does.
+  - it: rejects a certificate preceded by a human-readable preamble
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      # What `openssl x509 -text` prints ahead of the PEM block.
+      caCert: |
+        Certificate:
+            Data:
+                Version: 3 (0x2)
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  - it: rejects a certificate trailed by arbitrary bytes
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+        and then some trailing bytes
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   - it: fails closed when name is empty
     templates:

@@ -151,12 +151,19 @@ Parameters:
 {{-   if regexMatch "(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY" $caCert -}}
 {{-     fail "cozy-lib.tls.caCertSecret: caCert must not contain private key material" -}}
 {{-   end -}}
-{{- /* Require a COMPLETE certificate block, not merely a BEGIN line: armour,
-       then at least one base64 character of body, then the closing line. A
-       header match alone accepted "-----BEGIN CERTIFICATE-----" on its own,
-       armour with no END, and armour wrapped around text that could never be
-       base64 — each of which renders a trust anchor carrying nothing a verifier
-       can load, published under a name that tells the tenant it is the CA.
+{{- /* Require the WHOLE value to be certificate blocks and whitespace, not
+       merely to CONTAIN one. The regex is anchored (\A ... \z) around one or
+       more COMPLETE blocks — armour, at least one base64 character of body, the
+       closing line — because ca.crt below is emitted VERBATIM. An unanchored
+       match let a value carry bytes before the first block or after the last and
+       still pass, and those bytes — a human-readable preamble, or a raw DER/JWK
+       key that wears no PEM private-key header and so slips the guard above —
+       would then be published to the tenant inside the trust anchor. Anchoring
+       makes preamble and trailing bytes a rejection, not a leak. A bare
+       "-----BEGIN CERTIFICATE-----", armour with no END, and armour around text
+       that could never be base64 are refused for the same reason: each renders a
+       trust anchor carrying nothing a verifier can load, under a name that tells
+       the tenant it is the CA.
 
        INHERENT LIMIT, stated rather than papered over: this bounds the block's
        SHAPE, not its contents. The body is only checked for characters outside
@@ -176,10 +183,11 @@ Parameters:
        loudly at the client. The general path — an operator-minted CA, extracted
        from whatever Secret the engine actually produced — is the CA-extraction
        controller (internal/controller/cacert), which is Go, does the full
-       pem.Decode + x509.ParseCertificate, and is where a value nobody wrote by
-       hand is checked. The two ends agree on the same contract; they enforce as
-       much of it as their language allows. */ -}}
-{{-   if not (regexMatch "(?i)-----BEGIN CERTIFICATE-----\\s+[A-Za-z0-9+/=][A-Za-z0-9+/=\\s]*-----END CERTIFICATE-----" $caCert) -}}
+       pem.Decode + x509.ParseCertificate, and REBUILDS the projection from the
+       parsed blocks. The two ends reach the same result — a trust anchor that is
+       nothing but certificates — the controller by re-encoding, this helper by
+       refusing anything else, each enforcing as much as its language allows. */ -}}
+{{-   if not (regexMatch "(?i)\\A\\s*(-----BEGIN CERTIFICATE-----\\s+[A-Za-z0-9+/=][A-Za-z0-9+/=\\s]*-----END CERTIFICATE-----\\s*)+\\z" $caCert) -}}
 {{-     fail "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)" -}}
 {{-   end -}}
 {{- /* internal.cozystack.io/tenant-ca is the label that actually reaches the
