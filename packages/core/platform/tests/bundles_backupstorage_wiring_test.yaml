@@ -73,3 +73,19 @@ tests:
       - equal:
           path: spec.components.backupstrategy-controller.values.backupStorage.endpoint
           value: https://s3.example.com
+
+  - it: forwards backupStorage overrides on the isp-hosted variant too
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+      backupStorage:
+        endpoint: https://s3.example.com
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backupstrategy-controller
+    asserts:
+      - equal:
+          path: spec.components.backupstrategy-controller.values.backupStorage.endpoint
+          value: https://s3.example.com
