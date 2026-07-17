@@ -49,6 +49,10 @@ prep() {
   export FAKE_STRATEGY=1
   export FAKE_CREDS=1
   export FAKE_V2_CRD=0
+  export FAKE_CLAIM_CRD=1
+  # One healthy claim provisioned into the bucket the projected creds advertise:
+  # the COSI path. Tests override this to model external S3 / stale claims.
+  export FAKE_CLAIMS="tenant-root bucket-cozy-backups cozy-backups-7f3a -"
   # The baked-CRD dir must exist for the script's `-d` guard; the fake kubectl
   # logs the apply without reading it, so an empty dir is enough.
   export ETCD_CRD_DIR="$WORK/etcd-operator-crds"
@@ -77,6 +81,9 @@ lineno() {
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
   ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  # https is forced because a BucketClaim is provisioned into exactly the bucket
+  # the creds advertise, not because the projected endpoint happens to exist.
+  grep -qF -- "BUCKETCLAIM-LIST" "$FAKE_CMDLOG"
   echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
   echo "$apply" | grep -qF -- "--backup-s3-credentials-secret=cozy-backups-creds"
   echo "$apply" | grep -qF -- "--backup-s3-region=us-east-1"
@@ -189,7 +196,9 @@ lineno() {
 
 @test "no resolvable destination hard-fails without scaling or adopting" {
   prep
-  # Neither source resolves: no Strategy CR AND no projected coordinates.
+  # Neither source resolves the bucket: the projector dropped bucketName (its
+  # source Secret did not carry one) and the Strategy CR that would supply it
+  # never rendered.
   export FAKE_STRATEGY=0
   export FAKE_CREDS_COORDS=0
   rc=0
@@ -229,20 +238,296 @@ lineno() {
   rm -rf "$WORK"
 }
 
-@test "external S3 (no projected endpoint) keeps the Strategy CR endpoint verbatim" {
+@test "external S3 (no COSI at all) keeps the Strategy CR endpoint scheme verbatim" {
   prep
-  # provisionBucket: false — the admin's .Values.backupStorage.endpoint is
-  # authoritative and may legitimately be plaintext against a private store, so
-  # the CR's scheme must survive: we must not force https on a non-COSI target.
-  export FAKE_CREDS_COORDS=0
+  # provisionBucket: false on a cluster with no SeaweedFS/COSI at all
+  # (docs/operations/backup-classes.md describes exactly this flip), so the
+  # BucketClaim CRD itself is absent and every claim query fails the way real
+  # kubectl fails on an unknown resource type. That must classify as external
+  # and must NOT abort the script under `set -euo pipefail`.
+  #
+  # The projector still writes a bare `endpoint` here (it always does), so the
+  # endpoint's PRESENCE cannot signal this case. The admin's
+  # .Values.backupStorage.endpoint is authoritative and may legitimately be
+  # plaintext against a private store, so its scheme must survive. Forcing https
+  # would be a total upgrade block: the snapshot is mandatory and
+  # ETCD_ADOPT_SKIP_BACKUP is not plumbed through templates/migration-hook.yaml,
+  # so the operator would have no escape.
+  export FAKE_CLAIM_CRD=0
+  export FAKE_CLAIMS=""
+  export FAKE_CREDS_ENDPOINT="minio.internal:9000"
+  # The healthy external shape: the admin's backupStorage.bucketName (which the
+  # CR renders) and their source Secret name the same bucket. The disagreeing
+  # shape is covered separately by the CR-wholesale test above.
+  export FAKE_CREDS_BUCKET="minio-bucket"
+  export FAKE_STRATEGY_BUCKET="minio-bucket"
+  export FAKE_STRATEGY_ENDPOINT="http://minio.internal:9000"
   rc=0
   bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
   cat "$WORK/out"
   cat "$FAKE_CMDLOG"
   [ "$rc" -eq 0 ]
   apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
-  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://minio.internal:9000"
+  # The projected bare host must NOT be promoted to https.
+  ! echo "$apply" | grep -qF -- "https://minio.internal:9000"
+  echo "$apply" | grep -qF -- "--backup-s3-bucket=minio-bucket"
+  # A missing CRD is answered, not retried: the list is never even attempted.
+  ! grep -qF -- "BUCKETCLAIM-LIST" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "external S3 takes every coordinate from the CR, never a Secret/CR hybrid" {
+  prep
+  # The projector copies bucketName straight from the admin's source Secret and
+  # never from backupStorage.bucketName, so the two can disagree outright (a
+  # stale projection, or a Secret that simply names a different bucket). Taking
+  # the CR's endpoint while keeping the Secret's bucket/region would assemble a
+  # pairing nothing else in the system produces and could snapshot into a bucket
+  # the platform's own backups never touch. The CR renders backupStorage.* and
+  # already points at these same creds, so CR coordinates + these creds is what
+  # this cluster's real BackupJobs use — take all four from it.
+  export FAKE_CLAIM_CRD=0
+  export FAKE_CLAIMS=""
+  export FAKE_CREDS_ENDPOINT="minio.internal:9000"
+  export FAKE_CREDS_BUCKET="stale-secret-bucket"
+  export FAKE_CREDS_REGION="eu-west-9"
+  export FAKE_CREDS_FPS="false"
+  export FAKE_STRATEGY_ENDPOINT="http://minio.internal:9000"
+  export FAKE_STRATEGY_BUCKET="platform-bucket"
+  export FAKE_STRATEGY_REGION="us-east-1"
+  export FAKE_STRATEGY_FPS="true"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://minio.internal:9000"
+  echo "$apply" | grep -qF -- "--backup-s3-bucket=platform-bucket"
+  echo "$apply" | grep -qF -- "--backup-s3-region=us-east-1"
+  echo "$apply" | grep -qF -- "--backup-s3-force-path-style"
+  # Not one projected coordinate may leak into the external destination.
+  ! echo "$apply" | grep -qF -- "stale-secret-bucket"
+  ! echo "$apply" | grep -qF -- "eu-west-9"
+  rm -rf "$WORK"
+}
+
+@test "COSI keeps the projected bucket even when the Strategy CR names another" {
+  prep
+  # Guard, not a bite: the CR-wholesale rule above is scoped to external S3. On
+  # the COSI path the projected bucket is the COSI-assigned name, which the CR
+  # can only reproduce through a live BucketClaim lookup that may never have run
+  # (the very race this hook works around) — and bucketNameOverride immunity
+  # depends on preferring the Secret. A future "simplify both paths to the CR"
+  # must fail here.
+  export FAKE_STRATEGY_BUCKET="cr-bucket-should-lose"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
   echo "$apply" | grep -qF -- "--backup-s3-bucket=cozy-backups-7f3a"
+  ! echo "$apply" | grep -qF -- "cr-bucket-should-lose"
+  rm -rf "$WORK"
+}
+
+@test "external S3 with a stale Terminating BucketClaim still keeps the CR scheme" {
+  prep
+  # The regression the name-keyed probe shipped: provisionBucket: false, but a
+  # leftover BucketClaim is wedged Terminating — its cosi bucketclaim-protection
+  # finalizer outlives the uninstalled COSI controller, so `kubectl get` on the
+  # NAME keeps returning 0 forever. An existence-keyed probe reads that as COSI
+  # and forces https on the admin's plaintext store, wedging the upgrade with no
+  # escape hatch. Matching on .status.bucketName instead: the stale claim names
+  # the OLD bucket, which cannot match the bucket the creds advertise.
+  export FAKE_CLAIMS="tenant-root bucket-cozy-backups bucket-0bb5096a-stale 2026-07-17T09:00:00Z"
+  export FAKE_CREDS_ENDPOINT="minio.internal:9000"
+  export FAKE_CREDS_BUCKET="minio-bucket"
+  export FAKE_STRATEGY_BUCKET="minio-bucket"
+  export FAKE_STRATEGY_ENDPOINT="http://minio.internal:9000"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://minio.internal:9000"
+  ! echo "$apply" | grep -qF -- "https://minio.internal:9000"
+  rm -rf "$WORK"
+}
+
+@test "COSI with overridden bucket coordinates is still detected (no hardcoded names)" {
+  prep
+  # backupStorage.namespace / .bucketName are supported Package-CR overrides
+  # (docs/operations/backup-classes.md), and this hook cannot see chart values —
+  # nothing plumbs them into the migration Job's env. So the claim may sit in any
+  # namespace under any name. Keying on the COSI-assigned .status.bucketName,
+  # which is what the projector republishes, makes the probe independent of both.
+  # A name-keyed probe would miss this claim, misclassify the cluster as
+  # external, and fall back to the v1.5.x plaintext CR — the original P0.
+  export FAKE_CLAIMS="tenant-custom bucket-my-backups cozy-backups-7f3a -"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
+  ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  rm -rf "$WORK"
+}
+
+@test "COSI is detected on a big multi-tenant cluster (match not last in the claim list)" {
+  prep
+  # Every other test runs with a single BucketClaim, which is exactly why a
+  # first-match-exit consumer looks green: it only misbehaves once the rendered
+  # list outgrows one pipe write (~8KB) AND the match is not the last line.
+  # `kubectl get -A` sorts by namespace, so tenant-root lands mid-list on a real
+  # cluster; this puts the match FIRST, the worst case.
+  #
+  # A `jq -r ... | grep -qxF` probe SIGPIPEs jq here (rc 141) and `set -o
+  # pipefail` surfaces that instead of grep's 0, so the match reads as "not
+  # COSI" -> external -> the v1.5.x plaintext :8333 CR endpoint -> the snapshot
+  # fails and the upgrade is blocked, on precisely the large clusters that can
+  # least afford it. Worse, it is a race: backoffLimit 3 can classify the same
+  # cluster differently on each retry.
+  export FAKE_CREDS_BUCKET="bucket-0bb5096a-956e-4630-91f4-e1d265de5f51"
+  export FAKE_CLAIMS="tenant-root bucket-cozy-backups bucket-0bb5096a-956e-4630-91f4-e1d265de5f51 -"
+  export FAKE_CLAIM_FILLER=300
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
+  echo "$apply" | grep -qF -- "--backup-s3-bucket=bucket-0bb5096a-956e-4630-91f4-e1d265de5f51"
+  # The v1.5.x CR endpoint must never be what a large cluster falls back to.
+  ! echo "$apply" | grep -qF -- "seaweedfs-s3.tenant-root.svc.cozy.local:8333"
+  rm -rf "$WORK"
+}
+
+@test "a TERMINATING claim on the matching bucket is ambiguous: refuse, do not guess" {
+  prep
+  # The state neither reading survives: an admin moved COSI -> external S3
+  # REUSING the bucket name (backup continuity), and the old claim is wedged
+  # Terminating because COSI is gone. Reading the corpse as ownership forces
+  # https on a plaintext store; reading it as "external" would, on a cluster
+  # that is still COSI with a mid-recreate claim, resurrect the plaintext-:8333
+  # P0. Both are wrong half the time and both fail as a confusing handshake
+  # error, so the guess buys nothing — refuse and name the ambiguity.
+  export FAKE_CLAIMS="tenant-root bucket-cozy-backups minio-bucket 2026-07-17T09:00:00Z"
+  export FAKE_CREDS_BUCKET="minio-bucket"
+  export FAKE_CREDS_ENDPOINT="minio.internal:9000"
+  export FAKE_STRATEGY_ENDPOINT="http://minio.internal:9000"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  grep -qF -- "TERMINATING BucketClaim" "$WORK/out"
+  grep -qF -- "could not determine" "$WORK/out"
+  # It must not have silently taken either branch.
+  ! grep -qF -- "treating as external S3" "$WORK/out"
+  ! grep -qF -- "forcing https" "$WORK/out"
+  # Nothing destructive ran.
+  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
+  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
+  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "a LIVE claim wins over an unrelated Terminating one (ambiguity is not over-applied)" {
+  prep
+  # Guard, not a bite: the refusal above must fire ONLY when the match is
+  # exclusively Terminating. A healthy COSI cluster that also carries some dead
+  # claim must still resolve normally — an over-broad "any Terminating claim is
+  # ambiguous" rule would wedge ordinary upgrades.
+  export FAKE_CLAIMS="tenant-root bucket-cozy-backups cozy-backups-7f3a -
+tenant-old bucket-dead bucket-dead-uuid 2026-07-17T09:00:00Z"
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=https://s3.example.com"
+  ! grep -qF -- "TERMINATING BucketClaim" "$WORK/out"
+  rm -rf "$WORK"
+}
+
+@test "an uninterpretable claim list fails loud rather than reading as external" {
+  prep
+  # No producer emits this — kubectl always renders a List with an items array —
+  # but without a shape gate every unexpected document reads as "no claim owns
+  # the bucket" = external = the plaintext-:8333 P0, silently. Refuse instead.
+  export FAKE_CLAIM_LIST_SHAPE=items-not-array
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -ne 0 ]
+  grep -qF -- "unexpected BucketClaim list shape" "$WORK/out"
+  ! grep -qF -- "treating as external S3" "$WORK/out"
+  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
+  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "an unreadable BucketClaim API fails loud instead of guessing external S3" {
+  prep
+  # A transient CRD read error is NOT the same answer as "the CRD is absent".
+  # Treating it as absent classifies a COSI cluster as external and snapshots to
+  # the unreachable v1.5 in-cluster endpoint — the original P0, resurrected by an
+  # apiserver blip. Refuse to classify instead: a loud failure is recoverable
+  # (the Job retries), a wrong classification is not.
+  export FAKE_CLAIM_CRD=error
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -ne 0 ]
+  grep -qF -- "could not determine" "$WORK/out"
+  grep -qF -- "refusing to adopt" "$WORK/out"
+  # It must NOT have silently taken the external path.
+  ! grep -qF -- "treating as external S3" "$WORK/out"
+  # Nothing destructive ran.
+  ! grep -qF -- "SCALE 0" "$FAKE_CMDLOG"
+  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
+  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "an unreadable claim LIST fails loud rather than classifying as external" {
+  prep
+  # Same reasoning one level down: the CRD exists (COSI is installed), so a
+  # failing list read cannot mean "no COSI here".
+  export FAKE_CLAIM_LIST_ERR=1
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -ne 0 ]
+  grep -qF -- "could not determine" "$WORK/out"
+  ! grep -qF -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG"
+  ! grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "COSI without a projected endpoint falls back to the CR, never a bare https://" {
+  prep
+  # Defensive: the projector cannot produce this (it fails
+  # ReasonSourceMalformed rather than omit the endpoint), but forcing the scheme
+  # onto an empty host yields the literal "https://", which is non-empty and so
+  # sails through the final resolution guard and reaches etcd-migrate as a
+  # destination. origin/main degraded to the CR here; so must this.
+  export FAKE_CREDS_ENDPOINT=""
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  cat "$FAKE_CMDLOG"
+  [ "$rc" -eq 0 ]
+  apply=$(grep -F -- "ETCD-MIGRATE --apply" "$FAKE_CMDLOG")
+  # No scheme-only endpoint reaches etcd-migrate...
+  ! echo "$apply" | grep -qE -- "--backup-s3-endpoint=https://( |$)"
+  # ...and the CR supplies the real one instead.
+  echo "$apply" | grep -qF -- "--backup-s3-endpoint=http://seaweedfs-s3.tenant-root.svc.cozy.local:8333"
   rm -rf "$WORK"
 }
 
@@ -292,7 +577,8 @@ lineno() {
   # The narrowing the reviewer asked for: a cluster with legacy etcd but no
   # resolvable backup target (backups disabled / external S3 without staged
   # creds / SeaweedFS not ready) is no longer a total upgrade block when the
-  # operator opts into skipping the snapshot.
+  # operator opts into skipping the snapshot. Resolution is not even attempted,
+  # so this passes regardless of why the target would be unresolvable.
   export FAKE_STRATEGY=0
   export FAKE_CREDS_COORDS=0
   export ETCD_ADOPT_SKIP_BACKUP=1
