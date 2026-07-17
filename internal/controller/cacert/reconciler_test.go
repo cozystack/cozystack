@@ -1715,6 +1715,47 @@ func TestReconcile_ExtraOwnerReferenceIsStripped(t *testing.T) {
 	assertKeyFree(t, got, testCA)
 }
 
+// TestReconcile_BlockOwnerDeletionDriftIsNormalized pins that the projection's
+// sole owner reference is re-homed when only its BlockOwnerDeletion flag drifts
+// to true.
+//
+// releaseOwnerRef sets BlockOwnerDeletion:false deliberately — the trust anchor
+// must never hold up the teardown of the application it belongs to. If an actor
+// or another controller flips that flag to true on the projection's owner
+// reference, a foreground deletion of the HelmRelease would then block on the
+// projection: the exact opposite of the invariant the flag exists to keep. So
+// the flag is part of the owner's identity for the drift check, and the write
+// path replaces the reference to restore BlockOwnerDeletion:false.
+func TestReconcile_BlockOwnerDeletionDriftIsNormalized(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(
+		helmRelease(), appDef(declaredCA()),
+		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
+	).Build()
+	mustReconcile(t, c)
+
+	// Flip BlockOwnerDeletion on the sole, otherwise-correct owner reference.
+	// Nothing else about the reference or the projection changes, so this flag
+	// is the only thing the next reconcile could act on.
+	proj := mustProjection(t, c)
+	if len(proj.OwnerReferences) != 1 {
+		t.Fatalf("precondition: projection must have exactly one owner, got %+v", proj.OwnerReferences)
+	}
+	proj.OwnerReferences[0].BlockOwnerDeletion = ptr.To(true)
+	if err := c.Update(context.TODO(), proj); err != nil {
+		t.Fatalf("set BlockOwnerDeletion drift: %v", err)
+	}
+
+	mustReconcile(t, c)
+
+	got := mustProjection(t, c)
+	if len(got.OwnerReferences) != 1 {
+		t.Fatalf("the projection must be owned by the release alone, got %+v", got.OwnerReferences)
+	}
+	if ptr.Deref(got.OwnerReferences[0].BlockOwnerDeletion, false) {
+		t.Errorf("BlockOwnerDeletion drift must be normalized back to false so teardown is never held up, got %+v", got.OwnerReferences[0])
+	}
+}
+
 // TestOwnedSolelyBy separates the two questions the drift check used to
 // conflate: is the release among the owners, and is it the only one.
 func TestOwnedSolelyBy(t *testing.T) {

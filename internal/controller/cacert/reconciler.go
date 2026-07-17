@@ -1596,14 +1596,22 @@ func ownedSolelyBy(refs []metav1.OwnerReference, want metav1.OwnerReference) boo
 }
 
 // hasOwner reports whether refs already carries the desired CONTROLLER reference.
-// The Controller flag is part of the comparison: a reference that names the right
-// release but is not marked as the controller (hand-edited, say) leaves the
-// projection without a controlling owner, and treating it as a match would let
-// the drift check pass and never re-home it.
+//
+// Both boolean flags are part of the comparison, not only the identity fields.
+// The Controller flag is: a reference that names the right release but is not
+// marked as the controller (hand-edited, say) leaves the projection without a
+// controlling owner, and treating it as a match would let the drift check pass
+// and never re-home it. BlockOwnerDeletion is too, for the symmetric reason:
+// releaseOwnerRef pins it to false so the trust anchor never holds up the
+// teardown of its application, and a reference that drifts it to true — which
+// makes a foreground deletion of the release block on the projection — must be
+// re-homed back to false, not accepted as already-correct.
 func hasOwner(refs []metav1.OwnerReference, want metav1.OwnerReference) bool {
 	for _, ref := range refs {
 		if ref.UID == want.UID && ref.Kind == want.Kind && ref.Name == want.Name &&
-			ref.APIVersion == want.APIVersion && ptr.Deref(ref.Controller, false) == ptr.Deref(want.Controller, false) {
+			ref.APIVersion == want.APIVersion &&
+			ptr.Deref(ref.Controller, false) == ptr.Deref(want.Controller, false) &&
+			ptr.Deref(ref.BlockOwnerDeletion, false) == ptr.Deref(want.BlockOwnerDeletion, false) {
 			return true
 		}
 	}
