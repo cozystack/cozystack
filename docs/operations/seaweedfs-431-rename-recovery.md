@@ -2,6 +2,8 @@
 
 This runbook covers clusters affected by the SeaweedFS chart-rename regression introduced when the vendored chart was bumped from `4.0.405` to `4.31.0` (Cozystack v1.5.0). Use it to classify each tenant, and to recover the ones that need an operator before they can be upgraded.
 
+**Scope — the default instance name is assumed throughout.** The supported way to run SeaweedFS is the tenant module: the tenant chart creates the instance under the fixed name `seaweedfs` (`packages/apps/tenant/templates/seaweedfs.yaml` hardcodes it; a tenant only enables or disables the module). Every shell selector below assumes that name. The API does not yet enforce it, so an instance created directly against `seaweedfses.apps.cozystack.io` under another name can exist — the audit script still classifies it (its release is `<name>-system`), but **do not run the shell loops here against it: escalate instead**, because the name-based `grep seaweedfs` filters cannot see claims whose names the chart truncated (instance names of roughly 30+ characters), and the chart guard's reconstruction does not cover the zone/pool volume components of long-named instances. One accepted limit applies even to default-named instances: a zone or pool **key** of roughly 40+ characters pushes `seaweedfs-system-volume-<key>` past the chart's truncation limit and similarly out of the guard's reconstruction — do not use keys that long.
+
 ## Background
 
 Before 4.31 the chart named workloads after the chart (`seaweedfs-*`), ignoring the release name. 4.31 names them after the release, and the data-plane HelmRelease is `<name>-system`, so every StatefulSet wanted to become `seaweedfs-system-*`. StatefulSet names are immutable, so the upgrade could not rename in place — Helm stood up a second, duplicate set beside the running one. Depending on cluster size the duplicate either deadlocks or splits:
@@ -63,21 +65,48 @@ It reports one class per SeaweedFS instance, matching exactly what the chart's g
 | `S` | Only the release-named generation — installed fresh on 1.5.x, or a long instance name. | Step 2, before upgrading. |
 | `MIXED` | Both generations. The chart **refuses**. | Below. |
 
-For `MIXED` it also names which generation is **original**, from two independent durable signals: the naming scheme revision 1 of the `<name>-system` release was installed with, and the age of each generation's **PersistentVolumes** measured against that release's `first_deployed`. It reads PV timestamps, never claim timestamps — Step 2 deletes each release-named claim and recreates it under the chart name against the same PV, so claim age is not durable and inverts for a tenant interrupted mid-re-bind. Such a tenant has both generations sitting at `first_deployed`, and the audit reports `MID-REBIND`: finish Step 2, do not run Step 2a.
+For `MIXED` it also names which generation is **original**, from two independent durable signals: the naming scheme revision 1 of the `<name>-system` release was installed with, and each generation's **PersistentVolume** creation timestamps. It reads PV timestamps, never claim timestamps — Step 2 deletes each release-named claim and recreates it under the chart name against the same PV, so claim age is not durable and inverts for a tenant interrupted mid-re-bind. The direction rule is **relative, never a clock**: a generation is the candidate duplicate only when *every* one of its bound PVs is strictly newer than every bound PV of the other generation — the same precondition Step 2a enforces. A tenant interrupted mid-re-bind has both generations on original-vintage PVs, so their ranges **overlap** and the audit names no candidate: finish Step 2, do not run Step 2a.
 
 **Read the audit's own warning.** "Original" is not "the other one is empty", and the gap is exactly where it matters. A duplicate that never scheduled (safe to delete) and one that served writes and later crashed or was scaled down (holds unique objects, deleting destroys them) are **identical on every durable signal** — same revision-1 scheme, same `first_deployed` deltas. The audit narrows the question to one generation; it does not answer it. Before deleting anything, establish that the candidate is empty:
 
+Empty means: no volume files (`.dat`/`.idx`/`.vif`) in any data directory. Do **not** `kubectl exec` into the candidate's own pods to check — a wedged duplicate's pods never start, so a check that needs the pod running is unexecutable exactly for the class where it matters most. Mount the claims instead:
+
 ```sh
 ns=<tenant>
-# The candidate's volume servers hold no volume files: an empty /data, no .dat/.idx.
-# Run per replica. If a server cannot be started, you cannot conclude it is empty.
-kubectl -n "$ns" exec <candidate-volume-pod> -- sh -c 'ls -la /data; du -sh /data'
-# Cross-check against the cluster's own accounting: no volumes attributed to the
-# candidate's servers.
-kubectl -n "$ns" exec <master-pod> -- weed shell -c "volume.list"
+# 1. Stop the candidate's workloads so its RWO claims can be mounted elsewhere.
+#    Reversible, and it is Step 3's first action anyway (Step 2a's for S-damaged).
+# 2. A candidate claim still Pending has no PV and therefore no data — empty by
+#    construction; skip it.
+# 3. Mount each BOUND candidate claim read-only in a scratch pod:
+pvc=<candidate-volume-claim>     # e.g. data1-seaweedfs-system-volume-0; repeat per claim
+kubectl -n "$ns" apply -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: swfs-emptiness-check
+spec:
+  restartPolicy: Never
+  containers:
+  - name: inspect
+    image: busybox:1.37
+    command: ["sh", "-c", "ls -laR /data; echo '--- volume file count:'; find /data \( -name '*.dat' -o -name '*.idx' -o -name '*.vif' \) | wc -l"]
+    volumeMounts:
+    - { name: data, mountPath: /data, readOnly: true }
+  volumes:
+  - name: data
+    persistentVolumeClaim: { claimName: ${pvc}, readOnly: true }
+EOF
+kubectl -n "$ns" wait --for=jsonpath='{.status.phase}'=Succeeded pod/swfs-emptiness-check --timeout=120s
+kubectl -n "$ns" logs swfs-emptiness-check      # empty = volume file count 0
+kubectl -n "$ns" delete pod swfs-emptiness-check
+
+# Cross-check against the cluster's own accounting, on the AUTHORITATIVE set's
+# running master (exec is fine there — that set is serving): no volumes may be
+# attributed to the candidate's servers.
+kubectl -n "$ns" exec <authoritative-master-pod> -- weed shell -c "volume.list"
 ```
 
-If the candidate's servers cannot be inspected, or the two views disagree, **stop and escalate**. Both generations holding real data is recoverable; deleting the wrong one is not.
+If a candidate claim cannot be inspected, or the two views disagree, **stop and escalate**. Both generations holding real data is recoverable; deleting the wrong one is not.
 
 **D-wedged** — a duplicate that never scheduled — is `MIXED` too, and the chart refuses it like any other duplicate. On main it rendered through, because a duplicate reading `readyReplicas: 0` was taken as proof it never served. That is not proof: a duplicate that served writes and later crashed or was scaled down reads identically. Confirm emptiness as above, then remove it via Step 3 **before** upgrading.
 
