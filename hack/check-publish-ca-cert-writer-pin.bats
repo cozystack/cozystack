@@ -68,7 +68,14 @@ controller_sa() {
     echo "If the pin moved or was renamed, update this test with it — do not delete the check." >&2
     exit 1
   fi
-  [[ "$pin" == system:serviceaccount:* ]]
+  case "$pin" in
+    system:serviceaccount:*) ;;
+    *)
+      echo "The pinned writer is not a ServiceAccount username: $pin" >&2
+      echo "Expected it to begin with 'system:serviceaccount:'." >&2
+      exit 1
+      ;;
+  esac
 }
 
 @test "the platform installs cert-manager with the namespace and release the pin assumes" {
@@ -82,16 +89,19 @@ controller_sa() {
     exit 1
   fi
 
-  if [[ "$pin" != "system:serviceaccount:${ns}:"* ]]; then
-    echo "The publish-ca-cert writer policy allows: $pin" >&2
-    echo "But the platform installs cert-manager into namespace: $ns (release $release)" >&2
-    echo "" >&2
-    echo "The policy would allow nobody, and every Secret labelled" >&2
-    echo "internal.cozystack.io/publish-ca-cert would be denied — silently breaking" >&2
-    echo "the CA-extraction controller's label leg. Update the pin in:" >&2
-    echo "  $POLICY" >&2
-    exit 1
-  fi
+  case "$pin" in
+    "system:serviceaccount:${ns}:"*) ;;
+    *)
+      echo "The publish-ca-cert writer policy allows: $pin" >&2
+      echo "But the platform installs cert-manager into namespace: $ns (release $release)" >&2
+      echo "" >&2
+      echo "The policy would allow nobody, and every Secret labelled" >&2
+      echo "internal.cozystack.io/publish-ca-cert would be denied — silently breaking" >&2
+      echo "the CA-extraction controller's label leg. Update the pin in:" >&2
+      echo "  $POLICY" >&2
+      exit 1
+      ;;
+  esac
 }
 
 @test "the pinned ServiceAccount is the one cert-manager's controller actually runs as" {
