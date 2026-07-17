@@ -115,9 +115,11 @@ limitations under the License.
 //     chart-side guard in cozy-lib.tls.caCertSecret
 //     (packages/library/cozy-lib/templates/_tls.tpl), so both ends of the
 //     contract reject the same inputs.
-//  2. Sanitize at write time. Exactly one whitelisted key is copied, under
-//     the canonical name. The source Data map is never copied wholesale —
-//     that is the precise bug this controller exists to prevent.
+//  2. Sanitize at write time. Exactly one whitelisted key is emitted, under
+//     the canonical name, and its value is rebuilt from the certificate blocks
+//     the guard parsed rather than copied from the source. The source Data map
+//     is never copied wholesale — that is the precise bug this controller
+//     exists to prevent.
 //  3. Tolerate asynchronous sources. An operator creates its CA Secret long
 //     after the chart renders, and may populate it later still. "Not there
 //     yet" is the normal startup state: a quiet, retried wait, never an error
@@ -1320,27 +1322,41 @@ func selectorsDigest(def *cozyv1alpha1.ApplicationDefinition) (string, error) {
 }
 
 // projectionData builds the projection payload and is the single write-path
-// guard. It emits exactly one key — the canonical ca.crt — and refuses to
-// emit anything that carries a PEM private-key header or is not a PEM
-// certificate. Every byte written to a projection passes through here, on
+// guard. It emits exactly one key — the canonical ca.crt — whose value is
+// REBUILT from the certificate blocks it validated, never copied from the
+// input. It refuses anything that carries a PEM private-key header or is not a
+// PEM certificate. Every byte written to a projection passes through here, on
 // both legs, on create and on update.
 //
 // The two checks run in this order deliberately. The key guard is the one whose
 // failure is a security incident and it must own that verdict: a private key
 // wrapped in certificate armour has to be refused AS key material, with the
 // event that says so, not as a parse failure.
+//
+// Rebuilding the value from the parsed blocks — instead of cloning the input
+// once it validates — is what makes the guard airtight, and it closes a real
+// hole. The key guard above matches a PEM "-----BEGIN ... PRIVATE KEY-----"
+// header; a RAW DER or JWK private key wears no such header, so it walks past.
+// pem.Decode then SKIPS bytes before the first block and between blocks, so
+// that key never reaches the certificate loop either. A projection cloned from
+// the input would therefore hand the tenant a trust anchor with a private key
+// tucked in front of, or between, the certificates. A projection assembled only
+// from the re-encoded certificate DER cannot carry a byte the guard did not
+// parse as a certificate.
 func projectionData(value []byte) (map[string][]byte, error) {
 	if containsPrivateKey(string(value)) {
 		return nil, errPrivateKey
 	}
-	if err := assertCertificateChain(value); err != nil {
+	chain, err := certificateChainPEM(value)
+	if err != nil {
 		return nil, err
 	}
-	return map[string][]byte{caCertKey: bytes.Clone(value)}, nil
+	return map[string][]byte{caCertKey: chain}, nil
 }
 
-// assertCertificateChain reports whether value is a PEM sequence of nothing but
-// certificates that x509 accepts.
+// certificateChainPEM validates that value is a PEM sequence of nothing but
+// certificates that x509 accepts, and returns those certificates re-encoded as
+// a clean PEM chain — the exact bytes the projection publishes.
 //
 // A header match is not this check, and the difference is the guard's whole
 // worth. "-----BEGIN CERTIFICATE-----" around a truncated DER prefix, around
@@ -1357,37 +1373,46 @@ func projectionData(value []byte) (map[string][]byte, error) {
 //   - nothing but PEM blocks left at the end, so a value cannot carry a
 //     certificate and then trail arbitrary bytes past the first match.
 //
-// One residue is worth naming rather than hiding: pem.Decode SKIPS text that
-// precedes a block, so human-readable preamble between certificates (what
-// `openssl x509 -text` emits) is tolerated here, exactly as it is by
-// crypto/x509's own CertPool.AppendCertsFromPEM. That text cannot smuggle key
-// material — projectionData refuses the whole value on a private-key header
-// before this runs — and it cannot smuggle a certificate, because anything the
-// tenant's verifier would load out of it is a block, and every block is checked.
-func assertCertificateChain(value []byte) error {
+// The returned chain is assembled from the PARSED certificate DER, not from the
+// input. pem.Decode silently skips text before a block and between blocks — the
+// human-readable preamble `openssl x509 -text` emits, but also a raw DER or JWK
+// key that carries no PEM private-key header — so copying the input verbatim
+// would republish those bytes to the tenant. Re-encoding only the certificates
+// makes preamble and interstitial key material structurally unreachable; the
+// trailing-byte rejection still keeps a value from parsing as a certificate and
+// then trailing arbitrary bytes past the last block.
+func certificateChainPEM(value []byte) ([]byte, error) {
 	// "At least one block" is enforced HERE and only here: an empty value is
 	// rejected up front, which is what guarantees the loop below runs at least
 	// once, and every iteration either returns an error or parses a certificate.
 	// A counter checked afterwards would be unreachable.
 	rest := bytes.TrimSpace(value)
 	if len(rest) == 0 {
-		return fmt.Errorf("%w: value is empty", errNotCertificate)
+		return nil, fmt.Errorf("%w: value is empty", errNotCertificate)
 	}
+	var chain []byte
 	for len(rest) > 0 {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
 		if block == nil {
-			return fmt.Errorf("%w: value carries %d bytes that are not a PEM block", errNotCertificate, len(rest))
+			return nil, fmt.Errorf("%w: value carries %d bytes that are not a PEM block", errNotCertificate, len(rest))
 		}
 		if block.Type != certificatePEMType {
-			return fmt.Errorf("%w: PEM block is of type %q, want %q", errNotCertificate, block.Type, certificatePEMType)
+			return nil, fmt.Errorf("%w: PEM block is of type %q, want %q", errNotCertificate, block.Type, certificatePEMType)
 		}
 		if _, err := x509.ParseCertificate(block.Bytes); err != nil {
-			return fmt.Errorf("%w: %v", errNotCertificate, err)
+			return nil, fmt.Errorf("%w: %v", errNotCertificate, err)
 		}
+		// Re-encode ONLY the parsed certificate DER: no PEM headers, no
+		// surrounding bytes, nothing the loop did not just verify is a
+		// certificate. This is the byte-for-byte content of the projection.
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{
+			Type:  certificatePEMType,
+			Bytes: block.Bytes,
+		})...)
 		rest = bytes.TrimSpace(rest)
 	}
-	return nil
+	return chain, nil
 }
 
 // refusalRetry returns how long to wait before re-examining a source whose value

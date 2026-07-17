@@ -17,6 +17,7 @@ limitations under the License.
 package cacert
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -87,7 +88,7 @@ const (
 //
 // They used to be certificate armour wrapped around a truncated DER prefix,
 // which the write-path guard accepted because it only matched the BEGIN line.
-// Now that the guard parses what it publishes (see assertCertificateChain), a
+// Now that the guard parses what it publishes (see certificateChainPEM), a
 // fixture has to be the thing it claims to be — and the fact that these two
 // constants had to change at all is the clearest statement of what the old
 // guard was worth.
@@ -131,6 +132,23 @@ func mustCertPEM(commonName string) string {
 		panic("mint test CA certificate: " + err.Error())
 	}
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+// mustPrivateKeyDER returns a RAW DER-encoded PKCS#8 private key, with no PEM
+// armour at all. It is the fixture for the smuggling cases: key material that
+// wears no "-----BEGIN ... PRIVATE KEY-----" header slips past the header guard,
+// and pem.Decode skips it as inter-block noise, so only a projection rebuilt
+// from the parsed certificates can keep it away from the tenant.
+func mustPrivateKeyDER() []byte {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic("generate test private key: " + err.Error())
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		panic("marshal test private key: " + err.Error())
+	}
+	return der
 }
 
 // mustPublicKeyDER returns a DER-encoded public key, for the fixture that
@@ -2046,22 +2064,30 @@ func TestProjectionData_RefusesCertificateArmouredNonCertificate(t *testing.T) {
 // TestProjectionData_AcceptsRealCertificates keeps the guard from failing closed
 // on the values it exists to publish: a single CA, and the multi-certificate
 // bundle an intermediate chain arrives as.
+//
+// The projection is the certificate blocks re-encoded, not the input echoed
+// back. For a value that is already canonical PEM the two are byte-identical
+// (want == in); a value with surrounding whitespace comes back as the bare
+// blocks, because everything the guard did not parse as a certificate is
+// dropped.
 func TestProjectionData_AcceptsRealCertificates(t *testing.T) {
 	bundle := testCA + testCARot
-	for name, value := range map[string]string{
-		"one certificate":     testCA,
-		"a chain of two":      bundle,
-		"trailing whitespace": testCA + "\n\n  \n",
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"one certificate", testCA, testCA},
+		{"a chain of two", bundle, bundle},
+		{"trailing whitespace", testCA + "\n\n  \n", testCA},
 	} {
-		t.Run(name, func(t *testing.T) {
-			got, err := projectionData([]byte(value))
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := projectionData([]byte(tc.in))
 			if err != nil {
-				t.Fatalf("projectionData(%s) = %v, want accepted", name, err)
+				t.Fatalf("projectionData(%s) = %v, want accepted", tc.name, err)
 			}
-			// The value is published verbatim: the guard validates, it never
-			// rewrites what the engine minted.
-			if string(got[caCertKey]) != value {
-				t.Errorf("projectionData must publish the value verbatim, got %q want %q", got[caCertKey], value)
+			if string(got[caCertKey]) != tc.want {
+				t.Errorf("projectionData(%s) published %q, want the validated blocks %q", tc.name, got[caCertKey], tc.want)
 			}
 		})
 	}
@@ -2086,6 +2112,82 @@ func TestProjectionData_RefusesTrailingGarbage(t *testing.T) {
 func TestProjectionData_KeyGuardWinsOverTheParse(t *testing.T) {
 	if _, err := projectionData([]byte(testCA + testKey)); !errors.Is(err, errPrivateKey) {
 		t.Errorf("projectionData(cert+key) error = %v, want errPrivateKey", err)
+	}
+}
+
+// TestProjectionData_StripsKeyMaterialSmuggledAroundBlocks is the write path's
+// deepest guarantee: the projection is REBUILT from the certificate blocks it
+// validated, never copied from the input.
+//
+// The header guard (containsPrivateKey) only sees "-----BEGIN ... PRIVATE
+// KEY-----". A raw PKCS#8 DER key, or a JSON Web Key, carries no such header, so
+// it walks past that guard. pem.Decode then skips it — text before the first
+// block and between blocks is silently dropped by the decoder — so the
+// certificate loop never inspects it either. A projection that cloned the input
+// once it validated would therefore hand the tenant a trust anchor with a
+// private key tucked in front of, or between, the certificates. Rebuilding from
+// the parsed DER makes that byte structurally unreachable.
+func TestProjectionData_StripsKeyMaterialSmuggledAroundBlocks(t *testing.T) {
+	derKey := mustPrivateKeyDER()
+	// A private JWK: text, no PEM header, sits before the certificate.
+	jwkKey := `{"kty":"EC","crv":"P-256","d":"c2VjcmV0LXByaXZhdGUta2V5LW1hdGVyaWFs"}`
+
+	concat := func(parts ...[]byte) []byte { return bytes.Join(parts, nil) }
+	for _, tc := range []struct {
+		name string
+		in   []byte
+		want string
+	}{
+		{
+			// Raw DER key, newline, then a real certificate.
+			name: "leading DER key",
+			in:   concat(derKey, []byte("\n"), []byte(testCA)),
+			want: testCA,
+		},
+		{
+			// A private JWK ahead of the certificate.
+			name: "leading JWK key",
+			in:   []byte(jwkKey + "\n" + testCA),
+			want: testCA,
+		},
+		{
+			// Key bytes wedged BETWEEN two certificate blocks.
+			name: "interstitial DER key",
+			in:   concat([]byte(testCA), derKey, []byte("\n"), []byte(testCARot)),
+			want: testCA + testCARot,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := projectionData(tc.in)
+			if err != nil {
+				t.Fatalf("projectionData(%s) = %v, want the value accepted and sanitized", tc.name, err)
+			}
+			if string(got[caCertKey]) != tc.want {
+				t.Errorf("projectionData(%s) published %q, want only the validated blocks %q", tc.name, got[caCertKey], tc.want)
+			}
+			if bytes.Contains(got[caCertKey], derKey) {
+				t.Errorf("projectionData(%s) leaked raw DER private-key material into the tenant projection", tc.name)
+			}
+		})
+	}
+}
+
+// TestProjectionData_DropsHumanReadablePreamble pins that the text dump
+// `openssl x509 -text` prints before each certificate — which pem.Decode
+// tolerates — is not republished to the tenant. The projection carries the
+// certificate blocks and nothing else.
+func TestProjectionData_DropsHumanReadablePreamble(t *testing.T) {
+	preamble := "Certificate:\n    Data:\n        Version: 3 (0x2)\n"
+	in := preamble + testCA + preamble + testCARot
+	got, err := projectionData([]byte(in))
+	if err != nil {
+		t.Fatalf("projectionData(preamble+chain) = %v, want accepted", err)
+	}
+	if string(got[caCertKey]) != testCA+testCARot {
+		t.Errorf("projectionData must publish only the certificate blocks, got %q", got[caCertKey])
+	}
+	if bytes.Contains(got[caCertKey], []byte("Certificate:")) {
+		t.Errorf("projectionData leaked human-readable preamble into the tenant projection")
 	}
 }
 
