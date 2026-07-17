@@ -175,8 +175,8 @@ YAML
 @test "validate detects a suite mapped to a source absent from the graph" {
     # suite_to_source() hardcodes securitygroup -> cozystack.securitygroup-controller;
     # a sources dir without that PackageSource must fail validation (fail closed),
-    # pinning the contract that EVERY mapping resolves to a real source — there is
-    # no bypass value (the old "-" escape is gone).
+    # pinning that the elif validates every mapping, including hardcoded ones,
+    # against the graph.
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     mkdir -p "$tmp/sources" "$tmp/suites/securitygroup"
