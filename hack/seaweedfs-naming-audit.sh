@@ -13,15 +13,27 @@
 #   sh.helm.release.v1.<name>-system.v1  — the manifest of revision 1 names either
 #       seaweedfs-master (born pre-4.31) or <release>-master (born 4.31). Exact, but
 #       revision 1 may have been pruned by Helm's history limit.
-#   info.first_deployed                  — on EVERY retained revision, so it survives
-#       pruning. The generation whose PersistentVolumes were created at first_deployed
-#       is the original; the other was provisioned later, by the bad upgrade.
+#   PersistentVolume creation timestamps — the original generation's PVs predate the
+#       duplicate's, which were provisioned later by the bad upgrade. Compared only
+#       against each other (see the relative rule below); info.first_deployed is
+#       printed as context but decides nothing.
 #
 # PV timestamps, not PVC ones: runbook Step 2 deletes each release-named claim and
 # recreates it under the chart name against the SAME PV, so claim age is not durable
 # and inverts for a tenant interrupted mid-re-bind. The PV survives and keeps its
-# creationTimestamp. A tenant mid-re-bind shows BOTH generations at first_deployed,
-# which this reports as MID-REBIND rather than as a duplicate.
+# creationTimestamp.
+#
+# Direction is decided by a RELATIVE rule, never a clock window: a generation is
+# the candidate duplicate only when EVERY one of its bound PVs is strictly newer
+# than every bound PV of the other generation — the same precondition runbook
+# Step 2a enforces before deleting anything. Overlapping vintages mean an
+# interrupted Step 2 re-bind (both generations on original PVs) or interleaved
+# provisioning, and the audit refuses to name a candidate. An absolute window
+# measured from first_deployed was tried first and is unsound: the shipped
+# StorageClasses are WaitForFirstConsumer, so PVs appear at pod-SCHEDULE time,
+# and ordinary cold-cluster latency puts even the original generation's PVs
+# minutes past first_deployed — which pushed a mid-rebind tenant into the branch
+# whose advice deletes the un-re-bound claims.
 #
 # IMPORTANT — what this does NOT tell you. "Which generation is original" is not
 # "the other one is empty". A duplicate that never scheduled (safe to delete) and one
@@ -110,6 +122,27 @@ pv_epoch() {
   date -u -d "$(printf '%s' "$t" | cut -c1-19)" +%s 2>/dev/null
 }
 
+# classify_mixed_direction <lmin> <lmax> <rmin> <rmax> -- direction of a MIXED
+# tenant, from the bound-PV creation-epoch ranges of the chart-named (l*) and
+# release-named (r*) generations. Prints one of:
+#
+#   legacy-original   every release-named PV strictly newer -> it is the candidate
+#                     duplicate (runbook Step 3)
+#   renamed-original  every chart-named PV strictly newer -> S-damaged, the
+#                     chart-named set is the candidate duplicate (Step 2a, then 2)
+#   overlap           vintages interleave or touch -> no candidate. An interrupted
+#                     Step 2 re-bind puts BOTH generations on original-vintage PVs.
+#
+# Purely relative — no clock, no window, no first_deployed. Ties (second-resolution
+# timestamps) count as overlap: refusing a candidate is recoverable, naming the
+# wrong one is not.
+classify_mixed_direction() {
+  if [ "$3" -gt "$2" ]; then printf 'legacy-original'
+  elif [ "$1" -gt "$4" ]; then printf 'renamed-original'
+  else printf 'overlap'
+  fi
+}
+
 audit_ns() {
   ns="$1"
   for rel in $(system_releases "$ns"); do
@@ -150,28 +183,37 @@ audit_ns() {
       printf '%-24s %-14s %-8s   revision 1 was installed with the %s names => the %s generation is ORIGINAL\n' \
         "" "" "" "$scheme" "$scheme"
     fi
-    if [ -n "$fd" ]; then
-      lmin=""; rmin=""
-      for p in $legacy_pvcs;  do e=$(pv_epoch "$ns" "$p"); [ -n "$e" ] || continue; d=$((e - fd)); { [ -z "$lmin" ] || [ "$d" -lt "$lmin" ]; } && lmin=$d; done
-      for p in $renamed_pvcs; do e=$(pv_epoch "$ns" "$p"); [ -n "$e" ] || continue; d=$((e - fd)); { [ -z "$rmin" ] || [ "$d" -lt "$rmin" ]; } && rmin=$d; done
-      printf '%-24s %-14s %-8s   oldest PV vs first_deployed: chart-named %ss, release-named %ss\n' \
-        "" "" "" "${lmin:-?}" "${rmin:-?}"
-      if [ -n "$lmin" ] && [ -n "$rmin" ]; then
-        if [ "$lmin" -le "$MIDREBIND_WINDOW" ] && [ "$rmin" -le "$MIDREBIND_WINDOW" ]; then
-          printf '%-24s %-14s %-8s   BOTH at first_deployed => MID-REBIND, not a duplicate. Finish Step 2; do NOT run Step 2a.\n' "" "" ""
-        elif [ "$lmin" -lt "$rmin" ]; then
-          printf '%-24s %-14s %-8s   chart-named is original => the release-named set is the candidate duplicate\n' "" "" ""
-        else
-          printf '%-24s %-14s %-8s   release-named is original => the chart-named set is the candidate duplicate (Step 2a, then Step 2)\n' "" "" ""
-        fi
-      fi
+    lmin=""; lmax=""; rmin=""; rmax=""
+    for p in $legacy_pvcs; do
+      e=$(pv_epoch "$ns" "$p"); [ -n "$e" ] || continue
+      { [ -z "$lmin" ] || [ "$e" -lt "$lmin" ]; } && lmin=$e
+      { [ -z "$lmax" ] || [ "$e" -gt "$lmax" ]; } && lmax=$e
+    done
+    for p in $renamed_pvcs; do
+      e=$(pv_epoch "$ns" "$p"); [ -n "$e" ] || continue
+      { [ -z "$rmin" ] || [ "$e" -lt "$rmin" ]; } && rmin=$e
+      { [ -z "$rmax" ] || [ "$e" -gt "$rmax" ]; } && rmax=$e
+    done
+    if [ -n "$fd" ] && [ -n "$lmin" ] && [ -n "$rmin" ]; then
+      printf '%-24s %-14s %-8s   oldest PV vs first_deployed: chart-named +%ss, release-named +%ss (context only, not the rule)\n' \
+        "" "" "" "$((lmin - fd))" "$((rmin - fd))"
+    fi
+    if [ -n "$lmin" ] && [ -n "$rmin" ]; then
+      case $(classify_mixed_direction "$lmin" "$lmax" "$rmin" "$rmax") in
+        legacy-original)
+          printf '%-24s %-14s %-8s   every release-named PV is strictly newer => chart-named is ORIGINAL, the release-named set is the candidate duplicate (Step 3)\n' "" "" "" ;;
+        renamed-original)
+          printf '%-24s %-14s %-8s   every chart-named PV is strictly newer => release-named is ORIGINAL, the chart-named set is the candidate duplicate (Step 2a, then Step 2)\n' "" "" "" ;;
+        overlap)
+          printf '%-24s %-14s %-8s   PV vintages OVERLAP => no candidate. An interrupted Step 2 re-bind looks exactly like this (both generations on original PVs). Finish Step 2 if one is in progress; otherwise escalate. Do NOT run Step 2a.\n' "" "" "" ;;
+      esac
+    else
+      printf '%-24s %-14s %-8s   a generation has no bound PVs (Pending claims, or StatefulSets only) => direction cannot be established from PV ages. Resolve the Pending claims or classify by hand.\n' "" "" ""
     fi
     printf '%-24s %-14s %-8s   CANDIDATE ONLY: "original" does not mean the other set is EMPTY. A duplicate that\n' "" "" ""
     printf '%-24s %-14s %-8s   served writes and later crashed looks identical here. Verify emptiness before deleting.\n' "" "" ""
   done
 }
-
-MIDREBIND_WINDOW="${MIDREBIND_WINDOW:-120}"
 
 main() {
   printf '%-24s %-14s %-8s %s\n' NAMESPACE RELEASE CLASS NOTE

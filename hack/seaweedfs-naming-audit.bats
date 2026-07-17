@@ -69,6 +69,43 @@ export SEAWEEDFS_AUDIT_LIB
   done
 }
 
+@test "clean duplicate: release-named PVs all strictly newer => legacy is original" {
+  # A tenant that passed through the 4.31 rename: legacy PVs at install time,
+  # duplicate PVs provisioned by the bad upgrade much later.
+  [ "$(classify_mixed_direction 1000 1010 5000 5020)" = "legacy-original" ]
+}
+
+@test "S-damaged: chart-named PVs all strictly newer => release-named is original" {
+  # Installed fresh on 1.5.x (release-named PVs first); an unguarded 1.6 upgrade
+  # then created empty chart-named claims beside them.
+  [ "$(classify_mixed_direction 5000 5020 1000 1010)" = "renamed-original" ]
+}
+
+@test "interrupted Step 2 re-bind: overlapping vintages => no candidate" {
+  # Step 2 re-binds release-named claims onto their ORIGINAL PVs under chart
+  # names, one claim at a time. Interrupted part-way, BOTH generations sit on
+  # original-vintage PVs, so the ranges interleave. The old absolute-window
+  # classifier fell through to a coin flip here and its advice deleted the
+  # un-re-bound claims; the relative rule must refuse instead.
+  [ "$(classify_mixed_direction 1000 1010 1005 1015)" = "overlap" ]
+}
+
+@test "a tie is overlap, not a candidate" {
+  # Second-resolution timestamps: a duplicate provisioned within the same second
+  # as the newest original PV is not STRICTLY newer. Refusing is recoverable;
+  # naming the wrong candidate is not.
+  [ "$(classify_mixed_direction 1000 1010 1010 1020)" = "overlap" ]
+}
+
+@test "direction needs no clock: vintages far from any anchor still classify" {
+  # The shipped StorageClasses are WaitForFirstConsumer, so PVs appear at
+  # pod-SCHEDULE time — on a cold cluster minutes after first_deployed. The rule
+  # must not care: only the two generations' ranges relative to EACH OTHER count.
+  # (The previous classifier anchored a 120s window on first_deployed and
+  # misclassified exactly this case.)
+  [ "$(classify_mixed_direction 100000 100600 200000 200600)" = "legacy-original" ]
+}
+
 @test "the audit's reconstruction agrees with the chart helper it mirrors" {
   # hack/seaweedfs-naming-audit.sh and
   # packages/system/seaweedfs/templates/_naming.tpl reimplement the same two
