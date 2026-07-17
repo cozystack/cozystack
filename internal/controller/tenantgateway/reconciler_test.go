@@ -2034,6 +2034,293 @@ func TestReconcile_TLSPassthroughListenersRendered(t *testing.T) {
 	}
 }
 
+// TestReconcile_TLSPassthroughListenerObjects pins the layer-4
+// TLS-passthrough listener flow: each entry in
+// spec.tlsPassthroughListeners materialises exactly one "tls-<name>"
+// Gateway listener on the entry's native port with protocol TLS, mode
+// Passthrough, the entry's per-engine SNI hostname, and AllowedRoutes
+// restricted to TLSRoute so the listener yields a single Envoy filter
+// chain. This is distinct from TestReconcile_TLSPassthroughListenersRendered,
+// which covers the legacy layer-7 spec.tlsPassthroughServices field on
+// the shared port 443.
+func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+				{Name: "mysql", Port: 3306, Hostname: "mysql.foo.example.com"},
+				{Name: "kafka", Port: 9092, Hostname: "*.kafka.foo.example.com"},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+
+	type want struct {
+		port     gatewayv1.PortNumber
+		hostname string
+	}
+	wanted := map[string]want{
+		"tls-postgres": {5432, "postgres.foo.example.com"},
+		"tls-mysql":    {3306, "mysql.foo.example.com"},
+		"tls-kafka":    {9092, "*.kafka.foo.example.com"},
+	}
+	seen := map[string]int{}
+	for _, l := range gw.Spec.Listeners {
+		w, ok := wanted[string(l.Name)]
+		if !ok {
+			continue
+		}
+		seen[string(l.Name)]++
+
+		if l.Port != w.port {
+			t.Errorf("%s port=%d, want %d", l.Name, l.Port, w.port)
+		}
+		if l.Protocol != gatewayv1.TLSProtocolType {
+			t.Errorf("%s protocol=%s, want TLS", l.Name, l.Protocol)
+		}
+		if l.Hostname == nil || string(*l.Hostname) != w.hostname {
+			t.Errorf("%s hostname=%v, want %s", l.Name, l.Hostname, w.hostname)
+		}
+		if l.TLS == nil || l.TLS.Mode == nil || *l.TLS.Mode != gatewayv1.TLSModePassthrough {
+			t.Errorf("%s TLS mode is not Passthrough: %+v", l.Name, l.TLS)
+		}
+		// Native-port passthrough listeners each sit alone on their
+		// port, so — unlike the port-443 passthrough that shares its
+		// Kinds set with the terminate listeners (cilium#45559) — they
+		// carry exactly one route kind, TLSRoute. One kind => one SNI
+		// filter chain.
+		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 1 ||
+			l.AllowedRoutes.Kinds[0].Kind != "TLSRoute" {
+			t.Errorf("%s AllowedRoutes.Kinds=%+v, want exactly [TLSRoute]", l.Name, l.AllowedRoutes)
+		}
+	}
+	for name := range wanted {
+		if seen[name] != 1 {
+			t.Errorf("listener %s rendered %d times, want exactly 1", name, seen[name])
+		}
+	}
+}
+
+// TestValidateTLSPassthroughListeners exercises the cross-field
+// validation the CRD schema alone cannot express: DNS-1123 label names
+// unique across the list and not colliding with a tlsPassthroughServices
+// entry, ports in 1..65535 unique and never a reserved Gateway port
+// (80/443), and hostnames that are exact-or-wildcard AND within the
+// tenant apex. Every rejection case is load-bearing: weakening the
+// corresponding branch in validateTLSPassthroughListeners turns the
+// matching subtest red.
+func TestValidateTLSPassthroughListeners(t *testing.T) {
+	mk := func(name string, port int32, host string) gatewayv1alpha1.TLSPassthroughListener {
+		return gatewayv1alpha1.TLSPassthroughListener{Name: name, Port: port, Hostname: host}
+	}
+	const apex = "foo.example.com"
+	tests := []struct {
+		name      string
+		listeners []gatewayv1alpha1.TLSPassthroughListener
+		services  []string
+		apex      string
+		wantErr   bool
+	}{
+		{"empty is valid", nil, nil, apex, false},
+		{"valid list", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("postgres", 5432, "postgres.foo.example.com"),
+			mk("kafka", 9092, "*.kafka.foo.example.com"),
+		}, nil, apex, false},
+		{"apex-exact and wildcard-at-apex hostnames valid", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("apex", 5432, "foo.example.com"),
+			mk("wild", 5433, "*.foo.example.com"),
+		}, nil, apex, false},
+		{"valid alongside passthrough services", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("postgres", 5432, "postgres.foo.example.com"),
+		}, []string{"api", "vm-exportproxy"}, apex, false},
+		{"duplicate name", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "a.foo.example.com"),
+			mk("pg", 5433, "b.foo.example.com"),
+		}, nil, apex, true},
+		{"name collides with passthrough service", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("api", 5432, "api.foo.example.com"),
+		}, []string{"api", "vm-exportproxy", "cdi-uploadproxy"}, apex, true},
+		{"duplicate port", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "a.foo.example.com"),
+			mk("pg2", 5432, "b.foo.example.com"),
+		}, nil, apex, true},
+		{"port 443 collides with terminate", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 443, "pg.foo.example.com"),
+		}, nil, apex, true},
+		{"port 80 collides with http listener", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 80, "pg.foo.example.com"),
+		}, nil, apex, true},
+		{"port below range", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 0, "pg.foo.example.com"),
+		}, nil, apex, true},
+		{"port above range", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 65536, "pg.foo.example.com"),
+		}, nil, apex, true},
+		{"invalid dns-1123 name", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("Postgres_DB", 5432, "pg.foo.example.com"),
+		}, nil, apex, true},
+		{"invalid hostname", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "not a hostname"),
+		}, nil, apex, true},
+		{"malformed wildcard hostname", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "*.*.foo.example.com"),
+		}, nil, apex, true},
+		{"hostname outside apex", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "pg.other.example.com"),
+		}, nil, apex, true},
+		{"wildcard outside apex", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "*.other.example.com"),
+		}, nil, apex, true},
+		{"sibling-domain hostname not under apex", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "evilfoo.example.com"),
+		}, nil, apex, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTLSPassthroughListeners(tc.listeners, tc.services, tc.apex)
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestReconcile_TLSPassthroughListenerInvalidRejected proves the
+// layer-4 passthrough validation is wired into the render path: a spec
+// with two listeners on the same port makes Reconcile fail loudly
+// rather than emitting a Gateway with clashing listeners the Gateway
+// API would reject wholesale.
+func TestReconcile_TLSPassthroughListenerInvalidRejected(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+				{Name: "mysql", Port: 5432, Hostname: "mysql.foo.example.com"},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err == nil {
+		t.Fatalf("expected Reconcile to fail on duplicate passthrough port, got nil")
+	}
+}
+
+// TestReconcile_TLSPassthroughListenerPort80Rejected proves the wired
+// path rejects a passthrough listener on port 80: renderGateway always
+// renders the http listener there, so a TLS listener on 80 is a
+// protocol conflict on a shared port that the Gateway API rejects
+// wholesale.
+func TestReconcile_TLSPassthroughListenerPort80Rejected(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 80, Hostname: "postgres.foo.example.com"},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err == nil {
+		t.Fatalf("expected Reconcile to fail on port-80 passthrough listener, got nil")
+	}
+}
+
+// TestReconcile_TLSPassthroughListenerNameCollidesWithService proves the
+// wired path rejects a passthrough listener whose name equals a
+// TLSPassthroughServices entry: both render a tls-<X> listener, so the
+// Gateway would carry two listeners with the same name — rejected across
+// the whole Gateway, taking every app listener for the tenant down. The
+// colliding name here ("api") is one of the shipped chart defaults.
+func TestReconcile_TLSPassthroughListenerNameCollidesWithService(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: []string{"api", "vm-exportproxy", "cdi-uploadproxy"},
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "api", Port: 5432, Hostname: "api.foo.example.com"},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err == nil {
+		t.Fatalf("expected Reconcile to fail on passthrough name colliding with a service, got nil")
+	}
+}
+
+// TestReconcile_TLSPassthroughListenerHostnameOutOfApexRejected proves
+// the wired path rejects a passthrough listener whose hostname is outside
+// the tenant apex. Such a listener would be rendered and then denied by
+// the cozystack-gateway-hostname-policy VAP, failing the whole Gateway on
+// the first reconcile; validating up front turns that into a clean
+// TenantGateway status error instead.
+func TestReconcile_TLSPassthroughListenerHostnameOutOfApexRejected(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: "postgres.other-tenant.example.com"},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err == nil {
+		t.Fatalf("expected Reconcile to fail on out-of-apex passthrough hostname, got nil")
+	}
+}
+
 // TestReconcile_StatusObservedGeneration pins observedGeneration: the
 // status field tracks .metadata.generation so operators can tell
 // whether the controller has caught up with the latest spec.

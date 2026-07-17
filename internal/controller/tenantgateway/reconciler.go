@@ -741,6 +741,9 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // Layer 1 of the security model documented in
 // packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {
+	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
+		return nil, err
+	}
 	allowedRoutes := buildAllowedRoutes(tgw)
 	httpAllowedRoutes := buildHTTPListenerAllowedRoutes(tgw)
 	listeners := []gatewayv1.Listener{
@@ -877,8 +880,38 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		passthroughAllowed := *allowedRoutes
 		passthroughAllowed.Kinds = port443Kinds
 		listeners = append(listeners, gatewayv1.Listener{
-			Name:     gatewayv1.SectionName("tls-" + svc),
+			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
 			Port:     443,
+			Protocol: gatewayv1.TLSProtocolType,
+			Hostname: &host,
+			TLS: &gatewayv1.ListenerTLSConfig{
+				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
+			},
+			AllowedRoutes: &passthroughAllowed,
+		})
+	}
+
+	// Layer-4 TLS-passthrough listeners. One
+	// "tls-<name>" listener per entry in Spec.TLSPassthroughListeners,
+	// on the entry's native Port, mode Passthrough, matching the
+	// entry's per-engine SNI Hostname, rendered alongside the port-443
+	// terminate listeners. Each sits alone on its own port, so — unlike
+	// the port-443 TLSPassthroughServices listeners above that must
+	// share their allowedRoutes.kinds with the terminate listeners to
+	// dodge Cilium's same-port listener collapse (cilium#45559) — these
+	// carry TLSRoute alone. One route kind on a dedicated (port, SNI)
+	// pair yields exactly one Envoy filter chain that SNI-routes to the
+	// attaching TLSRoute's backend. No engine is wired here: the
+	// TLSRoute, certificate, and CA plumbing land in later phases.
+	for _, pl := range tgw.Spec.TLSPassthroughListeners {
+		host := gatewayv1.Hostname(pl.Hostname)
+		passthroughAllowed := *allowedRoutes
+		passthroughAllowed.Kinds = []gatewayv1.RouteGroupKind{
+			{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
+		}
+		listeners = append(listeners, gatewayv1.Listener{
+			Name:     gatewayv1.SectionName(passthroughListenerPrefix + pl.Name),
+			Port:     gatewayv1.PortNumber(pl.Port),
 			Protocol: gatewayv1.TLSProtocolType,
 			Hostname: &host,
 			TLS: &gatewayv1.ListenerTLSConfig{
