@@ -402,7 +402,13 @@ spec:
                     description: Labels for the release
                     type: object
                   prefix:
-                    description: Prefix for the release name
+                    description: |-
+                      Prefix for the release name. Release names are "<prefix><app name>" and the
+                      tenant CA trust anchor is projected to "<release>.tenant-ca", where the dot
+                      is a separator no release name may contain — so the prefix must be dot-free.
+                      It is restricted to lowercase DNS-1123 characters, which excludes the dot by
+                      construction.
+                    pattern: ^[a-z0-9-]*$
                     type: string
                   waitStrategy:
                     description: |-
