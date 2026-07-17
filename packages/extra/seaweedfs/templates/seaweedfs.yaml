@@ -107,7 +107,7 @@
    stood up a second, empty set while the data stayed put. system/seaweedfs pins
    the chart-based name back, so those workloads and volumes are adopted in place.
 
-   Two states cannot be adopted and stop the render instead:
+   These states cannot be adopted and stop the render instead:
 
    - FRESH on 1.5.x: only the renamed volumes exist, so the data was written under
      them. Adopting the chart-based name would rename the workloads AWAY from that
@@ -116,8 +116,9 @@
    - D-split: both sets exist AND the renamed volume servers are live, so they may
      hold objects written through the split endpoint. Adopting the chart-based set
      would strand those. The operator is sent to reconcile the split first (Step 3).
-     A duplicate that never served (D-wedged: zero ready replicas) is safe to adopt
-     and renders through.
+     A duplicate that never served (D-wedged: zero ready replicas) is refused the
+     same way: readyReplicas is a snapshot, not proof it never served, so it cannot
+     be told apart from D-split and is never adopted blind (see the note below).
 
    The renamed volumes are matched by SHAPE rather than by reconstructing the
    name: a volume PVC is always `data1-<fullname>-volume[-<pool|zone>]-N`, and

@@ -4,14 +4,18 @@ suite: seaweedfs legacy-naming guard
 # names (`seaweedfs-master`, `data1-seaweedfs-volume-N`) and an upgrade past the
 # 4.31 rename adopts the running set in place.
 #
-# Three states stop the render instead of adopting: a tenant installed FRESH on
-# 1.5.x (only the renamed volumes exist → PV re-bind, Step 2), a tenant an
-# unguarded upgrade already damaged (BOTH generations exist but the renamed
-# volumes are OLDER — the data was born there and the chart-named set is the
-# empty one → Step 2a + Step 2), and a D-split tenant (both sets present, the
-# legacy volumes are older, AND the renamed volume servers are live → reconcile
-# the split, Step 3). A duplicate that never served (D-wedged, zero ready
-# replicas) renders through and is adopted.
+# Any tenant with BOTH naming generations present stops the render instead of
+# adopting — which set is the empty duplicate cannot be told from inside a render,
+# so the guard refuses and sends the operator to classify. The recovery path
+# differs by case: a tenant an unguarded upgrade already damaged (the renamed
+# volumes are OLDER — the data was born there and the chart-named set is the empty
+# one → Step 2a + Step 2), and a D-split tenant (the legacy volumes are older AND
+# the renamed volume servers are live → reconcile the split, Step 3). A duplicate
+# that never served (D-wedged, zero ready replicas) is refused the same way:
+# readyReplicas is a snapshot, not proof it never served, so it is indistinguishable
+# from D-split and cannot be adopted blind. A tenant installed FRESH on 1.5.x (only
+# the renamed volumes exist, no second generation) is refused separately → PV
+# re-bind, Step 2.
 #
 # The guard only runs when it can see the cluster: the release namespace is its
 # canary. Every test that exercises classification therefore registers
