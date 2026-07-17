@@ -101,14 +101,6 @@
     echo "$output" | grep -wq cozystack.gateway-api-crds
 }
 
-@test "core-platform suite contributes no package and emits no warning" {
-    # serviceexposure is a core-platform CRD; nothing to enable, no warning.
-    err=$(hack/select-install.sh "serviceexposure" 2>&1 1>/dev/null)
-    [ -z "$err" ]
-    output=$(hack/select-install.sh "serviceexposure" 2>/dev/null)
-    [ -z "$output" ]
-}
-
 @test "validate passes on the real source graph and suite mapping" {
     hack/select-install.sh --validate
 }

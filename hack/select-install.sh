@@ -61,9 +61,9 @@ fi
 #   - a "cozystack.*" name         the suite's primary install target
 #   - "-"                          the suite targets a core-platform feature that
 #                                  has no separately-enabled package (always
-#                                  present via the base install), e.g.
-#                                  serviceexposure (ExposureClass/ServiceExposure
-#                                  live in packages/core/platform)
+#                                  present via the base install); no current
+#                                  suite maps here, kept for the next
+#                                  packages/core/platform-owned suite
 #   - nothing                      no mapping is known (caller fails closed)
 # Most suites follow the <suite>-application convention; a bare-<suite> fallback
 # and the explicit cases cover suites whose source is named differently. Kept in
@@ -82,7 +82,6 @@ suite_to_source() {
       echo cozystack.kubernetes-application ; return ;;
     vminstance) echo cozystack.vm-instance-application ; return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
-    serviceexposure) echo - ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
     if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi
