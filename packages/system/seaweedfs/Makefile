@@ -19,5 +19,6 @@ update:
 	patch --no-backup-if-mismatch -p4 < patches/cosi-bucket-class-lock-readonly.patch
 	patch --no-backup-if-mismatch -p4 < patches/s3-service-name.patch
 	patch --no-backup-if-mismatch -p4 < patches/s3-service-name-consumers.patch
+	patch --no-backup-if-mismatch -p4 < patches/cluster-scoped-names-per-namespace.patch
 	#patch --no-backup-if-mismatch -p4 < patches/retention-policy-delete.yaml
 

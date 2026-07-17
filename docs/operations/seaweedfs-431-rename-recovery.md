@@ -217,6 +217,26 @@ kubectl -n "$ns" get secret -o name | sed 's|secret/||' \
 
 Never delete `data1-seaweedfs-volume-*` — those are the live data PVCs of the adopted set.
 
+The same 4.31 bump also renamed the tenant's four **cluster-scoped** RBAC objects, and those leftovers are cluster-wide rather than namespaced. Pre-4.31 they were named after the per-namespace service account (`<tenant>-seaweedfs-*`); 4.31 named them after the Helm release, which is identical in every tenant, so the fleet collided on one object. The fix puts them back on the service account name, which is where a 1.4.x tenant's objects already are — those are adopted in place and need no cleanup. A tenant that passed **through** 1.5.x, however, leaves behind whatever name that release used, and because more than one tenant claimed it, it may not be pruned by any release's manifest:
+
+```sh
+# Stale shared/renamed cluster-scoped RBAC. The go-forward names all start with a
+# tenant namespace; anything on the release-based names is a leftover. The fourth
+# pre-4.31 object is matched separately: 4.31 renamed the master-rw BINDING from
+# upstream's username-shaped system:serviceaccount:<sa>:default to <sa>-rw-crb, so
+# the old one carries neither suffix and no tenant prefix.
+kubectl get clusterrole,clusterrolebinding \
+  -o custom-columns='KIND:.kind,NAME:.metadata.name,OWNER:.metadata.annotations.meta\.helm\.sh/release-name,NS:.metadata.annotations.meta\.helm\.sh/release-namespace' \
+  | grep -E 'objectstorage-provisioner|-rw-cr|^\S+\s+system:serviceaccount:.*:default' \
+  | grep -vE '^\S+\s+tenant-'
+```
+
+A `system:serviceaccount:<tenant>-seaweedfs:default` row is the pre-4.31 master-rw binding. It is superseded by `<tenant>-seaweedfs-rw-crb` and is pruned automatically by the tenant's own upgrade (it is in that release's manifest), so it should not survive — if it does, the tenant has not upgraded yet.
+
+Each surviving row is inert once every tenant is upgraded and verified — no release renders those names any more. Confirm the tenant listed in `OWNER`/`NS` is healthy on the go-forward names first, then delete by name. Do not delete anything named `<tenant>-seaweedfs-*`: those are live.
+
+**During** a rolling fleet upgrade there is a window, and it is worth expecting rather than debugging: Helm prunes by name without checking ownership, so the first tenant to reconcile onto the fixed chart deletes the shared `seaweedfs-objectstorage-provisioner` / `seaweedfs-rw-cr` objects that a not-yet-upgraded tenant is still bound through. Those tenants' COSI provisioners get 403s on bucket operations until they reconcile onto their own per-namespace RBAC. Existing buckets keep serving — S3 traffic does not go through the provisioner — so this is a provisioning outage, not a data-plane one, and it closes on its own as the remaining tenants reconcile.
+
 If a tenant's `seaweedfs-system` HelmRelease was suspended during triage, resume it so the fix can reconcile:
 
 ```sh
