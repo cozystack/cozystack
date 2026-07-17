@@ -195,7 +195,21 @@
 {{include "cozystack.platform.package.default" (list "cozystack.monitoring-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.cozystack-basics" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.backupstrategy-controller" $) }}
+{{- /*
+  Forward admin backupStorage overrides (endpoint, region, systemSecretName, …)
+  into the emitted cozystack.backupstrategy-controller Package CR's
+  components.backupstrategy-controller.values, so the supported override path
+  on the cozystack-platform Package — spec.components.platform.values.backupStorage —
+  actually reaches the backupstrategy-controller HelmRelease (#3245). Same
+  pattern as the kubevirt / gpu-operator forwarding in bundles/iaas.yaml. The
+  components block is only rendered when the admin set something, so an unset
+  backupStorage keeps the emitted Package identical to the historical render.
+*/ -}}
+{{- $backupStrategyComponents := dict -}}
+{{- if .Values.backupStorage -}}
+{{- $_ := set $backupStrategyComponents "backupstrategy-controller" (dict "values" (dict "backupStorage" .Values.backupStorage)) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.backupstrategy-controller" "default" $ $backupStrategyComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.backup-controller" $) }}
 {{- /* velero must be a default package: backupstrategy-controller (default)
 hard-depends on cozystack.velero, so an optional velero leaves the

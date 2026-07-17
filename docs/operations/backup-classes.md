@@ -108,7 +108,7 @@ Alert on `rate(failures_total) > 0` or `absent_over_time(successes_total[10m])` 
 
 ## Admin overrides for `cozy-default`
 
-`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the cozystack `Package` CR, which lets admins inject Helm values into platform components:
+`cozy-default` is rendered by the `backupstrategy-controller` chart and owned by Flux's helm-controller. **Direct `kubectl edit backupclass cozy-default` is overwritten on the next helm reconcile** — the same applies to its companion `strategy.backups.cozystack.io/*` CRs (`cozy-default-cnpg`, `cozy-default-etcd`, `cozy-default-mariadb`, `cozy-default-altinity`, `cozy-default-foundationdb`, the two `cozy-default-velero-*`). The supported override path is the `backupStorage` block on the **`platform` component** of the `cozystack.cozystack-platform` Package CR:
 
 ```yaml
 apiVersion: cozystack.io/v1alpha1
@@ -117,7 +117,7 @@ metadata:
   name: cozystack.cozystack-platform
 spec:
   components:
-    backupstrategy-controller:
+    platform:
       values:
         backupStorage:
           provisionBucket: true                    # default; set false for external S3
@@ -129,6 +129,8 @@ spec:
           systemNamespaces:
             - cozy-velero
 ```
+
+The platform chart forwards this block into the child `Package cozystack.backupstrategy-controller` as `components.backupstrategy-controller.values.backupStorage` (`packages/core/platform/templates/bundles/system.yaml`), from where the cozystack operator merges it into the `backupstrategy-controller` HelmRelease over the chart defaults. Two paths that look plausible do **not** work: `spec.components.backupstrategy-controller` on the `cozystack.cozystack-platform` Package is silently ignored (the only component under that PackageSource is `platform`), and patching the child `Package cozystack.backupstrategy-controller` directly is reverted whenever the platform helm-reconcile re-renders it.
 
 | Knob | Effect |
 |---|---|
