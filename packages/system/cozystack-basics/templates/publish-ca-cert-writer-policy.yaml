@@ -59,6 +59,40 @@
      controller writes it freely.
    - Any Secret without the publish-ca-cert label: never matched.
 
+  ASYMMETRY, deliberate and accepted as residual risk: this policy gates the
+  SOURCE surface (a Secret labelled publish-ca-cert, from which the controller
+  lifts a CA), but the DESTINATION surface — the projection <release>.tenant-ca
+  the tenant actually reads — is gated by NO admission policy. A platform-tier
+  Secret writer can pre-create that projection with an attacker ca.crt, the
+  tenant-ca label, and an owner reference naming the release; the lineage webhook
+  then marks it tenantresource=true and the tenant reads a forged anchor as
+  vouched. That is left ungated on purpose, for three reasons:
+
+   - It is unequal DEPTH, not an escalation. The actor is platform-tier — base
+     tenant roles grant no core-Secret verb — and that same actor already has an
+     ungated path to the same outcome: the declared-leg source (CloudNativePG's
+     <release>-ca) carries no publish-ca-cert label, so this policy does not gate
+     it either, and tampering its ca.crt makes the controller project an attacker
+     anchor just the same. Gating the destination would close one of several
+     doors without removing the capability.
+
+   - A destination gate cannot be the clean single-writer pin this one is. The
+     tenant-ca label has TWO legitimate producers: this controller (which writes
+     projections) and helm-controller (which applies the value-at-render-time
+     anchors that cozy-lib.tls.caCertSecret renders). An allow-list would have to
+     include helm-controller — the cluster's universal chart applier — so any
+     Flux-delivered chart could still carry the label, leaving the gate to stop
+     only DIRECT forges (kubectl, a restore, a rogue controller) at the cost of a
+     second fragile writer seam and a Deny on every tenant-ca Secret during
+     disaster recovery.
+
+   - The surgical fix belongs elsewhere. What lets a forged projection be READ is
+     that lineage resolves owner references by kind and name and does not check
+     their UID, so a reference merely NAMING the release is honoured. Verifying
+     that UID at the trust-decision point would defend every tenantresource-
+     labelled kind, not just this Secret, and is tracked as separate follow-up
+     work rather than bolted onto this policy.
+
   DELETE is INTENTIONALLY ungated (operations are CREATE + UPDATE only), and
   that is a deliberate design decision, not an oversight:
    - This policy protects INTEGRITY — it stops a forged or tampered source
