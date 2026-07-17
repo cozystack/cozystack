@@ -89,9 +89,10 @@ spec:
   # render — and the projection only happens because the parent lists the
   # BucketInfo Secrets in the child's valuesFrom, which makes helm-controller
   # re-render the child when they appear (#3247: before that wiring the
-  # -credentials Secrets stayed missing forever). The 6m budget covers the
-  # interval-based fallback reconcile (child interval is 5m) in case the
-  # watch event is missed; the watch path converges in seconds.
+  # -credentials Secrets stayed missing forever). The 6m budget covers one
+  # full release interval (5m): helm-controller 1.5 re-composes valuesFrom
+  # per reconcile rather than watching the Secret, so the worst case is the
+  # Secret appearing just after a reconcile, plus the upgrade itself.
   - name: wait-credentials-projected
     try:
     - assert:

@@ -26,9 +26,11 @@ spec:
   user-credentials.yaml is never re-evaluated once the release settles, so
   without this reference a Secret the COSI driver provisions after the last
   render would never be projected into <bucket>-<user>-credentials (#3247).
-  helm-controller re-composes valuesFrom on every reconcile and reacts to
-  watched Secret events, so the Secret appearing (or rotating) triggers an
-  upgrade, which re-runs the lookup. BucketInfo is a JSON object, so its
+  helm-controller re-composes valuesFrom on every reconcile, so the Secret
+  appearing (or rotating) changes the composed values digest and triggers
+  an upgrade, which re-runs the lookup. Convergence is bounded by the
+  release interval below — helm-controller 1.5 (Flux 2.8) does not watch
+  valuesFrom references. BucketInfo is a JSON object, so its
   keys (apiVersion/kind/metadata/spec) merge into the child's values root;
   the chart does not read them. Scoping the payload under targetPath is not
   an option before Flux 2.9: targetPath goes through Helm's strvals parser,
