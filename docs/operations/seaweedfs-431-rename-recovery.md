@@ -13,6 +13,32 @@ The fix pins `fullnameOverride: seaweedfs` in `system/seaweedfs` values, so work
 
 One class cannot be adopted that way: a tenant installed **fresh on 1.5.x**, whose data was written under the release-based names and lives on `data1-seaweedfs-system-volume-*` PVCs. Pinning the chart name there would rename the workloads *away* from that data. Helm cannot move data between PVCs, so the charts refuse to render for such a tenant and point here. The **enforcing** guard lives in `system/seaweedfs` (`templates/naming-guard.yaml`) — the `<name>-system` HelmRelease pulls that chart straight from a platform-managed ExternalArtifact, so a platform upgrade re-renders it directly and nothing else stands between the upgrade and the tenant's workloads; `extra/seaweedfs` carries a sibling copy so the refusal is also visible on the SeaweedFS application itself. Re-bind the tenant's volumes (below) before upgrading.
 
+## Step 0 — `seaweedfs-db` ownership check (read-only, do this FIRST)
+
+Unrelated to the rename, but it lands on the same upgrade and it destroys data rather than duplicating it, so clear it before anything else.
+
+The v1.5.0 db split moved the CNPG `Cluster/seaweedfs-db` — the filer metadata store, i.e. the index for every object in the tenant's S3 — out of the `<name>-system` release into its own `<name>-db` release. Migration 43 performs the hand-over: it re-owns the Cluster to `<name>-db` and stamps `helm.sh/resource-policy: keep` so the `<name>-system` upgrade, whose chart no longer renders the Cluster, does not delete it as a removed resource. **Migration 43 shipped comparing the owning release name against the literal `seaweedfs-system`**, so it only ever fired for an instance named `seaweedfs`. `SeaweedFS` is a user-creatable kind: an instance named `foo` is owned by `foo-system`, was skipped, and had its Cluster pruned — CNPG takes the PVC with it.
+
+The prune is not a one-shot. Helm computes deletions by diffing the **last deployed** revision against the new manifest, so a tenant whose `<name>-system` last succeeded on a pre-split revision recomputes the same deletion on *every* upgrade attempt — including attempts that fail for unrelated reasons and never become the new deployed revision. Such a tenant re-deletes the Cluster each time `<name>-db` recreates it.
+
+Migration 43 is fixed to match the `-system` suffix, and migration 53 re-runs the hand-over for clusters that already ran the hardcoded version. Both are pre-upgrade hooks, so they land before `<name>-system` re-renders. Audit anyway — a Cluster already deleted cannot be recovered by either:
+
+```sh
+kubectl get cluster.postgresql.cnpg.io -A \
+  -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,OWNER:.metadata.annotations.meta\.helm\.sh/release-name,KEEP:.metadata.annotations.helm\.sh/resource-policy'
+```
+
+Read the rows for `NAME=seaweedfs-db`:
+
+| OWNER | KEEP | Meaning |
+|---|---|---|
+| `<name>-db` | `keep` | Handed over. Nothing to do. |
+| `<name>-db` | *(none)* | Installed fresh on ≥1.5.0. Safe: `<name>-system` never rendered the Cluster, so it is not in that release's prune baseline. |
+| `<name>-system` | *(none)* | **At risk.** Migration 53 hands it over on the next upgrade. Do not reconcile `<name>-system` before the migration runs. |
+| *(no row at all)* | | **Already lost** — see below. |
+
+A tenant with a SeaweedFS instance but **no `seaweedfs-db` row** has already had its metadata deleted. Its S3 returns 500 and its objects are unreachable even though the volume PVCs still hold the bytes. Nothing in this runbook or in any migration can rebuild that index: the Cluster and its PVC are gone. Restore the `seaweedfs-db` Postgres from a backup, or treat the tenant's object storage as lost. Note that `<name>-db` may report **Ready** while this is true — it rendered its Cluster successfully and a later `<name>-system` prune removed it; Flux has not re-checked. Trust the `kubectl get cluster` output, not the HelmRelease status.
+
 ## Step 1 — Audit the fleet (read-only)
 
 Run per cluster (`KUBECONFIG` pointed at each). It mutates nothing. Classification is driven by the **PVCs**, because they hold the data and outlive any workload.

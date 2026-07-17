@@ -33,16 +33,16 @@ tests:
       value: Role
     asserts:
       - contains:
-          path: rules[1].resourceNames
+          path: rules[2].resourceNames
           content: archive-system-seaweedfs-ca-cert
       - contains:
-          path: rules[1].resourceNames
+          path: rules[2].resourceNames
           content: archive-system-seaweedfs-db-secret
       # The adopted chart-based scheme is the same for every instance.
       - contains:
-          path: rules[1].resourceNames
+          path: rules[2].resourceNames
           content: seaweedfs-ca-cert
       # The old hardcoded default name must NOT appear for a non-default instance.
       - notContains:
-          path: rules[1].resourceNames
+          path: rules[2].resourceNames
           content: archive-system-ca-cert

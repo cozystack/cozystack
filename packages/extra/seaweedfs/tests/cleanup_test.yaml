@@ -51,6 +51,20 @@ tests:
             apiGroups: [""]
             resources: ["persistentvolumeclaims"]
             verbs: ["get", "list", "delete"]
+      # Migration 43/53 stamps helm.sh/resource-policy=keep on the CNPG Cluster
+      # so a <name>-system upgrade cannot prune the filer metadata. `keep` is
+      # permanent and also survives the <name>-db release's own uninstall, so
+      # without an explicit reclaim here, deleting the app orphans the Cluster,
+      # its Postgres pods and its PVCs (which the PVC selector above does not
+      # match — they are labelled cnpg.io/cluster=seaweedfs-db).
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["postgresql.cnpg.io"]
+            resources: ["clusters"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - seaweedfs-db
       - contains:
           path: rules
           content:
@@ -172,3 +186,34 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'app\.kubernetes\.io/component='
+      # The filer-metadata database must be reclaimed too. Migration 43/53 stamps
+      # helm.sh/resource-policy=keep on the Cluster so a <name>-system upgrade
+      # cannot prune it (that prune destroys the tenant's S3 index), but keep is
+      # permanent and also survives the <name>-db release's own uninstall — so
+      # deleting the app would leave the Cluster, its Postgres pods and its PVCs
+      # with nothing owning them. The PVCs carry ownerReferences to the Cluster,
+      # so deleting it garbage-collects them; the label selector above does not
+      # match them (they are labelled cnpg.io/cluster=seaweedfs-db).
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete cluster\.postgresql\.cnpg\.io -n tenant-root seaweedfs-db --ignore-not-found --wait=false'
+      # The Cluster name is hardcoded `seaweedfs-db` for EVERY instance, so name
+      # alone is not ownership. Deleting on name would take a different SeaweedFS
+      # app's database (a Client shares another app's filer; a second Simple
+      # instance loses Helm's ownership race but still installs), and CNPG takes
+      # the PVC with it. The Job must re-check the owner annotation at run time.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'REFUSING to delete Cluster/seaweedfs-db: owned by'
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\$owner" != "seaweedfs-db"'
+      # A failed reclaim must FAIL the Job: the Cluster is keep-protected, so
+      # nothing else reclaims it, and hook-delete-policy would drop the only
+      # cleanup Job. `|| echo` would swallow it into exit zero.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'Failing so the Job retries.*\n.*exit 1|exit 1'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete cluster\.postgresql\.cnpg\.io[^|]*\|\| echo'
