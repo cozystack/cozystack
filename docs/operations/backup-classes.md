@@ -76,7 +76,7 @@ kubectl -n tenant-root get secret bucket-cozy-backups-system-credentials
 kubectl -n cozy-velero get backupstoragelocation cozy-default
 ```
 
-The bucket lives in `tenant-root` and is provisioned through the `apps.cozystack.io/Bucket` CR. The system-managed credentials Secret never leaves that namespace. The backupstrategy-controller projects a copy under the name `cozy-backups-creds` into a tenant namespace right before each BackupJob runs, and refreshes the same Secret in `cozy-velero` (and any other namespace listed in `backupStorage.systemNamespaces`) on a 1-minute tick. The projected Secret carries multiple key formats so each driver finds what it needs in one place:
+The bucket lives in `tenant-root` and is provisioned through the `apps.cozystack.io/Bucket` CR. The system-managed credentials Secret never leaves that namespace. The backupstrategy-controller projects a copy under the name `cozy-backups-creds` into a tenant namespace right before each BackupJob or RestoreJob runs, and refreshes the same Secret in `cozy-velero` (and any other namespace listed in `backupStorage.systemNamespaces`) on a 1-minute tick. The projected Secret carries multiple key formats so each driver finds what it needs in one place:
 
 | Key                                           | Consumer                                  |
 |-----------------------------------------------|-------------------------------------------|
