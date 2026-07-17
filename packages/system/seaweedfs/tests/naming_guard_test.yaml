@@ -462,6 +462,90 @@ tests:
       - failedTemplate:
           errorPattern: "has BOTH naming generations present"
 
+  # ---------------------------------------------------------------------------
+  # MultiZone (and Simple-with-pools) tenants have NO plain `volume` component —
+  # extra/seaweedfs sets volume.enabled=false and renders one component per zone
+  # key, suffix `volume-<key>`. For the supported instance (the tenant module
+  # hardcodes the name `seaweedfs`, fullname 16 chars) nothing is truncated, so
+  # the reconstructed prefix `seaweedfs-system-volume` must prefix-match every
+  # zone component. These pin that. The reconstruction does NOT cover zone
+  # components of long-named instances or ~40+ char zone keys — an accepted,
+  # documented limit (_naming.tpl, runbook Scope), deliberately not tested.
+  # ---------------------------------------------------------------------------
+
+  - it: renders for a legacy-only MultiZone tenant (zone components adopt in place)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-md-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume-md
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses class S for a MultiZone tenant with only zone components (fresh 1.5.x)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # No plain `volume` component exists on a MultiZone tenant — the zone
+        # objects are the ONLY release-named evidence, so if the prefix match
+        # missed them this tenant would render and be renamed away from its data.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-md-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume-md
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release"
+
+  - it: refuses both-generations for a MultiZone tenant
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-md-0
+            namespace: tenant-fresh
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-md-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume-md
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
   - it: ignores unrelated data1-*-volume-* claims of other apps
     kubernetesProvider:
       scheme: *scheme
