@@ -172,6 +172,31 @@ YAML
     fi
 }
 
+@test "validate detects a suite mapped to a source absent from the graph" {
+    # suite_to_source() hardcodes securitygroup -> cozystack.securitygroup-controller;
+    # a sources dir without that PackageSource must fail validation (fail closed),
+    # pinning the contract that EVERY mapping resolves to a real source — there is
+    # no bypass value (the old "-" escape is gone).
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    mkdir -p "$tmp/sources" "$tmp/suites/securitygroup"
+    : > "$tmp/suites/securitygroup/chainsaw-test.yaml"
+    cat > "$tmp/sources/standalone.yaml" <<'YAML'
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.standalone
+spec:
+  variants:
+    - name: default
+YAML
+    err=$(hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" 2>&1 1>/dev/null) && {
+        echo "expected validation to fail on a mapping to a missing source" >&2
+        exit 1
+    }
+    echo "$err" | grep -q "maps to 'cozystack.securitygroup-controller', not a PackageSource"
+}
+
 @test "validate fails when the suites dir does not exist" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT

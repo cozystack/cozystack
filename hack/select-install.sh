@@ -24,7 +24,7 @@
 # --validate: check the whole graph AND the suite mapping — every dependsOn
 #   target resolves to a real PackageSource, there are no dependency cycles, and
 #   every Chainsaw suite under <suites-dir> resolves via suite_to_source() to a
-#   real PackageSource or to "-". Exit non-zero on any failure. The graph lives
+#   real PackageSource. Exit non-zero on any failure. The graph lives
 #   next to the packages and cannot drift from the suite directories; the
 #   hand-maintained suite mapping is the only part that can, so it is guarded here.
 #
