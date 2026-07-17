@@ -142,6 +142,50 @@ type RFC2136DNS01 struct {
 	TSIGSecretSecretRef corev1.SecretKeySelector `json:"tsigSecretSecretRef"`
 }
 
+// TLSPassthroughListener declares one layer-4 TLS-passthrough listener
+// on the tenant Gateway. Unlike the layer-7 terminate listeners the
+// controller renders for published HTTP apps, a passthrough listener
+// does not terminate TLS: the ClientHello SNI selects the backend and
+// the raw TLS stream is forwarded to the TLSRoute-named service, so a
+// native database protocol that speaks its own TLS reaches clients
+// without the Gateway ever holding the private key. Each listener owns
+// a distinct native port and a per-engine SNI hostname.
+type TLSPassthroughListener struct {
+	// Name identifies the listener within the tenant Gateway. It
+	// becomes the rendered Gateway listener name "tls-<name>" and the
+	// sectionName a TLSRoute attaches to. Must be a DNS-1123 label
+	// (lowercase alphanumerics and '-', starting and ending with an
+	// alphanumeric) and unique across the list.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +required
+	Name string `json:"name"`
+
+	// Port is the TCP port the passthrough listener binds on the
+	// tenant Gateway's shared address. Set it to the engine's native
+	// port (e.g. 5432 for PostgreSQL). Must be 1..65535, unique across
+	// the list, and neither 80 nor 443 — the Gateway's own http (80)
+	// and TLS-terminate (443) listeners already own those ports.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +required
+	Port int32 `json:"port"`
+
+	// Hostname is the SNI the listener matches on the incoming
+	// ClientHello. It routes the raw TLS stream by SNI, so give each
+	// engine its own per-engine subdomain (e.g.
+	// "postgres.foo.example.com") or a left-most-label wildcard (e.g.
+	// "*.db.foo.example.com"). Must be an exact RFC 1123 hostname or a
+	// wildcard hostname, and must fall within the tenant apex — equal to
+	// Apex or a subdomain of it — since every listener on the tenant
+	// Gateway is constrained to the apex.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +required
+	Hostname string `json:"hostname"`
+}
+
 // TenantGatewaySpec describes the desired state of a per-tenant Gateway.
 type TenantGatewaySpec struct {
 	// Apex is the tenant's apex hostname. The Gateway listeners are
@@ -188,6 +232,20 @@ type TenantGatewaySpec struct {
 	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
 	// +optional
 	TLSPassthroughServices []string `json:"tlsPassthroughServices,omitempty"`
+
+	// TLSPassthroughListeners declares layer-4 TLS-passthrough
+	// listeners on the tenant Gateway. The controller renders one
+	// "tls-<name>" listener per entry — on the entry's native Port,
+	// mode Passthrough, matching the entry's per-engine SNI Hostname —
+	// alongside the layer-7 terminate listeners. This lets a database
+	// engine present its own certificate directly to clients while
+	// sharing the tenant Gateway's address. It is independent of
+	// TLSPassthroughServices, the layer-7 passthrough-on-443 form; the
+	// two do not replace each other.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	TLSPassthroughListeners []TLSPassthroughListener `json:"tlsPassthroughListeners,omitempty"`
 
 	// GatewayClassName names the GatewayClass to attach the rendered
 	// Gateway to. Default cilium.
