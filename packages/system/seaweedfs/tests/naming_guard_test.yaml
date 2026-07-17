@@ -1,0 +1,286 @@
+suite: seaweedfs naming-migration guard (enforcing copy)
+
+# This chart is what a platform upgrade actually re-renders: the <name>-system
+# HelmRelease pulls it from a platform-managed ExternalArtifact, so bumping the
+# platform upgrades the release directly — extra/seaweedfs (which carries a
+# sibling copy of this guard for operator visibility) is NOT in that path.
+# v1.6 regression: the guard lived only in extra/seaweedfs, so upgrading a
+# tenant installed fresh on 1.5.x (class S: data on the release-named
+# data1-<release>[-seaweedfs]-volume-* PVCs) stood up an empty chart-named set
+# beside its live data. These tests pin the enforcement where the rename
+# actually happens.
+#
+# The guard reads the cluster through lookup with the release namespace as its
+# canary, so classification tests register v1/Namespace + v1/PersistentVolumeClaim
+# + apps/v1/StatefulSet and include the namespace object. readyReplicas is quoted
+# ("1"/"0") because the fake client cannot deep-copy a bare Go int.
+
+templates:
+  - templates/naming-guard.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-fresh
+
+tests:
+  - it: renders for a client-side install with no cluster view (CI lint, unittest)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # NOTE: the fail-closed refusal (client-side UPGRADE with no cluster view)
+  # cannot be modelled here — helm-unittest 1.0.3 ignores release.isUpgrade, so
+  # .Release.IsUpgrade always renders false. Verify with a real renderer:
+  #   helm template packages/system/seaweedfs --is-upgrade 2>&1 \
+  #     | grep 'refusing to upgrade blind'
+
+  - it: refuses to render if the fullnameOverride pin is ever lifted
+    set:
+      seaweedfs:
+        fullnameOverride: something-else
+    asserts:
+      - failedTemplate:
+          errorPattern: "must pin seaweedfs.fullnameOverride=seaweedfs"
+
+  - it: renders for a net-new tenant (namespace visible, no SeaweedFS data)
+    kubernetesProvider:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - &ns
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-fresh
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-fresh
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders for a legacy tenant (data on the chart-named PVCs, adopt in place)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2025-11-02T10:00:00Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-fresh
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses class S — data only on release-named volumes (fresh 1.5.x install)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T07:01:59Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release.*Step 2"
+
+  - it: refuses class S when a previous unguarded upgrade already created the empty chart-named set
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # Exactly the observed damage: system volumes older (the data), chart-named
+        # volumes newer (created empty by the upgrade), renamed set still serving.
+        # A presence-only classification calls this D-split and sends the operator
+        # to quiesce the set that holds ALL the data.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T07:01:59Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T08:28:58Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "never as D-split.*Step 2a"
+
+  - it: renders for a D-wedged tenant (legacy volumes older, duplicate never served)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2025-11-02T10:00:00Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T12:00:00Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses a genuine D-split (legacy volumes older AND the duplicate is live)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2025-11-02T10:00:00Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T12:00:00Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "is running two live SeaweedFS sets.*Step 3"
+
+  - it: refuses class S for a non-default instance name (foo-system release)
+    release:
+      name: foo-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # 4.31 appends the chart name when the release name does not contain it:
+        # a fresh 1.5.x `foo` wrote to data1-foo-system-seaweedfs-volume-*.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-foo-system-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T07:01:59Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-fresh
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release"
+
+  - it: ignores unrelated data1-*-volume-* claims of other apps
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-clickhouse-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: clickhouse-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: clickhouse
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -11,7 +11,7 @@ Before 4.31 the chart named workloads after the chart (`seaweedfs-*`), ignoring 
 
 The fix pins `fullnameOverride: seaweedfs` in `system/seaweedfs` values, so workloads are always named after the chart, exactly as they were before 4.31. Upgrading past the bump therefore **adopts the running set and its volumes in place**.
 
-One class cannot be adopted that way: a tenant installed **fresh on 1.5.x**, whose data was written under the release-based names and lives on `data1-seaweedfs-system-volume-*` PVCs. Pinning the chart name there would rename the workloads *away* from that data. Helm cannot move data between PVCs, so `extra/seaweedfs` refuses to render for such a tenant and points here. Re-bind its volumes (below) before upgrading.
+One class cannot be adopted that way: a tenant installed **fresh on 1.5.x**, whose data was written under the release-based names and lives on `data1-seaweedfs-system-volume-*` PVCs. Pinning the chart name there would rename the workloads *away* from that data. Helm cannot move data between PVCs, so the charts refuse to render for such a tenant and point here. The **enforcing** guard lives in `system/seaweedfs` (`templates/naming-guard.yaml`) — the `<name>-system` HelmRelease pulls that chart straight from a platform-managed ExternalArtifact, so a platform upgrade re-renders it directly and nothing else stands between the upgrade and the tenant's workloads; `extra/seaweedfs` carries a sibling copy so the refusal is also visible on the SeaweedFS application itself. Re-bind the tenant's volumes (below) before upgrading.
 
 ## Step 1 — Audit the fleet (read-only)
 
@@ -30,15 +30,26 @@ nss=$(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "
         | awk '$2 ~ /^data1-.*volume/ && $2 ~ /seaweedfs/ {print $1}' | sort -u)
 [ -z "${nss}" ] && { echo "(no SeaweedFS volume PVCs found)"; exit 0; }
 for ns in ${nss}; do
-  pvcs=$(kubectl get pvc -n "$ns" -o name | sed 's|persistentvolumeclaim/||')
+  # name<TAB>creationTimestamp — the AGE ordering below tells a genuine D tenant
+  # from an S tenant that an unguarded upgrade already damaged.
+  pvcs=$(kubectl get pvc -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.creationTimestamp}{"\n"}{end}')
   legacy=$(echo "$pvcs" | grep -cE '^data1-seaweedfs-volume' || true)
   system=$(echo "$pvcs" | grep -E '^data1-.*volume' | grep -E 'seaweedfs' | grep -vE '^data1-seaweedfs-volume' | grep -c . || true)
+  legacy_oldest=$(echo "$pvcs" | grep -E '^data1-seaweedfs-volume' | cut -f2 | sort | head -1)
+  system_oldest=$(echo "$pvcs" | grep -E '^data1-.*volume' | grep -E 'seaweedfs' | grep -vE '^data1-seaweedfs-volume' | cut -f2 | sort | head -1)
   running_new=$(kubectl get pods -n "$ns" \
       -l app.kubernetes.io/name=seaweedfs,app.kubernetes.io/component=volume \
       --field-selector=status.phase=Running -o name 2>/dev/null \
       | grep -vc '/seaweedfs-volume-' || true)
   if [ "$legacy" -gt 0 ] && [ "$system" -gt 0 ]; then
-    if [ "${running_new:-0}" -gt 0 ]; then
+    # PVCs are never recreated in place, so the OLDER generation is where the
+    # data was born. Renamed older ⇒ a fresh-1.5.x tenant that an unguarded
+    # 1.6.0 upgrade already hit: the chart-named set is the NEWER, EMPTY one.
+    # That tenant is S (recover via Step 2a + Step 2), NEVER D-split — the
+    # D-split procedure would quiesce the set that holds all the data.
+    if [ "$system_oldest" \< "$legacy_oldest" ]; then
+      printf '%-28s %-10s %s\n' "$ns" "S-damaged" "renamed volumes are OLDER: data born there, chart-named set is empty (Step 2a, then Step 2)"
+    elif [ "${running_new:-0}" -gt 0 ]; then
       printf '%-28s %-10s %s\n' "$ns" "D-split" "DANGER: duplicate volume servers Running — audit before upgrading"
     else
       printf '%-28s %-10s %s\n' "$ns" "D-wedged" "duplicate set never served; upgrade adopts the legacy set"
@@ -51,7 +62,16 @@ for ns in ${nss}; do
 done
 ```
 
-Act on the classes in this order: resolve every **D-split** and every **S** tenant first (both need an operator), then upgrade. **L** and **D-wedged** need nothing.
+Act on the classes in this order: resolve every **D-split**, **S** and **S-damaged** tenant first (all need an operator), then upgrade. **L** needs nothing.
+
+**D-wedged** normally needs nothing — but on a cluster with no spare nodes (nodes ≤ replicas) the adoption rollout can stall: the wedged duplicate pods are still *scheduled*, carry the same labels as the adopted set (including `app.kubernetes.io/instance`), and their hard pod anti-affinity blocks the adopted set's rolled pods from landing anywhere (observed as `seaweedfs-filer-1`/`seaweedfs-master-2` stuck Pending on `didn't match pod anti-affinity rules`, wedging the `<name>-system` HelmRelease in upgrade/rollback loops). If that happens, scale the duplicate down first — it never served, so this is safe:
+
+```sh
+ns=<tenant>
+kubectl -n "$ns" get sts -l app.kubernetes.io/name=seaweedfs -o name | sed 's|statefulset.apps/||' \
+  | grep -vE '^seaweedfs-(master|filer|volume)($|-)' \
+  | xargs -r -I{} kubectl -n "$ns" scale sts {} --replicas=0
+```
 
 ## Step 2 — `S` tenants: re-bind the volumes before upgrading
 
@@ -126,6 +146,29 @@ kubectl -n "$ns" patch helmrelease "${app}-system" --type merge -p '{"spec":{"su
 Then upgrade. The filer metadata lives in the shared `seaweedfs-db` Postgres and is name-independent, and the volume IDs travel with the volumes themselves, so the adopted cluster comes back with its objects intact.
 
 The loop handles pools and zones (their PVC names carry the pool/zone key) and both renamed shapes: `data1-seaweedfs-system-volume-*` for the default instance, and `data1-<name>-system-seaweedfs-volume-*` for an instance running under another name, because 4.31's name helper appends the chart name when the release name does not contain it.
+
+## Step 2a — `S-damaged` tenants: remove the empty chart-named set first
+
+An `S` tenant that an unguarded 1.6.0 upgrade already reached has an extra problem: the upgrade **created** chart-named workloads (`seaweedfs-master/-filer/-volume`, an s3 Deployment) and **empty** `data1-seaweedfs-volume-*` PVCs beside the live renamed set, and deleted the renamed `<fullname>-s3` Service (only `seaweedfs-s3` remains — its endpoints may still resolve to the renamed set's pods because both sets carry identical labels, which is luck, not design: if the chart-named pods ever become Ready, the Service splits reads across a live set and an empty one).
+
+Verify the direction before touching anything — the chart-named PVCs must be the **newer** generation (compare `kubectl get pvc -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp`), matching the `S-damaged` audit row. Then clear the empty chart-named set so Step 2 can re-bind onto those names:
+
+```sh
+ns=<tenant>
+app=<seaweedfs-instance-name>
+kubectl -n "$ns" patch helmrelease "${app}-system" --type merge -p '{"spec":{"suspend":true}}'
+# The chart-named workloads were created by the aborted upgrade and never held
+# data. Delete them so the re-bind can take over their names.
+kubectl -n "$ns" delete sts seaweedfs-master seaweedfs-filer --ignore-not-found
+kubectl -n "$ns" get sts -o name | sed 's|statefulset.apps/||' | grep -E '^seaweedfs-volume($|-)' \
+  | xargs -r -I{} kubectl -n "$ns" delete sts {}
+# The EMPTY chart-named claims block Step 2's re-bind (same names). Double-check
+# each is the newer, never-served generation before deleting.
+kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||' | grep -E '^data1-seaweedfs-volume' \
+  | xargs -r -I{} kubectl -n "$ns" delete pvc {}
+```
+
+Leave the HelmRelease suspended and continue with Step 2 (skip its suspend line; the renamed StatefulSets it scales down are the ones holding the data, exactly as in a plain `S` tenant). Do NOT scale down or delete anything named `*-system-*` before its volumes are re-bound.
 
 ## Step 3 — `D-split` tenants: stop the split before upgrading
 

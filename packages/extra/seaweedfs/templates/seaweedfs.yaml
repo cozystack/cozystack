@@ -131,36 +131,76 @@
    an unrelated `data1-*-volume-*` claim. StatefulSets do carry the labels, so they
    are matched on those, which also covers a tenant whose PVCs are not provisioned
    yet and one whose name the chart truncated past the chart name; the renamed
-   volume StatefulSet is also where the D-split liveness signal is read. */}}
-{{- $legacyData := false }}
-{{- $systemData := false }}
+   volume StatefulSet is also where the D-split liveness signal is read.
+
+   Telling S from D when BOTH PVC generations exist is done by AGE: PVCs are never
+   recreated in place (StatefulSets are, by the adoption hook, so their timestamps
+   are useless), so the OLDER volume-PVC generation is where the data was born.
+   Release-named older → a fresh-1.5.x tenant that an unguarded upgrade already
+   damaged by creating the empty chart-named set: still class S; reporting it as
+   D-split would send the operator to quiesce the set that holds ALL the data.
+
+   This copy of the guard warns on the SeaweedFS application itself, where the
+   operator looks first. The ENFORCING copy lives in system/seaweedfs
+   (templates/naming-guard.yaml): the <name>-system HelmRelease pulls its chart
+   from a platform-managed ExternalArtifact, so a platform upgrade re-renders
+   THAT chart directly without ever re-rendering this one. Keep the two
+   classifications in sync.
+
+   Fail-closed: lookup errors abort the render, but a client-side render returns
+   nothing — the release namespace is used as a canary, and an upgrade that
+   cannot see the cluster refuses instead of misclassifying. */}}
+{{- $canary := lookup "v1" "Namespace" "" .Release.Namespace }}
+{{- if and (not $canary) .Release.IsUpgrade }}
+{{-   fail (printf "SeaweedFS naming-migration guard for %s in namespace %s: cannot see the cluster (lookup returned nothing for the release namespace itself). This render decides whether workloads are renamed away from live data, so refusing to upgrade blind. Renders applied by helm-controller always see the cluster; if templating by hand, render server-side." .Release.Name .Release.Namespace) }}
+{{- end }}
+{{- if $canary }}
+{{- $legacyPVC := false }}
+{{- $systemPVC := false }}
+{{- $legacyOldest := "" }}
+{{- $systemOldest := "" }}
+{{- $legacySTS := false }}
+{{- $systemSTS := false }}
 {{- $systemRunning := false }}
 {{- range (lookup "v1" "PersistentVolumeClaim" .Release.Namespace "").items | default list }}
 {{-   if and (hasPrefix "data1-" .metadata.name) (contains "-volume" .metadata.name) (contains "seaweedfs" .metadata.name) }}
+{{-     $ts := dig "metadata" "creationTimestamp" "" . }}
 {{-     if hasPrefix "data1-seaweedfs-volume" .metadata.name }}
-{{-       $legacyData = true }}
+{{-       $legacyPVC = true }}
+{{-       if and $ts (or (not $legacyOldest) (lt $ts $legacyOldest)) }}
+{{-         $legacyOldest = $ts }}
+{{-       end }}
 {{-     else }}
-{{-       $systemData = true }}
+{{-       $systemPVC = true }}
+{{-       if and $ts (or (not $systemOldest) (lt $ts $systemOldest)) }}
+{{-         $systemOldest = $ts }}
+{{-       end }}
 {{-     end }}
 {{-   end }}
 {{- end }}
 {{- range (lookup "apps/v1" "StatefulSet" .Release.Namespace "").items | default list }}
 {{-   if and (eq (dig "app.kubernetes.io/name" "" (.metadata.labels | default dict)) "seaweedfs") (contains "volume" .metadata.name) }}
 {{-     if hasPrefix "seaweedfs-volume" .metadata.name }}
-{{-       $legacyData = true }}
+{{-       $legacySTS = true }}
 {{-     else }}
-{{-       $systemData = true }}
+{{-       $systemSTS = true }}
 {{-       if gt (int (dig "status" "readyReplicas" 0 .)) 0 }}
 {{-         $systemRunning = true }}
 {{-       end }}
 {{-     end }}
 {{-   end }}
 {{- end }}
-{{- if and $legacyData $systemData $systemRunning }}
-{{-   fail (printf "SeaweedFS %s in namespace %s is running two live SeaweedFS sets (D-split): the renamed set has ready volume servers alongside the adopted set, and both write to the shared seaweedfs-db metadata. Rendering would adopt the chart-named set and strand the objects the renamed set wrote. Stop the split and reconcile the two sets before upgrading — see docs/operations/seaweedfs-431-rename-recovery.md (Step 3)." .Release.Name .Release.Namespace) }}
+{{- if or $systemPVC $systemSTS }}
+{{-   if and $systemPVC (not $legacyPVC) }}
+{{-     fail (printf "SeaweedFS %s in namespace %s keeps its data on volumes named after the Helm release (this tenant was installed on Cozystack 1.5.x). Workloads are named seaweedfs-*, so rendering would rename them away from that data and bring up an empty cluster. Re-bind the existing PVs onto the data1-seaweedfs-volume-* PVC names before upgrading — see docs/operations/seaweedfs-431-rename-recovery.md (Step 2)." .Release.Name .Release.Namespace) }}
+{{-   else if and $systemPVC $legacyPVC $systemOldest $legacyOldest (lt $systemOldest $legacyOldest) }}
+{{-     fail (printf "SeaweedFS %s in namespace %s keeps its data on the release-named volume PVCs (created %s, OLDER than the chart-named data1-seaweedfs-volume-* claims created %s) — a fresh 1.5.x install that a previous unguarded upgrade already damaged by creating the empty chart-named set. Classify as S, never as D-split — do NOT quiesce the release-named set, it holds all the data. Remove the empty chart-named set, then re-bind the PVs — see docs/operations/seaweedfs-431-rename-recovery.md (Step 2a, then Step 2)." .Release.Name .Release.Namespace $systemOldest $legacyOldest) }}
+{{-   else if and (not $systemPVC) (not $legacyPVC) (not $legacySTS) }}
+{{-     fail (printf "SeaweedFS %s in namespace %s runs release-named workloads (fresh 1.5.x install; volume PVCs not matchable by name — likely a long instance name the chart truncated). Rendering the chart-based names would rename the workloads away from their data. Re-bind the volumes first — see docs/operations/seaweedfs-431-rename-recovery.md (Step 2)." .Release.Name .Release.Namespace) }}
+{{-   else if $systemRunning }}
+{{-     fail (printf "SeaweedFS %s in namespace %s is running two live SeaweedFS sets (D-split): the renamed set has ready volume servers alongside the adopted set, and both write to the shared seaweedfs-db metadata. Rendering would adopt the chart-named set and strand the objects the renamed set wrote. Stop the split and reconcile the two sets before upgrading — see docs/operations/seaweedfs-431-rename-recovery.md (Step 3)." .Release.Name .Release.Namespace) }}
+{{-   end }}
 {{- end }}
-{{- if and $systemData (not $legacyData) }}
-{{-   fail (printf "SeaweedFS %s in namespace %s keeps its data on volumes named after the Helm release (this tenant was installed on Cozystack 1.5.x). Workloads are named seaweedfs-*, so rendering would rename them away from that data and bring up an empty cluster. Re-bind the existing PVs onto the data1-seaweedfs-volume-* PVC names before upgrading — see docs/operations/seaweedfs-431-rename-recovery.md" .Release.Name .Release.Namespace) }}
 {{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease

@@ -7,6 +7,9 @@ suite: seaweedfs naming guard for a non-default instance name
 #   - On 4.31 the fullname helper appends the chart name when the release name
 #     does not contain it, so a fresh 1.5.x `archive` wrote its data to
 #     data1-archive-system-seaweedfs-volume-*, NOT data1-archive-system-volume-*.
+#
+# The guard only runs when it can see the cluster (the release namespace is its
+# canary), so every provider registers v1/Namespace and includes the namespace.
 
 templates:
   - templates/seaweedfs.yaml
@@ -29,7 +32,13 @@ tests:
   - it: adopts a pre-4.31 instance whose data is on the chart-named PVCs
     set: *values
     kubernetesProvider:
-      scheme:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
         "v1/PersistentVolumeClaim":
           gvr:
             group: ""
@@ -43,11 +52,17 @@ tests:
             resource: "statefulsets"
           namespaced: true
       objects:
+        - &ns
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-root
         - kind: PersistentVolumeClaim
           apiVersion: v1
           metadata:
             name: data1-seaweedfs-volume-0
             namespace: tenant-root
+            creationTimestamp: "2025-11-02T10:00:00Z"
         - kind: StatefulSet
           apiVersion: apps/v1
           metadata:
@@ -64,25 +79,15 @@ tests:
   - it: refuses to render when this release's data is on its renamed volumes
     set: *values
     kubernetesProvider:
-      scheme:
-        "v1/PersistentVolumeClaim":
-          gvr:
-            group: ""
-            version: "v1"
-            resource: "persistentvolumeclaims"
-          namespaced: true
-        "apps/v1/StatefulSet":
-          gvr:
-            group: "apps"
-            version: "v1"
-            resource: "statefulsets"
-          namespaced: true
+      scheme: *scheme
       objects:
+        - *ns
         - kind: PersistentVolumeClaim
           apiVersion: v1
           metadata:
             name: data1-archive-system-seaweedfs-volume-0
             namespace: tenant-root
+            creationTimestamp: "2026-06-20T07:01:59Z"
         - kind: StatefulSet
           apiVersion: apps/v1
           metadata:
@@ -92,23 +97,46 @@ tests:
       - failedTemplate:
           errorPattern: "SeaweedFS archive in namespace tenant-root keeps its data on volumes named after the Helm release"
 
+  - it: refuses with class S when the renamed volumes are older than the chart-named ones
+    set: *values
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # A fresh-1.5.x `archive` that an unguarded upgrade already damaged: the
+        # renamed volumes are older (the data was born there) and the chart-named
+        # set is the newer, empty one. Must be S (Step 2a), never D-split.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-archive-system-seaweedfs-volume-0
+            namespace: tenant-root
+            creationTimestamp: "2026-06-20T07:01:59Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-root
+            creationTimestamp: "2026-06-20T08:28:58Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: archive-system-seaweedfs-volume
+            namespace: tenant-root
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "never as D-split.*Step 2a"
+
   - it: catches a long instance name whose renamed workloads the chart truncated
     set: *values
     kubernetesProvider:
-      scheme:
-        "v1/PersistentVolumeClaim":
-          gvr:
-            group: ""
-            version: "v1"
-            resource: "persistentvolumeclaims"
-          namespaced: true
-        "apps/v1/StatefulSet":
-          gvr:
-            group: "apps"
-            version: "v1"
-            resource: "statefulsets"
-          namespaced: true
+      scheme: *scheme
       objects:
+        - *ns
         # 4.31 truncates <fullname> to 56 chars before appending -volume, so a long
         # name loses the chart name from its tail and the PVC name alone no longer
         # identifies it. The StatefulSet still carries the chart labels, so the
@@ -127,25 +155,14 @@ tests:
             namespace: tenant-root
     asserts:
       - failedTemplate:
-          errorPattern: "keeps its data on volumes named after the Helm release"
+          errorPattern: "runs release-named workloads.*Re-bind"
 
   - it: ignores an unrelated data1-*-volume-* PVC belonging to another app
     set: *values
     kubernetesProvider:
-      scheme:
-        "v1/PersistentVolumeClaim":
-          gvr:
-            group: ""
-            version: "v1"
-            resource: "persistentvolumeclaims"
-          namespaced: true
-        "apps/v1/StatefulSet":
-          gvr:
-            group: "apps"
-            version: "v1"
-            resource: "statefulsets"
-          namespaced: true
+      scheme: *scheme
       objects:
+        - *ns
         - kind: PersistentVolumeClaim
           apiVersion: v1
           metadata:
