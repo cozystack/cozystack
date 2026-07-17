@@ -17,6 +17,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secretName: {{ .Release.Name }}-ca
+  secretTemplate:
+    labels:
+      internal.cozystack.io/publish-ca-cert: "true"
+      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name | quote }}
   duration: 43800h  # 5 years
   commonName: {{ .Release.Name }}-ca
   issuerRef:

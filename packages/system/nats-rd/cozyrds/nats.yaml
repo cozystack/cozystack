@@ -31,6 +31,8 @@ spec:
     include:
       - resourceNames:
           - nats-{{ .name }}-credentials
+      - matchLabels:
+          internal.cozystack.io/tenant-ca: "true"
   services:
     exclude: []
     include:

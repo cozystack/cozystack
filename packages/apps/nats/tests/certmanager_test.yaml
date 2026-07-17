@@ -139,6 +139,34 @@ tests:
           value: my-nats-ca
 
   ###################################################
+  # CA Secret carries trust-anchor publish labels   #
+  ###################################################
+
+  - it: CA certificate publishes ca.crt to tenants via secretTemplate labels
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+          value: "true"
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+          value: my-nats
+
+  - it: leaf certificate does NOT carry publish-ca-cert labels
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+
+  ###################################################
   # SAN coverage (internal, tls.enabled=true)       #
   ###################################################
 
