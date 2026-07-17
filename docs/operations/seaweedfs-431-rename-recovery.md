@@ -149,11 +149,11 @@ for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||'
   # not. Step 5 restores it from the annotation once the tenant is verified healthy.
   reclaim=$(kubectl get pv "$pv" -o jsonpath='{.spec.persistentVolumeReclaimPolicy}')
   if [ -z "$(kubectl get pv "$pv" -o jsonpath='{.metadata.annotations.cozystack\.io/original-reclaim-policy}')" ]; then
-    kubectl annotate pv "$pv" "cozystack.io/original-reclaim-policy=${reclaim}"
+    kubectl annotate pv "$pv" "cozystack.io/original-reclaim-policy=${reclaim}" || { echo "FAILED to record the original reclaim policy on $pv; aborting before any PVC is deleted" >&2; break; }
   fi
 
   # Keep the PV (and the data) when the claim goes away.
-  kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
+  kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}' || { echo "FAILED to set Retain on $pv; aborting before deleting its PVC" >&2; break; }
   kubectl -n "$ns" delete pvc "$pvc"
   # A Released PV cannot be re-bound until its old claimRef is cleared.
   kubectl patch pv "$pv" --type json -p '[{"op":"remove","path":"/spec/claimRef"}]'
@@ -378,7 +378,6 @@ for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||'
   pv=$(kubectl -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
   orig=$(kubectl get pv "$pv" -o jsonpath='{.metadata.annotations.cozystack\.io/original-reclaim-policy}')
   [ -n "$orig" ] || continue
-  kubectl patch pv "$pv" -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${orig}\"}}"
-  kubectl annotate pv "$pv" cozystack.io/original-reclaim-policy-
+  kubectl patch pv "$pv" -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${orig}\"}}" && kubectl annotate pv "$pv" cozystack.io/original-reclaim-policy-
 done
 ```
