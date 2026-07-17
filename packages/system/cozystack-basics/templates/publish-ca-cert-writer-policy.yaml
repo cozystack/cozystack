@@ -196,6 +196,8 @@
 */}}
 {{- $certManagerWriter := "system:serviceaccount:cozy-cert-manager:cert-manager" }}
 {{- $publishLabel := "internal.cozystack.io/publish-ca-cert" }}
+{{- /* Render only where the ValidatingAdmissionPolicy API is served (GA since Kubernetes 1.30; the management cluster requires 1.33+, so this holds on every supported cluster). The guard keeps `helm template` and any pre-1.30 edge from emitting a resource the apiserver would reject. Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
+{{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicy
@@ -260,3 +262,4 @@ spec:
       matchExpressions:
       - key: {{ $publishLabel | quote }}
         operator: Exists
+{{- end }}

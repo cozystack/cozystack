@@ -1,0 +1,34 @@
+suite: cozystack-basics VAP policies are gated on the ValidatingAdmissionPolicy API
+templates:
+  - templates/publish-ca-cert-writer-policy.yaml
+  - templates/route-hostname-policy.yaml
+  - templates/gateway-hostname-policy.yaml
+  - templates/ingress-hostname-policy.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+# root-host is set so the ingress policy's own value gate passes; with it set,
+# the only reason any of these four templates render nothing is the missing
+# ValidatingAdmissionPolicy API declared below. helm-unittest's per-test
+# capabilities merge rather than replace the suite's, so the absent case is a
+# separate suite pinned at suite level (mirrors the platform notes gate suite).
+set:
+  _cluster:
+    root-host: example.org
+capabilities:
+  apiVersions: []
+tests:
+  - it: none of the four VAP policies render when the API is unavailable
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/publish-ca-cert-writer-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/route-hostname-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/gateway-hostname-policy.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/ingress-hostname-policy.yaml
