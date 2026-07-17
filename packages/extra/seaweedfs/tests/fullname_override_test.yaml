@@ -123,13 +123,18 @@ tests:
           path: metadata.name
           value: seaweedfs-system
 
-  - it: renders on a D-wedged cluster (duplicate present but never served) — adopts the legacy set
+  # Was: "renders on a D-wedged cluster — adopts the legacy set". A duplicate
+  # reading zero ready replicas used to be treated as proof it never served, so
+  # this rendered through. readyReplicas is only a snapshot: a duplicate that
+  # crashed, was scaled down, or lost readiness AFTER serving writes looks
+  # identical, and adopting the legacy set would strand whatever it wrote. Both
+  # generations present is now refused regardless of liveness.
+  - it: refuses when both generations exist and the duplicate reads zero ready (was D-wedged, adopted)
     set: *values
     kubernetesProvider:
       scheme: *scheme
       objects:
         - *ns
-        # The legacy volumes predate the duplicate: the data was born on them.
         - kind: PersistentVolumeClaim
           apiVersion: v1
           metadata:
@@ -147,8 +152,6 @@ tests:
           metadata:
             name: unrelated-app-data-0
             namespace: tenant-root
-        # The duplicate volume set exists but never scheduled (anti-affinity):
-        # zero ready replicas, so its PVCs are empty and adoption is safe.
         - kind: StatefulSet
           apiVersion: apps/v1
           metadata:
@@ -158,15 +161,11 @@ tests:
               app.kubernetes.io/name: seaweedfs
           status:
             readyReplicas: "0"
-    documentSelector:
-      path: kind
-      value: HelmRelease
     asserts:
-      - equal:
-          path: metadata.name
-          value: seaweedfs-system
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
 
-  - it: refuses to render on a D-split cluster (duplicate volume servers are live)
+  - it: refuses when both generations exist and the duplicate is live (was D-split)
     set: *values
     kubernetesProvider:
       scheme: *scheme
@@ -197,9 +196,9 @@ tests:
             readyReplicas: "1"
     asserts:
       - failedTemplate:
-          errorPattern: "is running two live SeaweedFS sets.*Stop the split"
+          errorPattern: "has BOTH naming generations present"
 
-  - it: refuses with class S when the renamed volumes are OLDER (tenant damaged by an unguarded upgrade)
+  - it: refuses when both generations exist and the renamed volumes are older (was S-damaged)
     set: *values
     kubernetesProvider:
       scheme: *scheme
@@ -242,7 +241,7 @@ tests:
             readyReplicas: "0"
     asserts:
       - failedTemplate:
-          errorPattern: "never as D-split.*Step 2a"
+          errorPattern: "has BOTH naming generations present"
 
   - it: renders for a zoned legacy cluster (volume StatefulSets are per zone)
     set: *values
@@ -323,4 +322,4 @@ tests:
             namespace: tenant-root
     asserts:
       - failedTemplate:
-          errorPattern: "runs release-named workloads.*Re-bind"
+          errorPattern: "keeps its data on volumes named after the Helm release"

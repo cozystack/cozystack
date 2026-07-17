@@ -6,12 +6,19 @@ This runbook covers clusters affected by the SeaweedFS chart-rename regression i
 
 Before 4.31 the chart named workloads after the chart (`seaweedfs-*`), ignoring the release name. 4.31 names them after the release, and the data-plane HelmRelease is `<name>-system`, so every StatefulSet wanted to become `seaweedfs-system-*`. StatefulSet names are immutable, so the upgrade could not rename in place — Helm stood up a second, duplicate set beside the running one. Depending on cluster size the duplicate either deadlocks or splits:
 
-- **D-wedged** — with as many nodes as master replicas, the new masters cannot schedule (hard pod anti-affinity against the old masters). The new set stays `Pending`/`CrashLoopBackOff`, the old set keeps serving. No data at risk.
+- **D-wedged** — with as many nodes as master replicas, the new masters cannot schedule (hard pod anti-affinity against the old masters). The new set stays `Pending`/`CrashLoopBackOff`, the old set keeps serving. Usually no data at risk — but "usually" is not something a Helm render can verify (a duplicate that served writes and later crashed or was scaled down is indistinguishable from one that never started), so the chart refuses these too rather than adopt on an assumption.
 - **D-split** — with more nodes than masters, the new (empty) set comes up. Both sets carry identical pod labels, so the `seaweedfs-s3` Service load-balances across them, and both filers write to the **same `seaweedfs-db` Postgres** metadata store while pointing at different volume servers. This is a data-integrity incident, not just a duplicate: reads of existing objects through the new endpoint miss, new writes land on empty volumes, and the two master sets hand out volume IDs from independent sequences into one shared metadata table.
 
 The fix pins `fullnameOverride: seaweedfs` in `system/seaweedfs` values, so workloads are always named after the chart, exactly as they were before 4.31. Upgrading past the bump therefore **adopts the running set and its volumes in place**.
 
-One class cannot be adopted that way: a tenant installed **fresh on 1.5.x**, whose data was written under the release-based names and lives on `data1-seaweedfs-system-volume-*` PVCs. Pinning the chart name there would rename the workloads *away* from that data. Helm cannot move data between PVCs, so the charts refuse to render for such a tenant and point here. The **enforcing** guard lives in `system/seaweedfs` (`templates/naming-guard.yaml`) — the `<name>-system` HelmRelease pulls that chart straight from a platform-managed ExternalArtifact, so a platform upgrade re-renders it directly and nothing else stands between the upgrade and the tenant's workloads; `extra/seaweedfs` carries a sibling copy so the refusal is also visible on the SeaweedFS application itself. Re-bind the tenant's volumes (below) before upgrading.
+Two states cannot be adopted that way, and the charts refuse to render for both rather than guess:
+
+- A tenant installed **fresh on 1.5.x**, whose data was written under the release-based names and lives on `data1-seaweedfs-system-volume-*` PVCs. Pinning the chart name there would rename the workloads *away* from that data, and Helm cannot move data between PVCs. Re-bind its volumes (Step 2) before upgrading.
+- A tenant where **both** naming generations exist. One of them is an empty duplicate and one holds the data — but nothing durable in the object graph says which. Claim timestamps are not evidence: Step 2's own re-bind deletes and recreates claims, so a tenant interrupted mid-recovery has a brand-new claim holding real data. StatefulSets are recreated by the adoption hook. `readyReplicas: 0` does not prove a duplicate never served. Rendering would adopt the chart-named set, so a wrong guess strands or destroys data. Step 1 classifies these with signals a template does not have; once the empty generation is deleted, exactly one remains and the render proceeds on its own.
+
+The **enforcing** guard lives in `system/seaweedfs` (`templates/naming-guard.yaml`) — the `<name>-system` HelmRelease pulls that chart straight from a platform-managed ExternalArtifact, so a platform upgrade re-renders it directly and nothing else stands between the upgrade and the tenant's workloads; `extra/seaweedfs` carries a sibling copy so the refusal is also visible on the SeaweedFS application itself.
+
+A tenant upgrading **1.4.x straight to 1.6 never renames**, so it only ever has one generation and is unaffected by any of this. Duplicates exist only on tenants that passed through 1.5.x.
 
 ## Step 0 — `seaweedfs-db` ownership check (read-only, do this FIRST)
 
@@ -41,63 +48,40 @@ A tenant with a SeaweedFS instance but **no `seaweedfs-db` row** has already had
 
 ## Step 1 — Audit the fleet (read-only)
 
-Run per cluster (`KUBECONFIG` pointed at each). It mutates nothing. Classification is driven by the **PVCs**, because they hold the data and outlive any workload.
-
 ```sh
-#!/usr/bin/env bash
-set -euo pipefail
-printf '%-28s %-10s %s\n' NAMESPACE CLASS NOTE
-printf '%-28s %-10s %s\n' --------- ----- ----
-# A volume PVC is data1-<fullname>-volume[-<pool|zone>]-N. Pre-4.31 <fullname> was
-# always the chart name, so legacy data is data1-seaweedfs-volume-*. On 4.31 it is
-# the release name, plus the chart name when the release does not contain it:
-# seaweedfs-system-* for the default instance, <name>-system-seaweedfs-* otherwise.
-nss=$(kubectl get pvc -A -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' \
-        | awk '$2 ~ /^data1-.*volume/ && $2 ~ /seaweedfs/ {print $1}' | sort -u)
-[ -z "${nss}" ] && { echo "(no SeaweedFS volume PVCs found)"; exit 0; }
-for ns in ${nss}; do
-  # name<TAB>creationTimestamp — the AGE ordering below tells a genuine D tenant
-  # from an S tenant that an unguarded upgrade already damaged.
-  pvcs=$(kubectl get pvc -n "$ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.metadata.creationTimestamp}{"\n"}{end}')
-  legacy=$(echo "$pvcs" | grep -cE '^data1-seaweedfs-volume' || true)
-  system=$(echo "$pvcs" | grep -E '^data1-.*volume' | grep -E 'seaweedfs' | grep -vE '^data1-seaweedfs-volume' | grep -c . || true)
-  legacy_oldest=$(echo "$pvcs" | grep -E '^data1-seaweedfs-volume' | cut -f2 | sort | head -1)
-  system_oldest=$(echo "$pvcs" | grep -E '^data1-.*volume' | grep -E 'seaweedfs' | grep -vE '^data1-seaweedfs-volume' | cut -f2 | sort | head -1)
-  running_new=$(kubectl get pods -n "$ns" \
-      -l app.kubernetes.io/name=seaweedfs,app.kubernetes.io/component=volume \
-      --field-selector=status.phase=Running -o name 2>/dev/null \
-      | grep -vc '/seaweedfs-volume-' || true)
-  if [ "$legacy" -gt 0 ] && [ "$system" -gt 0 ]; then
-    # PVCs are never recreated in place, so the OLDER generation is where the
-    # data was born. Renamed older ⇒ a fresh-1.5.x tenant that an unguarded
-    # 1.6.0 upgrade already hit: the chart-named set is the NEWER, EMPTY one.
-    # That tenant is S (recover via Step 2a + Step 2), NEVER D-split — the
-    # D-split procedure would quiesce the set that holds all the data.
-    if [ "$system_oldest" \< "$legacy_oldest" ]; then
-      printf '%-28s %-10s %s\n' "$ns" "S-damaged" "renamed volumes are OLDER: data born there, chart-named set is empty (Step 2a, then Step 2)"
-    elif [ "${running_new:-0}" -gt 0 ]; then
-      printf '%-28s %-10s %s\n' "$ns" "D-split" "DANGER: duplicate volume servers Running — audit before upgrading"
-    else
-      printf '%-28s %-10s %s\n' "$ns" "D-wedged" "duplicate set never served; upgrade adopts the legacy set"
-    fi
-  elif [ "$legacy" -gt 0 ]; then
-    printf '%-28s %-10s %s\n' "$ns" "L" "pre-1.5 naming; upgrade adopts in place, nothing to do"
-  else
-    printf '%-28s %-10s %s\n' "$ns" "S" "fresh 1.5.x install; re-bind volumes (Step 2) BEFORE upgrading"
-  fi
-done
+hack/seaweedfs-naming-audit.sh                 # whole cluster
+hack/seaweedfs-naming-audit.sh tenant-foo      # or named namespaces
 ```
 
-Act on the classes in this order: resolve every **D-split**, **S** and **S-damaged** tenant first (all need an operator), then upgrade. **L** needs nothing.
+It mutates nothing. Earlier revisions of this runbook inlined the classification as a shell snippet here; it is a tested script now (`hack/seaweedfs-naming-audit.bats`), because it is what the chart's refusal hands you to and acting on it deletes PVCs. Two inline versions shipped wrong — one whose selector matched both generations at once and so inverted its own primary rule, one that could not see a long instance name at all — so it is not a snippet any more.
 
-**D-wedged** normally needs nothing — but on a cluster with no spare nodes (nodes ≤ replicas) the adoption rollout can stall: the wedged duplicate pods are still *scheduled*, carry the same labels as the adopted set (including `app.kubernetes.io/instance`), and their hard pod anti-affinity blocks the adopted set's rolled pods from landing anywhere (observed as `seaweedfs-filer-1`/`seaweedfs-master-2` stuck Pending on `didn't match pod anti-affinity rules`, wedging the `<name>-system` HelmRelease in upgrade/rollback loops). If that happens, scale the duplicate down first — it never served, so this is safe:
+It reports one class per SeaweedFS instance, matching exactly what the chart's guard decides:
+
+| CLASS | Meaning | Action |
+|---|---|---|
+| `L` | Only the chart-named generation. | None. The upgrade adopts it in place. |
+| `S` | Only the release-named generation — installed fresh on 1.5.x, or a long instance name. | Step 2, before upgrading. |
+| `MIXED` | Both generations. The chart **refuses**. | Below. |
+
+For `MIXED` it also names which generation is **original**, from two independent durable signals: the naming scheme revision 1 of the `<name>-system` release was installed with, and the age of each generation's **PersistentVolumes** measured against that release's `first_deployed`. It reads PV timestamps, never claim timestamps — Step 2 deletes each release-named claim and recreates it under the chart name against the same PV, so claim age is not durable and inverts for a tenant interrupted mid-re-bind. Such a tenant has both generations sitting at `first_deployed`, and the audit reports `MID-REBIND`: finish Step 2, do not run Step 2a.
+
+**Read the audit's own warning.** "Original" is not "the other one is empty", and the gap is exactly where it matters. A duplicate that never scheduled (safe to delete) and one that served writes and later crashed or was scaled down (holds unique objects, deleting destroys them) are **identical on every durable signal** — same revision-1 scheme, same `first_deployed` deltas. The audit narrows the question to one generation; it does not answer it. Before deleting anything, establish that the candidate is empty:
 
 ```sh
 ns=<tenant>
-kubectl -n "$ns" get sts -l app.kubernetes.io/name=seaweedfs -o name | sed 's|statefulset.apps/||' \
-  | grep -vE '^seaweedfs-(master|filer|volume)($|-)' \
-  | xargs -r -I{} kubectl -n "$ns" scale sts {} --replicas=0
+# The candidate's volume servers hold no volume files: an empty /data, no .dat/.idx.
+# Run per replica. If a server cannot be started, you cannot conclude it is empty.
+kubectl -n "$ns" exec <candidate-volume-pod> -- sh -c 'ls -la /data; du -sh /data'
+# Cross-check against the cluster's own accounting: no volumes attributed to the
+# candidate's servers.
+kubectl -n "$ns" exec <master-pod> -- weed shell -c "volume.list"
 ```
+
+If the candidate's servers cannot be inspected, or the two views disagree, **stop and escalate**. Both generations holding real data is recoverable; deleting the wrong one is not.
+
+**D-wedged** — a duplicate that never scheduled — is `MIXED` too, and the chart refuses it like any other duplicate. On main it rendered through, because a duplicate reading `readyReplicas: 0` was taken as proof it never served. That is not proof: a duplicate that served writes and later crashed or was scaled down reads identically. Confirm emptiness as above, then remove it via Step 3 **before** upgrading.
+
+On a cluster with no spare nodes (nodes ≤ replicas) a wedged duplicate also blocks the adoption rollout even once the render passes: its pods are still *scheduled*, carry the same labels as the adopted set (including `app.kubernetes.io/instance`), and their hard pod anti-affinity keeps the adopted set's rolled pods from landing anywhere (observed as `seaweedfs-filer-1`/`seaweedfs-master-2` stuck Pending on `didn't match pod anti-affinity rules`, wedging the `<name>-system` HelmRelease in upgrade/rollback loops). Step 3 removes it, which resolves that too.
 
 ## Step 2 — `S` tenants: re-bind the volumes before upgrading
 
@@ -130,9 +114,14 @@ for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||'
   pv=$(kubectl -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
   sc=$(kubectl -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.storageClassName}')
   size=$(kubectl -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.resources.requests.storage}')
-  # Remember the PV's own reclaim policy: it is restored verbatim below, so a volume
-  # the cluster deliberately set to Retain does not silently come back as Delete.
+  # Stash the PV's own reclaim policy ON THE PV before changing it, so a volume the
+  # cluster deliberately set to Retain does not silently come back as Delete -- and
+  # so the record survives this loop being interrupted, which a shell variable would
+  # not. Step 5 restores it from the annotation once the tenant is verified healthy.
   reclaim=$(kubectl get pv "$pv" -o jsonpath='{.spec.persistentVolumeReclaimPolicy}')
+  if [ -z "$(kubectl get pv "$pv" -o jsonpath='{.metadata.annotations.cozystack\.io/original-reclaim-policy}')" ]; then
+    kubectl annotate pv "$pv" "cozystack.io/original-reclaim-policy=${reclaim}"
+  fi
 
   # Keep the PV (and the data) when the claim goes away.
   kubectl patch pv "$pv" -p '{"spec":{"persistentVolumeReclaimPolicy":"Retain"}}'
@@ -140,12 +129,20 @@ for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||'
   # A Released PV cannot be re-bound until its old claimRef is cleared.
   kubectl patch pv "$pv" --type json -p '[{"op":"remove","path":"/spec/claimRef"}]'
 
+  # The labels matter: the post-delete cleanup hook selects volume PVCs by
+  # app.kubernetes.io/name + instance, and StatefulSet reconciliation does NOT
+  # retrofit claim-template labels onto an existing PVC. A claim recreated without
+  # them is invisible to that hook forever, so a recovered tenant would leak its
+  # volumes on a later app deletion.
   kubectl -n "$ns" apply -f - <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: ${new_pvc}
   namespace: ${ns}
+  labels:
+    app.kubernetes.io/name: seaweedfs
+    app.kubernetes.io/instance: ${app}-system
 spec:
   accessModes: ["ReadWriteOnce"]
   storageClassName: ${sc}
@@ -154,8 +151,10 @@ spec:
     requests:
       storage: ${size}
 EOF
-  # Restore the PV's original reclaim policy now that the new claim owns it.
-  kubectl patch pv "$pv" -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${reclaim}\"}}"
+  # NOTE: the reclaim policy stays Retain until Step 5. Restoring it here (as this
+  # runbook used to) re-arms Delete while the tenant is still mid-recovery, which is
+  # what turned a later mis-step into permanent data loss: on a Delete-policy
+  # StorageClass, deleting the claim takes the PV and the bytes with it.
 done
 
 # 3. Confirm every new claim is Bound to its original PV before going further.
@@ -177,52 +176,109 @@ The loop handles pools and zones (their PVC names carry the pool/zone key) and b
 
 An `S` tenant that an unguarded 1.6.0 upgrade already reached has an extra problem: the upgrade **created** chart-named workloads (`seaweedfs-master/-filer/-volume`, an s3 Deployment) and **empty** `data1-seaweedfs-volume-*` PVCs beside the live renamed set, and deleted the renamed `<fullname>-s3` Service (only `seaweedfs-s3` remains — its endpoints may still resolve to the renamed set's pods because both sets carry identical labels, which is luck, not design: if the chart-named pods ever become Ready, the Service splits reads across a live set and an empty one).
 
-Verify the direction before touching anything — the chart-named PVCs must be the **newer** generation (compare `kubectl get pvc -o custom-columns=NAME:.metadata.name,CREATED:.metadata.creationTimestamp`), matching the `S-damaged` audit row. Then clear the empty chart-named set so Step 2 can re-bind onto those names:
+> **STOP if you are resuming an interrupted Step 2.** This step deletes every `data1-seaweedfs-volume-*` claim. If Step 2 already re-bound some of them, those claims hold your data and are bound to the original PVs — deleting them is the data-loss path this step used to be reachable through by misclassification. Finish Step 2 instead. The check below refuses in that case, but read the Step 1 classification first and be sure.
+
+Verify the direction before touching anything. The chart-named generation must be the **newer** one, judged on the **PV** ages (claims are recreated by Step 2's re-bind, so their timestamps prove nothing). The precondition below refuses unless every chart-named claim is bound to a PV strictly newer than every release-named PV:
 
 ```sh
+#!/usr/bin/env bash
+set -euo pipefail
 ns=<tenant>
 app=<seaweedfs-instance-name>
+
+# PRECONDITION. Every chart-named claim must be bound to a PV strictly newer than
+# every release-named PV. A chart-named claim sitting on an OLD PV means Step 2
+# already re-bound it: it holds data, and this step would delete it.
+pv_age() { kubectl get pv "$(kubectl -n "$ns" get pvc "$1" -o jsonpath='{.spec.volumeName}')" \
+             -o jsonpath='{.metadata.creationTimestamp}'; }
+newest_release_pv=""
+for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||' \
+               | grep -E '^data1-.*volume' | grep seaweedfs | grep -vE '^data1-seaweedfs-volume'); do
+  a=$(pv_age "$pvc"); [ "$a" \> "$newest_release_pv" ] && newest_release_pv="$a"
+done
+[ -n "$newest_release_pv" ] || { echo "REFUSING: no release-named volumes found; this is not an S-damaged tenant"; exit 1; }
+for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||' | grep -E '^data1-seaweedfs-volume'); do
+  a=$(pv_age "$pvc")
+  if [ ! "$a" \> "$newest_release_pv" ]; then
+    echo "REFUSING: $pvc is bound to a PV created $a, NOT newer than the newest release-named PV ($newest_release_pv)."
+    echo "That claim is not an empty duplicate — Step 2 has most likely already re-bound it. Finish Step 2; do not run this step."
+    exit 1
+  fi
+done
+echo "ok: every chart-named claim is bound to a strictly newer PV — safe to clear the duplicate"
+
 kubectl -n "$ns" patch helmrelease "${app}-system" --type merge -p '{"spec":{"suspend":true}}'
 # The chart-named workloads were created by the aborted upgrade and never held
 # data. Delete them so the re-bind can take over their names.
 kubectl -n "$ns" delete sts seaweedfs-master seaweedfs-filer --ignore-not-found
 kubectl -n "$ns" get sts -o name | sed 's|statefulset.apps/||' | grep -E '^seaweedfs-volume($|-)' \
   | xargs -r -I{} kubectl -n "$ns" delete sts {}
-# The EMPTY chart-named claims block Step 2's re-bind (same names). Double-check
-# each is the newer, never-served generation before deleting.
+# The EMPTY chart-named claims block Step 2's re-bind (same names).
 kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||' | grep -E '^data1-seaweedfs-volume' \
   | xargs -r -I{} kubectl -n "$ns" delete pvc {}
 ```
 
 Leave the HelmRelease suspended and continue with Step 2 (skip its suspend line; the renamed StatefulSets it scales down are the ones holding the data, exactly as in a plain `S` tenant). Do NOT scale down or delete anything named `*-system-*` before its volumes are re-bound.
 
-## Step 3 — `D-split` tenants: stop the split before upgrading
+## Step 3 — `MIXED` tenants: remove the duplicate before upgrading
 
-Do **not** upgrade first and do not delete the duplicate PVCs — they may hold objects written through the split endpoint.
+The chart refuses while both generations exist, so the duplicate must be **gone before** the upgrade, not cleaned up after it. Do not skip to Step 4: it cannot run until this is done.
 
-1. Take the live duplicate out of the `seaweedfs-s3` Service rotation so nothing else is written to it. Select the renamed set precisely — the pre-4.31 chart-named `seaweedfs-master/-filer/-volume[-<key>]` is the authoritative set and must keep serving:
+Do **not** start by deleting PVCs. If the duplicate ever served, they may hold objects written through the split endpoint.
+
+1. **Take the duplicate out of service** so nothing else is written to it. Select it precisely — the generation Step 1 named as ORIGINAL is authoritative and must keep serving. For the common case (chart-named original, release-named duplicate):
 
    ```sh
    ns=<tenant>
    kubectl -n "$ns" get sts -l app.kubernetes.io/name=seaweedfs -o name | sed 's|statefulset.apps/||' \
      | grep -vE '^seaweedfs-(master|filer|volume)($|-)' \
      | xargs -r -I{} kubectl -n "$ns" scale sts {} --replicas=0
-   # The renamed s3 Deployment is the one whose pod template is NOT the chart-named set;
-   # scale every seaweedfs s3 Deployment except the adopted `seaweedfs-s3`.
+   # The renamed s3 Deployment is the one that is NOT the chart-named `seaweedfs-s3`.
    kubectl -n "$ns" get deploy -l app.kubernetes.io/name=seaweedfs,app.kubernetes.io/component=s3 -o name \
      | sed 's|deployment.apps/||' | grep -v '^seaweedfs-s3$' \
      | xargs -r -I{} kubectl -n "$ns" scale deploy {} --replicas=0
    ```
 
-2. Confirm the legacy set (`seaweedfs-*`) is the authoritative one and is serving.
-3. Audit what the split wrote: enumerate filer entries whose fids resolve only on the duplicate volume servers (objects PUT while both sets were live). Export anything that must survive, then re-upload it through the authoritative endpoint.
-4. Only then upgrade, and clean up the duplicate as in Step 4.
+   If Step 1 named the **release-named** generation as original, this tenant is `S-damaged`: the duplicate is the chart-named set. Use **Step 2a** instead, then Step 2 — the selectors are inverted there.
+
+2. **Confirm the authoritative set is serving**, and that the duplicate is out of the `seaweedfs-s3` endpoints:
+
+   ```sh
+   kubectl -n "$ns" get endpoints seaweedfs-s3 -o yaml
+   ```
+
+3. **If the duplicate ever served, escalate.** Step 1's emptiness check is what decides this. Recovering objects that exist only on a duplicate is not a procedure this runbook can give you: both master sets allocate volume IDs from independent sequences into one shared `seaweedfs-db`, so a fid written through the split endpoint can collide with a fid on the authoritative set, and there is no supported tool that reconciles two volume-ID spaces against one metadata store. Do not improvise it. Involve someone who can plan a per-object export, and treat the tenant as an incident.
+
+4. **Delete the duplicate's StatefulSets, Deployments and PVCs.** Only once (3) is settled, and only for a duplicate confirmed empty (or whose contents have been exported):
+
+   ```sh
+   ns=<tenant>
+   # StatefulSets and Deployments of the duplicate generation.
+   kubectl -n "$ns" get sts -l app.kubernetes.io/name=seaweedfs -o name | sed 's|statefulset.apps/||' \
+     | grep -vE '^seaweedfs-(master|filer|volume)($|-)' \
+     | xargs -r -I{} kubectl -n "$ns" delete sts {}
+   kubectl -n "$ns" get deploy -l app.kubernetes.io/name=seaweedfs -o name | sed 's|deployment.apps/||' \
+     | grep -vE '^seaweedfs-(s3|objectstorage-provisioner)$' \
+     | xargs -r -I{} kubectl -n "$ns" delete deploy {}
+   # Duplicate volume PVCs, BY NAME. Never by label: the live data PVCs carry the
+   # same app.kubernetes.io/instance=<name>-system label and would match too.
+   kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||' | grep -E '^data1-.*volume' \
+     | grep seaweedfs | grep -vE '^data1-seaweedfs-volume' | xargs -r -I{} kubectl -n "$ns" delete pvc {}
+   ```
+
+   Never delete `data1-seaweedfs-volume-*` here — those are the live data PVCs of the authoritative set. (For an `S-damaged` tenant it is the other way round; that is Step 2a's job, and it has its own precondition check.)
+
+5. **Re-run the audit.** The tenant must now read `L` (or `S`, if you are on the Step 2 path). Only then upgrade.
+
+   ```sh
+   hack/seaweedfs-naming-audit.sh "$ns"
+   ```
 
 ## Step 4 — Upgrade, then clear the leftovers
 
-Upgrade the cluster to a Cozystack version carrying the fix. On reconcile the `seaweedfs-system` release renders the chart-based names, adopts the running workloads and their volumes, and drops the duplicate `seaweedfs-system-*` StatefulSets and Deployments (they are no longer part of the release).
+Every tenant must read `L` or `S` in the audit before you start: the chart refuses to render while both generations exist, so a `MIXED` tenant does not upgrade at all — Steps 2/2a/3 come first, not after. Once the fleet is clean, upgrade to a Cozystack version carrying the fix. On reconcile the `<name>-system` release renders the chart-based names and adopts the running workloads and their volumes in place.
 
-Helm does not delete PVCs it did not template, and cert-manager Secrets have no owner reference, so the duplicate's volumes and certificates survive the upgrade as inert leftovers. Remove them by hand once the tenant is verified healthy:
+A duplicate's StatefulSets and PVCs are removed in Step 3, before the upgrade. What can still be left behind afterwards are objects no release templated and nothing owns: cert-manager Secrets have no owner reference, and PVCs Helm never templated are never GC'd. Remove those once the tenant is verified healthy:
 
 ```sh
 ns=<tenant>
@@ -284,3 +340,16 @@ kubectl -n "$ns" get endpoints seaweedfs-s3
 ```
 
 A recovered tenant has a single `seaweedfs-*` set, all three HelmReleases `Ready`, no `seaweedfs-system-*` StatefulSets, and no `data1-seaweedfs-system-volume-*` PVCs left behind.
+
+Only once that is true, restore the reclaim policy Step 2 stashed on each PV. Until this runs the volumes are `Retain`, which is deliberate: it is what makes an accidental claim deletion during recovery survivable.
+
+```sh
+ns=<tenant>
+for pvc in $(kubectl -n "$ns" get pvc -o name | sed 's|persistentvolumeclaim/||' | grep -E '^data1-seaweedfs-volume'); do
+  pv=$(kubectl -n "$ns" get pvc "$pvc" -o jsonpath='{.spec.volumeName}')
+  orig=$(kubectl get pv "$pv" -o jsonpath='{.metadata.annotations.cozystack\.io/original-reclaim-policy}')
+  [ -n "$orig" ] || continue
+  kubectl patch pv "$pv" -p "{\"spec\":{\"persistentVolumeReclaimPolicy\":\"${orig}\"}}"
+  kubectl annotate pv "$pv" cozystack.io/original-reclaim-policy-
+done
+```

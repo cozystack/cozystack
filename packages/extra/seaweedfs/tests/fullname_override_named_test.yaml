@@ -97,7 +97,7 @@ tests:
       - failedTemplate:
           errorPattern: "SeaweedFS archive in namespace tenant-root keeps its data on volumes named after the Helm release"
 
-  - it: refuses with class S when the renamed volumes are older than the chart-named ones
+  - it: refuses when both generations exist (was S-damaged)
     set: *values
     kubernetesProvider:
       scheme: *scheme
@@ -129,33 +129,39 @@ tests:
             readyReplicas: "1"
     asserts:
       - failedTemplate:
-          errorPattern: "never as D-split.*Step 2a"
+          errorPattern: "has BOTH naming generations present"
 
   - it: catches a long instance name whose renamed workloads the chart truncated
+    # Instance `archive-of-quarterly-financial-statements-x1` -> child release
+    # archive-of-quarterly-financial-statements-x1-system -> the fullname gains
+    # `-seaweedfs` (the release name does not contain it) and is 61 chars, so
+    # componentName cuts it to 56 before appending `-volume`: the chart name is gone
+    # from the tail and both the workload and its claims read
+    # ...-x1-system-seaw-volume. A `contains "seaweedfs"` name filter cannot see
+    # either of them; the reconstructed prefix matches both exactly.
+    release:
+      name: archive-of-quarterly-financial-statements-x1
+      namespace: tenant-root
     set: *values
     kubernetesProvider:
       scheme: *scheme
       objects:
         - *ns
-        # 4.31 truncates <fullname> to 56 chars before appending -volume, so a long
-        # name loses the chart name from its tail and the PVC name alone no longer
-        # identifies it. The StatefulSet still carries the chart labels, so the
-        # guard sees it there.
         - kind: StatefulSet
           apiVersion: apps/v1
           metadata:
-            name: archive-system-a-very-long-instance-name-that-gets-trunca-volume
+            name: archive-of-quarterly-financial-statements-x1-system-seaw-volume
             namespace: tenant-root
             labels:
               app.kubernetes.io/name: seaweedfs
         - kind: PersistentVolumeClaim
           apiVersion: v1
           metadata:
-            name: unrelated-app-data-0
+            name: data1-archive-of-quarterly-financial-statements-x1-system-seaw-volume-0
             namespace: tenant-root
     asserts:
       - failedTemplate:
-          errorPattern: "runs release-named workloads.*Re-bind"
+          errorPattern: "keeps its data on volumes named after the Helm release"
 
   - it: ignores an unrelated data1-*-volume-* PVC belonging to another app
     set: *values
