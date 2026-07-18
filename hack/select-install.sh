@@ -24,7 +24,7 @@
 # --validate: check the whole graph AND the suite mapping — every dependsOn
 #   target resolves to a real PackageSource, there are no dependency cycles, and
 #   every Chainsaw suite under <suites-dir> resolves via suite_to_source() to a
-#   real PackageSource or to "-". Exit non-zero on any failure. The graph lives
+#   real PackageSource. Exit non-zero on any failure. The graph lives
 #   next to the packages and cannot drift from the suite directories; the
 #   hand-maintained suite mapping is the only part that can, so it is guarded here.
 #
@@ -59,11 +59,6 @@ fi
 
 # suite name -> owning PackageSource. Prints:
 #   - a "cozystack.*" name         the suite's primary install target
-#   - "-"                          the suite targets a core-platform feature that
-#                                  has no separately-enabled package (always
-#                                  present via the base install), e.g.
-#                                  serviceexposure (ExposureClass/ServiceExposure
-#                                  live in packages/core/platform)
 #   - nothing                      no mapping is known (caller fails closed)
 # Most suites follow the <suite>-application convention; a bare-<suite> fallback
 # and the explicit cases cover suites whose source is named differently. Kept in
@@ -82,7 +77,6 @@ suite_to_source() {
       echo cozystack.kubernetes-application ; return ;;
     vminstance) echo cozystack.vm-instance-application ; return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
-    serviceexposure) echo - ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
     if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi
@@ -149,8 +143,8 @@ if [ "$MODE" = "validate" ]; then
     done
   done
 
-  # 3. Suite mapping: every Chainsaw suite dir must resolve to a real source or
-  #    "-". The suite universe is auto-discovered while suite_to_source() is
+  # 3. Suite mapping: every Chainsaw suite dir must resolve to a real source.
+  #    The suite universe is auto-discovered while suite_to_source() is
   #    hand-maintained, so this is the part that actually drifts. A missing
   #    suites dir is itself a failure — otherwise a moved/misspelled path would
   #    make discovery yield nothing and silently pass this whole check.
@@ -163,7 +157,7 @@ if [ "$MODE" = "validate" ]; then
       if [ -z "$src" ]; then
         echo "select-install: suite '$suite' has no PackageSource mapping (add it to suite_to_source)" >&2
         rc=1
-      elif [ "$src" != "-" ] && ! echo "$NODES" | grep -Fxq "$src"; then
+      elif ! echo "$NODES" | grep -Fxq "$src"; then
         echo "select-install: suite '$suite' maps to '$src', not a PackageSource in $SOURCES_DIR" >&2
         rc=1
       fi
@@ -181,7 +175,6 @@ for suite in $SUITES; do
   [ -z "$suite" ] && continue
   src="$(suite_to_source "$suite")"
   case "$src" in
-    "-") continue ;;  # core-platform feature — nothing separate to enable
     "")
       # Fail closed: a suite that maps to nothing must abort, not silently emit
       # an empty set. Collect every bad suite so one run reports them all.

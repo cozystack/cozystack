@@ -101,14 +101,6 @@
     echo "$output" | grep -wq cozystack.gateway-api-crds
 }
 
-@test "core-platform suite contributes no package and emits no warning" {
-    # serviceexposure is a core-platform CRD; nothing to enable, no warning.
-    err=$(hack/select-install.sh "serviceexposure" 2>&1 1>/dev/null)
-    [ -z "$err" ]
-    output=$(hack/select-install.sh "serviceexposure" 2>/dev/null)
-    [ -z "$output" ]
-}
-
 @test "validate passes on the real source graph and suite mapping" {
     hack/select-install.sh --validate
 }
@@ -178,6 +170,31 @@ YAML
         echo "expected validation to fail on an unmapped suite dir" >&2
         exit 1
     fi
+}
+
+@test "validate detects a suite mapped to a source absent from the graph" {
+    # suite_to_source() hardcodes securitygroup -> cozystack.securitygroup-controller;
+    # a sources dir without that PackageSource must fail validation (fail closed),
+    # pinning that the elif validates every mapping, including hardcoded ones,
+    # against the graph.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    mkdir -p "$tmp/sources" "$tmp/suites/securitygroup"
+    : > "$tmp/suites/securitygroup/chainsaw-test.yaml"
+    cat > "$tmp/sources/standalone.yaml" <<'YAML'
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.standalone
+spec:
+  variants:
+    - name: default
+YAML
+    err=$(hack/select-install.sh --validate "$tmp/sources" "$tmp/suites" 2>&1 1>/dev/null) && {
+        echo "expected validation to fail on a mapping to a missing source" >&2
+        exit 1
+    }
+    echo "$err" | grep -q "maps to 'cozystack.securitygroup-controller', not a PackageSource"
 }
 
 @test "validate fails when the suites dir does not exist" {
