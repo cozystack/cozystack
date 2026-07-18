@@ -11,8 +11,18 @@ stringData:
     set -e
     set -o pipefail
 
+    {{- /*
+      The backup image is alpine + mariadb-client, so these options are parsed
+      by the MariaDB client, which implements no ssl-mode option and rejects it
+      at argument parsing time before connecting. --ssl-ca combined with
+      --ssl-verify-server-cert is the MariaDB equivalent of MySQL's strictest
+      mode: it validates the chain against the CA and checks the server
+      hostname against the certificate SANs. Keep this rationale in a template
+      comment rather than a shell comment so the MySQL-only option name never
+      appears in the rendered script.
+    */}}
     {{- if $tlsEnabled }}
-    SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-mode=VERIFY_IDENTITY"
+    SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-verify-server-cert"
     {{- else }}
     SSL_OPTS=""
     {{- end }}
