@@ -108,8 +108,9 @@ version: v2
 ##   Secret. Transport mTLS stays operator-managed and independent.
 ##   REQUIRES OpenSearch 2.0.0 or later (version v2 or v3). Below that the operator
 ##   signs the admin certificate with the transport CA rather than this one, so
-##   securityadmin cannot authenticate; the chart refuses to render in that case.
-##   Use tls.enabled: false for operator-managed HTTP TLS on older versions.
+##   securityadmin cannot authenticate. Setting enabled: true on such a version
+##   fails the release; leaving it unset falls back to operator-managed HTTP TLS
+##   instead, so an external release on an older version keeps working.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
