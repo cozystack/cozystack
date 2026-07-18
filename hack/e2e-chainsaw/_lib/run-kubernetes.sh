@@ -214,8 +214,22 @@ _tenant_snapshot_on_fail() {
   echo "» capturing tenant crust-gather snapshot (${CURRENT_TENANT_KC}) before teardown"
   # Bounded with a timeout for the same reason as the host snapshot in
   # cozytest.sh: an unbounded collect can hang for hours and wedge the job.
-  # (timeout's own -k 30 / 300 are distinct from crust-gather's -k kubeconfig.)
-  timeout -k 30 300 crust-gather collect -k "${CURRENT_TENANT_KC}" --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" >/dev/null 2>&1 || true
+  # --duration is crust-gather's own collection budget (default 60s, which
+  # silently truncates and skips its finish step on elapse); the outer
+  # wall-clock has to exceed it because the API discovery that runs first is
+  # not covered by that budget at all.
+  # (timeout's own -k 30 / 360 are distinct from crust-gather's -k kubeconfig.)
+  # Output goes to a log beside the snapshot instead of /dev/null so "complete
+  # or truncated?" is answerable from the artifact, as for the host snapshot.
+  _cg_rc=0
+  timeout -k 30 360 crust-gather collect -k "${CURRENT_TENANT_KC}" --duration 180s \
+    --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" \
+    >"$_snap/crust-gather-${CURRENT_TENANT_KC}.log" 2>&1 || _cg_rc=$?
+  case "$_cg_rc" in
+    0) echo "» tenant crust-gather snapshot complete (${CURRENT_TENANT_KC})" ;;
+    124 | 137) echo "» tenant crust-gather snapshot TRUNCATED (wall-clock $_cg_rc); partial state kept, see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
+    *) echo "» tenant crust-gather snapshot FAILED (exit $_cg_rc); see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
+  esac
 }
 
 run_kubernetes_test() {
