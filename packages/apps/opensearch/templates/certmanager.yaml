@@ -33,6 +33,28 @@ or fewer. Fail fast with a clear message rather than producing invalid object na
 {{- if gt (len .Release.Name) 47 -}}
 {{- fail (printf "Release name %q is %d chars; opensearch TLS requires <=47 chars so cert-manager resource names fit in the 63-char Kubernetes limit (longest suffix: -http-selfsigned)." .Release.Name (len .Release.Name)) -}}
 {{- end -}}
+{{- /*
+VERSION GUARD: chart-managed HTTP TLS requires OpenSearch >= 2.0.0.
+
+The operator picks the CA that signs the admin certificate by version:
+adminCAName() returns spec.security.tls.http.caSecret only when the cluster
+version satisfies >=2.0.0, and spec.security.tls.transport.caSecret below that.
+This chart leaves the transport CA operator-generated, so on a <2.0.0 cluster
+that field is empty, adminCAProvided() is false, and the operator signs the
+admin certificate with its own transport CA — while the HTTP listener still
+trusts the cert-manager CA mounted from http.caSecret. The two anchors never
+meet, so securityadmin cannot authenticate and the security configuration
+(users, roles, audit policies) silently never applies.
+
+The comparison mirrors the operator's own constraint against the resolved image
+tag rather than the version enum, so it stays correct if the mapping changes.
+Fail loudly instead of shipping a cluster whose security config does not apply;
+set tls.enabled: false to use operator-managed HTTP TLS on these versions.
+*/}}
+{{- $resolvedVersion := include "opensearch.versionMap" $ -}}
+{{- if semverCompare "<2.0.0" $resolvedVersion -}}
+{{- fail (printf "opensearch %s (version: %s) does not support chart-managed HTTP TLS: the operator signs the securityadmin admin certificate with the transport CA below 2.0.0, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later." $resolvedVersion (.Values.version | default "v2")) -}}
+{{- end -}}
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 ---
 # Self-signed bootstrap Issuer — used only to sign the HTTP CA Certificate below.
