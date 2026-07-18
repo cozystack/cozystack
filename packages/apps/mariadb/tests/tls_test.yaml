@@ -688,7 +688,10 @@ tests:
           path: spec.dnsNames
           content: "my-mariadb-secondary.tenant-test"
 
-  - it: "leaf cert SAN list contains wildcard short-form *.<name>-internal entry"
+  # The headless wildcard must cover the same four resolution depths as every
+  # named service. A client resolving the 3-label form (low ndots, or a search
+  # domain) presents that name at handshake time, so a gap fails verification.
+  - it: "leaf cert SAN list covers all four depths of the headless wildcard"
     templates:
       - templates/certmanager.yaml
     set:
@@ -698,6 +701,28 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "*.my-mariadb-internal"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
+
+  # external=true requires a hostname for the LoadBalancer SAN. Without the
+  # guard the template dereferences nil and dies with a raw Go pointer error
+  # that says nothing about which value is missing.
+  - it: "external=true without _namespace.host fails with an actionable message"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      _namespace: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"
 
   # -------------------------------------------------------------------
   # ECDSA: CA and leaf use ECDSA P-256
@@ -916,6 +941,22 @@ tests:
   # fallback pointing at the upstream Kubernetes default instead of the
   # Cozystack one would silently produce certificates that fail verification.
   # -------------------------------------------------------------------
+  # The fallback must also survive _cluster being absent entirely, not just the
+  # key being blank — otherwise `index` errors before the default is reached
+  # and the fallback is dead code.
+  - it: "leaf certificate SANs fall back to cozy.local when _cluster is null"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        enabled: true
+      _cluster: null
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cozy.local"
+
   - it: "leaf certificate SANs fall back to cozy.local when cluster-domain is unset"
     templates:
       - templates/certmanager.yaml
