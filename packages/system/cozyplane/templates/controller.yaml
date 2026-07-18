@@ -79,12 +79,17 @@ rules:
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["servicevips/status"]
     verbs: ["get", "update", "patch"]
+  # Services: read for ServiceVIP backend resolution; write for the FloatingIP's
+  # owned LoadBalancer Service (its allocation+attraction vehicle, external-addresses.md).
   - apiGroups: [""]
     resources: ["services"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # EndpointSlices: read for ServiceVIP backend resolution; write for the one
+  # cozyplane synthesizes to make the LB implementation advertise a FloatingIP's
+  # address (MetalLB advertises only a Service with a ready endpoint).
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # VirtualMachineInstances: the migration controller reads status.nodeName /
   # status.migrationState as the cutover signal (the Kube-OVN model). Optional —
   # only present when KubeVirt is installed; the controller degrades to the
@@ -92,7 +97,7 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachineinstances"]
     verbs: ["get", "list", "watch"]
-  # Egress gateway Deployments (spec.egress.natGateway -> per-VPC gateway pod).
+  # Gateway Deployments for a pool-less VPCGateway (a pooled one is pure eBPF).
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
