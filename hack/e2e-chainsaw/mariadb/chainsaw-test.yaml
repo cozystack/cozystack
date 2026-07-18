@@ -1,0 +1,203 @@
+# Chainsaw port of hack/e2e-apps/mariadb.bats
+# ("Create DB MariaDB" + "Create single-replica MariaDB").
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mariadb
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mariadb-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=mariadb-test
+      tail: 50
+  steps:
+  - name: create-mariadb
+    try:
+    - apply:
+        file: mariadb.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mariadb-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-service-and-statefulset
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-test
+          spec:
+            (ports[0].port): 3306
+    # The chart hands the operator a MariaDB CR and ships no built-in workload,
+    # so the HelmRelease above goes Ready as soon as helm applies the manifests
+    # -- it never waits for a pod. This assert is the first gate that does: an
+    # endpoint address appears only once a replica has passed its startup and
+    # then its readiness probe. The startup probe grants each replica 310s of
+    # first-boot budget (see packages/apps/mariadb/templates/mariadb.yaml for
+    # why), so a ceiling under that would fail runs the probe was still willing
+    # to wait for. One ready address satisfies this assert, so it has to clear
+    # one budget, not two, plus the operator reconcile, PVC bind and image pull
+    # that precede it. 10m leaves room for all of that.
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-test
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: mariadb-test
+          status:
+            replicas: 2
+
+  - name: verify-metrics
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-test-metrics
+          spec:
+            (ports[0].port): 9104
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-test-metrics
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mariadb-test-metrics
+          status:
+            replicas: 1
+---
+# Guard for the operator-webhook regression fixed in c7e8f4d97: replication is
+# guarded on replicas>1, so replicas=1 must render a CR the mariadb-operator's
+# validating webhook admits. With one replica the operator provisions the bare
+# <name> Service (no -primary/-secondary split).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: mariadb-single
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mariadb-single
+  # The rendered operator CR makes a webhook rejection (the regression this
+  # guards against) legible in the log.
+  - describe:
+      apiVersion: k8s.mariadb.com/v1alpha1
+      kind: MariaDB
+      name: mariadb-single
+  - podLogs:
+      selector: app.kubernetes.io/instance=mariadb-single
+      tail: 50
+  steps:
+  - name: create-mariadb-single
+    try:
+    - apply:
+        file: mariadb-single.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mariadb-single
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-service-and-statefulset
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-single
+          spec:
+            (ports[0].port): 3306
+    # Same gate as the replicated case above -- the HelmRelease does not wait
+    # for a pod, so this is where first boot is actually covered. One replica
+    # means one 310s startup budget, plus the operator reconcile, PVC bind and
+    # image pull ahead of it.
+    - assert:
+        timeout: 10m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-single
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: mariadb-single
+          status:
+            replicas: 1
+
+  - name: verify-metrics
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: mariadb-single-metrics
+          spec:
+            (ports[0].port): 9104
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: v1
+          kind: Endpoints
+          metadata:
+            name: mariadb-single-metrics
+          (subsets[0].addresses[0].ip != null): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: mariadb-single-metrics
+          status:
+            replicas: 1
