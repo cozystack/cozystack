@@ -1,0 +1,52 @@
+suite: MariaDB startup probe budget
+
+# Regression cover for the widened startup budget. The rationale lives with
+# the field itself, in templates/mariadb.yaml.
+
+templates:
+  - templates/mariadb.yaml
+
+tests:
+  - it: widens the startup probe budget for a single-replica instance
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      replicas: 1
+    asserts:
+      - equal:
+          path: spec.startupProbe.failureThreshold
+          value: 30
+
+  - it: widens the startup probe budget for a replicated instance
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      replicas: 2
+    asserts:
+      - equal:
+          path: spec.startupProbe.failureThreshold
+          value: 30
+
+  - it: leaves liveness and readiness probes to the operator defaults
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: spec.livenessProbe
+      - notExists:
+          path: spec.readinessProbe
+
+  - it: overrides only thresholds so the operator keeps its own probe handler
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - notExists:
+          path: spec.startupProbe.exec
+      - notExists:
+          path: spec.startupProbe.httpGet
+      - notExists:
+          path: spec.startupProbe.tcpSocket

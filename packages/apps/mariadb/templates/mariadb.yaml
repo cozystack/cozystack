@@ -12,6 +12,28 @@ spec:
 
   port: 3306
 
+  # The operator leaves failureThreshold unset on the startup probe, so it
+  # defaults to 3. The kubelet only begins probing once initialDelaySeconds has
+  # elapsed and kills the container on the Nth consecutive failure, so the
+  # budget is initialDelay + (failureThreshold - 1) * period, here just 40s --
+  # the same budget as the liveness probe the startup probe exists to defer.
+  # A fresh datadir bootstrap (mysql_install_db, then the entrypoint's
+  # temporary server applying the root password) does not reliably finish
+  # inside that budget under a constrained CPU limit or slow replicated
+  # storage. Overrunning it is not merely a slow start: the kubelet kills the
+  # container mid-bootstrap, leaving a datadir that already has the mysql
+  # system tables but never received the root grant. On restart the entrypoint
+  # keys DATABASE_ALREADY_EXISTS off that directory, skips initialization for
+  # good, and the server comes up with the install-time root account -- local
+  # only and passwordless -- instead of the credentials the operator holds. So
+  # every later probe fails with "Access denied for user 'root'" and the pod
+  # crash-loops permanently with no path back. A threshold of 30 lifts the
+  # budget to 310s. Widen only the startup budget; the liveness and readiness
+  # probes keep the operator defaults, so a server that hangs after a
+  # successful start is still caught as quickly as before.
+  startupProbe:
+    failureThreshold: 30
+
   replicas: {{ .Values.replicas }}
   replicasAllowEvenNumber: true
   affinity:
