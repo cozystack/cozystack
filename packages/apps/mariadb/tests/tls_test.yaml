@@ -363,9 +363,15 @@ tests:
           value: "720h"
 
   # -------------------------------------------------------------------
-  # NB6: dashboard-resourcemap.yaml tri-state behavior
+  # NB6: dashboard-resourcemap.yaml exposure is TLS-state independent.
+  #
+  # The tenant grant used to follow the tri-state and hand out the
+  # cert-manager Secrets whenever TLS was on. Those Secrets carry private
+  # keys, so the grant is now a flat invariant instead: no TLS state may put
+  # them in the Role. All four tri-state combinations are checked so a
+  # regression cannot hide in the branch that happens to enable TLS.
   # -------------------------------------------------------------------
-  - it: "RBAC does not include TLS secrets when external=false and tls.enabled unset"
+  - it: "RBAC excludes TLS secrets when external=false and tls.enabled unset"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -379,21 +385,21 @@ tests:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
-  - it: "RBAC includes TLS secrets when external=true and tls.enabled unset"
+  - it: "RBAC excludes TLS secrets when external=true and tls.enabled unset"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
       external: true
     documentIndex: 0
     asserts:
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-tls
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
-  - it: "RBAC does not include TLS secrets when tls.enabled=false even if external=true"
+  - it: "RBAC excludes TLS secrets when tls.enabled=false even if external=true"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -409,7 +415,7 @@ tests:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
-  - it: "RBAC includes TLS secrets when tls.enabled=true even if external=false"
+  - it: "RBAC excludes TLS secrets when tls.enabled=true even if external=false"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -418,10 +424,10 @@ tests:
         enabled: true
     documentIndex: 0
     asserts:
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-tls
-      - contains:
+      - notContains:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
@@ -492,9 +498,11 @@ tests:
           content: crl sign
 
   # -------------------------------------------------------------------
-  # NB7: TLS secret names are consistent between cert-manager and RBAC
+  # NB7: cert-manager Secret names are pinned. They are referenced by the
+  # operator (serverCASecretRef / serverCertSecretRef) and by the backup
+  # CronJob volume, so a rename must break loudly here rather than at runtime.
   # -------------------------------------------------------------------
-  - it: "leaf cert secretName matches RBAC resourceNames entry for TLS secret"
+  - it: "leaf cert secretName is pinned"
     templates:
       - templates/certmanager.yaml
     set:
@@ -506,7 +514,7 @@ tests:
           path: spec.secretName
           value: my-mariadb-tls
 
-  - it: "CA cert secretName matches RBAC resourceNames entry for CA TLS secret"
+  - it: "CA cert secretName is pinned"
     templates:
       - templates/certmanager.yaml
     set:
@@ -517,30 +525,6 @@ tests:
       - equal:
           path: spec.secretName
           value: my-mariadb-ca-tls
-
-  - it: "RBAC resourceNames contains my-mariadb-tls matching leaf cert secretName"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      tls:
-        enabled: true
-    documentIndex: 0
-    asserts:
-      - contains:
-          path: rules[1].resourceNames
-          content: my-mariadb-tls
-
-  - it: "RBAC resourceNames contains my-mariadb-ca-tls matching CA cert secretName"
-    templates:
-      - templates/dashboard-resourcemap.yaml
-    set:
-      tls:
-        enabled: true
-    documentIndex: 0
-    asserts:
-      - contains:
-          path: rules[1].resourceNames
-          content: my-mariadb-ca-tls
 
   # -------------------------------------------------------------------
   # tls.required default and user override
@@ -849,6 +833,80 @@ tests:
           path: spec.jobTemplate.spec.template.spec.volumes
           content:
             name: tls-ca
+
+  # -------------------------------------------------------------------
+  # CA publication contract. The chart owns the cert-manager chain, so it
+  # labels the CA Secret itself. The labels mark the key-bearing CA Secret as
+  # the source for a key-free projection published to the tenant; the tenant
+  # never reads this Secret directly. Only the CA carries the labels — the
+  # leaf Secret holds the server private key and must never be published.
+  # -------------------------------------------------------------------
+  - it: "CA Certificate labels its Secret for CA publication when TLS is enabled"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 1
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.isCA
+          value: true
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+          value: "true"
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+          value: my-mariadb
+
+  - it: "leaf Certificate is never labelled for CA publication"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.isCA
+          value: false
+      - notExists:
+          path: spec.secretTemplate
+
+  # The publication labels are rendered inside the TLS gate, so with TLS off
+  # the chain does not exist at all and nothing is marked for publication.
+  - it: "no CA publication labels are rendered when TLS is disabled"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # -------------------------------------------------------------------
+  # Tenant exposure. The dashboard Role is the tenant-facing grant, so the
+  # key-bearing cert-manager Secrets must not appear in it under any TLS
+  # state. The tenant gets the key-free projection instead.
+  # -------------------------------------------------------------------
+  - it: "dashboard Role never grants access to the key-bearing TLS Secrets"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    documentIndex: 0
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-credentials
 
   # -------------------------------------------------------------------
   # Cluster-domain fallback. The platform injects _cluster.cluster-domain
