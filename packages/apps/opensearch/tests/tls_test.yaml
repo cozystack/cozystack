@@ -38,6 +38,39 @@ tests:
       - failedTemplate:
           errorMessage: "Release name \"os-test-name-that-is-definitely-too-long-xxxxxxx\" is 48 chars; opensearch TLS requires <=47 chars so cert-manager resource names fit in the 63-char Kubernetes limit (longest suffix: -http-selfsigned)."
 
+  # Version guard: below OpenSearch 2.0.0 the operator signs the admin certificate
+  # with the transport CA instead of http.caSecret, so securityadmin cannot verify
+  # against the cert-manager HTTP CA and the security config silently never applies.
+  - it: fails when chart-managed HTTP TLS is requested on a version below 2.0.0
+    set:
+      version: v1
+      tls:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "opensearch 1.3.20 (version: v1) does not support chart-managed HTTP TLS: the operator signs the securityadmin admin certificate with the transport CA below 2.0.0, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later."
+
+  - it: allows version v1 when chart-managed HTTP TLS is off
+    set:
+      version: v1
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: allows chart-managed HTTP TLS on v3, which is at or above 2.0.0
+    set:
+      version: v3
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
   - it: "(a) renders no resources when external false and tls.enabled unset"
     asserts:
       - hasDocuments:

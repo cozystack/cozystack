@@ -106,6 +106,10 @@ version: v2
 ##   it. The securityadmin job then verifies the HTTP server certificate and applies the
 ##   security configuration (users, roles, audit policies) from the <release>-security-config
 ##   Secret. Transport mTLS stays operator-managed and independent.
+##   REQUIRES OpenSearch 2.0.0 or later (version v2 or v3). Below that the operator
+##   signs the admin certificate with the transport CA rather than this one, so
+##   securityadmin cannot authenticate; the chart refuses to render in that case.
+##   Use tls.enabled: false for operator-managed HTTP TLS on older versions.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
