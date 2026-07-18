@@ -65,6 +65,36 @@ restic -r s3:s3.example.org/mariadb-backups/database_name restore latest --targe
 more details:
 - https://blog.aenix.io/restic-effective-backup-from-stdin-4bc1e8f083c1
 
+### How to connect over TLS
+
+TLS is enabled automatically when `external` is `true`, and can be turned on independently by setting `tls.enabled: true`. Whenever TLS is enabled, `tls.required` defaults to `true`, which sets `require_secure_transport=ON` on the server: plaintext connections are refused.
+
+Certificates are issued by a per-instance CA managed by cert-manager. The server certificate covers the instance services (`<instance>`, `<instance>-primary`, `<instance>-secondary`), the headless service used for per-pod routing, `localhost`, and — when `external` is `true` — the external hostname.
+
+Connect with the MariaDB client by supplying the CA and asking for full verification:
+
+```bash
+mysql -h <instance> -u <user> -p<password> --ssl-ca=/path/to/ca.crt --ssl-verify-server-cert
+```
+
+`--ssl-ca` alone establishes trust but leaves the hostname unchecked; `--ssl-verify-server-cert` is what validates the server name against the certificate. Note that these are MariaDB client options. The MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client does not accept.
+
+> Distribution of the CA certificate to the tenant is handled by the platform and is not yet available. Until it lands, clients inside the cluster that cannot obtain `ca.crt` have to either skip verification or run with `tls.required: false`.
+
+#### Migrating an existing instance
+
+Enabling TLS on an instance that already has clients is a breaking change: with `tls.required: true` every plaintext client stops connecting as soon as the change is applied. This affects existing instances with `external: true`, because they gain TLS enforcement automatically.
+
+To migrate without downtime, enable TLS but keep plaintext working while clients are updated:
+
+```yaml
+tls:
+  enabled: true
+  required: false
+```
+
+Move clients over to TLS one at a time, then drop `required: false` to enforce it.
+
 ### Known issues
 
 - **Replication can't be finished with various errors**
@@ -80,6 +110,8 @@ more details:
   mysqldump -h <slave> -P 3306 -u<user> -p<password> --column-statistics=0 <database> <table> ~/tmp/fix-table.sql
   mysql -h <master> -P 3306 -u<user> -p<password> <database> < ~/tmp/fix-table.sql
   ```
+
+  When TLS is enabled the server refuses plaintext connections, so add `--ssl-ca=/path/to/ca.crt --ssl-verify-server-cert` to both commands.
 
 ## Parameters
 
