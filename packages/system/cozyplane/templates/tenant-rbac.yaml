@@ -8,8 +8,8 @@
 # R2 ("a tenant enumerates nothing it does not own") is satisfied STRUCTURALLY, not
 # by vigilance: these roles list only NAMESPACED kinds, and a RoleBinding cannot
 # grant access to a cluster-scoped resource. So a tenant bound to these in its own
-# namespace *cannot* be given `list ports`, `list servicevips`, `list externalpools`
-# or `list hostfirewalls` — not by accident, not by a later careless edit here.
+# namespace *cannot* be given `list ports`, `list servicevips` or
+# `list hostfirewalls` — not by accident, not by a later careless edit here.
 # Those are cluster-scoped precisely because allocation needs a global keyspace, and
 # that allocation detail must never become a tenant-visible surface: one `list ports`
 # would hand over every other tenant's pods, addresses, MACs and node placement.

@@ -44,8 +44,8 @@ rules:
     resources: ["nodes"]
     verbs: ["get", "list", "watch"]
   # VPCGateways: a VPC's north-south boundary (docs/north-south.md). The
-  # controller owns their status (VPC/pool resolution, one-per-VPC) and reads
-  # them to decide whether to realize the gateway pod.
+  # controller owns their status (VPC resolution, one-per-VPC, NAT identity from
+  # owned Services) and reads them to decide whether to realize the gateway pod.
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpcgateways"]
     verbs: ["get", "list", "watch"]
@@ -60,17 +60,14 @@ rules:
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["vpcpeerings/status"]
     verbs: ["get", "update", "patch"]
-  # FloatingIPs: allocate an address from a pool and gate readiness on a live
-  # target Port (needs ExternalPools + Ports read, already granted above).
+  # FloatingIPs: own the delegated LoadBalancer Service that sources the address
+  # and gate readiness on a live target Port (docs/external-addresses.md).
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["floatingips"]
     verbs: ["get", "list", "watch"]
   - apiGroups: ["sdn.cozystack.io"]
     resources: ["floatingips/status"]
     verbs: ["get", "update", "patch"]
-  - apiGroups: ["sdn.cozystack.io"]
-    resources: ["externalpools"]
-    verbs: ["get", "list", "watch"]
   # ServiceVIPs: materialize one per attached Service, allocate the VIP,
   # resolve backends from Services/EndpointSlices (services-in-vpc.md).
   - apiGroups: ["sdn.cozystack.io"]
@@ -97,7 +94,8 @@ rules:
   - apiGroups: ["kubevirt.io"]
     resources: ["virtualmachineinstances"]
     verbs: ["get", "list", "watch"]
-  # Gateway Deployments for a pool-less VPCGateway (a pooled one is pure eBPF).
+  # Gateway Deployments for a VPCGateway family with no eBPF identity yet
+  # (one with addresses for every family is pure eBPF — docs/north-south.md §6a).
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch", "create", "update", "delete"]
