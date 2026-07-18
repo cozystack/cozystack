@@ -75,6 +75,15 @@ metadata:
   name: {{ .Release.Name }}-http-ca
 spec:
   secretName: {{ .Release.Name }}-http-ca
+  # Publish this CA to the tenant. The CA-extraction controller lifts ca.crt alone
+  # into the key-free <release>.tenant-ca Secret, so a tenant can verify the HTTPS
+  # endpoint without gaining access to the CA private key stored here under tls.key.
+  # The release label is required on this leg: cert-manager issues the Secret, so it
+  # carries neither an OwnerReference nor Helm metadata to attribute it by.
+  secretTemplate:
+    labels:
+      internal.cozystack.io/publish-ca-cert: "true"
+      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name | quote }}
   duration: 87600h  # 10 years
   isCA: true
   commonName: {{ .Release.Name }}-http-ca

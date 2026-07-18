@@ -71,6 +71,43 @@ tests:
       - hasDocuments:
           count: 4
 
+  # CA publication (label-driven leg). The CA-extraction controller selects the source
+  # by these labels and projects ca.crt alone into the key-free <release>.tenant-ca
+  # Secret. The release label is required because a cert-manager-issued Secret carries
+  # no OwnerReference and no Helm metadata to attribute it by.
+  - it: labels the HTTP CA secret for publication to the tenant
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+          value: "true"
+        documentIndex: 1
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+          value: os-test
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: os-test-http-ca
+        documentIndex: 1
+
+  # Only the CA may be published. The leaf carries the HTTPS server private key, so
+  # labelling it would hand that key to the extraction controller as a CA source.
+  - it: does not label the leaf server certificate for publication
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: os-test-http-cert
+        documentIndex: 3
+      - notExists:
+          path: spec.secretTemplate
+        documentIndex: 3
+
   - it: "(a) renders no resources when external false and tls.enabled unset"
     asserts:
       - hasDocuments:
