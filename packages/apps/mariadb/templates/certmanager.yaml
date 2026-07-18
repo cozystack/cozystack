@@ -1,6 +1,7 @@
 {{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
 {{- if $tlsEnabled }}
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- /* default (dict) keeps `index` from erroring when _cluster is absent or null, which is what makes the cozy.local fallback below actually reachable. */}}
+{{- $clusterDomain := (index (default (dict) .Values._cluster) "cluster-domain") | default "cozy.local" }}
 ---
 # Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
 apiVersion: cert-manager.io/v1
@@ -76,7 +77,12 @@ spec:
     {{- $ns := .Release.Namespace }}
     {{- $name := .Release.Name }}
     - localhost
+    # All four resolution depths are listed for the headless wildcard, matching
+    # the per-service names below: a client with a low ndots setting, or one
+    # using a search-domain suffix, presents the shortened form during
+    # verification, and an absent SAN fails the handshake.
     - {{ printf "*.%s-internal" $name | quote }}
+    - {{ printf "*.%s-internal.%s" $name $ns | quote }}
     - {{ printf "*.%s-internal.%s.svc" $name $ns | quote }}
     - {{ printf "*.%s-internal.%s.svc.%s" $name $ns $clusterDomain | quote }}
     {{- range $svc := list $name (printf "%s-primary" $name) (printf "%s-secondary" $name) }}
@@ -86,7 +92,9 @@ spec:
     - {{ $svc }}.{{ $ns }}.svc.{{ $clusterDomain }}
     {{- end }}
     {{- if .Values.external | default false }}
-    - {{ printf "%s.%s" .Release.Name .Values._namespace.host }}
+    {{- /* default (dict) keeps `index` from erroring on an absent or null _namespace, so the required message is what surfaces. */}}
+    {{- $extHost := required "external is true but _namespace.host is not set" (index (default (dict) .Values._namespace) "host") }}
+    - {{ printf "%s.%s" .Release.Name $extHost }}
     {{- end }}
   privateKey:
     rotationPolicy: Always
