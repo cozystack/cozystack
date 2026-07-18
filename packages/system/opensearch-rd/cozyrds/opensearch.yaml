@@ -35,7 +35,7 @@ spec:
       # The key-free trust anchor the CA-extraction controller publishes. The chart
       # mints the HTTP CA through cert-manager and labels that Secret for publication,
       # so opensearch resolves on the label-driven leg and declares no spec.caCert.
-      # This is the single, engine-agnostic selector; it carries no name templating.
+      # This is the engine-agnostic selector every converged engine shares.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:

@@ -38,17 +38,31 @@ tests:
       - failedTemplate:
           errorMessage: "Release name \"os-test-name-that-is-definitely-too-long-xxxxxxx\" is 48 chars; opensearch TLS requires <=47 chars so cert-manager resource names fit in the 63-char Kubernetes limit (longest suffix: -http-selfsigned)."
 
-  # Version guard: below OpenSearch 2.0.0 the operator signs the admin certificate
+  # Version floor: below OpenSearch 2.0.0 the operator signs the admin certificate
   # with the transport CA instead of http.caSecret, so securityadmin cannot verify
   # against the cert-manager HTTP CA and the security config silently never applies.
-  - it: fails when chart-managed HTTP TLS is requested on a version below 2.0.0
+  # An explicit request fails; an auto-on one degrades (asserted two cases below).
+  - it: fails when chart-managed HTTP TLS is explicitly requested below 2.0.0
     set:
       version: v1
       tls:
         enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: "opensearch 1.3.20 (version: v1) does not support chart-managed HTTP TLS: the operator signs the securityadmin admin certificate with the transport CA below 2.0.0, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later."
+          errorMessage: "opensearch 1.3.20 (version: v1) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later."
+
+  # A v1 + external release never asked for chart-managed TLS — the tri-state
+  # turned it on. Degrade to operator-managed HTTP TLS so such a release keeps
+  # rendering on upgrade instead of hard-failing on a flag it never set.
+  - it: degrades to operator-managed TLS when auto-on lands below 2.0.0
+    set:
+      version: v1
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 0
 
   - it: allows version v1 when chart-managed HTTP TLS is off
     set:
@@ -93,6 +107,56 @@ tests:
           value: os-test-http-ca
         documentIndex: 1
 
+  # Both names external-svc publishes to external-dns must appear in the leaf's SAN
+  # list, or an external client reaching the LoadBalancer fails hostname verification.
+  - it: covers both external-dns hostnames with certificate SANs
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+        documentIndex: 3
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+        documentIndex: 3
+
+  # The operator reserves <release>-http-cert for the HTTP certificate it generates
+  # itself. If the chart's leaf took that name, turning TLS off would leave the
+  # cert-manager Secret behind (enableCertificateOwnerRef is false), the operator
+  # would find it already present, skip generation and mount it — while signing the
+  # admin certificate with its transport CA, silently breaking securityadmin.
+  - it: keeps the leaf secret out of the operator's reserved certificate names
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-transport-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-dashboards-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-admin-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-ca
+        documentIndex: 3
+
   # Only the CA may be published. The leaf carries the HTTPS server private key, so
   # labelling it would hand that key to the extraction controller as a CA source.
   - it: does not label the leaf server certificate for publication
@@ -102,7 +166,7 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: os-test-http-cert
+          value: os-test-http-server
         documentIndex: 3
       - notExists:
           path: spec.secretTemplate
@@ -229,7 +293,7 @@ tests:
           of: Certificate
       - equal:
           path: spec.secretName
-          value: os-test-http-cert
+          value: os-test-http-server
       - equal:
           path: spec.issuerRef.name
           value: os-test-http-ca
@@ -362,6 +426,27 @@ set:
     cluster-domain: cozy.local
 
 tests:
+  # A v1 + external release never asked for chart-managed TLS — the tri-state
+  # turned it on. Below 2.0.0 that combination degrades to operator-managed HTTP
+  # TLS rather than failing, so such a release keeps working across an upgrade.
+  - it: leaves HTTP TLS operator-generated when auto-on degrades below 2.0.0
+    set:
+      version: v1
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        documentIndex: 0
+
   # --- Transport TLS: always operator-managed, never touched ---
 
   - it: transport TLS always uses operator generate regardless of tls.enabled
@@ -414,7 +499,7 @@ tests:
     asserts:
       - equal:
           path: spec.security.tls.http.secret.name
-          value: os-test-http-cert
+          value: os-test-http-server
         documentIndex: 0
       - equal:
           path: spec.security.tls.http.caSecret.name
@@ -454,7 +539,7 @@ tests:
     asserts:
       - equal:
           path: spec.security.tls.http.secret.name
-          value: os-test-http-cert
+          value: os-test-http-server
         documentIndex: 0
       - equal:
           path: spec.security.tls.http.caSecret.name
@@ -503,7 +588,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.dashboards.tls.secret.name
-          value: os-test-http-cert
+          value: os-test-http-server
         documentIndex: 0
       - notExists:
           path: spec.dashboards.tls.generate
@@ -525,7 +610,7 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.dashboards.tls.secret.name
-          value: os-test-http-cert
+          value: os-test-http-server
         documentIndex: 0
       - notExists:
           path: spec.dashboards.tls.generate
@@ -557,3 +642,24 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "external is true but _namespace.host is not set"
+
+  # The external-dns hostname is built from the tenant host, not the in-cluster
+  # domain: cozy.local does not resolve outside the cluster, and the name published
+  # here has to be one the leaf certificate carries a SAN for.
+  - it: publishes external-dns hostnames under the tenant host
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: os-test.example.cozy.local
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: os-test-dashboards.example.cozy.local
+        documentIndex: 1
+

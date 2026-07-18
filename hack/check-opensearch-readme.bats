@@ -5,12 +5,7 @@
 # make generate (which requires cozyvalues-gen in PATH). They verify that:
 #   1. tls.enabled description is not truncated (ends with "off otherwise")
 #   2. topologySpreadPolicy appears outside the TLS section
-#   3. opensearch-rd cozyrds has http-cert in secrets.include
-#      NOTE: cozyrds files are raw YAML read via .Files.Get — Go template
-#      conditionals ({{- if }}) are not processed by the Helm engine, so
-#      gating on tls.enabled is not possible at this layer. The entry is
-#      unconditional; when TLS is off the secret simply does not exist and
-#      the ApplicationDefinition controller ignores missing optional secrets.
+#   3. opensearch-rd cozyrds exposes the tenant CA and no server certificate
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 README="$REPO_ROOT/packages/apps/opensearch/README.md"
@@ -31,9 +26,17 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   grep -q "topologySpreadPolicy" "$README"
 }
 
-@test "cozyrds opensearch.yaml contains http-cert in secrets.include" {
-  # The entry is unconditional because cozyrds files are raw YAML (not Helm
-  # templates) and do not support {{- if }} conditionals. This test documents
-  # the current known state: http-cert is always listed regardless of tls.enabled.
-  grep -q "opensearch-.*-http-cert" "$COZYRDS"
+@test "cozyrds opensearch.yaml exposes the tenant CA to the tenant" {
+  # The key-free trust anchor the CA-extraction controller publishes. Selected by
+  # label rather than by name: the chart mints the HTTP CA through cert-manager
+  # and labels that Secret for publication, so opensearch resolves on the
+  # label-driven leg.
+  grep -q "internal.cozystack.io/tenant-ca" "$COZYRDS"
+}
+
+@test "cozyrds opensearch.yaml exposes no server certificate to the tenant" {
+  # A tenant needs ca.crt to verify the endpoint and nothing more. Both the leaf
+  # Secret and the cert-manager CA Secret carry a private key under tls.key, so
+  # neither may be listed here — only the controller's key-free projection.
+  ! grep -qE "opensearch-.*-(http-server|http-ca|http-cert)" "$COZYRDS"
 }
