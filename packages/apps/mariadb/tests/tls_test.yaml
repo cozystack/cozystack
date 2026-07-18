@@ -851,27 +851,48 @@ tests:
             name: tls-ca
 
   # -------------------------------------------------------------------
-  # E: backup script contains --ssl-mode=VERIFY_IDENTITY when TLS enabled
-  # VERIFY_IDENTITY is the strictest SSL mode — validates CA and hostname,
-  # matching the cert SAN list that already covers the primary/secondary
-  # service names used by MYSQL_HOST.
+  # Cluster-domain fallback. The platform injects _cluster.cluster-domain
+  # (networking.clusterDomain, "cozy.local"), but the chart-level fallback
+  # must match it: these FQDNs land in the leaf certificate SAN list, and the
+  # backup client verifies the server hostname against exactly that list. A
+  # fallback pointing at the upstream Kubernetes default instead of the
+  # Cozystack one would silently produce certificates that fail verification.
   # -------------------------------------------------------------------
-  - it: "backup-script Secret contains --ssl-mode=VERIFY_IDENTITY when tls.enabled=true"
+  - it: "leaf certificate SANs fall back to cozy.local when cluster-domain is unset"
     templates:
-      - templates/backup-script.yaml
+      - templates/certmanager.yaml
+    documentIndex: 3
     set:
       tls:
         enabled: true
-      backup:
-        enabled: true
-        s3Bucket: s3.example.org/test
-        cleanupStrategy: "--keep-last=3"
+      # helm-unittest deep-merges `set` over the suite defaults, so the key is
+      # blanked rather than removed to exercise the fallback branch.
+      _cluster:
+        cluster-domain: ""
     asserts:
-      - matchRegex:
-          path: stringData["backup.sh"]
-          pattern: "--ssl-mode=VERIFY_IDENTITY"
+      - contains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cozy.local"
+      - notContains:
+          path: spec.dnsNames
+          content: "my-mariadb.tenant-test.svc.cluster.local"
 
-  - it: "backup-script Secret contains --ssl-ca=/etc/mysql-ssl/ca.crt when tls.enabled=true"
+  # -------------------------------------------------------------------
+  # E: backup script uses MariaDB-native TLS verification flags.
+  #
+  # The backup image is alpine + mariadb-client, so the script is parsed by
+  # the MariaDB client, not the MySQL one. The two dialects differ:
+  #
+  #   MySQL 8    : --ssl-mode=VERIFY_IDENTITY
+  #   MariaDB    : --ssl-ca=<file> --ssl-verify-server-cert
+  #
+  # The MariaDB client has no --ssl-mode option at all and rejects it during
+  # argument parsing ("unknown variable 'ssl-mode=...'", exit 7) before any
+  # connection is attempted, so a single --ssl-mode occurrence fails every
+  # TLS-enabled backup run. These tests therefore assert the dialect, not the
+  # mere presence of some SSL string.
+  # -------------------------------------------------------------------
+  - it: "backup-script Secret uses MariaDB TLS verification flags when tls.enabled=true"
     templates:
       - templates/backup-script.yaml
     set:
@@ -882,9 +903,53 @@ tests:
         s3Bucket: s3.example.org/test
         cleanupStrategy: "--keep-last=3"
     asserts:
+      # --ssl-ca alone only supplies the trust anchor; without
+      # --ssl-verify-server-cert the MariaDB client skips hostname
+      # verification, which would silently downgrade the connection.
       - matchRegex:
           path: stringData["backup.sh"]
           pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
+
+  # Regression guard: no MySQL-8-only option may reach the MariaDB client, in
+  # any TLS state. Anchored on the option name so both --ssl-mode=VALUE and a
+  # bare --ssl-mode are caught.
+  - it: "backup-script Secret never emits the MySQL-only --ssl-mode option (tls.enabled=true)"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        enabled: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode"
+
+  # Both client invocations must carry $SSL_OPTS. If only one does, that leg
+  # connects without TLS verification while the suite still looks green.
+  - it: "backup-script Secret passes SSL_OPTS to both mysql and mysqldump"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        enabled: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "mysql -u \"\\$MYSQL_USER\" -h \"\\$MYSQL_HOST\" \\$SSL_OPTS"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "mysqldump -u \"\\$MYSQL_USER\" -h \"\\$MYSQL_HOST\" \\$SSL_OPTS"
 
   - it: "backup-script Secret does not contain ssl flags when tls.enabled=false"
     templates:
@@ -900,6 +965,12 @@ tests:
       - notMatchRegex:
           path: stringData["backup.sh"]
           pattern: "--ssl-mode"
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca"
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
 
   - it: "backup CronJob has tls-ca volumeMount when external=true and tls.enabled unset"
     templates:
