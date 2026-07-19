@@ -67,12 +67,15 @@ spec:
 {{- $clusterDomain := include "rabbitmq.clusterDomain" . }}
 {{- $ns := .Release.Namespace }}
 {{- $name := .Release.Name }}
-{{- /* Each Service name is covered in all three resolvable forms: bare (same
-     namespace), two-segment <name>.<namespace> (the cross-namespace shorthand that
-     the DNS search path resolves), and the fully qualified .svc / .svc.<domain>.
-     Omitting the two-segment form is the easy mistake: it resolves fine, so a
-     client connecting to amqps://<name>.<namespace>:5671 fails only at hostname
-     verification, which reads as a certificate bug rather than a missing SAN. */}}
+{{- /* Every name is covered in all resolvable forms: bare (same namespace),
+     two-segment <name>.<namespace> (the cross-namespace shorthand the DNS search
+     path resolves), and the fully qualified .svc / .svc.<domain>. That includes
+     the per-pod wildcards — the operator addresses nodes as
+     <pod>.<name>-nodes.<namespace>, the two-segment form, in RABBITMQ_NODENAME and
+     K8S_HOSTNAME_SUFFIX, so it is the canonical pod address rather than an
+     afterthought. Omitting a two-segment form is the easy mistake: it resolves
+     fine, so the connection succeeds and fails only at hostname verification,
+     which reads as a certificate bug rather than a missing SAN. */}}
 {{- $dnsNames := list
   $name
   (printf "%s.%s" $name $ns)
@@ -82,6 +85,7 @@ spec:
   (printf "%s-nodes.%s" $name $ns)
   (printf "%s-nodes.%s.svc" $name $ns)
   (printf "%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
+  (printf "*.%s-nodes.%s" $name $ns)
   (printf "*.%s-nodes.%s.svc" $name $ns)
   (printf "*.%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
 }}

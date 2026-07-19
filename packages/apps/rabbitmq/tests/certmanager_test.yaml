@@ -566,9 +566,11 @@ tests:
       external: true
     documentIndex: 3
     asserts:
+      # 11 internal names: client and headless Services in four forms each
+      # (bare, two-segment, .svc, .svc.<domain>), plus three pod wildcards.
       - lengthEqual:
           path: spec.dnsNames
-          count: 10
+          count: 11
 
   - it: adds exactly one SAN when _namespace.host is set
     release:
@@ -582,7 +584,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.dnsNames
-          count: 11
+          count: 12
 
   - it: renders the external DNS name as a SAN when _namespace.host is set
     release:
@@ -641,6 +643,12 @@ tests:
       - contains:
           path: spec.dnsNames
           content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      # The operator addresses nodes as <pod>.<name>-nodes.<namespace>
+      # (RABBITMQ_NODENAME / K8S_HOSTNAME_SUFFIX), so the two-segment wildcard is
+      # the canonical pod address and must be covered like every other form.
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test"
       - contains:
           path: spec.dnsNames
           content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
