@@ -79,7 +79,9 @@ kubectl get secret redis-<name>-ca-cert -o jsonpath='{.data.ca\.crt}' | base64 -
 redis-cli --tls --cacert ca.crt -h <host> -p 6379
 ```
 
-`<host>` has to be a name the certificate covers. In-cluster that is any of the `rfr-`, `rfrm-`, `rfrs-` and `rfs-` service names; from outside it is `<release>.<tenant-host>`, the same name the external LoadBalancer is published under. Connecting to the LoadBalancer IP directly fails hostname verification — the only IP addresses in the certificate are the loopback ones the in-pod probes and the metrics sidecar use.
+`<host>` has to be a name the certificate covers. In-cluster that is any of the `rfr-`, `rfrm-`, `rfrs-` and `rfs-` service names, and those resolve normally.
+
+From outside the cluster the only covered name is `<release>.<tenant-host>`, and the chart does not publish DNS for it: the external Service is a plain LoadBalancer with no `external-dns` annotation, so nothing points that name at the LoadBalancer address. Connecting to the LoadBalancer IP instead fails hostname verification, because the only IP addresses in the certificate are the loopback ones the in-pod probes and the metrics sidecar use. Until the name is published, an external client has to be pointed at it manually — a DNS record or a hosts entry mapping `<release>.<tenant-host>` to the LoadBalancer address.
 
 Neither the CA private key (`<release>-ca-tls`) nor the server leaf and its private key (`<release>-tls`) is readable by the tenant. The first would allow minting certificates that any client trusting this release accepts; the second would allow impersonating this release's Redis endpoints.
 

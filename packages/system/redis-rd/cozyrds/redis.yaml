@@ -32,9 +32,10 @@ spec:
   # labelling the chart's CA Certificate, because the declared source then
   # never has a private key sitting next to it — the cert-manager Secret
   # <release>-ca-tls holds the CA key and is not referenced here at all.
-  # The CA-extraction controller copies ca.crt into the key-free
-  # <release>.tenant-ca Secret, which the include selector below surfaces to
-  # the tenant.
+  # Source and destination are two different Secrets: the controller reads
+  # ca.crt out of the source named below and writes it into a separate
+  # key-free projection, <release>.tenant-ca, which the label selector further
+  # down then surfaces to the tenant.
   caCert:
     sourceSecretName: "{{ .release }}-ca-cert"
     sourceKey: ca.crt
