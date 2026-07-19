@@ -381,7 +381,10 @@ tests:
       - contains:
           path: spec.usages
           content: digital signature
-      - contains:
+      # key encipherment authorises RSA key transport and this key is ECDSA, so
+      # asking for it requests something the key type cannot do. ECDHE signs with
+      # digital signature instead.
+      - notContains:
           path: spec.usages
           content: key encipherment
       - notContains:
@@ -566,11 +569,13 @@ tests:
       external: true
     documentIndex: 3
     asserts:
-      # 11 internal names: client and headless Services in four forms each
-      # (bare, two-segment, .svc, .svc.<domain>), plus three pod wildcards.
+      # 12 internal names: three families — client Service, headless Service and
+      # the pod wildcard — in four forms each (bare, two-segment, .svc,
+      # .svc.<domain>). The wildcard family carried only three for a while; the
+      # exact-list assertion above is what pins the shape, this pins the count.
       - lengthEqual:
           path: spec.dnsNames
-          count: 11
+          count: 12
 
   - it: adds exactly one SAN when _namespace.host is set
     release:
@@ -584,7 +589,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.dnsNames
-          count: 12
+          count: 13
 
   - it: renders the external DNS name as a SAN when _namespace.host is set
     release:
@@ -637,18 +642,25 @@ tests:
       external: false
     documentIndex: 3
     asserts:
-      - contains:
-          path: spec.dnsNames
-          content: myrabbitmq-nodes.tenant-test
-      - contains:
-          path: spec.dnsNames
-          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      # Asserted as an exact list rather than with `contains`. The title claims
+      # every resolvable form is present, and a `contains` set can only show that
+      # the forms someone thought to list are there — it stays green for the one
+      # nobody thought of, which is exactly how the bare wildcard went missing.
       # The operator addresses nodes as <pod>.<name>-nodes.<namespace>
-      # (RABBITMQ_NODENAME / K8S_HOSTNAME_SUFFIX), so the two-segment wildcard is
-      # the canonical pod address and must be covered like every other form.
-      - contains:
+      # (RABBITMQ_NODENAME / K8S_HOSTNAME_SUFFIX), so the wildcard family is the
+      # canonical pod address and needs the same four forms as the rest.
+      - equal:
           path: spec.dnsNames
-          content: "*.myrabbitmq-nodes.tenant-test"
-      - contains:
-          path: spec.dnsNames
-          content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
+          value:
+            - myrabbitmq
+            - myrabbitmq.tenant-test
+            - myrabbitmq.tenant-test.svc
+            - myrabbitmq.tenant-test.svc.cozy.local
+            - myrabbitmq-nodes
+            - myrabbitmq-nodes.tenant-test
+            - myrabbitmq-nodes.tenant-test.svc
+            - myrabbitmq-nodes.tenant-test.svc.cozy.local
+            - "*.myrabbitmq-nodes"
+            - "*.myrabbitmq-nodes.tenant-test"
+            - "*.myrabbitmq-nodes.tenant-test.svc"
+            - "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"
