@@ -281,6 +281,29 @@ tests:
       - equal:
           path: spec.tls.certificateSecret.secretName
           value: my-redis-tls
+      # The name the operator publishes its CA-only Secret under. The dashboard
+      # Role grants exactly this name and the ApplicationDefinition declares it
+      # as the CA source, so all three have to agree.
+      - equal:
+          path: spec.tls.caCertSecretName
+          value: my-redis-ca-cert
+
+  - it: "leaf Certificate carries the loopback IP SANs the in-pod clients dial"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    documentIndex: 3
+    asserts:
+      # redis_exporter dials rediss://127.0.0.1 and verifies against the CA. A
+      # DNS SAN for localhost does not match an IP literal, so both loopback
+      # addresses have to be present as IP SANs or the sidecar cannot scrape.
+      - contains:
+          path: spec.ipAddresses
+          content: "127.0.0.1"
+      - contains:
+          path: spec.ipAddresses
+          content: "::1"
 
   - it: "dashboard-resourcemap.yaml grants only the CA-only secret in RBAC when external=true and authClients defaults to no"
     templates:
@@ -534,3 +557,53 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "external is true but _namespace.host is not set"
+
+  # ------------------------------------------------------------------
+  # Null forms of the tri-state. Both guards in _tls.tpl exist for these
+  # exact shapes: `default (dict)` for a nil tls map, and `kindIs "invalid"`
+  # for a present-but-null enabled key, which hasKey reports as set.
+  # ------------------------------------------------------------------
+  - it: "tls set to null is treated as unset and follows external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      tls: null
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "tls set to null is treated as unset and follows external=false"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls: null
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # An explicitly null tls.enabled is rejected by values.schema.json before any
+  # template runs ("at '/tls/enabled': got null, want boolean"), so it has no
+  # test here. The kindIs "invalid" guard in _tls.tpl covers the reachable
+  # shape: tls present as a map with no enabled key at all, which index returns
+  # nil for. That is the tls: {} case, exercised below.
+  - it: "tls given as an empty map follows external=true"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      tls: {}
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "tls given as an empty map follows external=false"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls: {}
+    asserts:
+      - hasDocuments:
+          count: 0

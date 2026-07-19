@@ -60,9 +60,19 @@ spec:
     include:
       - resourceNames:
           - redis-{{ .name }}-auth
+          # The CA-only Secret the operator publishes: ca.crt and nothing else,
+          # no private key. Named directly so the trust anchor reaches the
+          # tenant today. The label selector below covers the same anchor once
+          # the CA-extraction controller publishes its projection, but that
+          # controller is not merged yet and a label-only entry selects nothing
+          # until it is, which would leave a TLS-enabled Redis with no way for
+          # the tenant to obtain the certificate needed to verify it.
+          - redis-{{ .name }}-ca-cert
       # The key-free trust anchor published by the CA-extraction controller.
       # This is the engine-agnostic selector every converged engine shares and
-      # carries no per-release name templating.
+      # carries no per-release name templating. Inert until that controller
+      # merges, at which point the tenant sees the anchor under both this
+      # release-specific name and the uniform projection name.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:

@@ -10,10 +10,14 @@ Tri-state semantics:
   - tls: null                         → treated as unset, falls back to external
 
 `default (dict)` guards against tls: null (nil map). `kindIs "invalid"`
-catches the case where the tls.enabled key is present but set to null
-(hasKey returns true but index gives nil, and nil | toString = "<nil>"
-which silently breaks the tri-state). Null value is treated the same as
-unset: fall back to external.
+catches the case where tls is a map with no enabled key at all: index
+returns nil, and nil | toString = "<nil>", which would silently break the
+tri-state by reading as neither "true" nor "false". A missing key is
+treated the same as unset: fall back to external.
+
+An explicitly null enabled is not among the shapes reaching here —
+values.schema.json types the field as boolean and rejects null before any
+template runs — so the guard is about the absent key, not a null one.
 */}}
 {{- define "redis.tls.enabled" -}}
 {{- $tlsMap := default (dict) .Values.tls -}}
