@@ -86,11 +86,17 @@ spec:
     - {{ printf "*.%s.%s.svc" $redisSvc $ns | quote }}
     - {{ printf "*.%s.%s.svc.%s" $redisSvc $ns $clusterDomain | quote }}
     {{- if .Values.external | default false }}
-    {{- /* Fail loudly rather than on a nil dereference. Omitting the SAN
-           instead would produce a certificate that every external client
-           rejects on hostname verification, which is harder to diagnose. */}}
-    {{- $extHost := required "external is true but _namespace.host is not set" (index (.Values._namespace | default dict) "host") }}
+    {{- /* A tenant without a host is a legitimate shape — packages/apps/tenant
+           leaves the computed host empty when neither the tenant nor its parent
+           sets one — and such a tenant has no external name to certify. Emit
+           the SAN when there is a host and skip it otherwise; requiring one
+           here would stop an already-running external release from rendering
+           at all. Reading through a defaulted dict keeps an absent _namespace
+           from being a nil dereference. */}}
+    {{- $extHost := index (.Values._namespace | default dict) "host" | default "" }}
+    {{- if $extHost }}
     - {{ printf "%s.%s" .Release.Name $extHost | quote }}
+    {{- end }}
     {{- end }}
   ipAddresses:
     # redis_exporter dials rediss://127.0.0.1 with CA verification; a DNS SAN

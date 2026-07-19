@@ -548,15 +548,39 @@ tests:
           path: spec.dnsNames
           content: "rfr-my-redis.tenant-test.svc.cluster.local"
 
-  - it: "leaf Certificate fails with a named error when external is on and no namespace host is injected"
+  # A tenant with no host is legitimate — packages/apps/tenant leaves the
+  # computed host empty when neither the tenant nor its parent sets one. Such a
+  # release still has to render: an external Redis in a hostless tenant works
+  # today, and failing here would stop it dead on upgrade. There is simply no
+  # external name to certify, so the SAN is omitted and the in-cluster names
+  # still cover every verifying client inside the cluster.
+  - it: "leaf Certificate still renders with no external SAN when the namespace host is empty"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      _namespace:
+        host: ""
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cluster.local"
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis."
+
+  - it: "leaf Certificate still renders with no external SAN when no namespace map is injected"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
       _namespace: null
+    documentIndex: 3
     asserts:
-      - failedTemplate:
-          errorMessage: "external is true but _namespace.host is not set"
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cluster.local"
 
   # ------------------------------------------------------------------
   # Null forms of the tri-state. Both guards in _tls.tpl exist for these
@@ -607,3 +631,34 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # The CA-only Secret name appears in three places that must agree: the
+  # operator is told to publish under it (redisfailover.yaml), the tenant is
+  # granted it (dashboard-resourcemap.yaml), and the ApplicationDefinition
+  # declares it as the CA source and includes it as a tenant secret. Renaming
+  # any one of them alone leaves the tenant with no trust anchor and no error.
+  - it: "the operator is told to publish the CA-only secret under the shared name"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.tls.caCertSecretName
+          value: my-redis-ca-cert
+
+  - it: "the tenant is granted the CA-only secret under the same shared name"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - contains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-cert"
