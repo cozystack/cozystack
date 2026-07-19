@@ -38,7 +38,25 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # A tenant needs ca.crt to verify the endpoint and nothing more. Both the leaf
   # Secret and the cert-manager CA Secret carry a private key under tls.key, so
   # neither may be listed here — only the controller's key-free projection.
-  ! grep -qE "opensearch-.*-(http-server|http-ca|http-cert)" "$COZYRDS"
+  #
+  # Asserted on the SHAPE of secrets.include, not by grepping one spelling: this is
+  # the only thing standing between the CA private key and the tenant, and a name
+  # written a different way, or a selector that happens to match a key-bearing
+  # Secret, has to fail this too. Every entry must be one of exactly two known-safe
+  # forms — the credentials Secret by name, or the tenant-ca projection by label.
+  credentials='{"resourceNames":["opensearch-{{ .name }}-credentials"]}'
+  tenant_ca='{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}'
+
+  while IFS= read -r entry; do
+      [ -n "$entry" ] || continue
+      if [ "$entry" != "$credentials" ] && [ "$entry" != "$tenant_ca" ]; then
+          echo "secrets.include has an entry that is neither the credentials Secret" >&2
+          echo "nor the key-free tenant-ca projection: $entry" >&2
+          return 1
+      fi
+  done <<EOF
+$(yq --output-format=json -I=0 '.spec.secrets.include[]' "$COZYRDS")
+EOF
 }
 
 @test "cozyrds opensearch.yaml selects the projection, never a publish source" {

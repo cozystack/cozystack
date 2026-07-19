@@ -356,7 +356,12 @@ tests:
 
   # --- SAN coverage for HTTP services ---
 
-  - it: leaf cert includes three DNS forms for the main service
+  # SAN PARITY WITH THE OPERATOR. Enabling chart-managed TLS replaces the certificate
+  # the operator was issuing, so every name that certificate covered has to be covered
+  # here too — otherwise an existing client silently stops verifying. The operator
+  # issues for <name>, the service name, <name>-discovery and the <name>.<ns>[.svc
+  # [.domain]] ladder, and its Dashboards certificate for the -dashboards ladder.
+  - it: leaf cert covers every DNS form the operator certificate covered
     set:
       tls:
         enabled: true
@@ -367,10 +372,28 @@ tests:
           content: os-test
       - contains:
           path: spec.dnsNames
+          content: os-test.tenant-test
+      - contains:
+          path: spec.dnsNames
           content: os-test.tenant-test.svc
       - contains:
           path: spec.dnsNames
           content: os-test.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: os-test-discovery
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc.cozy.local
 
   - it: "(b) leaf cert includes external HTTP DNS SAN when external true"
     set:
@@ -422,7 +445,9 @@ tests:
           path: spec.dnsNames
           content: os-test-dashboards.example.cozy.local
 
-  - it: leaf cert includes usages server auth, signing, and key encipherment
+  # No key encipherment on either certificate: RFC 5480 section 3 forbids it for
+  # ECDSA keys, which do no key transport, and both keys here are ECDSA P-256.
+  - it: leaf cert includes usages server auth and signing, and no key encipherment
     set:
       tls:
         enabled: true
@@ -434,15 +459,31 @@ tests:
       - contains:
           path: spec.usages
           content: signing
-      - contains:
+      - notContains:
           path: spec.usages
           content: key encipherment
       - lengthEqual:
           path: spec.usages
-          count: 3
+          count: 2
       - notContains:
           path: spec.usages
           content: cert sign
+
+  - it: CA cert carries no key encipherment either
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - lengthEqual:
+          path: spec.usages
+          count: 2
 
   - it: external SAN block fails clearly when _namespace.host missing
     set:
