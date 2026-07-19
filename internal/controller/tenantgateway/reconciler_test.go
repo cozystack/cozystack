@@ -2304,6 +2304,20 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 		// a status error for every other shape of the same mistake.
 		{"duplicate passthrough service", nil,
 			[]string{"api", "api"}, apex, true},
+		// Gateway API keys listeners by (port, protocol, hostname), so
+		// these are distinct and the object is accepted; Cilium routes
+		// passthrough by SNI alone (cilium#42898) and silently serves
+		// only one of them.
+		{"same hostname on different ports", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "db.foo.example.com"),
+			mk("pg2", 5433, "db.foo.example.com"),
+		}, nil, apex, true},
+		// Same shape spanning both lists: the service renders
+		// api.<apex> on 443, so this listener collides on hostname
+		// while the names differ and the name checks see nothing.
+		{"hostname collides with a passthrough service listener", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pgapi", 5432, "api.foo.example.com"),
+		}, []string{"api"}, apex, true},
 		{"duplicate passthrough service alongside listeners", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("postgres", 5432, "postgres.foo.example.com"),
 		}, []string{"api", "vm-exportproxy", "api"}, apex, true},
