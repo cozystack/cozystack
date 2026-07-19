@@ -12,6 +12,16 @@ include ../../../hack/package.mk
 # drop them and every RedisFailover the redis chart renders would be rejected.
 # The fork keeps the chart directory as charts/redisoperator while the chart
 # itself is named redis-operator, hence the rename after extraction.
+#
+# Note on the ClusterRole this vendors: it grants create/get/patch/update on
+# Secrets and full verbs on cert-manager Certificates cluster-wide, which is
+# wider than this platform needs — the operator only reads the TLS Secret and
+# publishes the CA-only one, and it never takes the cert-manager path because
+# the chart always supplies spec.tls.certificateSecret. It is not narrowed here
+# because everything under charts/ is overwritten by the update target above;
+# the fix belongs in the fork, either as a namespace-scoped Role or behind a
+# chart value, and a downstream edit would be silently reverted on the next
+# `make update`.
 update:
 	rm -rf charts
 	mkdir -p charts

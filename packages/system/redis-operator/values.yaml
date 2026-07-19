@@ -1,4 +1,11 @@
 redis-operator:
   image:
     repository: ghcr.io/cozystack/cozystack/redis-operator
+    # Do not "fix" the -rc1 suffix by reverting to v1.4.0. The v1.4.x line is
+    # the cozystack fork's own numbering, not an upstream release train —
+    # spotahome's latest tag is v1.3.0-rc1 — so rc1 here is how the fork tagged
+    # the build, not a statement about its readiness. The single commit between
+    # v1.4.0 and v1.4.1-rc1 guards a nil watcher before watch.Filter wraps it;
+    # dropping back to v1.4.0 reinstates that crash. A stable v1.4.1 retag of
+    # the same commit has been requested; repin to it when it exists.
     tag: v1.4.1-rc1@sha256:404c84c23ef3df181a2eac974d5823f6664f75e9d6b4e4d944d0841ad0750edf
