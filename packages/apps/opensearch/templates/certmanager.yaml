@@ -45,11 +45,7 @@ issued, with a message naming the label that actually binds.
 */}}
 {{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
 {{- if $tlsEnabled }}
-{{- $longestSuffix := ternary "-dashboards" "-discovery" (.Values.dashboards.enabled | default false) -}}
-{{- $maxReleaseLen := sub 63 (len $longestSuffix) | int -}}
-{{- if gt (len .Release.Name) $maxReleaseLen -}}
-{{- fail (printf "Release name %q is %d chars; opensearch TLS requires <=%d here so the SAN %q stays within the 63-char DNS label limit." .Release.Name (len .Release.Name) $maxReleaseLen (printf "%s%s" .Release.Name $longestSuffix)) -}}
-{{- end -}}
+{{- include "opensearch.validateReleaseName" . -}}
 {{- /*
 The OpenSearch >= 2.0.0 floor for chart-managed HTTP TLS is enforced in
 opensearch.tls.enabled, which fails on an explicit request and degrades an

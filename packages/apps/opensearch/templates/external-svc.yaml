@@ -1,4 +1,5 @@
 {{- if .Values.external }}
+{{- include "opensearch.validateReleaseName" . -}}
 {{- /*
 The tenant host may legitimately be empty — a platform with no _cluster.root-host
 set leaves it so all the way down the tenant tree. That is not a reason to take the
