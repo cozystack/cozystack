@@ -2189,6 +2189,33 @@ func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 	}
 }
 
+// TestValidateTLSPassthroughListenersReportsApexBeforeOverlap pins the
+// order of two checks that can both fire on one entry. An out-of-apex
+// hostname is the actionable mistake; reporting the overlap instead
+// sends the reader to inspect an unrelated listener that is not the
+// problem. Asserting only that the entry is rejected would pass either
+// way, so this asserts which error comes back.
+func TestValidateTLSPassthroughListenersReportsApexBeforeOverlap(t *testing.T) {
+	// "*.example.com" covers the tls-api listener's hostname
+	// (api.foo.example.com) AND sits outside the apex foo.example.com,
+	// so both checks match this one entry. Two exact hostnames can
+	// never overlap, so the case has to use a wildcard to reach the
+	// state where the ordering is observable at all.
+	listeners := []gatewayv1alpha1.TLSPassthroughListener{
+		{Name: "pg", Port: 5432, Hostname: "*.example.com"},
+	}
+	err := validateTLSPassthroughListeners(listeners, []string{"api"}, "foo.example.com")
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	if !strings.Contains(err.Error(), "outside the tenant apex") {
+		t.Errorf("error should name the apex violation, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "overlaps listener") {
+		t.Errorf("error reports the overlap instead of the apex violation: %v", err)
+	}
+}
+
 // TestReconcile_ListenerAllowedRoutesNotAliased pins that every
 // rendered listener owns its AllowedRoutes.Namespaces rather than
 // sharing one struct with its siblings. The passthrough loops used to

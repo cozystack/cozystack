@@ -296,12 +296,22 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		// distinct to Gateway API — listeners are keyed by (port,
 		// protocol, hostname) — and the object is accepted. Cilium
 		// routes passthrough by SNI without distinguishing the port
-		// (cilium#42898, fixed upstream by cilium#44889, not in the
-		// shipped 1.19.x), so only one of them works and which one
+		// (cilium#42898, fixed upstream by cilium#44889 and
+		// backported via cilium#46826 into 1.19.6 — cozystack pins
+		// 1.19.5 in packages/system/cilium/images/cilium/Dockerfile,
+		// so revisit this restriction when that pin moves), so only
+		// one of them works and which one
 		// depends on route ordering. On a native database port that is
 		// a raw stream forwarded to the wrong backend, with Accepted
 		// and Programmed both true and nothing on the status to show
 		// for it. Reject the shape instead.
+		if !hostnameWithinApex(l.Hostname, apex) {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
+		}
+
+		// Checked after the apex test on purpose: an out-of-apex
+		// hostname that also happens to overlap should report the apex
+		// violation, which names the actual mistake.
 		for _, claimed := range seenHostnames {
 			if !hostnamesOverlap(l.Hostname, claimed.hostname) {
 				continue
@@ -309,10 +319,6 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps listener %q hostname %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners whose hostnames match the same ClientHello, even on different ports", l.Name, l.Hostname, claimed.listener, claimed.hostname)
 		}
 		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, passthroughListenerPrefix + l.Name})
-
-		if !hostnameWithinApex(l.Hostname, apex) {
-			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
-		}
 	}
 	return nil
 }
