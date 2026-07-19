@@ -290,3 +290,56 @@ tests:
       - equal:
           path: spec.replsets[0].splitHorizons.mg-test-rs0-0.external
           value: mg-test-rs0-0.example.com
+      # The horizons reach a topology that cannot survive losing a member, and
+      # unsafeFlags.replsetSize is the chart's own marker for that. The pairing
+      # is what the README's upgrade-restart warning is about: a SAN change
+      # reissues the leaf, the operator hashes it into the pod template, and the
+      # StatefulSet rolls — which at this size is a full outage rather than an
+      # ordered handover. Asserted together so that gating horizons to
+      # quorum-capable sizes later turns this red and sends someone back to the
+      # doc, instead of leaving a warning describing a case that no longer
+      # exists.
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+
+  - it: splitHorizons renders for two replicas, below the write quorum
+    set:
+      external: true
+      replicas: 2
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      # Two members is the case that reads as highly available and is not: the
+      # majority is still 2, so the rollout's restart of either member stalls
+      # writes until it returns. Covered separately from the single-replica case
+      # because the failure is different -- an outage of writes rather than of
+      # everything -- and the README distinguishes them.
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-0.external
+          value: mg-test-rs0-0.example.com
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-1.external
+          value: mg-test-rs0-1.example.com
+      - equal:
+          path: spec.unsafeFlags.replsetSize
+          value: true
+
+  - it: the quorum-capable default replica count needs no unsafe flag
+    set:
+      external: true
+      _namespace:
+        host: example.com
+    documentIndex: 0
+    asserts:
+      # Positive control for the two assertions above. Both read
+      # unsafeFlags.replsetSize as the sub-quorum marker, which says nothing
+      # unless the flag is actually absent at a size that can tolerate a
+      # restart. Without this, rendering the flag unconditionally would leave
+      # them green while the marker meant nothing.
+      - equal:
+          path: spec.replsets[0].splitHorizons.mg-test-rs0-2.external
+          value: mg-test-rs0-2.example.com
+      - notExists:
+          path: spec.unsafeFlags.replsetSize
