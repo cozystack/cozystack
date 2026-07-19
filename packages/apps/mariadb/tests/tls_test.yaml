@@ -497,7 +497,10 @@ tests:
           path: spec.privateKey.rotationPolicy
           value: Always
 
-  - it: "leaf Certificate has renewBefore set"
+  # Both, because cert-manager rejects duration <= renewBefore at admission:
+  # pinning only one lets the other drift into a pair that renders but will not
+  # apply.
+  - it: "leaf Certificate has duration and renewBefore set"
     templates:
       - templates/certmanager.yaml
     set:
@@ -509,6 +512,9 @@ tests:
       - equal:
           path: spec.renewBefore
           value: "720h"
+      - equal:
+          path: spec.duration
+          value: "8760h"
 
   # -------------------------------------------------------------------
   # NB6: dashboard-resourcemap.yaml exposure is TLS-state independent.
@@ -1330,6 +1336,14 @@ tests:
       - matchRegex:
           path: stringData["backup.sh"]
           pattern: 'is missing or empty'
+      # Match the whole construct, not its parts. Asserting the test expression
+      # and the message separately leaves the thing that makes it a guard —
+      # aborting — unpinned: flipping the exit status to 0, or short-circuiting
+      # the condition, keeps every substring above intact while the backup runs
+      # on regardless and can report success having dumped nothing.
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'if \[ ! -r /etc/mysql-ssl/ca\.crt \] \|\| \[ ! -s /etc/mysql-ssl/ca\.crt \]; then(.|\n)*exit 1(.|\n)*fi'
 
   - it: "backup CronJob passes the CA Secret name to the script"
     templates:
