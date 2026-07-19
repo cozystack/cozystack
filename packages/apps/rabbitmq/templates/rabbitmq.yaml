@@ -10,19 +10,12 @@
 {{- end }}
 {{- $disableNonTLS := and $tlsEnabled $wantDisableNonTLS }}
 
-{{- /* messaging-topology-operator reaches the broker only over the plaintext
-     management port here: the flag forces its connection to TLS regardless of its
-     own configuration (TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners()))
-     and it verifies against x509.SystemCertPool(), which cannot hold a per-release
-     CA. So User, Vhost and Permission would stop reconciling. Fail rather than ship
-     that.
-
-     The check reads .Values only because that is all a template can see. The
-     breakage is wider: useTLSForConnection is derived from the RabbitmqCluster, not
-     from who created the topology CR, so hand-written User/Vhost/Permission objects
-     against this cluster fail identically and silently. The flag is for clusters
-     whose users are managed by rabbitmqctl or a definitions import, not by that
-     operator at all. See README "Closing the plaintext listeners". */}}
+{{- /* The flag forces messaging-topology-operator onto TLS, where it verifies the
+     per-release CA against x509.SystemCertPool() and fails, so User, Vhost and
+     Permission stop reconciling. The .Values check understates the breakage:
+     useTLSForConnection derives from the RabbitmqCluster, not from who created the
+     topology CR, so hand-written objects fail the same way without this refusal.
+     See README "Closing the plaintext listeners". */}}
 {{- if and $disableNonTLS (or .Values.users .Values.vhosts) }}
 {{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. That applies to hand-written topology objects too — the operator reads the RabbitmqCluster, not who created the CR — so moving them out of the chart does not help. Manage users and permissions with rabbitmqctl or a definitions import, or leave tls.disableNonTLSListeners unset." }}
 {{- end }}
@@ -35,29 +28,17 @@ metadata:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
   {{- if and $tlsEnabled (not $disableNonTLS) }}
-  {{- /* Keep messaging-topology-operator on the plaintext management port.
-       Setting spec.tls.secretName makes RabbitmqCluster.TLSEnabled() true, and the
-       topology operator computes
-         useTLSForConnection = TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())
-       with connectUsingHTTP coming from CONNECT_USING_PLAIN_HTTP, which the
-       cozystack Deployment does not set. So it would switch to https://…:15671 and
-       verify against x509.SystemCertPool() — a process-wide pool that cannot
-       contain a per-release self-signed CA. Every User, Vhost and Permission this
-       chart renders would then fail with "certificate signed by unknown
-       authority": already-applied users would linger while password rotation, new
-       users and permission changes silently stopped.
+  {{- /* Pins messaging-topology-operator to the plaintext management port. Without
+       it, spec.tls.secretName alone flips the operator to https://…:15671, where it
+       verifies the per-release CA against x509.SystemCertPool() and every User,
+       Vhost and Permission fails with "certificate signed by unknown authority".
+       The http:// scheme makes extractURIandScheme report tlsEnabled=false, so that
+       plaintext listener is load-bearing rather than merely tolerated. Broker
+       traffic is unaffected.
 
-       This annotation short-circuits that: extractURIandScheme reports
-       tlsEnabled=false for an http:// scheme, so the operator uses the plaintext
-       management listener — which the chart deliberately keeps open. That listener
-       is load-bearing, not merely tolerated. Broker traffic is unaffected; this
-       governs only the operator's own management connection.
-
-       Note it does not stay on this object: ReconcileAndFilterAnnotations strips
-       only keys containing kubernetes.io or k8s.io, so this annotation is copied
-       onto every child the operator builds — Service, StatefulSet, ServiceAccount,
-       Role and the default-user Secret the tenant reads. Harmless, but it is why
-       an internal plumbing annotation shows up on tenant-visible objects. */}}
+       Expect this key on tenant-visible objects: ReconcileAndFilterAnnotations
+       strips only kubernetes.io / k8s.io keys, so the operator copies it onto every
+       child it builds. See README "The plaintext management listener". */}}
   annotations:
     rabbitmq.com/operator-connection-uri: "http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "rabbitmq.clusterDomain" . }}:15672"
   {{- end }}
@@ -70,17 +51,12 @@ spec:
   {{- end }}
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
   {{- if $tlsEnabled }}
-  {{- /* Setting spec.tls.secretName is the whole of it. The operator then writes its
-       own defaultTLSConf, supplying ssl_options.certfile/keyfile,
-       listeners.ssl.default=5671 and management.ssl.certfile/keyfile/port=15671, so
-       no additionalConfig is needed to serve AMQPS or management HTTPS. The same
-       branch writes management.tcp.port=15672, which is why the plaintext management
-       listener stays up while disableNonTLSListeners is unset.
-
-       No cacertfile is set on either listener. It would only matter for verifying
-       CLIENT certificates, which additionally requires verify_peer and
-       fail_if_no_peer_cert; without those the endpoint authenticates clients by
-       password inside the TLS session, not by certificate. */}}
+  {{- /* secretName is the whole of it: the operator's defaultTLSConf then supplies
+       ssl_options and management.ssl itself, so no additionalConfig is needed to
+       serve AMQPS or management HTTPS. That same branch writes
+       management.tcp.port=15672, which is why plaintext management stays up while
+       disableNonTLSListeners is unset. No cacertfile is set — it would only matter
+       for verifying CLIENT certificates, which this chart does not enable. */}}
   tls:
     secretName: {{ .Release.Name }}-tls
     {{- if $disableNonTLS }}
@@ -92,19 +68,12 @@ spec:
     {{- end }}
   {{- end }}
   override:
-    {{- /* No spec.override.service, in either direction.
-
-         It cannot REMOVE a port: the operator regenerates its default port set each
-         reconcile and applies the override as a strategic merge patch keyed on
-         `port`, which only adds or mutates. A TLS-only port list would be a no-op
-         that reads like a guarantee.
-
-         It must not ADD one either. Re-adding prometheus:15692, which enabling TLS
-         swaps for prometheus-tls:15691, churns on a LoadBalancer: updatePorts drops
-         any port name the operator does not own along with its NodePort, the
-         override reinstates it with nodePort unset, the apiserver reallocates, and
-         that write retriggers the operator's Service watch. ClusterIP escapes only
-         because NodePorts are zeroed there. See README "TLS scope". */}}
+    {{- /* Deliberately no spec.override.service. It cannot remove a port — the
+         override is a strategic merge keyed on `port` against defaults the operator
+         regenerates each reconcile — so a TLS-only port list would be a no-op that
+         reads like a guarantee. Re-adding one is worse: on a LoadBalancer it drives
+         a NodePort reallocation loop through the operator's Service watch. See
+         README "TLS scope". */}}
     statefulSet:
       spec:
         template:
