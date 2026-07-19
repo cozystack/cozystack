@@ -75,7 +75,11 @@ No two passthrough listeners may match the same SNI, counting the port-443 liste
 
 The listener is all this field creates. Nothing is routed until a `TLSRoute` attaches to it by `sectionName: tls-<name>` and names a backend Service, and because a passthrough listener never terminates TLS, the backend — not the Gateway — must hold the certificate for the listener's hostname. Route attachment is bounded the same way as every other listener: only `TLSRoute`, and only from namespaces carrying `namespace.cozystack.io/gateway` for this tenant — which, as in the security model above, means the tenant's own namespace, the admin-listed attached namespaces, and every child tenant inheriting this Gateway. Point a passthrough listener at a database with that full set in mind, not just the tenant's own namespace.
 
-This field is set on the `TenantGateway` resource directly; the chart exposes no corresponding value yet.
+Two current limitations are worth knowing before designing around this. Each entry must occupy its own port, so two instances of the same engine cannot both sit on the engine's native port distinguished only by SNI — that restriction is a deliberate narrowing for this phase rather than a Gateway API rule, and lifting it is a validation change with no API impact. And the SNI-overlap rule above exists because the pinned Cilium (1.19.5) selects a passthrough backend by SNI alone; the fix landed upstream in 1.19.6, so both restrictions should be revisited when the Cilium pin moves.
+
+This field is set on the `TenantGateway` resource directly; the chart exposes no corresponding value yet. That matters operationally: the `TenantGateway` object is rendered and owned by this chart, so a `kubectl edit` adding `tlsPassthroughListeners` is drift that Flux reverts on its next reconcile of the release. Until the chart exposes a value, treat the field as reachable only for experimentation on a suspended release.
+
+Two schema constraints tightened alongside this field apply to objects that already exist, since they are enforced on the next write rather than retroactively: `apex` must now be a lowercase hostname of at most 253 characters, and `tlsPassthroughServices` entries must be unique DNS-1123 labels. The shipped defaults and the chart's own `fail` on an empty host already conform, so an upgrade is a no-op in practice — but a cluster carrying a hand-edited upper-case apex will see its gateway release fail on the next apply rather than silently render a Gateway that Gateway API would reject anyway.
 
 ## Parameters
 
