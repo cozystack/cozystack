@@ -7,6 +7,8 @@
 Transport mTLS is always operator-managed and is not affected by tls.enabled.
 */}}
 {{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
+{{- /* Renders unconditionally, so this is the invocation that covers every path — including dashboards on with external access and chart-managed TLS both off. */ -}}
+{{- include "opensearch.validateReleaseName" . -}}
 ---
 apiVersion: opensearch.opster.io/v1
 kind: OpenSearchCluster

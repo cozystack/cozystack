@@ -861,6 +861,43 @@ tests:
           path: spec.security.tls.http.secret
         documentIndex: 0
 
+  # The dashboards-only path: no external access, no chart-managed TLS. The operator
+  # still creates a <release>-dashboards Service, which is a DNS-1035 label bounded at
+  # 63, so the bound applies here even though neither of the other two templates that
+  # invoke the guard renders anything in this configuration.
+  - it: applies the dashboards bound with external access and TLS both off
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      dashboards:
+        enabled: true
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch requires <=52 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
+
+  - it: accepts the longest dashboards-only name with external access and TLS off
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      dashboards:
+        enabled: true
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - isKind:
+          of: OpenSearchCluster
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.enable
+          value: true
+        documentIndex: 0
+
   # The part whose loss actually hurts: an empty tenant host must not stop the cluster
   # itself from rendering. A hard failure here takes the OpenSearchCluster CR, the
   # credentials Secret and the RBAC with it, so a running release goes not-Ready.
