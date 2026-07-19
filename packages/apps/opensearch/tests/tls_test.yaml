@@ -1008,6 +1008,34 @@ tests:
   # The external-dns hostname is built from the tenant host, not the in-cluster
   # domain: cozy.local does not resolve outside the cluster, and the name published
   # here has to be one the leaf certificate carries a SAN for.
+  # The operator labels Dashboards pods with opensearch.cluster.dashboards only.
+  # A selector naming opster.io/opensearch-cluster or app.kubernetes.io/* matches
+  # nothing, so the LoadBalancer comes up with no endpoints and no error — and this
+  # PR issues a certificate SAN and documents a hostname for that very Service.
+  - it: selects dashboards pods by the label the operator actually sets
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.selector["opensearch.cluster.dashboards"]
+          value: os-test
+        documentIndex: 1
+      - notExists:
+          path: spec.selector["app.kubernetes.io/component"]
+        documentIndex: 1
+      - notExists:
+          path: spec.selector["opster.io/opensearch-cluster"]
+        documentIndex: 1
+      # The API Service keeps the label the operator does set on data pods.
+      - equal:
+          path: spec.selector["opster.io/opensearch-cluster"]
+          value: os-test
+        documentIndex: 0
+
   - it: publishes external-dns hostnames under the tenant host
     set:
       external: true
