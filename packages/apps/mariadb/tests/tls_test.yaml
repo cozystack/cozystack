@@ -1197,6 +1197,21 @@ tests:
           path: spec.tls.required
           value: false
 
+  # The kindIs "invalid" guard on required is defensive only: an explicit null
+  # never reaches the template, because the schema types the field as a boolean
+  # and rejects it first. Pin that, so the guard is not mistaken for a live path
+  # and the rejection is not silently relaxed later.
+  - it: "an explicit required=null is rejected by the schema, not rendered"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        enabled: true
+        required: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "values don't meet the specifications of the schema(s) in the following chart(s):\nmariadb:\n- at '/tls/required': got null, want boolean\n"
+
   - it: "managed TLS honours an explicit required=true"
     templates:
       - templates/mariadb.yaml
