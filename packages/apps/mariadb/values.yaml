@@ -81,7 +81,7 @@ external: false
 
 ## @typedef {struct} TLS - TLS configuration.
 ## @field {*bool} enabled - Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager, and enforce TLS by default. This does not switch TLS on: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA and enforcement instead of the operator's CA with no enforcement. When omitted, defaults to the value of `external`.
-## @field {bool} [required] - Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies only when TLS is managed, where it defaults to true; when TLS is unmanaged, enforcement is left to the operator, which does not enforce. Set to false only during migration when legacy clients cannot use TLS yet.
+## @field {*bool} [required] - Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies only when TLS is managed, where it defaults to true; when TLS is unmanaged, enforcement is left to the operator, which does not enforce. Set to false only during migration when legacy clients cannot use TLS yet.
 
 ## @param {TLS} [tls] - TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Managed automatically when `external` is true.
 tls: {}
