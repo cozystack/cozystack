@@ -1,3 +1,4 @@
+{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -24,8 +25,15 @@ rules:
   resourceNames:
   # The cert-manager Secrets are deliberately absent: -ca-tls and -tls hold
   # private keys, so granting them here would hand the tenant signing material
-  # instead of a trust anchor. The tenant gets the key-free CA projection.
+  # instead of a trust anchor.
   - {{ .Release.Name }}-credentials
+  {{- if $tlsEnabled }}
+  # -ca-bundle is reconciled by the operator whenever TLS is enabled and holds
+  # only ca.crt, never a private key. It is the trust anchor clients need to
+  # verify the server, and it tracks CA rollovers, so it is the correct thing
+  # to hand the tenant.
+  - {{ .Release.Name }}-ca-bundle
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io

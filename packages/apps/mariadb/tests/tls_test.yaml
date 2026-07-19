@@ -807,7 +807,9 @@ tests:
             name: tls-ca
             readOnly: true
 
-  - it: "backup CronJob has tls-ca volume from leaf TLS secret when tls.enabled=true"
+  # The trust anchor comes from the operator's CA bundle, not the leaf Secret:
+  # the bundle spans a CA rollover, the leaf only holds the current signer.
+  - it: "backup CronJob takes tls-ca volume from the operator CA bundle when tls.enabled=true"
     templates:
       - templates/backup-cronjob.yaml
     set:
@@ -819,6 +821,16 @@ tests:
         cleanupStrategy: "--keep-last=3"
     asserts:
       - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              items:
+              - key: ca.crt
+                path: ca.crt
+      # The leaf Secret must not be mounted into the backup Pod at all.
+      - notContains:
           path: spec.jobTemplate.spec.template.spec.volumes
           content:
             name: tls-ca
@@ -895,8 +907,29 @@ tests:
       - equal:
           path: spec.isCA
           value: false
+      # The leaf carries the operator watch label but must never be marked as a
+      # publication source: its Secret holds the server private key.
       - notExists:
-          path: spec.secretTemplate
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+
+  # Both Secrets are referenced by the MariaDB CR (serverCASecretRef /
+  # serverCertSecretRef), and the operator gates those watches on this label.
+  # Without it a cert-manager renewal is not observed until the next resync.
+  - it: "both Certificates label their Secrets for the operator watch"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - exists:
+          path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
+        documentIndex: 1
+      - exists:
+          path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
+        documentIndex: 3
 
   # The publication labels are rendered inside the TLS gate, so with TLS off
   # the chain does not exist at all and nothing is marked for publication.
@@ -915,7 +948,7 @@ tests:
   # key-bearing cert-manager Secrets must not appear in it under any TLS
   # state. The tenant gets the key-free projection instead.
   # -------------------------------------------------------------------
-  - it: "dashboard Role never grants access to the key-bearing TLS Secrets"
+  - it: "dashboard Role grants the key-free bundle but never the key-bearing Secrets"
     templates:
       - templates/dashboard-resourcemap.yaml
     documentIndex: 0
@@ -932,6 +965,25 @@ tests:
       - contains:
           path: rules[1].resourceNames
           content: my-mariadb-credentials
+      # The operator-reconciled bundle holds ca.crt only, so it is the trust
+      # anchor the tenant is allowed to read.
+      - contains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-bundle
+
+  # With TLS off the operator reconciles no bundle, so granting it would name a
+  # Secret that never exists.
+  - it: "dashboard Role omits the CA bundle when TLS is disabled"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    documentIndex: 0
+    set:
+      tls:
+        enabled: false
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-bundle
 
   # -------------------------------------------------------------------
   # Cluster-domain fallback. The platform injects _cluster.cluster-domain

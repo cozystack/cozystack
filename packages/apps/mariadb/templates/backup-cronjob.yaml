@@ -91,9 +91,12 @@ spec:
           - name: cache
             emptyDir: {}
           {{- if $tlsEnabled }}
+          # -ca-bundle is the operator-reconciled trust bundle. It carries both
+          # the old and the new CA across a rollover, whereas the leaf Secret
+          # only ever holds the CA that signed the current certificate.
           - name: tls-ca
             secret:
-              secretName: {{ .Release.Name }}-tls
+              secretName: {{ .Release.Name }}-ca-bundle
               items:
               - key: ca.crt
                 path: ca.crt
