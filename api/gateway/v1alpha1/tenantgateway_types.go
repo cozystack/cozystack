@@ -286,8 +286,19 @@ type TenantGatewaySpec struct {
 	// unbounded strings makes the estimate exceed the per-CRD budget.
 	// The item length is a DNS-1123 label; the count leaves the
 	// listener budget room.
+	// listType=set makes the apiserver reject a repeated entry, which
+	// would otherwise render the same tls-<svc> listener twice and get
+	// the Gateway rejected wholesale. It costs nothing at install time
+	// — unlike a CEL rule, which is why it is expressed as a marker.
+	// The item pattern is a DNS-1123 label for the same reason the
+	// listener hostname carries one: the entry becomes the hostname
+	// <svc>.<apex>, so an upper-case or underscored value renders a
+	// listener hostname Gateway API refuses, taking every app's HTTPS
+	// listener down with it.
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +listType=set
 	// +optional
 	TLSPassthroughServices []string `json:"tlsPassthroughServices,omitempty"`
 
