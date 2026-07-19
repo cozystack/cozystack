@@ -1,5 +1,4 @@
 {{- if .Values.backup.enabled }}
-{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" }}
 {{ $image := .Files.Get "images/backup.json" | fromJson }}
 
 apiVersion: batch/v1
@@ -69,11 +68,9 @@ spec:
               name: tmp
             - mountPath: /.cache
               name: cache
-            {{- if $tlsEnabled }}
             - mountPath: /etc/mysql-ssl
               name: tls-ca
               readOnly: true
-            {{- end }}
             securityContext:
               allowPrivilegeEscalation: false
               capabilities:
@@ -90,17 +87,17 @@ spec:
             emptyDir: {}
           - name: cache
             emptyDir: {}
-          {{- if $tlsEnabled }}
           # -ca-bundle is the operator-reconciled trust bundle. It carries both
           # the old and the new CA across a rollover, whereas the leaf Secret
-          # only ever holds the CA that signed the current certificate.
+          # only ever holds the CA that signed the current certificate. Mounted
+          # unconditionally: the server always serves TLS and the bundle always
+          # exists, so the backup client can always verify.
           - name: tls-ca
             secret:
               secretName: {{ .Release.Name }}-ca-bundle
               items:
               - key: ca.crt
                 path: ca.crt
-          {{- end }}
           securityContext:
             runAsNonRoot: true
             runAsUser: 9000

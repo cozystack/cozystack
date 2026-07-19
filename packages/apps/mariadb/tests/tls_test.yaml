@@ -886,7 +886,11 @@ tests:
               - key: ca.crt
                 path: ca.crt
 
-  - it: "backup CronJob has no tls-ca volume when tls.enabled=false"
+  # These two used to assert the volume was absent when TLS is unmanaged. It is
+  # now always mounted, because the backup client always verifies. They also
+  # never actually asserted that: notContains compares whole list entries, so
+  # a partial {name: tls-ca} matched nothing and passed either way.
+  - it: "backup CronJob mounts the CA bundle when tls.enabled=false"
     templates:
       - templates/backup-cronjob.yaml
     set:
@@ -897,12 +901,17 @@ tests:
         s3Bucket: s3.example.org/test
         cleanupStrategy: "--keep-last=3"
     asserts:
-      - notContains:
+      - contains:
           path: spec.jobTemplate.spec.template.spec.volumes
           content:
             name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              items:
+              - key: ca.crt
+                path: ca.crt
 
-  - it: "backup CronJob has no tls-ca volume when external=false and tls.enabled unset"
+  - it: "backup CronJob mounts the CA bundle when external=false and tls.enabled unset"
     templates:
       - templates/backup-cronjob.yaml
     set:
@@ -912,10 +921,21 @@ tests:
         s3Bucket: s3.example.org/test
         cleanupStrategy: "--keep-last=3"
     asserts:
-      - notContains:
+      - contains:
           path: spec.jobTemplate.spec.template.spec.volumes
           content:
             name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              items:
+              - key: ca.crt
+                path: ca.crt
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].volumeMounts
+          content:
+            mountPath: /etc/mysql-ssl
+            name: tls-ca
+            readOnly: true
 
   # -------------------------------------------------------------------
   # CA publication contract. The chart owns the cert-manager chain, so it
@@ -1256,7 +1276,12 @@ tests:
           path: stringData["backup.sh"]
           pattern: "mysqldump -u \"\\$MYSQL_USER\" -h \"\\$MYSQL_HOST\" \\$SSL_OPTS"
 
-  - it: "backup-script Secret does not contain ssl flags when tls.enabled=false"
+  # The backup client verifies in every configuration. The server always serves
+  # TLS and the operator always reconciles the CA bundle, so there is nothing to
+  # gain from connecting unverified — and enforcement can be switched on
+  # independently of managed TLS, which would make an unverified backup client
+  # fail outright.
+  - it: "backup-script Secret still uses MariaDB TLS flags when tls.enabled=false"
     templates:
       - templates/backup-script.yaml
     set:
@@ -1267,15 +1292,59 @@ tests:
         s3Bucket: s3.example.org/test
         cleanupStrategy: "--keep-last=3"
     asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
       - notMatchRegex:
           path: stringData["backup.sh"]
           pattern: "--ssl-mode"
-      - notMatchRegex:
+
+  # The combination that used to break every backup run: enforcement on while
+  # TLS is unmanaged left the client with no CA and no verification flags.
+  - it: "backup-script Secret verifies when enforcement is on and TLS is unmanaged"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      tls:
+        required: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
           path: stringData["backup.sh"]
-          pattern: "--ssl-ca"
-      - notMatchRegex:
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
           path: stringData["backup.sh"]
           pattern: "--ssl-verify-server-cert"
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'SSL_OPTS=""'
+
+  - it: "backup CronJob mounts the CA bundle when enforcement is on and TLS is unmanaged"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      tls:
+        required: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.volumes
+          content:
+            name: tls-ca
+            secret:
+              secretName: my-mariadb-ca-bundle
+              items:
+              - key: ca.crt
+                path: ca.crt
 
   - it: "backup CronJob has tls-ca volumeMount when external=true and tls.enabled unset"
     templates:
