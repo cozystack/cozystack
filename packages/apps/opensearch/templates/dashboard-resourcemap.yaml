@@ -21,6 +21,12 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-credentials
+  # The key-free trust anchor the CA-extraction controller publishes. Listing it in
+  # the ApplicationDefinition only labels it for the tenant-resource registry; direct
+  # read still needs a grant here, which is why kafka carries both legs too.
+  # ONLY the projection: <release>-http-ca, -http-server and -dashboards-server all
+  # hold a private key and must never appear in this list.
+  - {{ .Release.Name }}.tenant-ca
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io
