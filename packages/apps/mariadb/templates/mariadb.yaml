@@ -106,8 +106,12 @@ spec:
   # TLS is enforced, not whether TLS exists.
   tls:
     enabled: true
-  {{- if $tlsEnabled }}
-    # required: true enforces require_secure_transport=ON (strict TLS for all connections).
+    # required: true enforces require_secure_transport=ON (strict TLS for all
+    # connections). It is emitted in every configuration, not only the managed
+    # one: enforcement is a sibling of enabled in the operator API and works
+    # against operator-issued certificates too, so gating it here would accept
+    # required: true and silently drop it — the worst outcome for a setting
+    # whose whole purpose is refusing unprotected connections.
     #
     # It defaults to false, and enforcement is opt-in, because enforcement has to
     # follow the trust anchor rather than lead it: until the platform publishes a
@@ -120,6 +124,7 @@ spec:
     #
     # `kindIs "invalid"` guards against unset field; an explicit value is preserved.
     required: {{ if kindIs "invalid" $tlsRequired }}false{{ else }}{{ $tlsRequired }}{{ end }}
+  {{- if $tlsEnabled }}
     serverCertSecretRef:
       name: {{ .Release.Name }}-tls
     serverCASecretRef:

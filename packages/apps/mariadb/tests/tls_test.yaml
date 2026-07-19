@@ -35,9 +35,10 @@ tests:
 
   # spec.tls.enabled is true in every configuration, because the operator
   # substitutes TLS{Enabled: true} whenever spec.tls is absent — omitting the
-  # block does not disable TLS, it only hides that TLS is on. What the unmanaged
-  # case must NOT carry is enforcement or certificate references: those are the
-  # operator's own defaults to pick.
+  # block does not disable TLS, it only hides that TLS is on. Enforcement is
+  # stated explicitly in every configuration too, defaulting to false. What the
+  # unmanaged case must NOT carry is the certificate references: those select
+  # chart-owned material that does not exist there.
   - it: "mariadb.yaml declares TLS enabled but unmanaged when external=false and tls.enabled is unset"
     templates:
       - templates/mariadb.yaml
@@ -47,10 +48,47 @@ tests:
       - equal:
           path: spec.tls.enabled
           value: true
-      - notExists:
+      - equal:
           path: spec.tls.required
+          value: false
       - notExists:
           path: spec.tls.serverCertSecretRef
+      - notExists:
+          path: spec.tls.serverCASecretRef
+
+  # Enforcement is not gated on managed TLS. It works against the operator's own
+  # certificates, so dropping it here would accept required: true and silently
+  # not enforce — the worst outcome for a setting that exists to refuse
+  # unprotected connections.
+  - it: "unmanaged TLS still honours an explicit required=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+      tls:
+        required: true
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - equal:
+          path: spec.tls.required
+          value: true
+      - notExists:
+          path: spec.tls.serverCertSecretRef
+
+  - it: "unmanaged TLS honours required=true even with tls.enabled explicitly false"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: true
+      tls:
+        enabled: false
+        required: true
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: true
       - notExists:
           path: spec.tls.serverCASecretRef
 
@@ -255,8 +293,9 @@ tests:
       - equal:
           path: spec.tls.enabled
           value: true
-      - notExists:
+      - equal:
           path: spec.tls.required
+          value: false
       - notExists:
           path: spec.tls.serverCertSecretRef
       - notExists:
@@ -1033,8 +1072,9 @@ tests:
       - equal:
           path: spec.tls.enabled
           value: true
-      - notExists:
+      - equal:
           path: spec.tls.required
+          value: false
 
   # Enforcement is opt-in: it must follow the published trust anchor, not lead
   # it. Defaulting to true would refuse plaintext connections on the next

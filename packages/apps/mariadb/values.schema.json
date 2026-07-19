@@ -137,7 +137,7 @@
           "type": "boolean"
         },
         "required": {
-          "description": "Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Enforcement is opt-in and defaults to false: it has to follow the trust anchor, not lead it, because requiring TLS before the platform publishes a CA to the tenant would demand encryption while leaving clients nothing to verify the server against. Set to true once your clients have the CA. This default is temporary and flips to true as an announced change, together with the published anchor. Applies only when TLS is managed; when it is unmanaged, enforcement is left to the operator, which does not enforce.",
+          "description": "Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Enforcement is opt-in and defaults to false: it has to follow the trust anchor, not lead it, because requiring TLS before the platform publishes a CA to the tenant would demand encryption while leaving clients nothing to verify the server against. Set to true once your clients have the CA. This default is temporary and flips to true as an announced change, together with the published anchor.",
           "type": "boolean"
         }
       }
