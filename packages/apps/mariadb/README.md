@@ -105,7 +105,9 @@ Mounting that Secret into a client Pod is the usual in-cluster approach; nothing
 
 #### Migrating an existing instance
 
-Nothing changes until you opt in: an existing instance keeps the operator's CA and its current enforcement, upgrade or not. Setting `tls.enabled: true` is what moves the instance to a CA issued for it, and that is the step to plan around.
+An existing instance keeps the operator's CA and its current enforcement whether or not you upgrade; setting `tls.enabled: true` is what moves it to a CA issued for it, and that is the step to plan around.
+
+One thing does change on upgrade, and only for instances using the deprecated `backup.*` CronJob: the backup client now verifies the server it connects to, where before it connected without checking. It verifies against the operator's own CA bundle, which is present on every instance, and the operator's certificate already covers the hostname the job connects to — so this needs no action. It is called out because it is a behaviour change to a running job rather than something you opted into.
 
 Managed TLS does not enforce anything by itself — enforcement is a separate opt-in — but it does change who issues the server certificate. A client that reads `mariadb-<name>-ca-bundle` at connect time follows the change automatically, because the operator keeps both the old and the new CA in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
 

@@ -40,6 +40,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}
                   key: root-password
+            - name: MYSQL_CA_SECRET
+              value: {{ .Release.Name }}-ca-bundle
             - name: MYSQL_HOST
               # replicas>1 enables replication (offload dumps to a secondary);
               # replicas=1 has no replication and only the bare service exists.
@@ -98,8 +100,9 @@ spec:
           # there is a window on first install where it does not exist yet; a
           # required mount would leave the pod in ContainerCreating, and with
           # concurrencyPolicy: Forbid that one stuck pod blocks every later
-          # backup indefinitely. Absent the file, the client fails to start with
-          # a message naming it, the Job retries, and the schedule keeps moving.
+          # backup indefinitely. The script checks for the file before connecting
+          # because the client reports its absence only as "TLS/SSL error: No
+          # such file or directory", without naming what it could not read.
           - name: tls-ca
             secret:
               secretName: {{ .Release.Name }}-ca-bundle

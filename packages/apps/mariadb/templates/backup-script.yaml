@@ -27,6 +27,17 @@ stringData:
       every run would fail.
     */}}
     SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-verify-server-cert"
+
+    # The client reports a missing CA as "TLS/SSL error: No such file or
+    # directory" without naming the file, which is not enough to act on. The
+    # volume is an optional mount, so the file is absent exactly when the
+    # operator has not reconciled the trust bundle yet; say so.
+    if [ ! -r /etc/mysql-ssl/ca.crt ]; then
+      echo "ERROR: cannot read /etc/mysql-ssl/ca.crt, projected from Secret ${MYSQL_CA_SECRET}." >&2
+      echo "The operator reconciles that Secret once TLS certificates settle; retry after it exists." >&2
+      exit 1
+    fi
+
     JOB_ID="job-$(uuidgen|cut -f1 -d-)"
     DB_LIST=$(mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" $SSL_OPTS -sNe 'SHOW DATABASES;' | grep -v '^\(#.*\|mysql\|sys\|information_schema\|performance_schema\)$')
     echo DB_LIST=$(echo "$DB_LIST" | shuf) # shuffle list

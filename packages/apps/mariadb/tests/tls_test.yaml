@@ -1279,6 +1279,39 @@ tests:
   # TLS-enabled backup run. These tests therefore assert the dialect, not the
   # mere presence of some SSL string.
   # -------------------------------------------------------------------
+  # A missing CA file is reported by the client only as "TLS/SSL error: No such
+  # file or directory", with no path, so the script has to name it itself.
+  - it: "backup-script Secret checks the CA file exists and names it"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'if \[ ! -r /etc/mysql-ssl/ca\.crt \]'
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'cannot read /etc/mysql-ssl/ca\.crt'
+
+  - it: "backup CronJob passes the CA Secret name to the script"
+    templates:
+      - templates/backup-cronjob.yaml
+    set:
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - contains:
+          path: spec.jobTemplate.spec.template.spec.containers[0].env
+          content:
+            name: MYSQL_CA_SECRET
+            value: my-mariadb-ca-bundle
+
   - it: "backup-script Secret uses MariaDB TLS verification flags when tls.enabled=true"
     templates:
       - templates/backup-script.yaml
