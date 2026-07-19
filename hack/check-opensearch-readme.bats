@@ -40,3 +40,11 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # neither may be listed here — only the controller's key-free projection.
   ! grep -qE "opensearch-.*-(http-server|http-ca|http-cert)" "$COZYRDS"
 }
+
+@test "cozyrds opensearch.yaml selects the projection, never a publish source" {
+  # The selector must name the key-free projection (tenant-ca), not the label that
+  # marks a publish SOURCE (publish-ca-cert). Sources are key-bearing: the chart puts
+  # publish-ca-cert on the cert-manager CA Secret, which holds the CA private key.
+  # Selecting by that label instead would hand the tenant the key directly.
+  ! grep -q "internal.cozystack.io/publish-ca-cert" "$COZYRDS"
+}

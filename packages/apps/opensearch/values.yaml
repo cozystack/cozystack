@@ -120,8 +120,10 @@ version: v2
 ##   The certificate is issued by a per-release private CA, so clients must trust it
 ##   explicitly. The platform publishes that trust anchor as the key-free Secret
 ##   <release>.tenant-ca, holding ca.crt alone; the private key never leaves the
-##   namespace. Rotating the certificate is a deliberate act — it is mounted by
-##   subPath and is not refreshed in place — so delete the Secret and restart the pods.
+##   namespace. Rotating the server certificate is a deliberate act — it is mounted
+##   by subPath and is not refreshed in place — so delete the <release>-http-server
+##   Secret and restart the OpenSearch pods. Do not delete <release>-http-ca for this:
+##   that mints a new CA, and until the pods restart they still trust the old one.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
