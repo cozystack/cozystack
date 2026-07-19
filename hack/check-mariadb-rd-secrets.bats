@@ -27,7 +27,9 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 }
 
 @test "mariadb-rd selects the tenant CA projection by label" {
-  grep -q "internal.cozystack.io/tenant-ca: \"true\"" "$COZYRDS"
+  # Must appear inside a matchLabels selector, not merely somewhere in the file:
+  # the label only exposes the projection when it is what the selector matches on.
+  grep -A2 "matchLabels:" "$COZYRDS" | grep -q "internal.cozystack.io/tenant-ca: \"true\""
 }
 
 # An empty matchLabels compiles to a match-everything selector, which would
