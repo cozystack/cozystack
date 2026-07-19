@@ -131,7 +131,7 @@ The order that avoids downtime:
 
 Step 3 is the only one that can refuse a connection, and it happens when you choose it rather than when a platform upgrade rolls through.
 
-Going back is the same change in reverse: setting `tls.enabled: false` hands issuance back to the operator, and clients have to pick up the operator's CA from the bundle again. The Certificates are removed, but cert-manager does not delete the Secrets it issued, so `mariadb-<name>-tls` and `mariadb-<name>-ca-tls` stay behind in the namespace until you remove them. Nothing reads them at that point, and no tenant grant covers them.
+Going back is the same change in reverse: setting `tls.enabled: false` hands issuance back to the operator, and clients have to pick up the operator's CA from the bundle again. The Certificates are removed, but cert-manager does not delete the Secrets it issued, so `mariadb-<name>-tls` and `mariadb-<name>-ca-tls` stay behind until you remove them. Nothing reads them at that point and no tenant grant covers them, but they do hold private keys, so they are worth deleting. Uninstalling the instance removes them for you.
 
 ### Known issues
 
