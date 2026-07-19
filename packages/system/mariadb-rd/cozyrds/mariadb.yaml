@@ -41,7 +41,39 @@ spec:
     sourceSecretName: "{{ .release }}-ca-bundle"
     sourceKey: ca.crt
   secrets:
-    exclude: []
+    # Backstop for the include selector below. matchLabels carries no name
+    # constraint, so any Secret of this instance that acquires the tenant-ca
+    # label gets promoted with its data copied verbatim. The source label is
+    # guarded by a policy; the destination label is not. Exclude wins over
+    # include, so naming the dangerous Secrets here closes the enumerable part
+    # of that gap.
+    #
+    # The guarantee is exactly as wide as this list: matching is by exact name,
+    # there are no globs, so a Secret introduced by a future operator version
+    # or created transiently mid-rotation is not covered. The real protection
+    # stays the fact that only the extraction controller stamps the label —
+    # this closes the set we can enumerate, not the set that can exist.
+    exclude:
+      - resourceNames:
+          # Private keys. -ca-tls and -tls are issued by this chart through
+          # cert-manager and hold the CA and server keys; -ca, -server-cert and
+          # -client-cert are the operator's equivalents when it issues its own.
+          - mariadb-{{ .name }}-ca-tls
+          - mariadb-{{ .name }}-tls
+          - mariadb-{{ .name }}-ca
+          - mariadb-{{ .name }}-server-cert
+          - mariadb-{{ .name }}-client-cert
+          # Database credentials. -credentials is the tenant's own and is
+          # included below; these are the internal ones it must not also get.
+          - mariadb-{{ .name }}-root
+          - mariadb-{{ .name }}-password
+          - mariadb-{{ .name }}-repl-password
+          - mariadb-{{ .name }}-metrics-password
+          # Backup credentials: S3 keys and the restic password, which together
+          # grant read access to every dump ever taken.
+          - mariadb-{{ .name }}-backup
+          # Registry pull credentials.
+          - mariadb-{{ .name }}-regsecret
     include:
       - resourceNames:
           - mariadb-{{ .name }}-credentials
