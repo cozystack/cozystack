@@ -27,21 +27,9 @@ it (pemtrustedcas). The operator reads the cert-manager secret's tls.crt/tls.key
 CA via the cert-manager.io/issuer-kind annotation. As a result securityadmin verifies the
 server certificate, is accepted as admin, and the security config (users/roles) applies.
 
-NAME-LENGTH GUARD: the binding limits are on the certificate contents, not on the
-object names — Certificate, Issuer and Secret names are DNS subdomains, bounded at
-253, which nothing here approaches. What is actually bounded:
-
-  - each SAN is a DNS name whose labels are bounded at 63, and the longest label
-    built below is "<release>-dashboards", capping the release at 52;
-  - "<release>-discovery" caps it at 53;
-  - the CA's commonName is an X.509 CN, bounded at 64, and "<release>-http-ca"
-    caps the release at 56.
-
-The guard therefore tracks the binding limit rather than sitting under it: 52 when
-Dashboards is enabled, 53 otherwise. A tighter fixed number would reject names the
-platform itself accepts — the aggregated API admits release names up to 53 — and
-those releases render today. Fail only where the certificate genuinely could not be
-issued, with a message naming the label that actually binds.
+NAME-LENGTH GUARD: see opensearch.validateReleaseName in _names.tpl, which owns the
+limits table and is invoked below. Keeping a second copy of those numbers here is how
+the two drifted apart before.
 */}}
 {{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
 {{- if $tlsEnabled }}
