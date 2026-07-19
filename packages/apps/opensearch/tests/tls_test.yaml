@@ -723,9 +723,11 @@ tests:
         enabled: true
       external: true
       _namespace: {}
+      dashboards:
+        enabled: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 5
       - contains:
           path: spec.dnsNames
           content: os-test.tenant-test.svc.cozy.local
@@ -734,6 +736,16 @@ tests:
           path: spec.dnsNames
           content: os-test.
         documentIndex: 3
+      # The dashboards leaf carries the same guard and must be held to it — an empty
+      # host there would emit a trailing-dot SAN on the more exposed service.
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc.cozy.local
+        documentIndex: 4
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-dashboards.
+        documentIndex: 4
 
 ---
 ---
