@@ -44,8 +44,23 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # written a different way, or a selector that happens to match a key-bearing
   # Secret, has to fail this too. Every entry must be one of exactly two known-safe
   # forms — the credentials Secret by name, or the tenant-ca projection by label.
+  command -v yq >/dev/null || { echo "yq (mikefarah v4+) is required" >&2; exit 1; }
+
   credentials='{"resourceNames":["opensearch-{{ .name }}-credentials"]}'
   tenant_ca='{"matchLabels":{"internal.cozystack.io/tenant-ca":"true"}}'
+
+  entries="$(yq --output-format=json -I=0 '.spec.secrets.include[]' "$COZYRDS")"
+
+  # Guard against a vacuous pass. A loop over nothing is a green test, and this one
+  # guards tenant read access to a Secret holding the HTTP CA private key — so assert
+  # the list is the size we think it is before concluding anything about its members.
+  # Without this the test would still report ok if the path were restructured away.
+  count="$(printf '%s\n' "$entries" | grep -c '^{')"
+  if [ "$count" -ne 2 ]; then
+      echo "expected exactly 2 secrets.include entries, found $count" >&2
+      printf '%s\n' "$entries" >&2
+      return 1
+  fi
 
   while IFS= read -r entry; do
       [ -n "$entry" ] || continue
@@ -55,7 +70,7 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
           return 1
       fi
   done <<EOF
-$(yq --output-format=json -I=0 '.spec.secrets.include[]' "$COZYRDS")
+$entries
 EOF
 }
 
