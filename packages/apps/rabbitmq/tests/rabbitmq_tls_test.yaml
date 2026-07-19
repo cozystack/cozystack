@@ -336,3 +336,120 @@ tests:
       # hardcode a URI the operator derives correctly on its own.
       - notExists:
           path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+
+  # -----------------------------------------------------------------------
+  # tls.disableNonTLSListeners: opt-in, and refused where it would break.
+  #
+  # The flag writes `listeners.tcp = none` into rabbitmq.conf — broker level, so
+  # in-cluster clients lose plaintext at the same instant external ones do. It
+  # stays off unless asked for, so enabling TLS never closes a working listener.
+  #
+  # It also forces messaging-topology-operator onto TLS regardless of how that
+  # operator is configured, because its expression is
+  #   TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())
+  # and it then verifies against the system trust pool, which cannot hold a
+  # per-release CA. Pinning it back to plaintext is no escape — that is the port
+  # the flag closes. So the combination with users/vhosts is refused at render
+  # time instead of failing silently on the cluster.
+  # -----------------------------------------------------------------------
+
+  - it: does not set disableNonTLSListeners by default when TLS is on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  - it: sets disableNonTLSListeners when explicitly opted in
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
+
+  - it: ignores the flag when TLS is off, since the operator rejects that combination
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  - it: drops the operator connection annotation when the plaintext port is closed
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # Pointing the operator at a port this flag just closed would be a
+      # connection refused dressed up as configuration.
+      - notExists:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+
+  - it: refuses the flag combined with users
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      users.alice.password: hackme
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be combined with users or vhosts"
+
+  - it: refuses the flag combined with vhosts
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      vhosts.myapp.roles.admin[0]: alice
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be combined with users or vhosts"
+
+  - it: allows the flag when users and vhosts are managed outside the chart
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true

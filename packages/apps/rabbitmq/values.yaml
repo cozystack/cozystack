@@ -77,6 +77,7 @@ external: false
 
 ## @typedef {struct} TLS - TLS configuration for RabbitMQ.
 ## @field {*bool} enabled - Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
+## @field {bool} [disableNonTLSListeners] - Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.
 
 ## @param {TLS} [tls] - TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
 ## When TLS is enabled, the trust anchor reaches the tenant as <release>.tenant-ca:
@@ -86,6 +87,12 @@ external: false
 ## private key next to the same ca.crt, and RBAC cannot filter by key.
 ## Publishing depends on the CA-extraction controller, which ships separately;
 ## until it is present the projection is not created and TLS itself is unaffected.
+##
+## disableNonTLSListeners is opt-in and defaults to false, because turning it on
+## closes the plaintext listeners for every client at once — in-cluster included —
+## rather than only for external ones. It also stops messaging-topology-operator
+## from reconciling User, Vhost and Permission objects, so the chart refuses the
+## combination with `users` or `vhosts` instead of letting it fail silently.
 tls: {}
 
 ##
