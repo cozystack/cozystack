@@ -18,6 +18,7 @@ package tenantgateway
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -25,6 +26,8 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	schemacel "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	apiservervalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"sigs.k8s.io/yaml"
@@ -39,12 +42,23 @@ import (
 // that silently failed to generate.
 const crdPath = "../../../packages/system/cozystack-controller/definitions/gateway.cozystack.io_tenantgateways.yaml"
 
-// specValidator compiles the spec schema's CEL rules exactly as the
-// apiserver would. A rule that fails to compile, or whose estimated cost
+// admissionCheck bundles the two validators the apiserver applies to a
+// spec: the structural schema (types, pattern, minimum/maximum,
+// maxItems) and the compiled CEL rules. Both must be run to answer "is
+// this write accepted" — the constraints under test are split across
+// the two, and checking only one silently ignores half of them.
+type admissionCheck struct {
+	cel        *schemacel.Validator
+	structural *schema.Structural
+	schema     apiservervalidation.SchemaValidator
+}
+
+// specValidator compiles the spec schema exactly as the apiserver
+// would. A CEL rule that fails to compile, or whose estimated cost
 // exceeds the per-CRD budget, surfaces here — which matters because a
 // CRD the apiserver refuses to install takes the whole platform's
 // gateway API down, and nothing else in this suite would notice.
-func specValidator(t *testing.T) (*schemacel.Validator, *schema.Structural) {
+func specValidator(t *testing.T) *admissionCheck {
 	t.Helper()
 
 	raw, err := os.ReadFile(crdPath)
@@ -81,14 +95,25 @@ func specValidator(t *testing.T) (*schemacel.Validator, *schema.Structural) {
 	if err != nil {
 		t.Fatalf("structural schema: %v", err)
 	}
-	return schemacel.NewValidator(structural, true, celconfig.PerCallLimit), structural
+	schemaValidator, _, err := apiservervalidation.NewSchemaValidator(&internal)
+	if err != nil {
+		t.Fatalf("schema validator: %v", err)
+	}
+	return &admissionCheck{
+		cel:        schemacel.NewValidator(structural, true, celconfig.PerCallLimit),
+		structural: structural,
+		schema:     schemaValidator,
+	}
 }
 
-// celRejects runs the compiled spec rules against a spec object and
-// reports whether any rule rejected it.
-func celRejects(t *testing.T, v *schemacel.Validator, s *schema.Structural, spec map[string]interface{}) bool {
+// rejects reports whether the apiserver would refuse this spec, running
+// the structural schema and the CEL rules the same way admission does.
+func (a *admissionCheck) rejects(t *testing.T, spec map[string]interface{}) bool {
 	t.Helper()
-	errs, _ := v.Validate(context.TODO(), field.NewPath("spec"), s, spec, nil, celconfig.RuntimeCELCostBudget)
+	if errs := apiservervalidation.ValidateCustomResource(field.NewPath("spec"), spec, a.schema); len(errs) > 0 {
+		return true
+	}
+	errs, _ := a.cel.Validate(context.TODO(), field.NewPath("spec"), a.structural, spec, nil, celconfig.RuntimeCELCostBudget)
 	return len(errs) > 0
 }
 
@@ -102,12 +127,15 @@ func celRejects(t *testing.T, v *schemacel.Validator, s *schema.Structural, spec
 // admitted before the rules existed. If one side stops rejecting a case
 // the other rejects, this test says so.
 //
-// Name-format and port-range cases are deliberately absent: those are
-// plain schema pattern/minimum/maximum constraints, not CEL, so there is
-// no CEL side to compare against. TestValidateTLSPassthroughListeners
-// covers them on the Go side.
+// The check runs the structural schema alongside the CEL rules, because
+// the constraints are split across both layers and the split is an
+// implementation detail the caller should not have to know: hostname
+// format rides on the field's pattern, the reserved-port and apex rules
+// on CEL. Asserting only one layer is how the hostname-format gap went
+// unnoticed — every malformed hostname is inside the apex, so the CEL
+// rule waves it through and only the pattern stops it.
 func TestSpecCELMatchesControllerValidation(t *testing.T) {
-	v, s := specValidator(t)
+	a := specValidator(t)
 
 	const apex = "foo.example.com"
 	type listener struct {
@@ -164,6 +192,33 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 			services:   []string{"api"},
 			wantReject: true,
 		},
+		// Hostname format is carried by the Pattern on the field, not
+		// by CEL, but it belongs in this table for the same reason the
+		// CEL rules do: the apex rule is a plain suffix test, so
+		// without the pattern each of these typos is within the apex,
+		// passes admission, and is caught only by the controller —
+		// after the object is already in etcd and the reconcile chain
+		// behind it has aborted.
+		{
+			name:       "underscore in hostname",
+			listeners:  []listener{{"pg", 5432, "pg_main.foo.example.com"}},
+			wantReject: true,
+		},
+		{
+			name:       "upper-case in hostname",
+			listeners:  []listener{{"pg", 5432, "PG.foo.example.com"}},
+			wantReject: true,
+		},
+		{
+			name:       "leading dash in hostname label",
+			listeners:  []listener{{"pg", 5432, "-pg.foo.example.com"}},
+			wantReject: true,
+		},
+		{
+			name:       "wildcard not in the left-most label",
+			listeners:  []listener{{"pg", 5432, "*.*.foo.example.com"}},
+			wantReject: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -190,7 +245,7 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 				spec["tlsPassthroughServices"] = svcs
 			}
 
-			gotCEL := celRejects(t, v, s, spec)
+			gotCEL := a.rejects(t, spec)
 			if gotCEL != tc.wantReject {
 				t.Errorf("CEL rejected=%v, want %v", gotCEL, tc.wantReject)
 			}
@@ -206,19 +261,81 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 	}
 }
 
+// TestPassthroughListenerCapFitsGatewayAPI pins that a spec filled to
+// the schema's maxItems still renders a Gateway the apiserver accepts.
+// Gateway API caps spec.listeners at 64 and renderGateway always adds
+// the port-80 listener plus the terminate listeners, so a cap of 64
+// here would let a spec that satisfies every other rule render 65 and
+// be rejected wholesale — taking every app's HTTPS listener down with
+// it, the outcome the validation exists to avoid. The bound is read
+// from the generated CRD so raising the marker without re-checking the
+// arithmetic fails here rather than in a cluster.
+func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
+	const gatewayAPIListenerCap = 64
+
+	raw, err := os.ReadFile(crdPath)
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(raw, &crd); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+	var maxItems int64
+	for i := range crd.Spec.Versions {
+		v := &crd.Spec.Versions[i]
+		if v.Name != "v1alpha1" || v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+		spec := v.Schema.OpenAPIV3Schema.Properties["spec"]
+		field := spec.Properties["tlsPassthroughListeners"]
+		if field.MaxItems == nil {
+			t.Fatal("tlsPassthroughListeners has no maxItems; the cap is unbounded")
+		}
+		maxItems = *field.MaxItems
+	}
+
+	listeners := make([]gatewayv1alpha1.TLSPassthroughListener, 0, maxItems)
+	for i := int64(0); i < maxItems; i++ {
+		listeners = append(listeners, gatewayv1alpha1.TLSPassthroughListener{
+			Name:     fmt.Sprintf("db%d", i),
+			Port:     int32(10000 + i),
+			Hostname: fmt.Sprintf("db%d.foo.example.com", i),
+		})
+	}
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                    "foo.example.com",
+			CertMode:                gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:        "cilium",
+			TLSPassthroughListeners: listeners,
+		},
+	}
+
+	r := &Reconciler{Scheme: newScheme(t)}
+	gw, err := r.renderGateway(tgw, []string{"app.foo.example.com"}, nil)
+	if err != nil {
+		t.Fatalf("renderGateway: %v", err)
+	}
+	if got := len(gw.Spec.Listeners); got > gatewayAPIListenerCap {
+		t.Errorf("maxItems=%d renders %d listeners, over the Gateway API cap of %d", maxItems, got, gatewayAPIListenerCap)
+	}
+}
+
 // TestSpecCELAcceptsEmptyPassthroughListeners guards the has() guards
 // themselves: every rule is written to short-circuit when the optional
 // field is absent, so a spec that never mentions tlsPassthroughListeners
 // must pass. Dropping a "!has(...)" prefix would reject every existing
 // TenantGateway in the cluster on its next write.
 func TestSpecCELAcceptsEmptyPassthroughListeners(t *testing.T) {
-	v, s := specValidator(t)
+	a := specValidator(t)
 	for _, spec := range []map[string]interface{}{
 		{"apex": "foo.example.com"},
 		{"apex": "foo.example.com", "tlsPassthroughServices": []interface{}{"api"}},
 		{"apex": "foo.example.com", "tlsPassthroughListeners": []interface{}{}},
 	} {
-		if celRejects(t, v, s, spec) {
+		if a.rejects(t, spec) {
 			t.Errorf("spec %v was rejected, want accepted", spec)
 		}
 	}

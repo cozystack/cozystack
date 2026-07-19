@@ -180,8 +180,18 @@ type TLSPassthroughListener struct {
 	// wildcard hostname, and must fall within the tenant apex — equal to
 	// Apex or a subdomain of it — since every listener on the tenant
 	// Gateway is constrained to the apex.
+	//
+	// The pattern is copied verbatim from Gateway API's own Hostname
+	// type, so a value this field accepts is one the rendered listener
+	// accepts. Without it only length is checked at admission, and an
+	// ordinary typo — an underscore, an upper-case letter, a leading
+	// dash — passes the apex rule (a plain suffix test) and is caught
+	// only by the controller, which is far too late: renderGateway is
+	// the first reconcile step, so the object is already in etcd and
+	// the whole chain behind it aborts.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +required
 	Hostname string `json:"hostname"`
 }
@@ -269,10 +279,17 @@ type TenantGatewaySpec struct {
 	// terminates TLS, so the Gateway neither holds nor issues that
 	// certificate. Declaring an entry without attaching a TLSRoute opens
 	// the port and matches the SNI but has nowhere to forward the stream.
+	// The cap is 62, not Gateway API's 64: renderGateway always emits
+	// the port-80 http listener and at least one terminate listener
+	// besides these, so allowing 64 entries here would let a spec that
+	// satisfies every rule above render 65 listeners and be rejected
+	// wholesale — taking every app's HTTPS listener down with it, the
+	// exact failure the other rules exist to prevent. It also bounds
+	// the cost estimate for the CEL rules above.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
-	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:MaxItems=62
 	TLSPassthroughListeners []TLSPassthroughListener `json:"tlsPassthroughListeners,omitempty"`
 
 	// GatewayClassName names the GatewayClass to attach the rendered
