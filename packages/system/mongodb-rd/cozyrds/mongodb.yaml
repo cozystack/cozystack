@@ -32,16 +32,30 @@ spec:
   # the key-free <release>.tenant-ca Secret; the include selector below then
   # makes that projection readable by the tenant.
   #
-  # ORDERING: caCert is not yet a field of ApplicationDefinitionSpec, and the
-  # CRD is structural, so until the CA-extraction controller ships the Go type
-  # and regenerated CRD this block is pruned at admission rather than stored —
-  # silently, with no event and nothing visible in `kubectl get`. The block is
-  # therefore inert until that component lands: no projection is published and
-  # the label selector below matches nothing. Everything else here is live —
-  # the exclude list and the tenant Role take effect immediately — so the
-  # security posture does not depend on the ordering, only the trust-anchor
-  # delivery does. Read `kubectl get applicationdefinition mongodb -o yaml`
-  # showing no caCert as the expected pre-controller state, not as drift.
+  # ORDERING: caCert is not yet a field of ApplicationDefinitionSpec, so until
+  # the CA-extraction controller ships the Go type and the regenerated CRD,
+  # THIS BRANCH DOES NOT INSTALL. The failure is not a silent prune at
+  # admission: the helm-controller builds a typed patch against the CRD schema
+  # and refuses a field the schema does not declare, so the request never
+  # reaches the API server and the release fails to reconcile outright —
+  #
+  #   Helm upgrade failed for release cozy-system/mongodb-rd: failed to create
+  #   typed patch object (Kind=ApplicationDefinition): .spec.caCert: field not
+  #   declared in schema
+  #
+  # It retries without converging, so the mongodb ApplicationDefinition is
+  # never created and MongoDB is unavailable as a managed service for as long
+  # as this ships ahead of the controller.
+  #
+  # The merge order is therefore enforced mechanically rather than by
+  # convention, and the red end-to-end run is that enforcement working. Do not
+  # "fix" the red by deleting this block: dropping it would trade a loud,
+  # accurate failure for a chart that installs while the trust anchor silently
+  # never appears. The block stays; the controller lands first.
+  #
+  # Everything else in this file is independent of that ordering — the exclude
+  # list and the tenant Role carry the security posture and neither depends on
+  # caCert existing.
   caCert:
     sourceSecretName: "{{ .release }}-ca-cert"
     sourceKey: ca.crt
