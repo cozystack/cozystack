@@ -97,7 +97,9 @@ Mounting that Secret into a client Pod is the usual in-cluster approach; nothing
 
 #### Migrating an existing instance
 
-Turning on managed TLS does not disconnect anything by itself: enforcement is off by default, so existing clients keep working while you migrate them. What does change is who issues the server certificate — the CA moves from the operator's to one issued for this instance. A client that verifies against `<instance>-ca-bundle` follows that automatically, because the bundle carries the old and the new CA together; a client that copied `ca.crt` somewhere and pinned it has to re-read it.
+Managed TLS does not enforce anything by itself — enforcement is off by default — but it does change who issues the server certificate: the CA moves from the operator's to one issued for this instance. A client that reads `<instance>-ca-bundle` at connect time follows that automatically, because the operator keeps both CAs in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
+
+Note that instances with `external: true` get managed TLS automatically, so for those the CA change arrives with the platform upgrade rather than with an edit of your own. If you have pinned clients, set `tls.enabled: false` before upgrading to keep the operator's CA, then migrate deliberately.
 
 The order that avoids downtime:
 

@@ -83,15 +83,16 @@ spec:
   duration: 8760h
   renewBefore: 720h
   isCA: false
-  # Server authentication only, matching what the operator issues for its own
-  # server certificates. MariaDB treats server and client certificates as
-  # separate roles, and a user declared REQUIRE X509 accepts any client
-  # certificate signed by a trusted CA, so granting the server key client auth
-  # would let it authenticate as such a user.
+  # Server authentication only. The operator issues its own server certificates
+  # the same way — server auth, never client auth — and keeps client auth on the
+  # separate client certificates it manages, which is what replication actually
+  # presents. MariaDB treats the two as distinct roles, and a user declared
+  # REQUIRE X509 accepts any client certificate signed by a trusted CA, so
+  # granting the server key client auth would let it authenticate as such a user.
   #
   # digital signature is the usage an ECDSA key actually needs, for the ECDHE
-  # signature in TLS 1.2 and TLS 1.3. key encipherment covers RSA key transport
-  # and means nothing for a P-256 key.
+  # signature. This set deliberately drops the key encipherment bit the operator
+  # also sets: it covers RSA key transport and means nothing for a P-256 key.
   usages:
     - server auth
     - digital signature
