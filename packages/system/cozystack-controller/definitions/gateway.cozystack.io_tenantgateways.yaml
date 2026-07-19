@@ -68,8 +68,10 @@ spec:
               every published app on the tenant, with nothing but Ready=False to
               point at the field that caused it. Rejecting the write keeps the bad
               spec out of etcd and the chain intact. The controller keeps its own
-              copy of these checks: it must stay correct for objects admitted
-              before the rules existed, and it is what the unit tests exercise.
+              copy of these checks: during an upgrade the controller and the CRD
+              roll out separately, so it cannot assume the rules were applied to
+              what it reads, and it is the layer the unit tests can exercise
+              directly.
 
               Name uniqueness is not restated here — the listType=map/listMapKey=name
               markers on the field already make the apiserver enforce it.
@@ -85,7 +87,14 @@ spec:
                   this value, and without a declared bound the apiserver's
                   install-time cost estimator assumes the maximum string size and
                   refuses the whole CRD.
+                  The pattern matches the one on listener hostnames. Without it an
+                  apex containing an upper-case letter is accepted while every
+                  tlsPassthroughListeners entry under it becomes unsatisfiable —
+                  the hostname pattern forbids upper case, so no value can be both
+                  well-formed and within the apex, and the error names the hostname
+                  rather than the apex that caused it.
                 maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
               attachedNamespaces:
                 description: |-

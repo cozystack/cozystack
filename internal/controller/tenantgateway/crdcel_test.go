@@ -305,6 +305,41 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 	}
 }
 
+// TestPassthroughListenerNameUniquenessIsEnforcedBySchema pins the
+// listType=map / listMapKey=name markers.
+//
+// Name uniqueness is the one rule with no CEL equivalent and no entry
+// in the parity table — the field doc and the parity test both point at
+// these markers as the reason. Nothing else asserts they are there:
+// the per-object harness does not implement list-map semantics, so
+// dropping the markers leaves the whole suite green while duplicate
+// names become admissible, render two tls-<name> listeners, and get the
+// Gateway rejected wholesale.
+func TestPassthroughListenerNameUniquenessIsEnforcedBySchema(t *testing.T) {
+	raw, err := os.ReadFile(crdPath)
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(raw, &crd); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+	for i := range crd.Spec.Versions {
+		v := &crd.Spec.Versions[i]
+		if v.Name != "v1alpha1" || v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+		spec := v.Schema.OpenAPIV3Schema.Properties["spec"]
+		field := spec.Properties["tlsPassthroughListeners"]
+		if field.XListType == nil || *field.XListType != "map" {
+			t.Fatalf("tlsPassthroughListeners x-kubernetes-list-type=%v, want map; duplicate names would be admissible", field.XListType)
+		}
+		if len(field.XListMapKeys) != 1 || field.XListMapKeys[0] != "name" {
+			t.Fatalf("tlsPassthroughListeners x-kubernetes-list-map-keys=%v, want [name]", field.XListMapKeys)
+		}
+	}
+}
+
 // TestPassthroughListenerCapFitsGatewayAPI pins that a spec filled to
 // the schema's maxItems, on a tenant publishing one app, still renders
 // within Gateway API's 64-listener cap. The bound is read from the
