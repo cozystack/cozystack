@@ -33,11 +33,12 @@ spec:
   #
   # WARNING: this block does not install until the change that adds spec.caCert
   # to the ApplicationDefinition CRD lands (#3299). The field is not in the
-  # schema yet, and it is not dropped quietly on the way in: helm-controller
-  # builds its server-side-apply patch against the schema the API server
-  # publishes, and an undeclared field fails that patch with "field not declared
-  # in schema" before any request is sent. The HelmRelease fails as a whole, so
-  # the result is no install rather than a degraded one.
+  # schema yet, and it is not dropped quietly on the way in: Flux v2.8's
+  # Server-Side Apply enforces the schema at the API server, and an undeclared
+  # field rejects the apply with "field not declared in schema". Under v2.7's
+  # client-side patch it would have been dropped silently and been merely
+  # inert. The HelmRelease fails as a whole, so the result is no install
+  # rather than a degraded one.
   #
   # That makes the merge order mechanically forced rather than a sequencing
   # preference: the CRD change goes first, and only then does anything here
