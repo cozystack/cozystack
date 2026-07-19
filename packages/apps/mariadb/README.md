@@ -131,7 +131,15 @@ The order that avoids downtime:
 
 Step 3 is the only one that can refuse a connection, and it happens when you choose it rather than when a platform upgrade rolls through.
 
-Going back is the same change in reverse: setting `tls.enabled: false` hands issuance back to the operator, and clients have to pick up the operator's CA from the bundle again. The Certificates are removed, but cert-manager does not delete the Secrets it issued, so `mariadb-<name>-tls` and `mariadb-<name>-ca-tls` stay behind until you remove them. Nothing reads them at that point and no tenant grant covers them, but they do hold private keys, so they are worth deleting. Uninstalling the instance removes them for you.
+Going back is the same change in reverse: setting `tls.enabled: false` hands issuance back to the operator, and clients have to pick up the operator's CA from the bundle again.
+
+One thing does not clean itself up. The Certificates are removed, but cert-manager is configured not to own the Secrets it issued, so `mariadb-<name>-ca-tls` (the CA private key) and `mariadb-<name>-tls` (the server private key) stay in the namespace. Nothing reads them at that point and no tenant grant exposes them, but they are private keys, so remove them:
+
+```bash
+kubectl delete secret mariadb-<name>-ca-tls mariadb-<name>-tls --ignore-not-found
+```
+
+Uninstalling the instance does this for you; only the turn-it-off-and-keep-running case needs the manual step.
 
 ### Known issues
 
