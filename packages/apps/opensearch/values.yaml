@@ -81,7 +81,8 @@ storageClass: ""
 ##   it never issues a delete. The stale entry keeps pointing at the LoadBalancer
 ##   until it is removed from the zone by hand.
 ##   ONLY chart-managed TLS covers those names. With tls.enabled true (or auto-on on
-##   OpenSearch 2.0.0 and later) the certificate carries both as SANs. With TLS
+##   OpenSearch 2.0.0 and later) each service gets its own certificate carrying its
+##   own external name — they are issued separately, not as one covering both. With TLS
 ##   operator-managed — tls.enabled false, or the fallback below 2.0.0 — the operator
 ##   issues a certificate for in-cluster names only, so an external client reaching
 ##   the published name cannot verify it and must skip verification or supply its own
@@ -130,13 +131,17 @@ version: v2
 ##   The certificate is issued by a per-release private CA, so clients must trust it
 ##   explicitly. The platform publishes that trust anchor as the key-free Secret
 ##   <release>.tenant-ca, holding ca.crt alone; the private key never leaves the
-##   namespace. The certificate is mounted by subPath and is never refreshed in
-##   place, so ANY change to it needs a manual step, not just a deliberate rotation:
-##   changing external, the tenant host or the cluster domain makes cert-manager
-##   reissue with the new names while the pods keep serving the old certificate, with
-##   no error anywhere. In every such case, delete the <release>-http-server Secret
-##   and restart the OpenSearch pods. Do not delete <release>-http-ca to do this: that
-##   mints a new CA, and until the pods restart they still trust the old one.
+##   namespace. Neither service picks up a reissued certificate on its own, so ANY
+##   change to one needs a manual step, not just a deliberate rotation: changing
+##   external, the tenant host or the cluster domain makes cert-manager reissue with
+##   the new names while the pods keep serving the old material, with no error
+##   anywhere. Those three reissue BOTH certificates, so complete it on both sides —
+##   delete <release>-http-server and restart the OpenSearch pods, and, when
+##   Dashboards is enabled, delete <release>-dashboards-server and restart the
+##   Dashboards deployment separately. Doing only the first leaves Dashboards serving
+##   a certificate that no longer matches its own name. Do not delete <release>-http-ca
+##   to do this: that mints a new CA, and until everything restarts the old one is
+##   still what is trusted.
 ##   UPGRADE NOTE: an existing external release with this switch unset is on
 ##   operator-managed TLS today and moves to chart-managed TLS the first time it is
 ##   reconciled after this becomes available. That rolls the cluster and re-anchors it
@@ -145,7 +150,8 @@ version: v2
 ##   Turning this off again on a release that had it on also needs a manual cleanup:
 ##   cert-manager keeps its Secrets after the certificates are removed, so the tenant
 ##   keeps receiving the old CA while the endpoint has moved to an operator-issued
-##   certificate. Delete <release>-http-ca and <release>-http-server to complete it.
+##   certificate. Delete <release>-http-ca, <release>-http-server and, if Dashboards
+##   was enabled, <release>-dashboards-server to complete it.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
