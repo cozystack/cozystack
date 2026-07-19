@@ -27,6 +27,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -768,7 +769,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
 	}
 	httpsAllowedRoutes := allowedRoutes.DeepCopy()
-	httpsAllowedRoutes.Kinds = port443Kinds
+	httpsAllowedRoutes.Kinds = slices.Clone(port443Kinds)
 
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
 		// Both modes serve the apex and every subdomain off a single
@@ -878,7 +879,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
 		passthroughAllowed := allowedRoutes.DeepCopy()
-		passthroughAllowed.Kinds = port443Kinds
+		passthroughAllowed.Kinds = slices.Clone(port443Kinds)
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
 			Port:     443,
