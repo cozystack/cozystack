@@ -1,5 +1,4 @@
 {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
-{{- $authClients := include "redis.tls.authClients" . -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -22,17 +21,20 @@ rules:
   resourceNames:
   - "{{ .Release.Name }}-auth"
   {{- if $tlsEnabled }}
-  # CA-only secret (ca.crt, no private key). Tenants trust this to verify the
-  # Redis server. The CA private key ({{ .Release.Name }}-ca-tls) is deliberately
-  # NOT granted here — exposing it would let tenants mint certificates trusted by
-  # the whole cluster.
+  # CA-only Secret, published by the operator holding just ca.crt. It is what a
+  # client needs to verify the Redis server, and it carries no private key.
+  #
+  # Two key-bearing Secrets of this release are deliberately NOT granted:
+  #   - {{ .Release.Name }}-ca-tls, the CA private key. Anyone holding it can
+  #     mint certificates that every client trusting this release's CA accepts.
+  #   - {{ .Release.Name }}-tls, the server leaf and its private key. Anyone
+  #     holding it can impersonate this release's Redis and Sentinel endpoints.
+  #
+  # This stays true regardless of tls.authClients. When authClients is optional
+  # or yes, Redis asks connecting clients for a certificate signed by the same
+  # CA, and the platform does not currently mint a client certificate for the
+  # tenant — see the TLS section of README.md.
   - "{{ .Release.Name }}-ca-cert"
-  {{- if eq $authClients "yes" }}
-  # authClients=yes requires clients to present a certificate signed by the CA.
-  # They reuse the server leaf secret as their client identity. A dedicated
-  # per-tenant client certificate would be the stricter long-term design.
-  - "{{ .Release.Name }}-tls"
-  {{- end }}
   {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
