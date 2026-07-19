@@ -260,3 +260,79 @@ tests:
   # Baseline (no TLS): RabbitmqCluster always renders
   # -----------------------------------------------------------------------
 
+
+  # -----------------------------------------------------------------------
+  # messaging-topology-operator must keep using the plaintext management port.
+  #
+  # spec.tls.secretName makes RabbitmqCluster.TLSEnabled() true, and the topology
+  # operator then computes useTLSForConnection = TLSEnabled() && (!connectUsingHTTP
+  # || DisableNonTLSListeners()). connectUsingHTTP comes from
+  # CONNECT_USING_PLAIN_HTTP, which the cozystack Deployment does not set, so it
+  # would dial https://...:15671 and verify against x509.SystemCertPool() — which
+  # cannot contain a per-release self-signed CA. Every User, Vhost and Permission
+  # this chart renders would fail with "certificate signed by unknown authority".
+  # The annotation makes extractURIandScheme report tlsEnabled=false.
+  # -----------------------------------------------------------------------
+
+  - it: pins the operator connection to plaintext management when TLS is on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          value: "http://myrabbitmq.tenant-test.svc.cozy.local:15672"
+
+  - it: pins the operator connection on the external path too
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          value: "http://myrabbitmq.tenant-test.svc.cozy.local:15672"
+
+  - it: uses an http scheme, since https would fail against the system cert pool
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          pattern: "^http://"
+
+  - it: adds no connection annotation when TLS is off
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # Without TLS the operator already uses plaintext; pinning would only
+      # hardcode a URI the operator derives correctly on its own.
+      - notExists:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
