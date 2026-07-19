@@ -66,11 +66,17 @@ spec:
 #
 # The operator can issue this leaf itself, via spec.tls.serverCertIssuerRef
 # pointed at the CA Issuer above, which would remove this hand-written list.
-# It is not used because the operator computes the SAN list from the cluster's
-# own service names and offers no way to extend it: its TLS spec has no
-# alt-names field of any kind, so the external hostname — the only reason
-# external: true exists — could never appear in the certificate, and an
+# It is not used because at the pinned operator version (25.10.2) the SAN list
+# is computed from the cluster's own service names with no way to extend it —
+# the TLS spec has no alt-names field — so the external hostname, the only
+# reason external: true exists, could never appear in the certificate and an
 # external client would fail hostname verification against it.
+#
+# That is version-scoped, not permanent: upstream has since added
+# spec.tls.serverCertAdditionalNames, which TLSServerDNSNames appends. Once the
+# operator is bumped past that, the issuer path can carry the external hostname
+# and everything below here can go. Worth revisiting at the next bump rather
+# than treating this as settled.
 #
 # The consequence is that this list has to track the operator's service naming
 # by hand, and nothing verifies that it still does. The test suite pins the full
