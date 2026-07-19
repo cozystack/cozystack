@@ -166,6 +166,35 @@ tests:
       - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
 
+  # publish-ca-cert marks a SOURCE to lift ca.crt out of; tenant-ca marks the
+  # key-free projection that tenants may read. The CA Secret is the former and
+  # must never be the latter: it stores the CA private key under tls.key, and
+  # the ResourceDefinition promotes to a tenant secret BY LABEL, so stamping
+  # either visibility label here would hand that key to every tenant subject.
+  - it: key-bearing CA Secret is never marked as a tenant-readable trust anchor
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
+  - it: key-bearing leaf Secret is never marked as a tenant-readable trust anchor
+    set:
+      tls:
+        enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenantresource"]
+
   ###################################################
   # SAN coverage (internal, tls.enabled=true)       #
   ###################################################
