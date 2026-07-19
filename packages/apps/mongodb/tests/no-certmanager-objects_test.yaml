@@ -1,0 +1,56 @@
+suite: chart renders no cert-manager objects
+
+# The PSMDB operator owns the entire cert-manager chain — the self-signed
+# bootstrap Issuer, the CA Certificate, the CA-backed Issuer and the leaf
+# certificates — and controls the CA it embeds in the pods. Anything this chart
+# rendered would be orphaned and ignored as a trust anchor while looking like
+# it participated. The invariant is stated in both templates/mongodb.yaml and
+# the README; this suite is what stops it from silently becoming untrue.
+#
+# Deliberately NOT scoped with `templates:` — the point is to see every
+# document the chart produces, not one file.
+
+release:
+  name: mg-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cozy.local
+
+tests:
+  - it: renders no cert-manager Certificate
+    asserts:
+      - not: true
+        containsDocument:
+          kind: Certificate
+          apiVersion: cert-manager.io/v1
+
+  - it: renders no cert-manager Issuer
+    asserts:
+      - not: true
+        containsDocument:
+          kind: Issuer
+          apiVersion: cert-manager.io/v1
+
+  - it: renders no cert-manager objects with external access enabled
+    set:
+      external: true
+      _namespace:
+        host: example.com
+    asserts:
+      - not: true
+        containsDocument:
+          kind: Certificate
+          apiVersion: cert-manager.io/v1
+      - not: true
+        containsDocument:
+          kind: Issuer
+          apiVersion: cert-manager.io/v1
+
+  - it: renders no cert-manager ClusterIssuer
+    asserts:
+      - not: true
+        containsDocument:
+          kind: ClusterIssuer
+          apiVersion: cert-manager.io/v1
