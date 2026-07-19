@@ -79,7 +79,11 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
   # and under secrets.exclude it is the backstop doing its job; neither must
   # trip this. Brace spacing is not pinned, the entry may be quoted, and a
   # trailing comment must not hide it.
-  awk '/^    include:/{inblock=1; next} /^  [a-z]/{inblock=0} inblock' "$COZYRDS" \
+  awk '/^  secrets:/{sec=1; inc=0; next}
+       /^  [a-z]/{sec=0; inc=0}
+       sec && /^    include:/{inc=1; next}
+       sec && /^    [a-z]/{inc=0}
+       sec && inc' "$COZYRDS" \
     | sed 's/#.*$//' \
     | grep -E "^[[:space:]]*-[[:space:]].*-(ca-)?tls\"?[[:space:]]*$" && {
         echo "Found a key-bearing TLS Secret in the tenant include list" >&2
@@ -113,7 +117,11 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 # The backstop must not swallow what the tenant is supposed to receive: exclude
 # beats include, so an over-broad entry here silently removes the trust anchor.
 @test "mariadb-rd does not exclude the Secrets it exposes" {
-  excluded=$(awk '/^    exclude:/{i=1; next} /^    include:/{i=0} i' "$COZYRDS")
+  excluded=$(awk '/^  secrets:/{sec=1; ex=0; next}
+                  /^  [a-z]/{sec=0; ex=0}
+                  sec && /^    exclude:/{ex=1; next}
+                  sec && /^    [a-z]/{ex=0}
+                  sec && ex' "$COZYRDS")
   for n in credentials ca-bundle; do
     if echo "$excluded" | grep -q -- "-$n\$"; then
       echo "exclude list contains -$n, which the tenant is meant to read" >&2
