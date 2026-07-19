@@ -19,7 +19,8 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 # -ca-tls and -tls hold the CA and server private keys. Declaring either as the
 # publication source would run the extraction next to private key material.
 @test "mariadb-rd never names a key-bearing Secret as the CA source" {
-  if grep -E "sourceSecretName:.*-(ca-)?tls\"" "$COZYRDS"; then
+  # Quote-agnostic: an unquoted value is just as wrong as a quoted one.
+  if grep -E "sourceSecretName:.*-(ca-)?tls[\"[:space:]]*$" "$COZYRDS"; then
     echo "CA source points at a key-bearing Secret" >&2
     exit 1
   fi
@@ -39,7 +40,8 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 }
 
 @test "mariadb-rd does not expose key-bearing TLS Secrets by name" {
-  if grep -E "^\s+- mariadb-\{\{ \.name \}\}-(ca-)?tls\s*$" "$COZYRDS"; then
+  # Brace spacing is not pinned: any list entry ending in -tls or -ca-tls fails.
+  if grep -E "^[[:space:]]*-[[:space:]].*-(ca-)?tls[[:space:]]*$" "$COZYRDS"; then
     echo "Found a key-bearing TLS Secret in the tenant include list" >&2
     exit 1
   fi
