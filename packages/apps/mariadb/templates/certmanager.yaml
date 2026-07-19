@@ -73,8 +73,14 @@ spec:
 # external client would fail hostname verification against it.
 #
 # The consequence is that this list has to track the operator's service naming
-# by hand. The test suite pins the full expected set so a drift shows up as a
-# failing test rather than as a handshake error in a cluster.
+# by hand, and nothing verifies that it still does. The test suite pins the full
+# set, which catches an accidental edit here, but it compares this template
+# against a copy of itself — it cannot notice the operator renaming a service.
+# The operator does not check either: with both serverCASecretRef and
+# serverCertSecretRef supplied it skips certificate reconciliation entirely and
+# never looks at the SANs. So an upstream rename surfaces as a handshake failure
+# in a cluster, and closing that gap needs an e2e case that connects, not
+# another rendering assertion.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:

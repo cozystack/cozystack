@@ -5,10 +5,11 @@ suite: TLS configuration for MariaDB
 # Neither enforces: enforcement is opt-in through tls.required and defaults to
 # false. TLS itself is on in every row — the operator serves it regardless — so
 # no row here turns TLS off:
+# Managing TLS is opt-in and is NOT derived from external:
 #   1. external=false, tls.enabled unset  → unmanaged
-#   2. external=true,  tls.enabled unset  → managed (inherits external)
-#   3. external=true,  tls.enabled=false  → unmanaged (explicit overrides)
-#   4. external=false, tls.enabled=true   → managed (explicit overrides)
+#   2. external=true,  tls.enabled unset  → unmanaged (external does not imply it)
+#   3. external=true,  tls.enabled=false  → unmanaged (explicit, same result)
+#   4. external=any,   tls.enabled=true   → managed (the only way in)
 
 release:
   name: my-mariadb
@@ -93,9 +94,10 @@ tests:
           path: spec.tls.serverCASecretRef
 
   # -------------------------------------------------------------------
-  # Case 2: external=true, tls.enabled unset → TLS enabled via external
+  # Case 2: tls.enabled=true → managed. external only adds the external SAN;
+  # it does not select managed TLS on its own.
   # -------------------------------------------------------------------
-  - it: "certmanager.yaml renders 4 documents (selfsigned Issuer, CA Cert, CA Issuer, leaf Cert) when external=true and tls.enabled is unset"
+  - it: "certmanager.yaml renders 4 documents (selfsigned Issuer, CA Cert, CA Issuer, leaf Cert) when tls.enabled=true"
     templates:
       - templates/certmanager.yaml
     set:
@@ -106,7 +108,7 @@ tests:
       - hasDocuments:
           count: 4
 
-  - it: "first document is a selfsigned Issuer when TLS enabled via external"
+  - it: "first document is a selfsigned Issuer when TLS is managed"
     templates:
       - templates/certmanager.yaml
     set:
@@ -127,7 +129,7 @@ tests:
       - exists:
           path: spec.selfSigned
 
-  - it: "second document is the CA Certificate when TLS enabled via external"
+  - it: "second document is the CA Certificate when TLS is managed"
     templates:
       - templates/certmanager.yaml
     set:
@@ -152,7 +154,7 @@ tests:
           path: spec.issuerRef.name
           value: my-mariadb-selfsigned
 
-  - it: "third document is the CA Issuer when TLS enabled via external"
+  - it: "third document is the CA Issuer when TLS is managed"
     templates:
       - templates/certmanager.yaml
     set:
@@ -171,7 +173,7 @@ tests:
           path: spec.ca.secretName
           value: my-mariadb-ca-tls
 
-  - it: "fourth document is the leaf Certificate when TLS enabled via external"
+  - it: "fourth document is the leaf Certificate when TLS is managed"
     templates:
       - templates/certmanager.yaml
     set:
@@ -248,9 +250,13 @@ tests:
   # The full SAN set, pinned exactly. The operator cannot issue this certificate
   # for us — its TLS spec has no alt-names field, so the external hostname could
   # never be included — which means this list is maintained by hand against the
-  # operator's service naming. Pinning the exact set turns a drift in that naming
-  # into a failing test instead of a handshake failure in a cluster. lengthEqual
-  # is what makes it catch additions, not just removals.
+  # operator's service naming.
+  #
+  # What this pins is the template against an accidental edit: lengthEqual makes
+  # it catch an addition as well as a removal. What it cannot do is notice the
+  # operator renaming a service, because the expected list here is a copy of what
+  # the template produces, not of what the operator expects. That gap needs an
+  # e2e case that actually completes a handshake.
   - it: "leaf Certificate SAN set is exactly the expected list"
     templates:
       - templates/certmanager.yaml
