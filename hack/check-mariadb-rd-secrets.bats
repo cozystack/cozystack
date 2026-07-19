@@ -34,11 +34,25 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 
 # An empty matchLabels compiles to a match-everything selector, which would
 # project every Secret in the namespace — credentials included — to the tenant.
+# Both spellings are empty: the inline "matchLabels: {}" and a bare
+# "matchLabels:" with nothing nested under it.
 @test "mariadb-rd has no empty matchLabels selector" {
-  if grep -qE "matchLabels:\s*\{\s*\}" "$COZYRDS"; then
-    echo "Found an empty matchLabels selector (matches every Secret)" >&2
+  if grep -qE "matchLabels:[[:space:]]*\{[[:space:]]*\}" "$COZYRDS"; then
+    echo "Found an inline empty matchLabels selector (matches every Secret)" >&2
     exit 1
   fi
+  # A bare matchLabels: must be followed by a more-indented "key: value" line.
+  awk '
+    /matchLabels:[[:space:]]*$/ {
+      match($0, /^[[:space:]]*/); indent = RLENGTH
+      if ((getline nextline) <= 0) { print "matchLabels: at end of file"; exit 1 }
+      match(nextline, /^[[:space:]]*/)
+      if (RLENGTH <= indent || nextline !~ /:/) {
+        print "Found a bare matchLabels: with no labels under it (matches every Secret)"
+        exit 1
+      }
+    }
+  ' "$COZYRDS"
 }
 
 @test "mariadb-rd does not expose key-bearing TLS Secrets by name" {
