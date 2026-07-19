@@ -113,11 +113,11 @@ spec:
     # required: true and silently drop it — the worst outcome for a setting
     # whose whole purpose is refusing unprotected connections.
     #
-    # It defaults to false, and enforcement is opt-in, because enforcement has to
-    # follow the trust anchor rather than lead it: until the platform publishes a
-    # key-free CA to the tenant, requiring TLS would tell clients they must
-    # encrypt while giving them nothing to verify the server against. It also
-    # keeps a platform upgrade from refusing connections that work today.
+    # It defaults to false so that enforcement is a decision rather than
+    # something a platform upgrade does to a running instance: switching it on
+    # refuses every client not yet moved to TLS. The anchor to move them with is
+    # already reachable — the tenant can read <release>-ca-bundle — so the order
+    # is distribute, migrate, then enforce.
     #
     # This default is temporary. It flips to true as an announced change, in the
     # same release that makes the published anchor universal.

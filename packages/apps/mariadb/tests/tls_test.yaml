@@ -1,10 +1,10 @@
 suite: TLS configuration for MariaDB
 
-# Tests cover the tri-state tls.enabled logic. "Managed" means the chart issues
-# the CA and server certificate; "unmanaged" means the operator keeps its own.
-# Neither enforces: enforcement is opt-in through tls.required and defaults to
-# false. TLS itself is on in every row — the operator serves it regardless — so
-# no row here turns TLS off:
+# "Managed" means the chart issues the CA and server certificate; "unmanaged"
+# means the operator keeps its own. Neither enforces: enforcement is opt-in
+# through tls.required and defaults to false. TLS itself is on in every row —
+# the operator serves it regardless — so no row here turns TLS off.
+#
 # Managing TLS is opt-in and is NOT derived from external:
 #   1. external=false, tls.enabled unset  → unmanaged
 #   2. external=true,  tls.enabled unset  → unmanaged (external does not imply it)
@@ -955,6 +955,7 @@ tests:
             name: tls-ca
             secret:
               secretName: my-mariadb-ca-bundle
+              optional: true
               items:
               - key: ca.crt
                 path: ca.crt
@@ -990,6 +991,7 @@ tests:
             name: tls-ca
             secret:
               secretName: my-mariadb-ca-bundle
+              optional: true
               items:
               - key: ca.crt
                 path: ca.crt
@@ -1010,6 +1012,7 @@ tests:
             name: tls-ca
             secret:
               secretName: my-mariadb-ca-bundle
+              optional: true
               items:
               - key: ca.crt
                 path: ca.crt
@@ -1425,6 +1428,7 @@ tests:
             name: tls-ca
             secret:
               secretName: my-mariadb-ca-bundle
+              optional: true
               items:
               - key: ca.crt
                 path: ca.crt
