@@ -35,7 +35,11 @@ The comparison runs against the resolved image tag rather than the version
 enum, so it stays correct if the version mapping changes.
 */}}
 {{- define "opensearch.tls.enabled" -}}
-{{- /* default dict so an explicit `tls: null` degrades to unset rather than a nil deref */ -}}
+{{- /*
+Defensive only: Helm coalesces an explicit `tls: null` back to the `tls: {}` in
+values.yaml, so nil does not reach here today and no test can exercise it. The
+default keeps that true if values.yaml ever stops defaulting the key.
+*/ -}}
 {{- $tls := .Values.tls | default dict -}}
 {{- $explicit := not (kindIs "invalid" $tls.enabled) -}}
 {{- $requested := ternary ($tls.enabled | toString) (.Values.external | default false | toString) $explicit -}}

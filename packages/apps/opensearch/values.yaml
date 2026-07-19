@@ -74,11 +74,16 @@ storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
 ##   The LoadBalancer Services are published to external-dns as
-##   <release>.<tenant-host> and <release>-dashboards.<tenant-host>, and those are
-##   the names the TLS certificate carries SANs for. Releases created before this
-##   naming was introduced were published under the in-cluster domain instead, which
-##   does not resolve outside the cluster; enabling or re-applying external access
-##   retires the old record and publishes the new name.
+##   <release>.<tenant-host> and <release>-dashboards.<tenant-host>. Releases created
+##   before this naming was introduced were published under the in-cluster domain
+##   instead, which does not resolve outside the cluster; enabling or re-applying
+##   external access retires the old record and publishes the new name.
+##   ONLY chart-managed TLS covers those names. With tls.enabled true (or auto-on on
+##   OpenSearch 2.0.0 and later) the certificate carries both as SANs. With TLS
+##   operator-managed — tls.enabled false, or the fallback below 2.0.0 — the operator
+##   issues a certificate for in-cluster names only, so an external client reaching
+##   the published name cannot verify it and must skip verification or supply its own
+##   certificate out of band.
 external: false
 
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
@@ -124,6 +129,10 @@ version: v2
 ##   by subPath and is not refreshed in place — so delete the <release>-http-server
 ##   Secret and restart the OpenSearch pods. Do not delete <release>-http-ca for this:
 ##   that mints a new CA, and until the pods restart they still trust the old one.
+##   Turning this off again on a release that had it on also needs a manual cleanup:
+##   cert-manager keeps its Secrets after the certificates are removed, so the tenant
+##   keeps receiving the old CA while the endpoint has moved to an operator-issued
+##   certificate. Delete <release>-http-ca and <release>-http-server to complete it.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}

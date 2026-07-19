@@ -63,6 +63,17 @@ spec:
   # endpoint without gaining access to the CA private key stored here under tls.key.
   # The release label is required on this leg: cert-manager issues the Secret, so it
   # carries neither an OwnerReference nor Helm metadata to attribute it by.
+  #
+  # TURNING TLS OFF DOES NOT WITHDRAW THIS ANCHOR. Helm removes the Certificate, but
+  # cert-manager leaves the Secret (enableCertificateOwnerRef=false), so it keeps
+  # matching the publish label and the controller keeps projecting it — while the
+  # endpoint has gone back to an operator-issued certificate under a different CA.
+  # Tenants are then handed an anchor that no longer verifies the server. Nothing the
+  # chart renders can prevent this: the label leg withdraws on the source Secret
+  # disappearing, and Helm does not own that Secret. Until the controller gains a
+  # withdrawal signal for a removed Certificate, disabling chart-managed TLS on a
+  # release that had it means deleting <release>-http-ca and <release>-http-server by
+  # hand. Verification fails closed in the meantime; no key is exposed.
   secretTemplate:
     labels:
       internal.cozystack.io/publish-ca-cert: "true"
