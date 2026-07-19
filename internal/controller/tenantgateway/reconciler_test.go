@@ -2333,6 +2333,38 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 		{"hostname collides with a passthrough service listener", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("pgapi", 5432, "api.foo.example.com"),
 		}, []string{"api"}, apex, true},
+		// A wildcard matches any number of labels to its left, so
+		// exact-string dedup is not enough — these all resolve the same
+		// ClientHello to two listeners.
+		{"wildcard covers an exact listener hostname", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("wild", 5432, "*.db.foo.example.com"),
+			mk("pg", 5433, "pg.db.foo.example.com"),
+		}, nil, apex, true},
+		// Reachable from stock chart values: tlsPassthroughServices
+		// defaults to api/vm-exportproxy/cdi-uploadproxy, each
+		// rendering <svc>.<apex> on 443.
+		{"wildcard covers a shipped passthrough service hostname", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("wild", 5432, "*.foo.example.com"),
+		}, []string{"api"}, apex, true},
+		{"two identical wildcards on different ports", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("w1", 5432, "*.db.foo.example.com"),
+			mk("w2", 5433, "*.db.foo.example.com"),
+		}, nil, apex, true},
+		{"broader wildcard covers a narrower one", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("broad", 5432, "*.foo.example.com"),
+			mk("narrow", 5433, "*.db.foo.example.com"),
+		}, nil, apex, true},
+		// Disjoint wildcards must still be allowed — the guard rejects
+		// overlap, not wildcards.
+		{"disjoint wildcards coexist", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "*.pg.foo.example.com"),
+			mk("my", 5433, "*.my.foo.example.com"),
+		}, nil, apex, false},
+		// A wildcard does not match its own bare suffix.
+		{"wildcard does not cover its bare suffix", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("wild", 5432, "*.db.foo.example.com"),
+			mk("bare", 5433, "db.foo.example.com"),
+		}, nil, apex, false},
 		{"duplicate passthrough service alongside listeners", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("postgres", 5432, "postgres.foo.example.com"),
 		}, []string{"api", "vm-exportproxy", "api"}, apex, true},
