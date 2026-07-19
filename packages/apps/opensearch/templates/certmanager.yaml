@@ -139,14 +139,19 @@ metadata:
 spec:
   secretName: {{ .Release.Name }}-http-server
   # LIFETIME MATCHES THE CA, AND THERE IS NO renewBefore, because a reissue cannot
-  # reach the running pods. Passing http.caSecret — which securityadmin needs — moves
-  # the operator off mountFolder onto three mount() calls, and those carry
-  # SubPath: filename. The kubelet never refreshes a subPath-mounted Secret file, and
-  # nothing in the operator restarts the pods when the Secret changes, so whatever
-  # cert-manager writes back is not what the pods serve. A one-year leaf therefore
-  # expired in place: cert-manager reissued into the Secret while the pods kept
-  # serving the old certificate until it ran out, taking HTTPS on 9200 down and
-  # breaking securityadmin on a timer. Matching the CA's lifetime removes that fuse.
+  # reach the running pods. The reason that does not depend on any operator version:
+  # OpenSearch reads its certificates once at startup, the pinned operator's CRD has
+  # no enableHotReload, and nothing restarts the pods when the Secret changes. So a
+  # one-year leaf expired in place — cert-manager reissued into the Secret while the
+  # pods kept serving the old certificate until it ran out, taking HTTPS on 9200 down
+  # and breaking securityadmin on a timer. Matching the CA's lifetime removes that fuse.
+  #
+  # At operator 2.8.0 (the pinned version) the mount shape compounds it: passing
+  # http.caSecret — which securityadmin needs — moves handleHttp off mountFolder onto
+  # three mount() calls carrying SubPath: filename, and the kubelet never refreshes a
+  # subPath-mounted file at all. Upstream main has since moved every http branch back
+  # to mountFolder, so DO NOT treat that half as durable across a `make update` bump.
+  # The startup-read reason above is what keeps the conclusion correct either way.
   # (Dropping renewBefore does not disable reissue — cert-manager still defaults to
   # duration/3 — it only stops promising a 30-day cycle nothing can honour.)
   # Rotating this certificate is a deliberate act: delete the Secret named below,
