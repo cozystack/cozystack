@@ -82,10 +82,10 @@ Certificates are issued by a per-instance CA managed by cert-manager. The server
 Connect with the MariaDB client by supplying the CA and asking for full verification:
 
 ```bash
-mysql -h mariadb-<name> -u <user> -p<password> --ssl-ca=/path/to/ca.crt --ssl-verify-server-cert
+mysql -h mariadb-<name> -u <user> -p --ssl-ca=/path/to/ca.crt --ssl-verify-server-cert
 ```
 
-`--ssl-ca` alone establishes trust but leaves the hostname unchecked; `--ssl-verify-server-cert` is what validates the server name against the certificate. Note that these are MariaDB client options. The MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client does not accept.
+`-p` without a value prompts for the password, which keeps it out of shell history and out of the process arguments other users can read. `--ssl-ca` alone establishes trust but leaves the hostname unchecked; `--ssl-verify-server-cert` is what validates the server name against the certificate. Note that these are MariaDB client options. The MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client does not accept.
 
 The trust anchor is available in the instance namespace as the Secret `mariadb-<name>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
 
