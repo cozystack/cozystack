@@ -403,6 +403,63 @@ tests:
           path: spec.privateKey.rotationPolicy
           value: Always
 
+  # The same positive pin for the dashboards leaf, which also establishes that index 4
+  # IS that certificate — the negative guards below would otherwise pass vacuously
+  # against whatever landed there if document order ever shifted.
+  # issuerRef is the load-bearing one: pointing it at the bootstrap self-signed Issuer
+  # instead of the CA still issues, still serves HTTPS and still goes Ready, while the
+  # anchor the platform publishes silently stops verifying the dashboards endpoint.
+  - it: fifth document is the dashboards Certificate referencing the same CA Issuer
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: os-test-dashboards-server
+      - equal:
+          path: spec.secretName
+          value: os-test-dashboards-server
+      - equal:
+          path: spec.issuerRef.name
+          value: os-test-http-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+      # Never the API leaf's Secret: two Certificates writing one Secret would race,
+      # and the CR points each service at its own name.
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-server
+
+  - it: gives the dashboards certificate the same non-expiring lifetime
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 87600h
+      - notExists:
+          path: spec.renewBefore
+
   # --- SAN coverage for HTTP services ---
 
   # SAN PARITY WITH THE OPERATOR. Enabling chart-managed TLS replaces the certificate
