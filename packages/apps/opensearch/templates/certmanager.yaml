@@ -163,13 +163,20 @@ spec:
   usages:
     - server auth
     - signing
-  # MUST COVER EVERYTHING THE OPERATOR'S OWN HTTP CERTIFICATE COVERED. Turning
+  # MUST COVER EVERY SHAPE THE OPERATOR'S OWN HTTP CERTIFICATE COVERED. Turning
   # chart-managed TLS on replaces the operator-issued certificate, so any name
   # missing here stops verifying for a client that was using it. The operator issues
   # for <name>, the service name, <name>-discovery and the <name>.<ns>[.svc[.domain]]
   # ladder. The two-label form is load-bearing: with ndots:5 and the default search
   # list, <name>.<ns> is what a client inside another namespace actually resolves and
   # therefore what its TLS verification runs against.
+  #
+  # The fully-qualified rung differs deliberately. The operator builds it from its
+  # own DNS_BASE, which the platform leaves at the upstream default cluster.local,
+  # while this uses the cluster domain the platform actually runs on. So the FQDN
+  # here is the name that resolves, not the one the operator would have emitted —
+  # a fix, not a gap. Anything relying on the operator's cluster.local FQDN never
+  # resolved in the first place.
   dnsNames:
     {{- $ns := .Release.Namespace }}
     {{- $name := .Release.Name }}
