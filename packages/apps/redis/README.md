@@ -72,6 +72,8 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 Enabling TLS makes the chart issue a per-release cert-manager chain: a self-signed bootstrap Issuer, a CA certificate, a CA Issuer, and the server leaf certificate the operator mounts into the Redis and Sentinel pods. The CA belongs to this release alone; it is not a cluster-wide trust root, and nothing outside the release trusts it.
 
+This means TLS requires cert-manager, which the platform installs in the variant-independent part of the `system` bundle, so `isp-hosted` has it too. On a cluster where the cert-manager controller has been removed but its CRDs remain, `tls.enabled` renders `cert-manager.io/v1` resources that nothing issues, and no certificate is ever produced; with the CRDs gone too, the release fails on an unknown kind instead.
+
 To verify the server, a client needs that CA certificate. The operator publishes it as the Secret `<release>.ca-cert`, which holds only `ca.crt` and no private key, and the release grants tenant read access to it:
 
 ```sh
