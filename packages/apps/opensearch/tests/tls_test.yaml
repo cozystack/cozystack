@@ -802,6 +802,7 @@ tests:
 ###############################################################################
 # opensearch.yaml — TLS state reflected in OpenSearchCluster spec
 ###############################################################################
+suite: opensearch CR TLS wiring
 
 templates:
   - templates/opensearch.yaml
@@ -1100,6 +1101,7 @@ tests:
 ###############################################################################
 # external-svc.yaml — required guard for _namespace.host
 ###############################################################################
+suite: external service tenant-host guard
 
 templates:
   - templates/external-svc.yaml
