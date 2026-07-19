@@ -96,6 +96,14 @@ version: v8
 ## @field {AuthClients} [authClients] - Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.
 
 ## @param {TLS} [tls] - TLS configuration. TLS is opt-in and is not inferred from `external`.
+# Stays empty on purpose. Spelling out `authClients: "no"` here would make the
+# generated README show the default instead of `{}`, but cozyvalues-gen quotes a
+# default only for the literal types `string` and `quantity`; an `@enum` alias
+# like AuthClients falls through to a YAML re-parse where `no` becomes boolean
+# false. The schema would get `"default": false` on a string-typed enum property
+# and the Go field `+kubebuilder:default:=false`. The default is resolved in
+# templates/_tls.tpl instead, and
+# hack/check-values-schema-string-defaults.bats fails on the coercion.
 tls: {}
 
 ##
