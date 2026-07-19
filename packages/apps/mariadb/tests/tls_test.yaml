@@ -45,7 +45,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  # spec.tls.issuer is true in every configuration, because the operator
+  # spec.tls.enabled is true in every configuration, because the operator
   # substitutes TLS{Enabled: true} whenever spec.tls is absent — omitting the
   # block does not disable TLS, it only hides that TLS is on. Enforcement is
   # stated explicitly in every configuration too, defaulting to false. What the

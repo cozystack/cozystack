@@ -42,8 +42,16 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 # The RBAC grant in dashboard-resourcemap.yaml and this list have to agree:
 # the Role decides whether the tenant may read the bundle, this decides whether
 # it is surfaced as a tenant resource at all.
+#
+# Scoped to secrets.include rather than the whole file: the bundle is named in
+# a comment and in caCert too, and matching either of those would let the
+# include entry be deleted while this still passed.
 @test "mariadb-rd exposes the operator CA bundle by name" {
-  grep -q "mariadb-{{ .name }}-ca-bundle" "$COZYRDS"
+  awk '/^  secrets:/{sec=1; inc=0; next}
+       /^  [a-z]/{sec=0; inc=0}
+       sec && /^    include:/{inc=1; next}
+       sec && /^    [a-z]/{inc=0}
+       sec && inc' "$COZYRDS" | grep -q "mariadb-{{ .name }}-ca-bundle"
 }
 
 # Placeholder (see header): nothing writes this label yet.
