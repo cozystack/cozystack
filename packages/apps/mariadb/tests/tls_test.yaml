@@ -1019,9 +1019,10 @@ tests:
           path: rules[1].resourceNames
           content: my-mariadb-ca-bundle
 
-  # With TLS off the operator reconciles no bundle, so granting it would name a
-  # Secret that never exists.
-  - it: "dashboard Role omits the CA bundle when TLS is disabled"
+  # The bundle exists in every configuration, because the chart always asks the
+  # operator to serve TLS. Gating the grant on managed TLS would leave the
+  # default instance serving TLS with no way for the tenant to fetch the CA.
+  - it: "dashboard Role grants the CA bundle even when TLS is unmanaged"
     templates:
       - templates/dashboard-resourcemap.yaml
     documentIndex: 0
@@ -1029,9 +1030,54 @@ tests:
       tls:
         enabled: false
     asserts:
-      - notContains:
+      - contains:
           path: rules[1].resourceNames
           content: my-mariadb-ca-bundle
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-ca-tls
+      - notContains:
+          path: rules[1].resourceNames
+          content: my-mariadb-tls
+
+  # The CR must not advertise enforcement the server does not apply. The
+  # operator treats an absent required as false, so a schema default of true
+  # would make `kubectl get mariadb` claim plaintext is refused on an unmanaged
+  # instance where it is not.
+  - it: "unmanaged TLS advertises no enforcement in the rendered CR"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      external: false
+    asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
+      - notExists:
+          path: spec.tls.required
+
+  - it: "managed TLS enforces by default without an explicit value"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: true
+
+  - it: "managed TLS preserves an explicit required=false"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        enabled: true
+        required: false
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: false
 
   # -------------------------------------------------------------------
   # Cluster-domain fallback. The platform injects _cluster.cluster-domain
