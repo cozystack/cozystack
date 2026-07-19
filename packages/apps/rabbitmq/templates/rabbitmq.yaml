@@ -15,9 +15,16 @@
      own configuration (TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners()))
      and it verifies against x509.SystemCertPool(), which cannot hold a per-release
      CA. So User, Vhost and Permission would stop reconciling. Fail rather than ship
-     that; the flag stays usable when users and vhosts live outside the chart. */}}
+     that.
+
+     The check reads .Values only because that is all a template can see. The
+     breakage is wider: useTLSForConnection is derived from the RabbitmqCluster, not
+     from who created the topology CR, so hand-written User/Vhost/Permission objects
+     against this cluster fail identically and silently. The flag is for clusters
+     whose users are managed by rabbitmqctl or a definitions import, not by that
+     operator at all. See README "Closing the plaintext listeners". */}}
 {{- if and $disableNonTLS (or .Values.users .Values.vhosts) }}
-{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. Manage users and vhosts outside the chart, or leave tls.disableNonTLSListeners unset." }}
+{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. That applies to hand-written topology objects too — the operator reads the RabbitmqCluster, not who created the CR — so moving them out of the chart does not help. Manage users and permissions with rabbitmqctl or a definitions import, or leave tls.disableNonTLSListeners unset." }}
 {{- end }}
 
 apiVersion: rabbitmq.com/v1beta1
