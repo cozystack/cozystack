@@ -34,25 +34,22 @@ spec:
       management.ssl.keyfile = /etc/rabbitmq-tls/tls.key
   {{- end }}
   override:
-    {{- if and $tlsEnabled .Values.external }}
-    {{- /* When both TLS and LoadBalancer are active, expose only TLS ports on
-         the public LB. Plaintext amqp (5672) and management (15672) are
-         intentionally omitted to prevent unencrypted traffic exposure.
-         In-cluster ClusterIP listeners remain unchanged — do NOT set
-         spec.tls.disableNonTLSListeners, which would close them at the
-         broker level and break in-cluster clients during migration. */}}
-    service:
-      spec:
-        ports:
-          - name: amqps
-            port: 5671
-            targetPort: 5671
-            protocol: TCP
-          - name: management-tls
-            port: 15671
-            targetPort: 15671
-            protocol: TCP
-    {{- end }}
+    {{- /* No spec.override.service here, deliberately. Listing only the TLS ports
+         would look like it removes the plaintext ones from the published Service,
+         and it does not: the operator rebuilds its full default port set from
+         generateServicePortsMap() on every reconcile and only then applies the
+         override as a strategic merge patch keyed on `port` (corev1.ServiceSpec
+         tags Ports with patchMergeKey:"port"), which can add or mutate entries but
+         never remove them. A partial port list is therefore a no-op — and with TLS
+         on, amqps:5671 and management-tls:15671 are byte-identical to what the
+         operator already generates. Plaintext amqp:5672 and management:15672 stay
+         published, including on the LoadBalancer when external is true.
+
+         The only switch that closes them is spec.tls.disableNonTLSListeners, which
+         writes `listeners.tcp = none` into rabbitmq.conf — a broker-level change
+         that closes the socket on every interface at once, dropping in-cluster
+         plaintext clients along with external ones. It is not set here, so
+         enabling TLS never breaks a working connection. See README "TLS scope". */}}
     statefulSet:
       spec:
         template:
