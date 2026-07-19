@@ -39,7 +39,12 @@ The OpenSearch >= 2.0.0 floor for chart-managed HTTP TLS is enforced in
 opensearch.tls.enabled, which fails on an explicit request and degrades an
 auto-on one, so reaching this point already implies a supported version.
 */}}
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- /*
+_cluster is defaulted before the read because `index` on an absent map is a hard
+render error, not a nil result — the `| default` below never runs. The platform
+always injects it, so the failure only shows up rendering the chart on its own.
+*/}}
+{{- $clusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 ---
 # Self-signed bootstrap Issuer — used only to sign the HTTP CA Certificate below.
 apiVersion: cert-manager.io/v1
