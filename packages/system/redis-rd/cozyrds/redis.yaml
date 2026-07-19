@@ -36,6 +36,20 @@ spec:
   # ca.crt out of the source named below and writes it into a separate
   # key-free projection, <release>.tenant-ca, which the label selector further
   # down then surfaces to the tenant.
+  #
+  # This block blocks installation until the CA-extraction controller lands.
+  # ApplicationDefinition's schema does not declare spec.caCert yet and carries
+  # no x-kubernetes-preserve-unknown-fields, and Flux applies the object as a
+  # typed patch — so helm-controller rejects it before the API server is ever
+  # asked, with "failed to create typed patch object: .spec.caCert: field not
+  # declared in schema", and the whole redis-rd release fails. It is not
+  # pruned and it does not degrade quietly; nothing installs.
+  #
+  # That is the intent rather than an oversight: it makes the merge order
+  # mechanically enforced instead of relying on a note, so this cannot land
+  # ahead of the controller and leave a broken definition behind. E2E is red
+  # by construction until then. Keep the block; do not "fix" the red run by
+  # deleting it.
   caCert:
     sourceSecretName: "{{ .release }}-ca-cert"
     sourceKey: ca.crt
@@ -71,12 +85,13 @@ spec:
       - resourceNames:
           - redis-{{ .name }}-auth
           # The CA-only Secret the operator publishes: ca.crt and nothing else,
-          # no private key. Named directly so the trust anchor reaches the
-          # tenant today. The label selector below covers the same anchor once
-          # the CA-extraction controller publishes its projection, but that
-          # controller is not merged yet and a label-only entry selects nothing
-          # until it is, which would leave a TLS-enabled Redis with no way for
-          # the tenant to obtain the certificate needed to verify it.
+          # no private key. Named directly rather than left to the label
+          # selector below, which only starts matching once the CA-extraction
+          # controller has actually written its projection for this release.
+          # The name entry covers the window between the operator publishing
+          # this Secret and that projection appearing, so a TLS-enabled Redis
+          # is never left without a way for the tenant to obtain the
+          # certificate needed to verify it.
           - redis-{{ .name }}-ca-cert
       # The key-free trust anchor published by the CA-extraction controller.
       # This is the engine-agnostic selector every converged engine shares and
