@@ -72,6 +72,8 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 Enabling TLS makes the chart issue a per-release cert-manager chain: a self-signed bootstrap Issuer, a CA certificate, a CA Issuer, and the server leaf certificate the operator mounts into the Redis and Sentinel pods. The CA belongs to this release alone; it is not a cluster-wide trust root, and nothing outside the release trusts it.
 
+This means TLS requires cert-manager, which the platform installs as part of the `system` bundle. The `isp-hosted` variant disables that bundle while still enabling `paas`, so it gets redis-operator without cert-manager: there `tls.enabled` renders `cert-manager.io/v1` resources into a cluster that has no controller to issue them, and no certificate is ever produced. Do not enable TLS on `isp-hosted` unless cert-manager has been installed separately.
+
 To verify the server, a client needs that CA certificate. The operator publishes it as the Secret `<release>-ca-cert`, which holds only `ca.crt` and no private key, and the release grants tenant read access to it:
 
 ```sh
@@ -90,9 +92,9 @@ Certificate renewal needs a restart, and only part of it is automated. The leaf 
 Two gaps in that sentence, both of which leave pods serving a certificate that eventually expires:
 
 - **Sentinel is never covered.** The annotation cannot reach it: the operator builds the Sentinel Deployment with no `metadata.annotations` field at all, and `spec.sentinel.podAnnotations` lands on the pod template, which is not where reloader looks. Closing this needs an operator change — the Sentinel Deployment carrying the RedisFailover's annotations the way the Redis StatefulSet already does — after which the existing annotation covers both.
-- **Redis is only covered where reloader is installed.** Reloader ships with the `isp-full` and `isp-full-generic` system variants; `isp-hosted` does not install it, while still permitting the `paas` bundle that provides redis-operator. On `isp-hosted` the annotation is inert and nothing rolls either workload.
+- **Redis is only covered where reloader is installed.** Reloader ships with the `isp-full` and `isp-full-generic` system variants, alongside cert-manager. A variant carrying cert-manager but not reloader would leave the annotation inert and roll neither workload; on `isp-hosted` the question does not arise, because TLS has no issuer there to begin with.
 
-So plan on restarting the pods yourself: Sentinel always, and both Redis and Sentinel on `isp-hosted`. Do it after a renewal, or on a schedule shorter than the 30-day `renewBefore` window. Where reloader does run, the failure is partial rather than total — the CA uses `rotationPolicy: Never`, so a rolled Redis and a stale Sentinel still chain to the same CA and keep verifying each other.
+So plan on restarting Sentinel yourself after a renewal, or on a schedule shorter than the 30-day `renewBefore` window. The failure is partial rather than total — the CA uses `rotationPolicy: Never`, so a rolled Redis and a stale Sentinel still chain to the same CA and keep verifying each other.
 
 `tls.authClients` maps to the Redis `tls-auth-clients` directive and defaults to `no`, meaning the server presents its certificate and does not ask connecting clients for one. Setting it to `optional` or `yes` makes Redis request, and for `yes` require, a client certificate signed by the same per-release CA.
 
