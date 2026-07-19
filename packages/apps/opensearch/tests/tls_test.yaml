@@ -107,6 +107,37 @@ tests:
           value: os-test-http-ca
         documentIndex: 1
 
+  # Passing http.caSecret moves the operator onto subPath mounts, which the kubelet
+  # never refreshes, and nothing restarts the pods when the Secret changes. A leaf
+  # that outlived its mount would expire in place and take HTTPS down on a timer, so
+  # the leaf must not be short-lived, and renewBefore must not promise a rotation
+  # that cannot happen.
+  - it: gives the leaf certificate no expiry the pods cannot survive
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 87600h
+        documentIndex: 3
+      - notExists:
+          path: spec.renewBefore
+        documentIndex: 3
+
+  - it: keeps the CA and the leaf on the same lifetime
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 87600h
+        documentIndex: 1
+      - notExists:
+          path: spec.renewBefore
+        documentIndex: 1
+
   # Both names external-svc publishes to external-dns must appear in the leaf's SAN
   # list, or an external client reaching the LoadBalancer fails hostname verification.
   - it: covers both external-dns hostnames with certificate SANs

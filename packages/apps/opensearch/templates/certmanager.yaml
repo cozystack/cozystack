@@ -116,8 +116,16 @@ metadata:
   name: {{ .Release.Name }}-http-server
 spec:
   secretName: {{ .Release.Name }}-http-server
-  duration: 8760h    # 1 year
-  renewBefore: 720h  # renew 30 days before expiry
+  # LIFETIME MATCHES THE CA, AND THERE IS NO renewBefore, because a renewal cannot
+  # reach the running pods. Passing http.caSecret — which securityadmin needs — moves
+  # the operator off mountFolder onto three mount() calls, and those carry
+  # SubPath: filename. The kubelet never refreshes a subPath-mounted Secret file, and
+  # nothing in the operator restarts the pods when the Secret changes. A shorter
+  # lifetime would therefore not rotate anything: cert-manager would reissue into the
+  # Secret while the pods kept serving the old leaf until it expired outright, taking
+  # HTTPS on 9200 down and breaking securityadmin on a timer. Rotating this
+  # certificate is a deliberate act — delete the Secret and restart the pods.
+  duration: 87600h  # 10 years, matching the CA above
   isCA: false
   usages:
     - server auth

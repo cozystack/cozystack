@@ -35,8 +35,10 @@ The comparison runs against the resolved image tag rather than the version
 enum, so it stays correct if the version mapping changes.
 */}}
 {{- define "opensearch.tls.enabled" -}}
-{{- $explicit := not (kindIs "invalid" .Values.tls.enabled) -}}
-{{- $requested := ternary (.Values.tls.enabled | toString) (.Values.external | default false | toString) $explicit -}}
+{{- /* default dict so an explicit `tls: null` degrades to unset rather than a nil deref */ -}}
+{{- $tls := .Values.tls | default dict -}}
+{{- $explicit := not (kindIs "invalid" $tls.enabled) -}}
+{{- $requested := ternary ($tls.enabled | toString) (.Values.external | default false | toString) $explicit -}}
 {{- if and (eq $requested "true") (semverCompare "<2.0.0" (include "opensearch.versionMap" .)) -}}
   {{- if $explicit -}}
     {{- fail (printf "opensearch %s (version: %s) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later." (include "opensearch.versionMap" .) (.Values.version | default "v2")) -}}
