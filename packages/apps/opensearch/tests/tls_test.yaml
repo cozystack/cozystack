@@ -30,12 +30,46 @@ templates:
   - templates/certmanager.yaml
 
 tests:
-  # Both sides of both boundaries. The limit is the one the SANs actually impose —
-  # 52 with Dashboards on, because <release>-dashboards is the longest DNS label
-  # built, and 53 without it, where <release>-discovery binds instead. A tighter
-  # fixed number would reject release names the platform accepts (its own cap is 53)
-  # and that render today.
-  - it: rejects a name only when the dashboards SAN would exceed the label limit
+  # The release-name bound is whatever the longest DNS label this configuration
+  # actually builds allows, and the limits differ by object kind: Service names and
+  # certificate SAN labels are bounded at 63, while Certificate/Secret/Role names are
+  # subdomains bounded at 253 and never bind. Both sides of each boundary are pinned.
+  #
+  # -dashboards-external (Service, external+dashboards) is the longest at 20 -> 43.
+  - it: rejects a name whose dashboards external Service would exceed 63
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+      tls:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 44 chars; opensearch requires <=43 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards-external" stays within the 63-char DNS label limit.'
+
+  - it: accepts the longest name that fits with external and dashboards both on
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  # -dashboards (SAN label and the operator's own Service) is 11 -> 52.
+  - it: rejects a name whose dashboards SAN would exceed 63
     release:
       name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
@@ -46,7 +80,7 @@ tests:
         enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch TLS requires <=52 here so the SAN "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch requires <=52 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
 
   - it: accepts that same name when dashboards is off and -discovery binds instead
     release:
@@ -63,28 +97,10 @@ tests:
           content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-discovery
         documentIndex: 3
 
-  - it: accepts the longest name that fits with dashboards enabled
-    release:
-      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-      namespace: tenant-test
-    set:
-      tls:
-        enabled: true
-      dashboards:
-        enabled: true
-    asserts:
-      - hasDocuments:
-          count: 5
-      - contains:
-          path: spec.dnsNames
-          content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards
-        documentIndex: 4
-
-  # The auto-on path must not lose a release to a name length either: this one never
-  # asked for chart-managed TLS, and at 53 chars with dashboards off it is fine.
+  # The auto-on path must not lose a release to a name length either.
   - it: still renders a long-named external release that never asked for TLS
     release:
-      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
     set:
       external: true
@@ -1065,6 +1081,24 @@ tests:
   # addresses and still serve; only the external-dns hostname is withheld, because
   # there is no name to publish. Previously this failed the whole render, which took
   # the OpenSearchCluster CR with it on a configuration that works on main.
+  # That bound has nothing to do with TLS — the Service renders on external alone —
+  # so the guard has to fire with chart-managed TLS off too.
+  - it: applies the Service bound even when chart-managed TLS is off
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+      tls:
+        enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 44 chars; opensearch requires <=43 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards-external" stays within the 63-char DNS label limit.'
+
   - it: still renders both Services when the tenant host is empty
     set:
       external: true
