@@ -69,6 +69,10 @@ spec:
           - mariadb-{{ .name }}-password
           - mariadb-{{ .name }}-repl-password
           - mariadb-{{ .name }}-metrics-password
+          # The exporter's my.cnf. Holds the same password as -metrics-password
+          # in plaintext, and the exporter user is granted SELECT on *.*, so it
+          # reads every table in every database.
+          - mariadb-{{ .name }}-metrics-config
           # Backup credentials: S3 keys and the restic password, which together
           # grant read access to every dump ever taken.
           - mariadb-{{ .name }}-backup
