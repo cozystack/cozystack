@@ -187,6 +187,25 @@ type TLSPassthroughListener struct {
 }
 
 // TenantGatewaySpec describes the desired state of a per-tenant Gateway.
+//
+// The tlsPassthroughListeners rules below are enforced at admission
+// rather than only in the controller because renderGateway is the FIRST
+// step of the reconcile chain: a spec the apiserver accepts but the
+// renderer rejects aborts everything behind it — Issuer, wildcard
+// Certificate, per-listener Certificates, route status, the http→https
+// redirect. One mistyped hostname would stall certificate renewal for
+// every published app on the tenant, with nothing but Ready=False to
+// point at the field that caused it. Rejecting the write keeps the bad
+// spec out of etcd and the chain intact. The controller keeps its own
+// copy of these checks: it must stay correct for objects admitted
+// before the rules existed, and it is what the unit tests exercise.
+//
+// Name uniqueness is not restated here — the listType=map/listMapKey=name
+// markers on the field already make the apiserver enforce it.
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.port != 80 && l.port != 443)",message="tlsPassthroughListeners: ports 80 and 443 are reserved for the Gateway's own http and TLS-terminate listeners; use the engine's native port"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
 type TenantGatewaySpec struct {
 	// Apex is the tenant's apex hostname. The Gateway listeners are
 	// constrained to this apex and its subdomains.
@@ -253,6 +272,7 @@ type TenantGatewaySpec struct {
 	// +optional
 	// +listType=map
 	// +listMapKey=name
+	// +kubebuilder:validation:MaxItems=64
 	TLSPassthroughListeners []TLSPassthroughListener `json:"tlsPassthroughListeners,omitempty"`
 
 	// GatewayClassName names the GatewayClass to attach the rendered
