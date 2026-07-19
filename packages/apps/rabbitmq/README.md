@@ -57,15 +57,21 @@ The certificates are issued by a per-release self-signed CA, so a client must be
 Throughout this section `<release>` means the Helm release name, which is the application name prefixed with `rabbitmq-`. A RabbitMQ named `orders` is release `rabbitmq-orders`, so its trust anchor is `rabbitmq-orders.tenant-ca` and its certificate Secrets are `rabbitmq-orders-tls` and `rabbitmq-orders-ca`.
 
 ```bash
-kubectl get tenantsecret rabbitmq-<name>.tenant-ca \
+kubectl get tenantsecret rabbitmq-<name>.tenant-ca --namespace <tenant-namespace> \
   -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 ```
+
+For an external endpoint, note what the certificate does and does not cover. When the platform supplies a root host the certificate carries `rabbitmq-<name>.<host>` as a SAN, but this chart creates no DNS record for that name — `external: true` renders a bare LoadBalancer Service, with no Ingress and no `external-dns` annotation. Verifying by hostname therefore requires pointing that name at the LoadBalancer address yourself. A client connecting straight to the IP will fail hostname verification against the SAN list, since it contains in-cluster names and the unresolved external name only.
 
 `<release>.tenant-ca` is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. The cert-manager Secrets are deliberately not granted to tenants: `<release>-ca` stores the CA **private key**, so read access would let the holder issue certificates for anything, and the leaf `<release>-tls` stores the server private key next to the same `ca.crt`. RBAC has no key-level filter, so granting either to deliver a trust anchor would deliver a key with it.
 
 > **Requires the CA-extraction controller.** This chart labels its CA for publication, but the platform component that performs the projection ships separately. Until it is present, `<release>.tenant-ca` is not created and the command above returns `NotFound`; the TLS configuration itself is unaffected. On a cluster without it, a tenant has no key-free path to the CA.
 
 Verification runs one way only. The server presents a certificate that a client can verify with the CA above; the server does not verify client certificates in return. Enabling that would require `management.ssl.verify = verify_peer` with `fail_if_no_peer_cert` for the management listener and the equivalent `ssl_options.*` for AMQP, none of which this chart sets. Clients continue to authenticate by username and password — carried inside the TLS session rather than in the clear, but still a password rather than a certificate.
+
+### Turning TLS off again
+
+Disabling TLS on a release that had it needs one manual step. Helm removes the `Certificate` objects, but cert-manager does not delete the Secrets they produced (`enableCertificateOwnerRef` is off), so `rabbitmq-<name>-ca` keeps the publication label and the trust anchor keeps being projected for an endpoint that has gone back to plaintext. Nothing the chart renders can prevent that — the label lives on a Secret Helm does not own. Delete `rabbitmq-<name>-ca` and `rabbitmq-<name>-tls` by hand after disabling TLS. Verification fails closed until you do, and no private key is exposed by the stale anchor.
 
 > **Warning:** the CA is issued with a 5-year duration and cert-manager renews the certificate as it approaches expiry, so a bundle copied once will eventually stop verifying. Re-read `<release>.tenant-ca` on a schedule, or mount it and let the kubelet refresh it, instead of baking `ca.crt` into a client image or a truststore built at release time.
 

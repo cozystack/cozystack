@@ -80,9 +80,22 @@ spec:
   (printf "*.%s-nodes.%s.svc" $name $ns)
   (printf "*.%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
 }}
+{{- /* Add the external hostname as a SAN when the platform supplies one. It is
+     skipped, not required: _namespace.host derives from _cluster.root-host, which
+     the platform treats as optional, and an external RabbitMQ is a bare
+     LoadBalancer Service with no Ingress and no hostname involvement. Failing
+     here would turn "external RabbitMQ on a cluster with no root host" — a
+     configuration that worked before this chart had TLS at all — into a render
+     error on upgrade, and those releases have no tls.enabled: false to fall back
+     on because the field did not exist when they were created.
+
+     Note this SAN is not backed by a DNS record the chart creates; see the README
+     on verifying an external endpoint. */}}
 {{- if .Values.external }}
-  {{- $host := required "external is true but _namespace.host is not set, so the external DNS name cannot be added to the certificate SANs" (dig "host" "" (.Values._namespace | default dict)) }}
-  {{- $dnsNames = append $dnsNames (printf "%s.%s" $name $host) }}
+  {{- $host := dig "host" "" (.Values._namespace | default dict) }}
+  {{- if $host }}
+    {{- $dnsNames = append $dnsNames (printf "%s.%s" $name $host) }}
+  {{- end }}
 {{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate

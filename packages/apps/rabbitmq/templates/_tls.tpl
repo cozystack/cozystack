@@ -13,10 +13,16 @@ answer. Three copies of the inline form previously existed in this chart and had
 already begun to drift.
 
 The lookup goes through `dig` on a defaulted dict rather than reading
-.Values.tls.enabled directly, so `--set tls=null` resolves instead of panicking
-with "nil pointer evaluating interface {}.enabled". The app CR cannot produce
-that shape — structural-schema pruning replaces null with the {} default — but a
-HelmRelease values override can.
+.Values.tls.enabled directly, so `tls: null` resolves instead of panicking with
+"nil pointer evaluating interface {}.enabled". The app CR cannot produce that
+shape — structural-schema pruning replaces null with the {} default — but a
+HelmRelease values override reaches the chart without pruning, and null passes
+values.schema.json.
+
+Non-map scalars need no handling here: values.schema.json types tls as an object,
+so `tls: false` or `tls: "x"` is rejected by Helm's own schema validation ("got
+boolean, want object") before any template renders, on every path including a
+HelmRelease. Only null slips through, which is what the dig form covers.
 */}}
 {{- define "rabbitmq.tls.enabled" -}}
 {{-   $enabled := dig "enabled" nil (.Values.tls | default dict) -}}
