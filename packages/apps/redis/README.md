@@ -25,6 +25,7 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 | `size`             | Persistent Volume Claim size available for application data.                                                                    | `quantity` | `1Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                            | `string`   | `""`      |
 | `external`         | Enable external access from outside the cluster.                                                                                | `bool`     | `false`   |
+| `version`          | Redis major version to deploy                                                                                                   | `string`   | `v8`      |
 
 
 ### TLS parameters
@@ -34,7 +35,6 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 | `tls`             | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                                                                              | `object` | `{}`   |
 | `tls.enabled`     | Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`. | `*bool`  | `null` |
 | `tls.authClients` | Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.                                                                                 | `string` | `{}`   |
-| `version`         | Redis major version to deploy                                                                                                                                                                                                       | `string` | `v8`   |
 
 
 ### Application-specific parameters
@@ -68,6 +68,8 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 `tls.enabled` turns on TLS for Redis and Sentinel connections. When it is not set the value of `external` is used, so a Redis reachable from outside the cluster is encrypted by default.
 
+> **Breaking change for existing `external: true` instances.** TLS replaces plaintext rather than running beside it: with TLS on, Redis and Sentinel are configured with `port 0` and serve only on the TLS port. Because `tls.enabled` defaults to the value of `external`, an already-deployed instance with `external: true` switches to TLS-only the first time it reconciles after this upgrade, and every existing client connecting in plaintext breaks. Set `tls.enabled: false` explicitly to keep the previous behaviour, or migrate the clients to TLS using the CA certificate described below.
+
 Enabling TLS makes the chart issue a per-release cert-manager chain: a self-signed bootstrap Issuer, a CA certificate, a CA Issuer, and the server leaf certificate the operator mounts into the Redis and Sentinel pods. The CA belongs to this release alone; it is not a cluster-wide trust root, and nothing outside the release trusts it.
 
 To verify the server, a client needs that CA certificate. The operator publishes it as the Secret `<release>-ca-cert`, which holds only `ca.crt` and no private key, and the release grants tenant read access to it:
@@ -76,6 +78,8 @@ To verify the server, a client needs that CA certificate. The operator publishes
 kubectl get secret redis-<name>-ca-cert -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 redis-cli --tls --cacert ca.crt -h <host> -p 6379
 ```
+
+`<host>` has to be a name the certificate covers. In-cluster that is any of the `rfr-`, `rfrm-`, `rfrs-` and `rfs-` service names; from outside it is `<release>.<tenant-host>`, the same name the external LoadBalancer is published under. Connecting to the LoadBalancer IP directly fails hostname verification — the only IP addresses in the certificate are the loopback ones the in-pod probes and the metrics sidecar use.
 
 Neither the CA private key (`<release>-ca-tls`) nor the server leaf and its private key (`<release>-tls`) is readable by the tenant. The first would allow minting certificates that any client trusting this release accepts; the second would allow impersonating this release's Redis endpoints.
 
