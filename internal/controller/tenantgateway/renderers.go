@@ -245,6 +245,14 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 	}
 	seenNames := make(map[string]struct{}, len(listeners))
 	seenPorts := make(map[int32]struct{}, len(listeners))
+	// Seeded with the hostnames the port-443 service listeners already
+	// occupy (<svc>.<apex>, matching renderGateway) so the check below
+	// spans both lists: a listener entry can collide with a service
+	// hostname while their names differ, which the name checks miss.
+	seenHostnames := make(map[string]string, len(listeners)+len(passthroughServices))
+	for _, svc := range passthroughServices {
+		seenHostnames[svc+"."+apex] = passthroughListenerPrefix + svc
+	}
 	for _, l := range listeners {
 		if errs := validation.IsDNS1123Label(l.Name); len(errs) > 0 {
 			return fmt.Errorf("tlsPassthroughListeners: invalid name %q: %s", l.Name, strings.Join(errs, "; "))
@@ -283,6 +291,21 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		if errs := validatePassthroughHostname(l.Hostname); len(errs) > 0 {
 			return fmt.Errorf("tlsPassthroughListeners: listener %q invalid hostname %q: %s", l.Name, l.Hostname, strings.Join(errs, "; "))
 		}
+		// Two listeners sharing a hostname on different ports are
+		// distinct to Gateway API — listeners are keyed by (port,
+		// protocol, hostname) — and the object is accepted. Cilium
+		// routes passthrough by SNI without distinguishing the port
+		// (cilium#42898, fixed upstream by cilium#44889, not in the
+		// shipped 1.19.x), so only one of them works and which one
+		// depends on route ordering. On a native database port that is
+		// a raw stream forwarded to the wrong backend, with Accepted
+		// and Programmed both true and nothing on the status to show
+		// for it. Reject the shape instead.
+		if other, dup := seenHostnames[l.Hostname]; dup {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is already used by listener %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners sharing a hostname, even on different ports", l.Name, l.Hostname, other)
+		}
+		seenHostnames[l.Hostname] = passthroughListenerPrefix + l.Name
+
 		if !hostnameWithinApex(l.Hostname, apex) {
 			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
 		}

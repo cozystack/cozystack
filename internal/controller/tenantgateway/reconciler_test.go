@@ -2243,6 +2243,11 @@ func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
 				t.Fatalf("expected at least 3 listeners to compare, got %d", len(gw.Spec.Listeners))
 			}
 			seen := map[*gatewayv1.RouteNamespaces]string{}
+			// Kinds is a slice, so identity is the backing array: two
+			// listeners handed the same slice header alias the same
+			// storage and an append or index-assign on one rewrites the
+			// other. Same invariant as Namespaces, different mechanism.
+			seenKinds := map[*gatewayv1.RouteGroupKind]string{}
 			for _, l := range gw.Spec.Listeners {
 				if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil {
 					t.Fatalf("listener %s has no AllowedRoutes.Namespaces", l.Name)
@@ -2253,6 +2258,16 @@ func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
 					continue
 				}
 				seen[ns] = string(l.Name)
+
+				if len(l.AllowedRoutes.Kinds) == 0 {
+					continue
+				}
+				k := &l.AllowedRoutes.Kinds[0]
+				if other, dup := seenKinds[k]; dup {
+					t.Errorf("listener %s shares its AllowedRoutes.Kinds backing array with %s", l.Name, other)
+					continue
+				}
+				seenKinds[k] = string(l.Name)
 			}
 		})
 	}
@@ -2304,6 +2319,20 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 		// a status error for every other shape of the same mistake.
 		{"duplicate passthrough service", nil,
 			[]string{"api", "api"}, apex, true},
+		// Gateway API keys listeners by (port, protocol, hostname), so
+		// these are distinct and the object is accepted; Cilium routes
+		// passthrough by SNI alone (cilium#42898) and silently serves
+		// only one of them.
+		{"same hostname on different ports", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pg", 5432, "db.foo.example.com"),
+			mk("pg2", 5433, "db.foo.example.com"),
+		}, nil, apex, true},
+		// Same shape spanning both lists: the service renders
+		// api.<apex> on 443, so this listener collides on hostname
+		// while the names differ and the name checks see nothing.
+		{"hostname collides with a passthrough service listener", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("pgapi", 5432, "api.foo.example.com"),
+		}, []string{"api"}, apex, true},
 		{"duplicate passthrough service alongside listeners", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("postgres", 5432, "postgres.foo.example.com"),
 		}, []string{"api", "vm-exportproxy", "api"}, apex, true},
