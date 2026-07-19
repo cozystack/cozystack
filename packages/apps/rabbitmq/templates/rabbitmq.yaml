@@ -1,4 +1,22 @@
 {{- $tlsEnabled := (include "rabbitmq.tls.enabled" .) | eq "true" }}
+{{- $disableNonTLS := and $tlsEnabled (dig "disableNonTLSListeners" false (.Values.tls | default dict)) }}
+
+{{- /* disableNonTLSListeners closes the plaintext management port, and
+     messaging-topology-operator has no working route to the broker without it.
+     Its connection is computed as
+       useTLSForConnection = TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())
+     so the flag forces TLS on that side no matter how the operator is configured,
+     and it then verifies the broker against x509.SystemCertPool(), which cannot
+     contain a per-release self-signed CA. Pinning it back to plaintext is not an
+     escape either — that is the port the flag just closed. So every User, Vhost and
+     Permission would stop reconciling, silently: objects already applied to the
+     broker keep working while new ones and password rotations never land.
+
+     Refuse the combination at render time rather than ship that. The flag remains
+     usable for an instance whose users and vhosts are managed outside the chart. */}}
+{{- if and $disableNonTLS (or .Values.users .Values.vhosts) }}
+{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. Manage users and vhosts outside the chart, or leave tls.disableNonTLSListeners unset." }}
+{{- end }}
 
 apiVersion: rabbitmq.com/v1beta1
 kind: RabbitmqCluster
@@ -7,7 +25,7 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-  {{- if $tlsEnabled }}
+  {{- if and $tlsEnabled (not $disableNonTLS) }}
   {{- /* Keep messaging-topology-operator on the plaintext management port.
        Setting spec.tls.secretName makes RabbitmqCluster.TLSEnabled() true, and the
        topology operator computes
@@ -50,6 +68,16 @@ spec:
        password inside the TLS session, not by certificate. */}}
   tls:
     secretName: {{ .Release.Name }}-tls
+    {{- if $disableNonTLS }}
+    {{- /* Broker-level: writes `listeners.tcp = none` into rabbitmq.conf, so the
+         plaintext AMQP socket is never opened on any interface and in-cluster
+         clients lose it at the same instant external ones do. Management and
+         Prometheus plaintext close with it. Erlang distribution (25672) and epmd
+         (4369) are NOT affected — the operator never applies this to the headless
+         Service that carries them, so inter-node traffic stays plaintext either
+         way. Opt-in only; see README "TLS scope". */}}
+    disableNonTLSListeners: true
+    {{- end }}
   {{- end }}
   override:
     {{- /* No spec.override.service here, and both directions are deliberate.
