@@ -31,22 +31,31 @@ spec:
     secretName: {{ .Release.Name }}-tls
   {{- end }}
   override:
-    {{- /* No spec.override.service here, deliberately. Listing only the TLS ports
-         would look like it removes the plaintext ones from the published Service,
-         and it does not: the operator rebuilds its full default port set from
-         generateServicePortsMap() on every reconcile and only then applies the
-         override as a strategic merge patch keyed on `port` (corev1.ServiceSpec
-         tags Ports with patchMergeKey:"port"), which can add or mutate entries but
-         never remove them. A partial port list is therefore a no-op — and with TLS
-         on, amqps:5671 and management-tls:15671 are byte-identical to what the
-         operator already generates. Plaintext amqp:5672 and management:15672 stay
-         published, including on the LoadBalancer when external is true.
+    {{- /* No spec.override.service here, and both directions are deliberate.
 
-         The only switch that closes them is spec.tls.disableNonTLSListeners, which
-         writes `listeners.tcp = none` into rabbitmq.conf — a broker-level change
-         that closes the socket on every interface at once, dropping in-cluster
-         plaintext clients along with external ones. It is not set here, so
-         enabling TLS never breaks a working connection. See README "TLS scope". */}}
+         Removing a port is impossible: the operator rebuilds its default port set
+         from generateServicePortsMap() on every reconcile and only then applies the
+         override as a strategic merge patch keyed on `port` (corev1.ServiceSpec
+         tags Ports with patchMergeKey:"port"), which can add or mutate an entry but
+         never delete one. A TLS-only port list would be a no-op that reads like a
+         guarantee. So plaintext amqp:5672 and management:15672 stay published,
+         including on the LoadBalancer when external is true; only
+         spec.tls.disableNonTLSListeners closes them, and it writes
+         `listeners.tcp = none` into rabbitmq.conf — broker level, so it drops
+         in-cluster clients along with external ones. It is not set here.
+
+         Adding a port is possible but not safe here. Enabling TLS swaps the
+         published metrics port from prometheus:15692 to prometheus-tls:15691
+         (service.go: "We expose either 15692 or 15691 in the Service, but not
+         both"), and adding 15692 back through this override would churn: on each
+         reconcile updatePorts drops it, because it keeps only operator-known port
+         NAMES and carries their NodePort across, then the override re-adds it with
+         nodePort unset. For a LoadBalancer the apiserver reads that as "allocate",
+         assigns a fresh NodePort, and the resulting write retriggers the operator's
+         own Service watch. ClusterIP escapes it only because Update() zeroes every
+         NodePort there, making the patched spec equal to the live one. The default
+         external configuration is exactly the one that would loop, so the port
+         change is documented in README "TLS scope" instead. */}}
     statefulSet:
       spec:
         template:
