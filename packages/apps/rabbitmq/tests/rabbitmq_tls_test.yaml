@@ -154,18 +154,18 @@ tests:
   # -----------------------------------------------------------------------
   # B1: no spec.override.service is rendered, in any combination.
   #
-  # Listing only the TLS ports there would READ as "plaintext is not published",
-  # but it cannot do that. The operator rebuilds its default port set from
-  # generateServicePortsMap() on every reconcile and only then applies the
-  # override as a strategic merge patch keyed on `port` (corev1.ServiceSpec tags
-  # Ports patchMergeKey:"port"), so a partial list can add or mutate entries but
-  # never remove them. With TLS on, amqps:5671 and management-tls:15671 are also
-  # byte-identical to what the operator already generates, making such an
-  # override a pure no-op that credits itself with a guarantee it does not
-  # provide. These tests pin its absence so it cannot come back as decoration.
+  # Not a TLS-only port list: the merge is a strategic merge patch keyed on
+  # `port`, which can add or mutate an entry but never delete one, so omitting
+  # amqp:5672 would be a no-op that reads like a guarantee to close plaintext.
   #
-  # Closing plaintext requires spec.tls.disableNonTLSListeners, which is a
-  # broker-level switch affecting in-cluster clients too — see the block below.
+  # And not a re-added prometheus:15692 either, even though enabling TLS swaps the
+  # published metrics port to prometheus-tls:15691. Adding it back would churn:
+  # updatePorts keeps only operator-known port NAMES and carries their NodePort
+  # across, so each reconcile drops the re-added entry and the override reinstates
+  # it with nodePort unset; on a LoadBalancer the apiserver reallocates, and the
+  # write retriggers the operator's Service watch. ClusterIP escapes only because
+  # NodePorts are zeroed there. external:true is the default TLS path, so that is
+  # the configuration that would loop.
   # -----------------------------------------------------------------------
 
   - it: no service override is rendered when TLS is on and external is false
@@ -195,6 +195,8 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
+      # The LoadBalancer path specifically: a port entry here would be
+      # reallocated on every reconcile.
       - notExists:
           path: spec.override.service
 
