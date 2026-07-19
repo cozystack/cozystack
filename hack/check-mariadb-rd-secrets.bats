@@ -2,14 +2,19 @@
 # Unit test: mariadb-rd cozyrds. The chart's helm-unittest suite cannot reach
 # this file, so its Secret-exposure invariants are pinned here.
 #
-# Read the coverage honestly. Two of these tests are live: the bundle is exposed
-# by name and no key-bearing Secret is listed, both against secrets.include,
-# which the API accepts today. The empty-selector guards are live too. The three
-# touching caCert and the tenant-ca label are placeholders — that field is not
-# in ApplicationDefinitionSpec yet and nothing writes that label, so they check
-# that the block we intend to ship is present and spelled consistently, not that
-# it does anything. If the API lands with different names they will need
-# updating; they cannot detect that on their own.
+# Read the coverage honestly. Seven of these eleven tests are live, all against
+# parts of the API that exist today: secrets.include (the bundle is exposed by
+# name, no key-bearing Secret is listed), the empty-selector guards, and the
+# four covering secrets.exclude — that its entries are name-scoped, that every
+# key-bearing and credential Secret is named there, and that it does not swallow
+# what the tenant is meant to receive.
+#
+# The other four are placeholders: the three reading caCert and the one reading
+# the tenant-ca label. That field is not in ApplicationDefinitionSpec yet and
+# nothing writes that label, so they check that the block we intend to ship is
+# present and spelled consistently, not that it does anything. If the API lands
+# with different names they will need updating; they cannot detect that on their
+# own.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
@@ -23,6 +28,7 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
   grep -q 'sourceSecretName: "{{ .release }}-ca-bundle"' "$COZYRDS"
 }
 
+# Placeholder (see header): the source key is read by nothing yet.
 @test "mariadb-rd extracts ca.crt from the declared source" {
   grep -q "sourceKey: ca.crt" "$COZYRDS"
 }
