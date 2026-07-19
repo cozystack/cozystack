@@ -104,13 +104,26 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
   return 0
 }
 
+# Extracts the exclude block alone. The two lists sit at the same indentation,
+# so an unscoped grep is satisfied by an entry in either one — which would let a
+# name be MOVED from exclude to include, the single most dangerous edit here,
+# without any guard noticing.
+excluded_block() {
+  awk '/^  secrets:/{sec=1; ex=0; next}
+       /^  [a-z]/{sec=0; ex=0}
+       sec && /^    exclude:/{ex=1; next}
+       sec && /^    [a-z]/{ex=0}
+       sec && ex' "$COZYRDS"
+}
+
 # Exclude backstop. The include selector matches by label with no name
 # constraint, so these names are the enumerable part of the gap: exclude wins
 # over include in matchResourceToExcludeInclude, so a Secret named here cannot
 # be promoted even if it acquires the label.
 @test "mariadb-rd excludes every key-bearing Secret" {
+  block="$(excluded_block)"
   for n in ca-tls tls ca server-cert client-cert; do
-    grep -q "^          - mariadb-{{ .name }}-$n\$" "$COZYRDS" || {
+    echo "$block" | grep -q "^          - mariadb-{{ .name }}-$n\$" || {
       echo "key-bearing Secret -$n missing from exclude" >&2
       exit 1
     }
@@ -118,8 +131,9 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 }
 
 @test "mariadb-rd excludes internal credentials and backup keys" {
+  block="$(excluded_block)"
   for n in root password repl-password metrics-password metrics-config backup regsecret; do
-    grep -q "^          - mariadb-{{ .name }}-$n\$" "$COZYRDS" || {
+    echo "$block" | grep -q "^          - mariadb-{{ .name }}-$n\$" || {
       echo "credential Secret -$n missing from exclude" >&2
       exit 1
     }
