@@ -180,8 +180,18 @@ type TLSPassthroughListener struct {
 	// wildcard hostname, and must fall within the tenant apex — equal to
 	// Apex or a subdomain of it — since every listener on the tenant
 	// Gateway is constrained to the apex.
+	//
+	// The pattern is copied verbatim from Gateway API's own Hostname
+	// type, so a value this field accepts is one the rendered listener
+	// accepts. Without it only length is checked at admission, and an
+	// ordinary typo — an underscore, an upper-case letter, a leading
+	// dash — passes the apex rule (a plain suffix test) and is caught
+	// only by the controller, which is far too late: renderGateway is
+	// the first reconcile step, so the object is already in etcd and
+	// the whole chain behind it aborts.
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +required
 	Hostname string `json:"hostname"`
 }
@@ -289,10 +299,19 @@ type TenantGatewaySpec struct {
 	// terminates TLS, so the Gateway neither holds nor issues that
 	// certificate. Declaring an entry without attaching a TLSRoute opens
 	// the port and matches the SNI but has nowhere to forward the stream.
+	// The cap bounds what THIS field contributes to the Gateway's 64
+	// listener slots; it does not by itself guarantee the total fits.
+	// The rendered count is the port-80 listener plus one per published
+	// hostname, one per tlsPassthroughServices entry, and one per entry
+	// here — so a tenant can exceed 64 with far fewer than 62 of these.
+	// The controller checks the assembled total and fails with a named
+	// budget; this cap only keeps a single field from consuming the
+	// whole allowance. It also bounds the cost estimate for the CEL
+	// rules above.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
-	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:MaxItems=62
 	TLSPassthroughListeners []TLSPassthroughListener `json:"tlsPassthroughListeners,omitempty"`
 
 	// GatewayClassName names the GatewayClass to attach the rendered
