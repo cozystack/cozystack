@@ -55,7 +55,9 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   # guards tenant read access to a Secret holding the HTTP CA private key — so assert
   # the list is the size we think it is before concluding anything about its members.
   # Without this the test would still report ok if the path were restructured away.
-  count="$(printf '%s\n' "$entries" | grep -c '^{')"
+  # `|| true` because grep exits non-zero on no match, which under set -e would kill
+  # the test before the diagnostic below could explain what was expected.
+  count="$(printf '%s\n' "$entries" | grep -c '^{' || true)"
   if [ "$count" -ne 2 ]; then
       echo "expected exactly 2 secrets.include entries, found $count" >&2
       printf '%s\n' "$entries" >&2
