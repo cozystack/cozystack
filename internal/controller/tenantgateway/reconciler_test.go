@@ -2205,41 +2205,56 @@ func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 // write and rebuilds fresh pointers on read, so every listener comes
 // back with its own struct no matter how the renderer built it. Going
 // through the client here would make the test pass unconditionally.
+// Both cert modes are exercised: the branches render different
+// listener sets, and pinning only the default one let the DNS-01 pair
+// ("https" and "https-apex") share a struct undetected.
 func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
-	tgw := &gatewayv1alpha1.TenantGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
-		Spec: gatewayv1alpha1.TenantGatewaySpec{
-			Apex:                   "foo.example.com",
-			CertMode:               gatewayv1alpha1.CertModeHTTP01,
-			GatewayClassName:       "cilium",
-			TLSPassthroughServices: []string{"api", "vm-exportproxy"},
-			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
-				{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
-				{Name: "mysql", Port: 3306, Hostname: "mysql.foo.example.com"},
-			},
-		},
+	modes := []struct {
+		name        string
+		mode        gatewayv1alpha1.CertMode
+		childApexes []string
+	}{
+		{name: "HTTP01", mode: gatewayv1alpha1.CertModeHTTP01},
+		{name: "DNS01", mode: gatewayv1alpha1.CertModeDNS01, childApexes: []string{"child.foo.example.com"}},
 	}
+	for _, m := range modes {
+		t.Run(m.name, func(t *testing.T) {
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                   "foo.example.com",
+					CertMode:               m.mode,
+					GatewayClassName:       "cilium",
+					TLSPassthroughServices: []string{"api", "vm-exportproxy"},
+					TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+						{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+						{Name: "mysql", Port: 3306, Hostname: "mysql.foo.example.com"},
+					},
+				},
+			}
 
-	r := &Reconciler{Scheme: newScheme(t)}
-	gw, err := r.renderGateway(tgw, []string{"app.foo.example.com"}, nil)
-	if err != nil {
-		t.Fatalf("renderGateway: %v", err)
-	}
+			r := &Reconciler{Scheme: newScheme(t)}
+			gw, err := r.renderGateway(tgw, []string{"app.foo.example.com"}, m.childApexes)
+			if err != nil {
+				t.Fatalf("renderGateway: %v", err)
+			}
 
-	if len(gw.Spec.Listeners) < 3 {
-		t.Fatalf("expected at least 3 listeners to compare, got %d", len(gw.Spec.Listeners))
-	}
-	seen := map[*gatewayv1.RouteNamespaces]string{}
-	for _, l := range gw.Spec.Listeners {
-		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil {
-			t.Fatalf("listener %s has no AllowedRoutes.Namespaces", l.Name)
-		}
-		ns := l.AllowedRoutes.Namespaces
-		if other, dup := seen[ns]; dup {
-			t.Errorf("listener %s shares its AllowedRoutes.Namespaces struct with %s", l.Name, other)
-			continue
-		}
-		seen[ns] = string(l.Name)
+			if len(gw.Spec.Listeners) < 3 {
+				t.Fatalf("expected at least 3 listeners to compare, got %d", len(gw.Spec.Listeners))
+			}
+			seen := map[*gatewayv1.RouteNamespaces]string{}
+			for _, l := range gw.Spec.Listeners {
+				if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil {
+					t.Fatalf("listener %s has no AllowedRoutes.Namespaces", l.Name)
+				}
+				ns := l.AllowedRoutes.Namespaces
+				if other, dup := seen[ns]; dup {
+					t.Errorf("listener %s shares its AllowedRoutes.Namespaces struct with %s", l.Name, other)
+					continue
+				}
+				seen[ns] = string(l.Name)
+			}
+		})
 	}
 }
 

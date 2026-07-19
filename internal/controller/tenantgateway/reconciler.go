@@ -792,7 +792,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
 			},
 			gatewayv1.Listener{
 				Name:     "https-apex",
@@ -805,7 +805,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
 			},
 		)
 		// Per-child-apex wildcard listeners — every inheriting
