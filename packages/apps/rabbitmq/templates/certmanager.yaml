@@ -24,6 +24,26 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secretName: {{ .Release.Name }}-ca
+  # Publish this CA to the tenant. The CA-extraction controller lifts ca.crt alone
+  # into the key-free <release>.tenant-ca Secret, so a tenant can verify the AMQPS
+  # and management HTTPS endpoints without gaining access to the CA private key
+  # stored here under tls.key. The label goes on the isCA Certificate, not the leaf
+  # <release>-tls: the leaf carries the server private key next to the same ca.crt.
+  # The release label is required on this leg: cert-manager issues the Secret, so it
+  # carries neither an OwnerReference nor Helm metadata to attribute it by.
+  #
+  # TURNING TLS OFF DOES NOT WITHDRAW THIS ANCHOR. Helm removes the Certificate, but
+  # cert-manager leaves the Secret behind (enableCertificateOwnerRef=false), so it
+  # keeps matching the publish label and the controller keeps projecting it — while
+  # the endpoint has gone back to plaintext. Nothing the chart renders prevents this:
+  # the label leg withdraws on the source Secret disappearing, and Helm does not own
+  # that Secret. Until the controller gains a withdrawal signal for a removed
+  # Certificate, disabling TLS on a release that had it means deleting <release>-ca
+  # and <release>-tls by hand. Verification fails closed meanwhile; no key is exposed.
+  secretTemplate:
+    labels:
+      internal.cozystack.io/publish-ca-cert: "true"
+      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name | quote }}
   duration: 43800h
   commonName: {{ .Release.Name }}-ca
   issuerRef:

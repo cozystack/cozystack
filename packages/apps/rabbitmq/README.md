@@ -44,12 +44,26 @@ The service utilizes official RabbitMQ operator. This ensures the reliability an
 
 ## TLS scope
 
-This chart enables TLS for AMQP (port 5671) and the management HTTPS interface
-(port 15671) using cert-manager. Intra-cluster Erlang distribution (port 25672)
-remains plaintext even when TLS is enabled. The RabbitMQ operator supports
-`spec.tls.disableNonTLSListeners` and inter-node mTLS via `spec.tls.caSecretName`;
-enabling Erlang distribution TLS is tracked as a follow-up and is not yet wired
-by this chart.
+This chart adds TLS listeners for AMQP (port 5671) and the management HTTPS interface (port 15671) using cert-manager. It adds encrypted endpoints; it does not close the unencrypted ones.
+
+**The plaintext listeners stay open.** AMQP on 5672 and management on 15672 keep listening whenever TLS is on, and when `external` is `true` they are published on the LoadBalancer alongside the TLS ports. The operator's `spec.tls.disableNonTLSListeners` is the only switch that closes them, and it closes them at the broker level — it writes `listeners.tcp = none` into `rabbitmq.conf`, so the socket is never opened on any interface and in-cluster clients lose plaintext access at the same instant as external ones. There is no operator-supported way to drop a port from the published Service alone: `spec.override.service.spec.ports` is applied as a strategic merge patch keyed on `port`, which can add or mutate entries but never remove them, and the operator regenerates its default port set on every reconcile. This chart therefore does not set the flag, and connecting over TLS is currently the client's choice rather than something the endpoint enforces. Treat an `external: true` RabbitMQ as reachable in plaintext from outside the cluster and restrict it at the network layer if that is not acceptable.
+
+Intra-cluster Erlang distribution (port 25672) also remains plaintext, and `disableNonTLSListeners` would not change that either — the operator never applies it to the headless Service that carries the distribution port. Inter-node mTLS via `spec.tls.caSecretName` is not wired by this chart.
+
+## Verifying the server certificate
+
+The certificates are issued by a per-release self-signed CA, so a client must be given that CA to verify the endpoint. The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
+
+```bash
+kubectl get tenantsecret <release>.tenant-ca \
+  -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+```
+
+`<release>.tenant-ca` is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. The cert-manager Secrets are deliberately not granted to tenants: `<release>-ca` stores the CA **private key**, so read access would let the holder issue certificates for anything, and the leaf `<release>-tls` stores the server private key next to the same `ca.crt`. RBAC has no key-level filter, so granting either to deliver a trust anchor would deliver a key with it.
+
+> **Requires the CA-extraction controller.** This chart labels its CA for publication, but the platform component that performs the projection ships separately. Until it is present, `<release>.tenant-ca` is not created and the command above returns `NotFound`; the TLS configuration itself is unaffected. On a cluster without it, a tenant has no key-free path to the CA.
+
+> **Warning:** the CA is issued with a 5-year duration and cert-manager renews the certificate as it approaches expiry, so a bundle copied once will eventually stop verifying. Re-read `<release>.tenant-ca` on a schedule, or mount it and let the kubelet refresh it, instead of baking `ca.crt` into a client image or a truststore built at release time.
 
 ## Parameter examples and reference
 
