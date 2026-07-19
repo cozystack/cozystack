@@ -73,3 +73,38 @@ tests:
       - notMatchRegex:
           path: spec.template.spec.containers[0].image
           pattern: //
+
+  # cert-manager runs with enableCertificateOwnerRef=false, so deleting the
+  # Certificates does not delete the Secrets they issued. Without this, the CA
+  # private key and the server private key outlive the release in a namespace
+  # the tenant shares with its other applications.
+  - it: deletes the key-bearing cert-manager Secrets on uninstall
+    documentIndex: 0
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-ca-tls"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-tls"
+      # -ca-bundle carries an ownerRef to the MariaDB resource, so Kubernetes
+      # collects it; deleting it here would need a grant that is not warranted.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-ca-bundle"
+
+  - it: grants delete on exactly the Secrets it removes
+    documentIndex: 2
+    asserts:
+      - equal:
+          path: kind
+          value: Role
+      - contains:
+          path: rules[1].resourceNames
+          content: mariadb-test-ca-tls
+      - contains:
+          path: rules[1].resourceNames
+          content: mariadb-test-tls
+      - lengthEqual:
+          path: rules[1].resourceNames
+          count: 4
