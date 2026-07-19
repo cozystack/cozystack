@@ -137,7 +137,7 @@
       ]
     },
     "tls": {
-      "description": "TLS configuration. When omitted, TLS is enabled automatically when `external` is true.",
+      "description": "TLS configuration. TLS is opt-in and is not inferred from `external`.",
       "type": "object",
       "default": {},
       "properties": {
@@ -151,7 +151,7 @@
           ]
         },
         "enabled": {
-          "description": "Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.",
+          "description": "Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.",
           "type": "boolean"
         }
       }

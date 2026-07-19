@@ -1,19 +1,26 @@
 {{/*
-redis.tls.enabled resolves the tri-state tls.enabled field to a plain
-string "true" or "false" so callers can use it with `eq`:
+redis.tls.enabled resolves the tls.enabled field to a plain string "true"
+or "false" so callers can use it with `eq`:
 
   {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 
-Tri-state semantics:
+Semantics — TLS is opt-in and is never inferred:
   - tls.enabled explicitly set (bool) → use that value
-  - tls.enabled unset or null         → auto-on when external is true
-  - tls: null                         → treated as unset, falls back to external
+  - tls.enabled unset                 → false
+  - tls: null                         → treated as unset, so false
+
+TLS deliberately does NOT follow `external`. In this operator TLS replaces
+plaintext rather than running beside it — the rendered config sets `port 0`
+and moves the listener to `tls-port` — so inferring it from `external` would
+switch an already-running externally-reachable Redis to TLS-only on its
+first reconcile after an upgrade and drop every plaintext client mid-flight.
+A platform upgrade must not sever working connections, so enabling TLS stays
+an explicit decision by whoever also migrates the clients.
 
 `default (dict)` guards against tls: null (nil map). `kindIs "invalid"`
 catches the case where tls is a map with no enabled key at all: index
-returns nil, and nil | toString = "<nil>", which would silently break the
-tri-state by reading as neither "true" nor "false". A missing key is
-treated the same as unset: fall back to external.
+returns nil, and nil | toString = "<nil>", which would read as neither
+"true" nor "false".
 
 An explicitly null enabled is not among the shapes reaching here —
 values.schema.json types the field as boolean and rejects null before any
@@ -23,7 +30,7 @@ template runs — so the guard is about the absent key, not a null one.
 {{- $tlsMap := default (dict) .Values.tls -}}
 {{- $enabled := index $tlsMap "enabled" -}}
 {{- if kindIs "invalid" $enabled -}}
-  {{- .Values.external | default false | toString -}}
+  {{- "false" -}}
 {{- else -}}
   {{- $enabled | toString -}}
 {{- end -}}
