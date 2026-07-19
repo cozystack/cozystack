@@ -1,14 +1,12 @@
 suite: RabbitMQ TLS tri-state agreement across templates
 
-# rabbitmq.yaml and certmanager.yaml both branch on whether TLS is on. They used
-# to carry byte-identical copies of the resolution logic, which had already begun
-# to drift (a third copy in dashboard-resourcemap.yaml outlived its only reader).
-# Both now call the rabbitmq.tls.enabled helper. These tests render both
-# templates together across every external x tls.enabled combination and assert
-# they reach the SAME answer — the certificate chain must exist exactly when the
-# cluster asks the operator to serve TLS. A chart that issued certificates nobody
-# used, or asked for a secret that was never created, would pass each template's
-# own suite and fail here.
+# rabbitmq.yaml and certmanager.yaml both branch on whether TLS is on, through
+# the shared rabbitmq.tls.enabled helper. These tests render both templates
+# across every external x tls.enabled combination and assert they reach the SAME
+# answer: the certificate chain must exist exactly when the cluster asks the
+# operator to serve TLS. A chart that issued certificates nobody used, or asked
+# for a Secret that was never created, would pass each template's own suite and
+# fail here.
 #
 # certmanager.yaml renders 4 documents when TLS is on (selfsigned Issuer, CA
 # Certificate, CA Issuer, leaf Certificate) and 0 when it is off.

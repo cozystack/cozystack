@@ -26,9 +26,7 @@ spec:
        No cacertfile is set on either listener. It would only matter for verifying
        CLIENT certificates, which additionally requires verify_peer and
        fail_if_no_peer_cert; without those the endpoint authenticates clients by
-       password inside the TLS session, not by certificate. Setting it on the
-       management listener alone — as this chart previously did — bought nothing and
-       left the two listeners inconsistent. */}}
+       password inside the TLS session, not by certificate. */}}
   tls:
     secretName: {{ .Release.Name }}-tls
   {{- end }}

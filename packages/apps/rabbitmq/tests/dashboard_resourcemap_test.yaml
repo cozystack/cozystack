@@ -165,3 +165,39 @@ tests:
       - equal:
           path: roleRef.name
           value: myrabbitmq-dashboard-resources
+
+  # -----------------------------------------------------------------------
+  # Pin the complete list, not just the absence of known-bad names. Every other
+  # assertion here is a notContains, so a Role that gained the erlang cookie or
+  # any future Secret would satisfy all of them. This is the actual contract.
+  # -----------------------------------------------------------------------
+
+  - it: grants exactly the intended Secrets and nothing else, TLS on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - myrabbitmq-default-user
+
+  - it: grants exactly the intended Secrets and nothing else, with users defined
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      users.alice.password: hackme
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[0].resourceNames
+          value:
+            - myrabbitmq-default-user
+            - myrabbitmq-alice-credentials

@@ -29,9 +29,19 @@ spec:
   secrets:
     # Evaluated before include, so this is a structural backstop rather than a
     # restatement. The trust-anchor include below matches by label with no name
-    # constraint, so a single mis-stamp of that label on one of these would
-    # promote a private key to the tenant — the projection API copies Secret
-    # data verbatim and filters no keys.
+    # constraint, and the projection API copies Secret data verbatim without
+    # filtering keys, so a Secret that both carries a private key and reaches
+    # promotion would hand that key to the tenant.
+    #
+    # This list is defence in depth, not the first line. Promotion runs on the
+    # internal.cozystack.io/tenantresource label, which the lineage webhook
+    # stamps only when it can resolve an ancestor; a cert-manager Secret has no
+    # ownerReference (enableCertificateOwnerRef is off) and no Helm metadata, so
+    # today it fails closed before include or exclude is consulted at all. What
+    # this list covers is the case where that stops being true — the future
+    # CA-extraction controller giving its projection an ownerRef, or any change
+    # that gives these objects an ancestor. Cheap to keep, and the cost of being
+    # wrong about it is a leaked private key.
     #
     # Two groups, both key-bearing:
     #   - The cert-manager chain. -ca holds the CA private key under tls.key

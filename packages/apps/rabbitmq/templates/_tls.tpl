@@ -8,9 +8,8 @@ Tri-state semantics:
   - tls.enabled explicitly set   → use that value
   - tls.enabled unset or null    → inherit from external
 
-Defined once because every template that branches on TLS must reach the same
-answer. Three copies of the inline form previously existed in this chart and had
-already begun to drift.
+Every template that branches on TLS calls this helper, so they cannot disagree
+about whether TLS is on. tests/tls_tristate_test.yaml pins that agreement.
 
 The lookup goes through `dig` on a defaulted dict rather than reading
 .Values.tls.enabled directly, so `tls: null` resolves instead of panicking with
