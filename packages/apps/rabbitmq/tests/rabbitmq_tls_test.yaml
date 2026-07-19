@@ -491,7 +491,26 @@ tests:
       - failedTemplate:
           errorPattern: "cannot be combined with users or vhosts"
 
-  - it: allows the flag when users and vhosts are managed outside the chart
+  - it: does not offer hand-written topology objects as the way around the refusal
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      users.alice.password: hackme
+    asserts:
+      # The message used to say "manage users and vhosts outside the chart",
+      # which reads as "move them into hand-written CRs". That does not work:
+      # useTLSForConnection is derived from the RabbitmqCluster, not from who
+      # created the topology CR, so those objects fail the same way with no
+      # refusal to warn anyone. Pin the correction so it cannot drift back.
+      - failedTemplate:
+          errorPattern: "the operator reads the RabbitmqCluster, not who created the CR"
+      - failedTemplate:
+          errorPattern: "rabbitmqctl or a definitions import"
+
+  - it: allows the flag when the chart is asked to manage no users or vhosts
     release:
       name: myrabbitmq
       namespace: tenant-test
