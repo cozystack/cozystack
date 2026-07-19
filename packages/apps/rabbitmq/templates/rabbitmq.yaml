@@ -27,11 +27,21 @@ spec:
   tls:
     secretName: {{ .Release.Name }}-tls
   rabbitmq:
+    {{- /* Setting spec.tls.secretName is what turns on TLS: the operator then writes
+         its own defaultTLSConf, which already supplies ssl_options.certfile/keyfile,
+         listeners.ssl.default=5671 and management.ssl.certfile/keyfile/port=15671.
+         Repeating those here would only duplicate the operator verbatim. It also
+         writes management.tcp.port=15672 in the same branch, which is why the
+         plaintext management listener stays up when disableNonTLSListeners is unset.
+
+         cacertfile is the one key the operator does not set outside mutual TLS. It
+         supplies the CA for the management listener; it does NOT by itself enable
+         client-certificate verification, which additionally requires
+         management.ssl.verify=verify_peer and fail_if_no_peer_cert. This chart does
+         not enable those, so the management endpoint authenticates its clients by
+         password over HTTPS, not by certificate. */}}
     additionalConfig: |
-      management.ssl.port = 15671
       management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt
-      management.ssl.certfile = /etc/rabbitmq-tls/tls.crt
-      management.ssl.keyfile = /etc/rabbitmq-tls/tls.key
   {{- end }}
   override:
     {{- /* No spec.override.service here, deliberately. Listing only the TLS ports

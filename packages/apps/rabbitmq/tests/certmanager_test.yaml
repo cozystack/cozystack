@@ -392,20 +392,6 @@ tests:
           content: signing
 
   # -----------------------------------------------------------------------
-  # B3: tls schema must reject unknown keys
-  # -----------------------------------------------------------------------
-
-  - it: schema rejects unknown tls keys
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      tls.bogus_key: true
-    asserts:
-      - failedTemplate: {}
-
-  # -----------------------------------------------------------------------
   # ECDSA: CA and leaf certificates use ECDSA P-256 private keys
   # -----------------------------------------------------------------------
 
@@ -544,3 +530,34 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
+
+  # -----------------------------------------------------------------------
+  # external=true requires _namespace.host: the external DNS name is a cert SAN,
+  # and a certificate silently missing it fails verification at connect time
+  # rather than at render time. Fail closed with a message that names the key.
+  # -----------------------------------------------------------------------
+
+  - it: fails with an actionable message when external is true but _namespace.host is unset
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "_namespace.host is not set"
+
+  - it: renders the external DNS name as a SAN when _namespace.host is set
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.example.com

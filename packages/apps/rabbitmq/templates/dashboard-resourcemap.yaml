@@ -1,11 +1,7 @@
 {{/*
-Tri-state TLS resolution: explicit non-null tls.enabled wins; when absent or null,
-defaults to external. A null tls.enabled is treated as "inherit from external".
+This Role deliberately does not branch on whether TLS is enabled: no TLS Secret is
+granted in either state, so there is nothing here for a TLS condition to gate.
 */}}
-{{- $tlsEnabled := .Values.external }}
-{{- if not (kindIs "invalid" .Values.tls.enabled) }}
-  {{- $tlsEnabled = .Values.tls.enabled }}
-{{- end }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

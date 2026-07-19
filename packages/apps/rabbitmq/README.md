@@ -63,6 +63,8 @@ kubectl get tenantsecret <release>.tenant-ca \
 
 > **Requires the CA-extraction controller.** This chart labels its CA for publication, but the platform component that performs the projection ships separately. Until it is present, `<release>.tenant-ca` is not created and the command above returns `NotFound`; the TLS configuration itself is unaffected. On a cluster without it, a tenant has no key-free path to the CA.
 
+Verification runs one way only. The server presents a certificate that a client can verify with the CA above; the server does not verify client certificates in return. Enabling that would require `management.ssl.verify = verify_peer` with `fail_if_no_peer_cert` for the management listener and the equivalent `ssl_options.*` for AMQP, none of which this chart sets. Clients continue to authenticate by username and password — carried inside the TLS session rather than in the clear, but still a password rather than a certificate.
+
 > **Warning:** the CA is issued with a 5-year duration and cert-manager renews the certificate as it approaches expiry, so a bundle copied once will eventually stop verifying. Re-read `<release>.tenant-ca` on a schedule, or mount it and let the kubelet refresh it, instead of baking `ca.crt` into a client image or a truststore built at release time.
 
 ## Parameter examples and reference

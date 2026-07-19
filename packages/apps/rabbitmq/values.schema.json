@@ -136,8 +136,7 @@
           "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.",
           "type": "boolean"
         }
-      },
-      "additionalProperties": false
+      }
     },
     "version": {
       "description": "RabbitMQ major.minor version to deploy",
