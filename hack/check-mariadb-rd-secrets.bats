@@ -39,13 +39,15 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
   grep -A2 "matchLabels:" "$COZYRDS" | grep -q "internal.cozystack.io/tenant-ca: \"true\""
 }
 
-# An empty matchLabels compiles to a match-everything selector, which would
-# project every Secret in the namespace — credentials included — to the tenant.
-# Both spellings are empty: the inline "matchLabels: {}" and a bare
-# "matchLabels:" with nothing nested under it.
+# An empty matchLabels compiles to a match-everything selector. The lineage
+# webhook only evaluates it for objects whose ownership resolves to this
+# instance, so the blast radius is the instance's own Secrets rather than the
+# whole namespace — but that set includes -ca-tls and -tls, the key-bearing
+# pair this design keeps away from the tenant. Both spellings are empty: the
+# inline "matchLabels: {}" and a bare "matchLabels:" with nothing nested.
 @test "mariadb-rd has no empty matchLabels selector" {
   if grep -qE "matchLabels:[[:space:]]*\{[[:space:]]*\}" "$COZYRDS"; then
-    echo "Found an inline empty matchLabels selector (matches every Secret)" >&2
+    echo "Found an inline empty matchLabels selector (matches every Secret the instance owns)" >&2
     exit 1
   fi
   # A bare matchLabels: must be followed by a more-indented "key: value" line.
@@ -55,7 +57,7 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
       if ((getline nextline) <= 0) { print "matchLabels: at end of file"; exit 1 }
       match(nextline, /^[[:space:]]*/)
       if (RLENGTH <= indent || nextline !~ /:/) {
-        print "Found a bare matchLabels: with no labels under it (matches every Secret)"
+        print "Found a bare matchLabels: with no labels under it (matches every Secret the instance owns)"
         exit 1
       }
     }
