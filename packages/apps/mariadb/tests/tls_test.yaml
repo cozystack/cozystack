@@ -10,6 +10,17 @@ suite: TLS configuration for MariaDB
 #   2. external=true,  tls.issuer unset  → unmanaged (external does not imply it)
 #   3. external=true,  tls.issuer=operator  → unmanaged (explicit, same result)
 #   4. external=any,   tls.issuer=cert-manager   → managed (the only way in)
+#
+# Scope caveat for the backup cases below. They pin the client flags in the
+# rendered script, and that script does not run today: the CronJob reads the
+# root password from Secret <release> key root-password, while the chart
+# renders <release>-credentials key root, so the pod never leaves
+# CreateContainerConfigError. That mismatch predates this branch and is not
+# fixed here — fixing it would start scheduled dumps on every instance with
+# backups enabled. The cases stay because the flag defect they cover was real:
+# the MariaDB client rejects the MySQL-only --ssl-mode at argument parsing, so
+# whenever the job is repaired or removed, these are what stop it coming back.
+# Until then, read them as pinning the template, not as covering a live path.
 
 release:
   name: my-mariadb
