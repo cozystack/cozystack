@@ -50,7 +50,7 @@ TLS mode is set to `preferTLS`, which means the MongoDB server accepts both TLS 
 
 ### Retrieving the CA bundle
 
-> **Requires the CA-extraction controller.** This chart declares where its trust anchor comes from, but the platform component that publishes `<release>.tenant-ca` ships separately. Until it is present the projection is not created and the command below returns `NotFound`; the TLS configuration itself is unaffected. On a cluster without it, a tenant has no key-free path to the CA — the operator's `<release>-ca-cert` is deliberately not granted, because it carries the CA private key.
+> **Requires the CA-extraction controller.** This chart declares where its trust anchor comes from, and the platform component that publishes `<release>.tenant-ca` reads that declaration. The two ship together and cannot be separated: the declaration names a field the ApplicationDefinition CRD only gains with the controller, and without it the managed-service definition fails to reconcile rather than degrading quietly, so a cluster serving MongoDB at all has the projection available. A tenant never gets a key-free path to the CA by any other route — the operator's `<release>-ca-cert` is deliberately not granted, because it carries the CA private key.
 >
 > **Requires cert-manager.** The declared source is the `<release>-ca-cert` Secret, which the operator creates only on its cert-manager path. Without cert-manager the operator falls back to issuing certificates itself, producing no `<release>-ca-cert` at all and embedding `ca.crt` inside the leaf Secrets instead — so the declared source resolves to nothing and no trust anchor is published. Cozystack ships cert-manager as a platform component, so this affects only clusters where it has been removed.
 
