@@ -532,21 +532,57 @@ tests:
           count: 0
 
   # -----------------------------------------------------------------------
-  # external=true requires _namespace.host: the external DNS name is a cert SAN,
-  # and a certificate silently missing it fails verification at connect time
-  # rather than at render time. Fail closed with a message that names the key.
+  # external=true must NOT require _namespace.host. It derives from
+  # _cluster.root-host, which the platform treats as optional, and an external
+  # RabbitMQ is a bare LoadBalancer with no Ingress. Failing would turn a
+  # previously-working configuration into a render error on upgrade, and those
+  # releases predate tls.enabled so they have no way to opt out.
   # -----------------------------------------------------------------------
 
-  - it: fails with an actionable message when external is true but _namespace.host is unset
+  - it: renders without the external SAN when external is true but _namespace.host is unset
     release:
       name: myrabbitmq
       namespace: tenant-test
     set:
       tls.enabled: true
       external: true
+    documentIndex: 3
     asserts:
-      - failedTemplate:
-          errorPattern: "_namespace.host is not set"
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
+      # No SAN is fabricated from an empty host: "myrabbitmq." would otherwise
+      # be appended and silently accepted as a name.
+      - notContains:
+          path: spec.dnsNames
+          content: myrabbitmq.
+
+  - it: renders the full internal SAN set when _namespace.host is unset
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 8
+
+  - it: adds exactly one SAN when _namespace.host is set
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentIndex: 3
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 9
 
   - it: renders the external DNS name as a SAN when _namespace.host is set
     release:
