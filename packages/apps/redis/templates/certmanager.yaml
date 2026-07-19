@@ -1,6 +1,6 @@
 {{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 {{- if $tlsEnabled }}
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cluster.local" }}
+{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
 ---
 # Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
 apiVersion: cert-manager.io/v1
