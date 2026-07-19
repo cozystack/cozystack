@@ -462,6 +462,96 @@ tests:
 
   # --- SAN coverage for Dashboards services ---
 
+  # THE SAME THREE GUARDS THE API LEAF HAS. The Dashboards certificate inherits every
+  # hazard its sibling documents — a shared key across services, offering a server key
+  # to the CA-extraction controller as a CA source, and colliding with a name the
+  # operator generates into — so it has to inherit the assertions too.
+  - it: keeps the dashboards cert from carrying any API name
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: os-test
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.tenant-test
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc.cozy.local
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-discovery
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
+  - it: never offers the dashboards server key as a CA source
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notExists:
+          path: spec.secretTemplate
+
+  - it: keeps the dashboards secret out of the operator's reserved names
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notEqual:
+          path: spec.secretName
+          value: os-test-dashboards-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-transport-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-admin-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-ca
+
+  - it: dashboards cert carries the same ECDSA-correct usages as the API leaf
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: signing
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+
   - it: dashboards cert covers every DNS form the operator dashboards cert covered
     set:
       tls:
