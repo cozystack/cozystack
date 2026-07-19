@@ -79,7 +79,15 @@ mysql -h <instance> -u <user> -p<password> --ssl-ca=/path/to/ca.crt --ssl-verify
 
 `--ssl-ca` alone establishes trust but leaves the hostname unchecked; `--ssl-verify-server-cert` is what validates the server name against the certificate. Note that these are MariaDB client options. The MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client does not accept.
 
-> Distribution of the CA certificate to the tenant is handled by the platform and is not yet available. Until it lands, clients inside the cluster that cannot obtain `ca.crt` have to either skip verification or run with `tls.required: false`.
+The trust anchor is available in the instance namespace as the Secret `<instance>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
+
+```bash
+kubectl get secret <instance>-ca-bundle -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+```
+
+Mounting that Secret into a client Pod is the usual in-cluster approach; nothing needs to be copied out of the namespace.
+
+> External clients additionally need a DNS record pointing at the LoadBalancer address. The certificate carries `<instance>.<host>` as a SAN but no IP SAN, so connecting to the address directly fails verification.
 
 #### Migrating an existing instance
 
