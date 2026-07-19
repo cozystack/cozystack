@@ -1,9 +1,10 @@
 suite: TLS configuration for MariaDB
 
 # Tests cover the tri-state tls.enabled logic. "Managed" means the chart issues
-# the CA and server certificate and enforces TLS; "unmanaged" means the operator
-# keeps its own CA and does not enforce. TLS itself is on in every row — the
-# operator serves it regardless — so no row here turns TLS off:
+# the CA and server certificate; "unmanaged" means the operator keeps its own.
+# Neither enforces: enforcement is opt-in through tls.required and defaults to
+# false. TLS itself is on in every row — the operator serves it regardless — so
+# no row here turns TLS off:
 #   1. external=false, tls.enabled unset  → unmanaged
 #   2. external=true,  tls.enabled unset  → managed (inherits external)
 #   3. external=true,  tls.enabled=false  → unmanaged (explicit overrides)
@@ -216,7 +217,7 @@ tests:
           value: true
       - equal:
           path: spec.tls.required
-          value: true
+          value: false
       - equal:
           path: spec.tls.serverCertSecretRef.name
           value: my-mariadb-tls
@@ -319,7 +320,7 @@ tests:
           value: true
       - equal:
           path: spec.tls.required
-          value: true
+          value: false
       - equal:
           path: spec.tls.serverCertSecretRef.name
           value: my-mariadb-tls
@@ -551,34 +552,8 @@ tests:
           path: spec.secretName
           value: my-mariadb-ca-tls
 
-  # -------------------------------------------------------------------
-  # tls.required default and user override
-  # Default is true (strict TLS) — operator manages its own internal
-  # connections. User may opt out by setting tls.required: false for
-  # migration scenarios where legacy clients cannot use TLS yet.
-  # -------------------------------------------------------------------
-  - it: "spec.tls.required defaults to true when TLS is enabled"
-    templates:
-      - templates/mariadb.yaml
-    set:
-      tls:
-        enabled: true
-    asserts:
-      - equal:
-          path: spec.tls.required
-          value: true
-
-  - it: "spec.tls.required can be overridden to false for migration scenarios"
-    templates:
-      - templates/mariadb.yaml
-    set:
-      tls:
-        enabled: true
-        required: false
-    asserts:
-      - equal:
-          path: spec.tls.required
-          value: false
+  # The tls.required default and both explicit overrides are covered together
+  # with the unmanaged case, further down under "Tenant exposure".
 
   # -------------------------------------------------------------------
   # B4: external absent (no value set) must not append an external SAN
@@ -1061,12 +1036,28 @@ tests:
       - notExists:
           path: spec.tls.required
 
-  - it: "managed TLS enforces by default without an explicit value"
+  # Enforcement is opt-in: it must follow the published trust anchor, not lead
+  # it. Defaulting to true would refuse plaintext connections on the next
+  # platform upgrade while the tenant still has no CA to verify the server
+  # with, and with no way to set the escape hatch beforehand.
+  - it: "managed TLS does not enforce by default"
     templates:
       - templates/mariadb.yaml
     set:
       tls:
         enabled: true
+    asserts:
+      - equal:
+          path: spec.tls.required
+          value: false
+
+  - it: "managed TLS honours an explicit required=true"
+    templates:
+      - templates/mariadb.yaml
+    set:
+      tls:
+        enabled: true
+        required: true
     asserts:
       - equal:
           path: spec.tls.required

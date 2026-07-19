@@ -108,10 +108,18 @@ spec:
     enabled: true
   {{- if $tlsEnabled }}
     # required: true enforces require_secure_transport=ON (strict TLS for all connections).
-    # The operator manages TLS for its own internal agents (replication, health-checks).
-    # Set tls.required: false only during migration when legacy clients cannot use TLS yet.
-    # `kindIs "invalid"` guards against unset field; explicit false is preserved.
-    required: {{ if kindIs "invalid" $tlsRequired }}true{{ else }}{{ $tlsRequired }}{{ end }}
+    #
+    # It defaults to false, and enforcement is opt-in, because enforcement has to
+    # follow the trust anchor rather than lead it: until the platform publishes a
+    # key-free CA to the tenant, requiring TLS would tell clients they must
+    # encrypt while giving them nothing to verify the server against. It also
+    # keeps a platform upgrade from refusing connections that work today.
+    #
+    # This default is temporary. It flips to true as an announced change, in the
+    # same release that makes the published anchor universal.
+    #
+    # `kindIs "invalid"` guards against unset field; an explicit value is preserved.
+    required: {{ if kindIs "invalid" $tlsRequired }}false{{ else }}{{ $tlsRequired }}{{ end }}
     serverCertSecretRef:
       name: {{ .Release.Name }}-tls
     serverCASecretRef:
