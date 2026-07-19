@@ -63,10 +63,14 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 }
 
 @test "mariadb-rd does not expose key-bearing TLS Secrets by name" {
-  # Brace spacing is not pinned, and the entry may be quoted: any list entry
-  # ending in -tls or -ca-tls fails either way.
-  if grep -E "^[[:space:]]*-[[:space:]].*-(ca-)?tls\"?[[:space:]]*$" "$COZYRDS"; then
-    echo "Found a key-bearing TLS Secret in the tenant include list" >&2
-    exit 1
-  fi
+  # Scoped to the secrets: block — a -tls entry under services: is a Service
+  # name, not a Secret, and must not trip this. Brace spacing is not pinned, the
+  # entry may be quoted, and a trailing comment must not hide it.
+  awk '/^  secrets:/{inblock=1; next} /^  [a-z]/{inblock=0} inblock' "$COZYRDS" \
+    | sed 's/#.*$//' \
+    | grep -E "^[[:space:]]*-[[:space:]].*-(ca-)?tls\"?[[:space:]]*$" && {
+        echo "Found a key-bearing TLS Secret in the tenant include list" >&2
+        exit 1
+      }
+  return 0
 }

@@ -91,7 +91,7 @@ mysql -h mariadb-<name> -u <user> -p --ssl-ca=/path/to/ca.crt --ssl-verify-serve
 
 `-p` without a value prompts for the password, which keeps it out of shell history and out of the process arguments other users can read.
 
-`--ssl-ca` supplies the trust anchor; `--ssl-verify-server-cert` is what checks the server name against the certificate. Whether that check is on by default depends on the client: MariaDB 10.11 leaves it off, 11.x turns it on. Passing it explicitly is correct on both, and it is the difference between an encrypted connection and a verified one. Note these are MariaDB client options — the MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client rejects outright.
+`--ssl-ca` supplies the trust anchor; `--ssl-verify-server-cert` is what checks the server name against the certificate. Whether that check is on by default depends on the client version: it is off through 10.11 and on from 11.4, so of the versions this chart offers, `v10.6` and `v10.11` leave it off while `v11.4` and `v11.8` enable it. Passing it explicitly is correct on both, and it is the difference between an encrypted connection and a verified one. Note these are MariaDB client options — the MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client rejects outright.
 
 The trust anchor is available in the instance namespace as the Secret `mariadb-<name>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
 
