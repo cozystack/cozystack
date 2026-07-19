@@ -76,8 +76,10 @@ storageClass: ""
 ##   The LoadBalancer Services are published to external-dns as
 ##   <release>.<tenant-host> and <release>-dashboards.<tenant-host>. Releases created
 ##   before this naming was introduced were published under the in-cluster domain
-##   instead, which does not resolve outside the cluster; enabling or re-applying
-##   external access retires the old record and publishes the new name.
+##   instead, which does not resolve outside the cluster. Re-applying publishes the
+##   new name but does NOT withdraw the old record: external-dns runs upsert-only, so
+##   it never issues a delete. The stale entry keeps pointing at the LoadBalancer
+##   until it is removed from the zone by hand.
 ##   ONLY chart-managed TLS covers those names. With tls.enabled true (or auto-on on
 ##   OpenSearch 2.0.0 and later) the certificate carries both as SANs. With TLS
 ##   operator-managed — tls.enabled false, or the fallback below 2.0.0 — the operator
