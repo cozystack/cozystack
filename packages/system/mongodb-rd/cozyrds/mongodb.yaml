@@ -31,6 +31,8 @@ spec:
     include:
       - resourceNames:
           - mongodb-{{ .name }}-credentials
+      - matchLabels:
+          apps.cozystack.io/user-secret: "true"
   services:
     exclude: []
     include:
