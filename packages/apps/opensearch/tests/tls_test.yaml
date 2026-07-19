@@ -6,8 +6,11 @@ suite: opensearch TLS cert-manager chain
 #   (c) external: true,  tls.enabled: false → TLS off, operator generates HTTP cert
 #   (d) external: false, tls.enabled: true  → TLS on via cert-manager (no external SAN)
 #
-# Design: ONE combined leaf Certificate for HTTP + Dashboards (combined SAN list).
-# Keeps the chain to 4 resources: selfsigned Issuer, CA Cert, CA Issuer, leaf Cert.
+# Design: ONE leaf Certificate per service, both under the same CA. Sharing a key
+# between the API and Dashboards would let a compromised Dashboards impersonate the
+# API endpoint, so they are issued separately, as the operator itself does.
+# Chain: selfsigned Issuer, CA Cert, CA Issuer, API leaf, and — only when Dashboards
+# is enabled, appended last so the first four indices are stable — the Dashboards leaf.
 # Transport mTLS remains operator-managed (generate: true, perNode: true) — not touched here.
 
 release:
@@ -47,13 +50,15 @@ tests:
     set:
       tls:
         enabled: true
+      dashboards:
+        enabled: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 5
       - contains:
           path: spec.dnsNames
           content: os-test-name-that-is-definitely-too-long-xxxxxx-dashboards
-        documentIndex: 3
+        documentIndex: 4
 
   # Version floor: below OpenSearch 2.0.0 the operator signs the admin certificate
   # with the transport CA instead of http.caSecret, so securityadmin cannot verify
@@ -172,7 +177,17 @@ tests:
       - contains:
           path: spec.dnsNames
           content: os-test-dashboards.example.cozy.local
+        documentIndex: 4
+      # Neither certificate may carry the other's name — that is the whole point of
+      # issuing them separately.
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
         documentIndex: 3
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+        documentIndex: 4
 
   # The operator reserves <release>-http-cert for the HTTP certificate it generates
   # itself. If the chart's leaf took that name, turning TLS off would leave the
@@ -283,10 +298,27 @@ tests:
           path: spec.dnsNames
           content: os-test.example.cozy.local
         documentIndex: 3
+
+  - it: "(e) adds a fifth resource, the dashboards certificate, when dashboards enabled"
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: metadata.name
+          value: os-test-dashboards-server
+        documentIndex: 4
       - contains:
           path: spec.dnsNames
           content: os-test-dashboards.example.cozy.local
-        documentIndex: 3
+        documentIndex: 4
 
   # --- Chain structure ---
 
@@ -399,16 +431,11 @@ tests:
       - contains:
           path: spec.dnsNames
           content: os-test-discovery
-      - contains:
+      # ...and none of the Dashboards names, which belong to its own certificate.
+      - notContains:
           path: spec.dnsNames
           content: os-test-dashboards
-      - contains:
-          path: spec.dnsNames
-          content: os-test-dashboards.tenant-test
-      - contains:
-          path: spec.dnsNames
-          content: os-test-dashboards.tenant-test.svc
-      - contains:
+      - notContains:
           path: spec.dnsNames
           content: os-test-dashboards.tenant-test.svc.cozy.local
 
@@ -435,12 +462,17 @@ tests:
 
   # --- SAN coverage for Dashboards services ---
 
-  - it: leaf cert includes three DNS forms for the dashboards service
+  - it: dashboards cert covers every DNS form the operator dashboards cert covered
     set:
       tls:
         enabled: true
-    documentIndex: 3
+      dashboards:
+        enabled: true
+    documentIndex: 4
     asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test
       - contains:
           path: spec.dnsNames
           content: os-test-dashboards
@@ -451,12 +483,14 @@ tests:
           path: spec.dnsNames
           content: os-test-dashboards.tenant-test.svc.cozy.local
 
-  - it: "(b) leaf cert includes external Dashboards DNS SAN when external true"
+  - it: "(b) dashboards cert includes external Dashboards DNS SAN when external true"
     set:
       external: true
       _namespace:
         host: example.cozy.local
-    documentIndex: 3
+      dashboards:
+        enabled: true
+    documentIndex: 4
     asserts:
       - contains:
           path: spec.dnsNames
@@ -720,6 +754,12 @@ tests:
         documentIndex: 0
       - equal:
           path: spec.dashboards.tls.secret.name
+          value: os-test-dashboards-server
+        documentIndex: 0
+      # Never the API certificate: a shared key would let a compromised Dashboards
+      # impersonate the OpenSearch API endpoint.
+      - notEqual:
+          path: spec.dashboards.tls.secret.name
           value: os-test-http-server
         documentIndex: 0
       - notExists:
@@ -741,6 +781,12 @@ tests:
           value: true
         documentIndex: 0
       - equal:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-dashboards-server
+        documentIndex: 0
+      # Never the API certificate: a shared key would let a compromised Dashboards
+      # impersonate the OpenSearch API endpoint.
+      - notEqual:
           path: spec.dashboards.tls.secret.name
           value: os-test-http-server
         documentIndex: 0

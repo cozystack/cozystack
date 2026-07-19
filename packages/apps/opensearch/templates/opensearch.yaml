@@ -55,8 +55,10 @@ spec:
     tls:
       enable: true
       {{- if $tlsEnabled }}
+      # Dashboards gets its own certificate, not the API one: sharing a key would let
+      # a compromised Dashboards impersonate the OpenSearch API endpoint.
       secret:
-        name: {{ .Release.Name }}-http-server
+        name: {{ .Release.Name }}-dashboards-server
       {{- else }}
       generate: true
       {{- end }}

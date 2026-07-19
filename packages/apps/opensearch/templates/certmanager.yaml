@@ -114,12 +114,16 @@ spec:
   ca:
     secretName: {{ .Release.Name }}-http-ca
 ---
-# Combined leaf TLS Certificate for HTTP API (port 9200) and Dashboards (port 5601).
-# A single cert with a combined SAN list is used so both services share the same
-# CA Issuer and the chain stays at exactly 4 resources.
-# The secret name ({{ .Release.Name }}-http-server) is passed to both:
-#   spec.security.tls.http.secret.name  (OpenSearch HTTP API)
-#   spec.dashboards.tls.secret.name     (Dashboards HTTPS, when enabled)
+# Leaf TLS Certificate for the OpenSearch HTTP API (port 9200), passed to
+# spec.security.tls.http.secret.name. Dashboards gets its OWN certificate below.
+#
+# ONE CERTIFICATE PER SERVICE, not one covering both. The operator issues separately
+# (<clusterName>-http-cert and <clusterName>-dashboards-cert), and collapsing them
+# into a single combined-SAN leaf would hand the Dashboards pod a private key valid
+# for the OpenSearch API names — including the external hostname. Dashboards is the
+# far more exposed of the two, so a compromise there would let it impersonate the
+# API endpoint for the whole certificate lifetime, which is ten years here. Keeping
+# them apart costs one more Certificate and preserves the operator's isolation.
 #
 # NAMED -http-server, NOT -http-cert, for the same reason the CA above is named
 # -http-ca: the operator reserves <clusterName>-http-cert for the HTTP certificate
@@ -156,13 +160,12 @@ spec:
   usages:
     - server auth
     - signing
-  # MUST COVER EVERYTHING THE OPERATOR'S OWN CERTIFICATE COVERED. Turning
+  # MUST COVER EVERYTHING THE OPERATOR'S OWN HTTP CERTIFICATE COVERED. Turning
   # chart-managed TLS on replaces the operator-issued certificate, so any name
   # missing here stops verifying for a client that was using it. The operator issues
   # for <name>, the service name, <name>-discovery and the <name>.<ns>[.svc[.domain]]
-  # ladder, and its Dashboards certificate for the matching -dashboards ladder. The
-  # two-label form is load-bearing: with ndots:5 and the default search list,
-  # <name>.<ns> is what a client inside another namespace actually resolves and
+  # ladder. The two-label form is load-bearing: with ndots:5 and the default search
+  # list, <name>.<ns> is what a client inside another namespace actually resolves and
   # therefore what its TLS verification runs against.
   dnsNames:
     {{- $ns := .Release.Namespace }}
@@ -174,6 +177,45 @@ spec:
     - {{ $name }}.{{ $ns }}.svc.{{ $clusterDomain }}
     # Headless discovery service the operator issues for as well
     - {{ $name }}-discovery
+    {{- if .Values.external | default false }}
+    {{- $extHost := required "external is true but _namespace.host is not set" (.Values._namespace | default dict).host }}
+    # External LoadBalancer DNS name (used by external-dns)
+    - {{ printf "%s.%s" $name $extHost }}
+    {{- end }}
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-http-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- if .Values.dashboards.enabled }}
+---
+# Leaf TLS Certificate for Dashboards (port 5601), passed to
+# spec.dashboards.tls.secret.name. Deliberately a separate key from the API
+# certificate above — see the note there. Same CA, so a client that trusts the
+# published anchor verifies both, and the names mirror what the operator's own
+# Dashboards certificate covered.
+#
+# Rendered last and only when Dashboards is enabled, so the document order of the
+# four resources above does not depend on this value.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-dashboards-server
+spec:
+  secretName: {{ .Release.Name }}-dashboards-server
+  # Same lifetime and reasoning as the API certificate above: mounted material is
+  # not refreshed in place, so a shorter life would expire rather than rotate.
+  duration: 87600h  # 10 years, matching the CA
+  isCA: false
+  usages:
+    - server auth
+    - signing
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $name := .Release.Name }}
     # Dashboards service (operator-created ClusterIP)
     - {{ $name }}-dashboards
     - {{ $name }}-dashboards.{{ $ns }}
@@ -182,7 +224,6 @@ spec:
     {{- if .Values.external | default false }}
     {{- $extHost := required "external is true but _namespace.host is not set" (.Values._namespace | default dict).host }}
     # External LoadBalancer DNS name (used by external-dns)
-    - {{ printf "%s.%s" $name $extHost }}
     - {{ printf "%s-dashboards.%s" $name $extHost }}
     {{- end }}
   privateKey:
@@ -193,4 +234,5 @@ spec:
     name: {{ .Release.Name }}-http-ca
     kind: Issuer
     group: cert-manager.io
+{{- end }}
 {{- end }}
