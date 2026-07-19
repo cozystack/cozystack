@@ -1,0 +1,36 @@
+suite: opensearch-operator DNS_BASE matches the platform cluster domain
+
+# The operator resolves in-cluster service FQDNs from the DNS_BASE env var — the
+# securityadmin bootstrap job connects to `<svc>.<ns>.svc.<DNS_BASE>` and the
+# OpenSearch Dashboards Deployment points OPENSEARCH_HOSTS at the same suffix.
+# The upstream chart defaults DNS_BASE to cluster.local, but Cozystack's cluster
+# domain is cozy.local. Left at the default those names never resolve: the
+# securityconfig job cannot reach the cluster (the .opendistro_security index is
+# never created, so OpenSearch nodes stay NotReady) and Dashboards crash-loops on
+# ENOTFOUND. Pin DNS_BASE to the platform's default cluster domain, matching what
+# the opensearch app chart already uses (`.Values._cluster.cluster-domain
+# | default "cozy.local"`).
+release:
+  name: opensearch-operator
+  namespace: cozy-opensearch-operator
+tests:
+  - it: sets DNS_BASE to the platform cluster domain, not the upstream cluster.local default
+    template: charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      # Guard container ordering: kube-rbac-proxy is [0], manager is [1].
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: operator-controller-manager
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: cozy.local
+      - notContains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DNS_BASE
+            value: cluster.local
