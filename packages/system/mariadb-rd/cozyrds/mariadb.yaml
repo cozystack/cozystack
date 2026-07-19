@@ -38,7 +38,7 @@ spec:
   # Until then the tenant reaches the anchor through the resourceNames entry
   # below, which needs nothing new.
   caCert:
-    sourceSecretName: "mariadb-{{ .name }}-ca-bundle"
+    sourceSecretName: "{{ .release }}-ca-bundle"
     sourceKey: ca.crt
   secrets:
     # Backstop for the include selector below. matchLabels carries no name
