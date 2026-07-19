@@ -60,3 +60,142 @@ spec:
             name: mongodb-test-rs0
           status:
             readyReplicas: 1
+
+  # The ApplicationDefinition declares the trust-anchor source by name
+  # (<release>-ca-cert, key ca.crt). Nothing else in the repo checks that this
+  # is what the operator actually produces: the declaration and any unit
+  # fixture would encode the same assumption and so cannot catch each other
+  # being wrong. This step is the independent witness — a Percona rename of
+  # either the Secret or the key breaks it here rather than silently producing
+  # an empty trust anchor.
+  - name: verify-ca-cert-source-shape
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ca-cert
+          (data."ca.crt" != null): true
+
+  # The Secrets the operator creates for TLS all carry private key material and
+  # must never be reachable by a tenant. The chart tests pin this at render
+  # time; this pins the object that is actually deployed.
+  #
+  # Asserted as an exact list rather than as the absence of forbidden names,
+  # because a rule granting `secrets` with no resourceNames at all grants every
+  # Secret in the namespace while containing no forbidden name to match on.
+  #
+  # Two counts are asserted alongside it and neither is redundant. An
+  # ADDITIONAL rule naming secrets contributes no entries to the flattened name
+  # list, so the equality alone would still hold while every Secret became
+  # readable — the secrets-rule count catches that. An ADDED rule with resources
+  # ["*"] grants every Secret without containing the string "secrets" at all, so
+  # it is invisible to both — the total rule count catches that one. An existing
+  # rule MUTATED to ["*"] drops the secrets-rule count to zero and empties the
+  # flattened name list, so both assertions below fail on it as well.
+  - name: verify-tenant-role-grants-no-key-material
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: mongodb-test-dashboard-resources
+          (length(rules)): 3
+          (length(rules[?contains(resources, 'secrets')])): 1
+          (rules[?contains(resources, 'secrets')].resourceNames[]):
+          - mongodb-test-credentials
+          # The Role is read-only by intent; verbs is the fourth RBAC axis and
+          # widening it is the same class as widening the other three.
+          (length(rules[?verbs != ['get', 'list', 'watch']])): 0
+
+  # The Role above is only one of the two paths a Secret can reach a tenant by.
+  # The other is core.cozystack.io/tenantsecrets, which surfaces whatever the
+  # lineage webhook stamped internal.cozystack.io/tenantresource=true from this
+  # application's ApplicationDefinition selectors. That is the path the
+  # secrets.include selector drives, and it is the one that would leak the CA
+  # private key if the selector ever named the operator's Secrets instead of
+  # the projection. Assert the key-bearing Secrets are not promoted onto it.
+  #
+  # This negative holds today and does not depend on the CA-extraction
+  # controller: it asserts what must NOT be labelled, not that the projection
+  # exists. Written as != 'true' rather than == 'false' because the stamp is
+  # applied when the operator adds its ownerReference, so before that pass the
+  # label is absent rather than false — both states are correct here.
+  - name: verify-key-bearing-secrets-are-not-tenant-secrets
+    try:
+    # Positive control, and it must come first. The three negatives below are
+    # satisfied by an ABSENT label — which is also exactly what you observe if
+    # the lineage webhook never stamped anything in this run at all, because a
+    # field was renamed or the kind was not reconciled. Without a witness that
+    # the mechanism is live, all three would pass while asserting nothing about
+    # the CA private key.
+    #
+    # The credentials Secret is the right witness: the chart renders it, it
+    # traces to the MongoDB CR, and the ApplicationDefinition grants it by name
+    # — so it MUST be stamped. This also catches the regression the exclude
+    # list makes newly possible, since exclude is evaluated before include and
+    # would silently revoke the tenant's own connection string.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-credentials
+            labels:
+              internal.cozystack.io/tenantresource: "true"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ca-cert
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+    # All three are enumerated deliberately. The promotion is driven by a label
+    # selector rather than by name, so any one of them acquiring the label
+    # leaks a key — witnessing two of the three would leave the third unguarded.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-internal
+          (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
+
+  # The -old snapshots are operator scratch state that the operator removes
+  # itself once the merged CA has landed, not residue needing manual cleanup.
+  # A settled install must therefore leave none behind. This is a weak witness
+  # on first install, where they are never created at all, but it pins the
+  # corrected claim and goes red if the operator stops cleaning up.
+  - name: verify-no-rotation-snapshots-remain
+    try:
+    - error:
+        # Short: a Secret that does not exist will not start existing while
+        # chainsaw waits, and this step is a weak witness on a first install.
+        timeout: 30s
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-old
+    - error:
+        timeout: 30s
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-internal-old
