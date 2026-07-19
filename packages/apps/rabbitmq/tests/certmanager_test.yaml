@@ -466,3 +466,81 @@ tests:
       - equal:
           path: spec.privateKey.rotationPolicy
           value: Always
+
+  # -----------------------------------------------------------------------
+  # CA publication (label leg).
+  #
+  # The CA-extraction controller selects source Secrets by these labels and
+  # projects ca.crt alone into the key-free <release>.tenant-ca Secret. The
+  # labels belong on the isCA Certificate (documentIndex 1), never on the leaf
+  # (documentIndex 3): projecting from the leaf would read a Secret whose
+  # tls.key is the SERVER key, and the point of the projection is that no
+  # private key sits next to the anchor being published.
+  #
+  # The -release label is required on this leg because cert-manager issues the
+  # Secret, so it carries neither an OwnerReference nor Helm metadata by which
+  # the controller could attribute it to a release.
+  # -----------------------------------------------------------------------
+
+  - it: CA certificate carries the publish-ca-cert label
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+          value: "true"
+
+  - it: CA certificate carries the publish-ca-cert-release label naming the release
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+          value: myrabbitmq
+
+  - it: CA certificate is the isCA one, so the published anchor is not the leaf
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 1
+    asserts:
+      - equal:
+          path: spec.isCA
+          value: true
+
+  - it: leaf certificate is NOT labelled for publication
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+
+  - it: publication labels are absent entirely when TLS is off
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    asserts:
+      - hasDocuments:
+          count: 0

@@ -17,11 +17,13 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-default-user
-  {{- if $tlsEnabled }}
-  {{- /* Grant read access to the TLS secret so tenants can retrieve ca.crt via:
-       kubectl get secret <release>-tls -o jsonpath='{.data.ca\.crt}' | base64 -d */}}
-  - {{ .Release.Name }}-tls
-  {{- end }}
+  {{- /* No TLS Secret is granted here. Both objects that carry ca.crt also carry a
+       private key: <release>-tls holds the server key (impersonation) and
+       <release>-ca holds the CA key (full trust-chain compromise). Granting read on
+       either to hand over a trust anchor would hand over the key with it, since RBAC
+       has no key-level filter. The tenant instead reads the key-free
+       <release>.tenant-ca projection through core.cozystack.io/tenantsecrets, which
+       cozy:tenant:use:base already grants — no core/v1 Secret grant is involved. */}}
   {{- range $name, $u := .Values.users }}
   - {{ $.Release.Name }}-{{ kebabcase $name }}-credentials
   {{- end }}

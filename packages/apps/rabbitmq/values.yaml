@@ -79,9 +79,13 @@ external: false
 ## @field {*bool} enabled - Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
 
 ## @param {TLS} [tls] - TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
-## When TLS is enabled, the CA certificate is available via the <release>-tls Secret:
-##   kubectl get secret <release>-tls -o jsonpath='{.data.ca\.crt}' | base64 -d
-## The <release>-tls Secret is exposed to tenants at the `use` access level via dashboard RBAC.
+## When TLS is enabled, the trust anchor reaches the tenant as <release>.tenant-ca:
+## an object holding ca.crt and nothing else, read through the
+## core.cozystack.io/tenantsecrets API that the base tenant roles already grant.
+## Neither <release>-tls nor <release>-ca is granted to the tenant — both carry a
+## private key next to the same ca.crt, and RBAC cannot filter by key.
+## Publishing depends on the CA-extraction controller, which ships separately;
+## until it is present the projection is not created and TLS itself is unaffected.
 tls: {}
 
 ##
