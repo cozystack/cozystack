@@ -93,11 +93,18 @@ spec:
   #secondaryService:
   #  type: LoadBalancer
 
-  {{- if $tlsEnabled }}
   {{- $tlsMap := default (dict) .Values.tls }}
   {{- $tlsRequired := index $tlsMap "required" }}
+  # enabled is always true because the operator cannot be told otherwise:
+  # SetDefaults substitutes TLS{Enabled: true} whenever spec.tls is absent, so
+  # every instance already serves TLS. Stating it explicitly makes the manifest
+  # describe what actually runs; omitting it would only hide the same result.
+  #
+  # What the chart's tls values actually select is who owns the CA and whether
+  # TLS is enforced, not whether TLS exists.
   tls:
     enabled: true
+  {{- if $tlsEnabled }}
     # required: true enforces require_secure_transport=ON (strict TLS for all connections).
     # The operator manages TLS for its own internal agents (replication, health-checks).
     # Set tls.required: false only during migration when legacy clients cannot use TLS yet.

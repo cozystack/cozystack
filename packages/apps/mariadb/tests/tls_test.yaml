@@ -29,14 +29,26 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "mariadb.yaml does not have spec.tls when external=false and tls.enabled is unset"
+  # spec.tls.enabled is true in every configuration, because the operator
+  # substitutes TLS{Enabled: true} whenever spec.tls is absent — omitting the
+  # block does not disable TLS, it only hides that TLS is on. What the unmanaged
+  # case must NOT carry is enforcement or certificate references: those are the
+  # operator's own defaults to pick.
+  - it: "mariadb.yaml declares TLS enabled but unmanaged when external=false and tls.enabled is unset"
     templates:
       - templates/mariadb.yaml
     set:
       external: false
     asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
       - notExists:
-          path: spec.tls
+          path: spec.tls.required
+      - notExists:
+          path: spec.tls.serverCertSecretRef
+      - notExists:
+          path: spec.tls.serverCASecretRef
 
   # -------------------------------------------------------------------
   # Case 2: external=true, tls.enabled unset → TLS enabled via external
@@ -225,7 +237,10 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "mariadb.yaml has no spec.tls when tls.enabled=false even if external=true"
+  # tls.enabled: false means "do not manage TLS", never "turn TLS off" — the
+  # operator cannot be told to turn it off. Rendering enabled: false here would
+  # be the one change that actually downgrades an existing instance.
+  - it: "mariadb.yaml keeps TLS enabled but unmanaged when tls.enabled=false even if external=true"
     templates:
       - templates/mariadb.yaml
     set:
@@ -233,8 +248,15 @@ tests:
       tls:
         enabled: false
     asserts:
+      - equal:
+          path: spec.tls.enabled
+          value: true
       - notExists:
-          path: spec.tls
+          path: spec.tls.required
+      - notExists:
+          path: spec.tls.serverCertSecretRef
+      - notExists:
+          path: spec.tls.serverCASecretRef
 
   # -------------------------------------------------------------------
   # Case 4: external=false, tls.enabled=true → explicit override wins
@@ -883,10 +905,13 @@ tests:
   # never reads this Secret directly. Only the CA carries the labels — the
   # leaf Secret holds the server private key and must never be published.
   # -------------------------------------------------------------------
-  - it: "CA Certificate labels its Secret for CA publication when TLS is enabled"
+  # The trust anchor is published from the operator's key-free ca-bundle, named
+  # by the ApplicationDefinition, so neither cert-manager Secret may be marked
+  # as a publication source. A publish label here would create a second path,
+  # and it would run right next to the CA private key.
+  - it: "no cert-manager Secret is marked as a CA publication source"
     templates:
       - templates/certmanager.yaml
-    documentIndex: 1
     set:
       tls:
         enabled: true
@@ -894,11 +919,29 @@ tests:
       - equal:
           path: spec.isCA
           value: true
-      - equal:
+        documentIndex: 1
+      - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
-          value: "true"
-      - equal:
+        documentIndex: 1
+      - notExists:
           path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+        documentIndex: 1
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+        documentIndex: 3
+
+  # The leaf must present a non-empty Subject CN for clients that still verify
+  # against it rather than the SAN list.
+  - it: "leaf Certificate sets a commonName"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.commonName
           value: my-mariadb
 
   - it: "leaf Certificate is never labelled for CA publication"

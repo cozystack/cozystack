@@ -67,7 +67,9 @@ more details:
 
 ### How to connect over TLS
 
-TLS is enabled automatically when `external` is `true`, and can be turned on independently by setting `tls.enabled: true`. Whenever TLS is enabled, `tls.required` defaults to `true`, which sets `require_secure_transport=ON` on the server: plaintext connections are refused.
+MariaDB always serves TLS here: the operator enables it unconditionally, so there is no configuration that turns it off. What `tls.enabled` selects is whether the instance gets a *managed* TLS setup — its own CA and server certificate issued through cert-manager, plus enforcement — rather than the operator's own CA with no enforcement. It is managed automatically when `external` is `true`, and can be turned on independently by setting `tls.enabled: true`.
+
+Whenever TLS is managed, `tls.required` defaults to `true`, which sets `require_secure_transport=ON` on the server: plaintext connections are refused. That enforcement, not the presence of TLS, is what existing clients notice.
 
 Certificates are issued by a per-instance CA managed by cert-manager. The server certificate covers the instance services (`<instance>`, `<instance>-primary`, `<instance>-secondary`), the headless service used for per-pod routing, `localhost`, and — when `external` is `true` — the external hostname.
 
@@ -91,9 +93,9 @@ Mounting that Secret into a client Pod is the usual in-cluster approach; nothing
 
 #### Migrating an existing instance
 
-Enabling TLS on an instance that already has clients is a breaking change: with `tls.required: true` every plaintext client stops connecting as soon as the change is applied. This affects existing instances with `external: true`, because they gain TLS enforcement automatically.
+Managing TLS on an instance that already has clients is a breaking change — not because TLS appears, it was always there, but because `tls.required: true` starts refusing plaintext connections as soon as the change is applied. This affects existing instances with `external: true`, because they gain enforcement automatically. The CA also changes hands, from the operator's to the one issued for this instance; a client that pinned the operator's `ca.crt` needs to re-read it, and `<instance>-ca-bundle` carries both across the switch.
 
-To migrate without downtime, enable TLS but keep plaintext working while clients are updated:
+To migrate without downtime, take enforcement in a second step, once clients are updated:
 
 ```yaml
 tls:
@@ -119,7 +121,7 @@ Move clients over to TLS one at a time, then drop `required: false` to enforce i
   mysql -h <master> -P 3306 -u<user> -p<password> <database> < ~/tmp/fix-table.sql
   ```
 
-  When TLS is enabled the server refuses plaintext connections, so add `--ssl-ca=/path/to/ca.crt --ssl-verify-server-cert` to both commands.
+  When TLS is enforced (`tls.required`) the server refuses plaintext connections, so add `--ssl-ca=/path/to/ca.crt --ssl-verify-server-cert` to both commands.
 
 ## Parameters
 
@@ -139,11 +141,11 @@ Move clients over to TLS one at a time, then drop `required: false` to enforce i
 
 ### TLS parameters
 
-| Name           | Description                                                                                                                                                                                  | Type     | Value  |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`          | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                                       | `object` | `{}`   |
-| `tls.enabled`  | Enable TLS for MariaDB connections. When omitted, defaults to the value of `external`.                                                                                                       | `*bool`  | `null` |
-| `tls.required` | Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is enabled. Set to false only during migration when legacy clients cannot use TLS yet. | `bool`   | `true` |
+| Name           | Description                                                                                                                                                                                                                                                                                                                                        | Type     | Value  |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`          | TLS configuration. TLS itself is always on, because the operator enables it unconditionally; these settings select CA ownership and enforcement. Managed automatically when `external` is true.                                                                                                                                                    | `object` | `{}`   |
+| `tls.enabled`  | Manage TLS for this instance: issue a dedicated CA and server certificate, and enforce TLS by default. This does not switch TLS on or off — the operator always serves TLS — it selects whether the instance gets its own CA and enforcement instead of the operator's unenforced defaults. When omitted, defaults to the value of `external`. | `*bool`  | `null` |
+| `tls.required` | Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is managed. Set to false only during migration when legacy clients cannot use TLS yet.                                                                                                                                                       | `bool`   | `true` |
 
 
 ### Version parameters
