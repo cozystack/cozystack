@@ -348,6 +348,14 @@ tests:
       - equal:
           path: spec.isCA
           value: true
+      # Mis-targeting issuerRef still issues and still goes Ready while anchoring on
+      # something other than the intended issuer, so pin the reference completely.
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
       - equal:
           path: spec.secretName
           value: os-test-http-ca
@@ -390,9 +398,22 @@ tests:
       - equal:
           path: spec.secretName
           value: os-test-http-server
+      # isCA is independent of spec.usages: cert-manager derives certSign from this
+      # field alone, so a leaf flipped to true still renders the same usages list and
+      # still passes every usages assertion — while becoming an intermediate CA whose
+      # key sits in the pod and chains to the anchor tenants are told to trust.
+      - equal:
+          path: spec.isCA
+          value: false
       - equal:
           path: spec.issuerRef.name
           value: os-test-http-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
       - equal:
           path: spec.privateKey.algorithm
           value: ECDSA
@@ -431,6 +452,13 @@ tests:
       - equal:
           path: spec.issuerRef.kind
           value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+      # Same reasoning as the API leaf: usages cannot catch this.
+      - equal:
+          path: spec.isCA
+          value: false
       - equal:
           path: spec.privateKey.algorithm
           value: ECDSA
