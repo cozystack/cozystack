@@ -27,50 +27,21 @@ spec:
     icon: PHN2ZyB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgdmlld0JveD0iMCAwIDE0NCAxNDQiIGZpbGw9Im5vbmUiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyI+CjxyZWN0IHg9Ii0wLjAwMTk1MzEyIiB3aWR0aD0iMTQ0IiBoZWlnaHQ9IjE0NCIgcng9IjI0IiBmaWxsPSJ1cmwoI3BhaW50MF9saW5lYXJfNjgzXzI5NzIpIi8+CjxwYXRoIGQ9Ik0xMTEuNDExIDYyLjhIODIuNDkzOUM4MS43OTY5IDYyLjc5OTcgODEuMTI4NSA2Mi41MjI4IDgwLjYzNTYgNjIuMDMwMUM4MC4xNDI3IDYxLjUzNzMgNzkuODY1NiA2MC44NjkxIDc5Ljg2NTMgNjAuMTcyMlYzMC4wNDEyQzc5Ljg2NTMgMjcuODEgNzguMDU1NiAyNiA3NS44MjQ5IDI2SDY1LjUwMjFDNjMuMjcgMjYgNjEuNDYxNCAyNy44MSA2MS40NjE0IDMwLjA0MTJWNTkuOTg5OEM2MS40NjE0IDYxLjU0MzUgNjAuMjA1IDYyLjgwNjUgNTguNjUwOCA2Mi44MTMzTDQ5LjE3NDMgNjIuODU4NEM0Ny42MDY5IDYyLjg2NjkgNDYuMzMzNiA2MS41OTU1IDQ2LjMzNjYgNjAuMDI5OEw0Ni4zOTU0IDMwLjA0OEM0Ni40MDA1IDI3LjgxMzQgNDQuNTkwMiAyNiA0Mi4zNTUgMjZIMzIuMDQwN0MyOS44MDgzIDI2IDI4IDI3LjgxIDI4IDMwLjA0MTJWMTE0LjQxMkMyOCAxMTYuMzk0IDI5LjYwNjEgMTE4IDMxLjU4NzEgMTE4SDExMS40MTFDMTEzLjM5NCAxMTggMTE1IDExNi4zOTQgMTE1IDExNC40MTJWNjYuMzg4QzExNSA2NC40MDU4IDExMy4zOTQgNjIuOCAxMTEuNDExIDYyLjhaTTk3Ljg1MDggOTQuNDc3OUM5Ny44NTA4IDk3LjA3NTUgOTUuNzQ0NSA5OS4xODE3IDkzLjE0NjQgOTkuMTgxN0g4NC45ODg0QzgyLjM5IDk5LjE4MTcgODAuMjgzNiA5Ny4wNzU1IDgwLjI4MzYgOTQuNDc3OVY4Ni4zMjE3QzgwLjI4MzYgODMuNzIzOCA4Mi4zOSA4MS42MTc5IDg0Ljk4ODQgODEuNjE3OUg5My4xNDY0Qzk1Ljc0NDUgODEuNjE3OSA5Ny44NTA4IDgzLjcyMzggOTcuODUwOCA4Ni4zMjE3Vjk0LjQ3NzlaIiBmaWxsPSJ3aGl0ZSIvPgo8ZGVmcz4KPGxpbmVhckdyYWRpZW50IGlkPSJwYWludDBfbGluZWFyXzY4M18yOTcyIiB4MT0iNSIgeTE9Ii03LjUiIHgyPSIxNDEiIHkyPSIxMjQuNSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgo8c3RvcCBzdG9wLWNvbG9yPSIjRkY4MjJGIi8+CjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI0ZGNjYwMCIvPgo8L2xpbmVhckdyYWRpZW50Pgo8L2RlZnM+Cjwvc3ZnPgo=
     keysOrder: [["apiVersion"], ["appVersion"], ["kind"], ["metadata"], ["metadata", "name"], ["spec", "replicas"], ["spec", "resources"], ["spec", "resourcesPreset"], ["spec", "size"], ["spec", "storageClass"], ["spec", "external"], ["spec", "tls"], ["spec", "version"], ["spec", "users"], ["spec", "vhosts"]]
   secrets:
-    # Evaluated before include, so this is a structural backstop rather than a
-    # restatement. The trust-anchor include below matches by label with no name
-    # constraint, and the projection API copies Secret data verbatim without
-    # filtering keys, so a Secret that both carries a private key and reaches
-    # promotion would hand that key to the tenant.
+    # Evaluated before include, so this is the structural backstop against the
+    # label-only trust-anchor include below matching a key-bearing Secret: the
+    # projection API copies Secret data verbatim without filtering keys.
     #
-    # This list is defence in depth, not the first line. Promotion runs on the
-    # internal.cozystack.io/tenantresource label, which the lineage webhook
-    # stamps only when it can resolve an ancestor; a cert-manager Secret has no
-    # ownerReference (enableCertificateOwnerRef is off) and no Helm metadata, so
-    # today it fails closed before include or exclude is consulted at all. What
-    # this list covers is the case where that stops being true — the future
-    # CA-extraction controller giving its projection an ownerRef, or any change
-    # that gives these objects an ancestor. Cheap to keep, and the cost of being
-    # wrong about it is a leaked private key.
+    # Every name here holds a private key. -ca holds the CA key (issue a cert for
+    # anything, MITM undetected); -tls holds the server key next to the very
+    # ca.crt a tenant wants, which is why the anchor is published separately;
+    # -erlang-cookie is enough to join the cluster as a peer on 25672 and run
+    # arbitrary Erlang, and disableNonTLSListeners does not protect that port.
     #
-    # Two groups, both key-bearing:
-    #   - The cert-manager chain. -ca holds the CA private key under tls.key
-    #     (whoever has it can issue a certificate for anything and MITM the
-    #     endpoint undetected); -tls holds the server private key next to the
-    #     very ca.crt a tenant legitimately wants, which is exactly why the
-    #     trust anchor is published as a separate key-free object instead.
-    #   - The operator's cluster secrets. -erlang-cookie is the Erlang
-    #     distribution shared secret: holding it and reaching port 25672 on the
-    #     -nodes headless Service is enough to join as a peer node and execute
-    #     arbitrary Erlang on the brokers. Note that disableNonTLSListeners does
-    #     not protect 25672 — the operator never applies it to the headless
-    #     Service — so this one is not mitigated by turning TLS on.
-    #
-    # rabbitmq-{{ .name }}-default-user is deliberately NOT excluded: it is
-    # included by name below, since handing the tenant its own broker
-    # credentials is the point of the resource map.
-    #
-    # The guarantee is bounded by this enumeration, not absolute: matching is by
-    # exact name with no glob support, so a release-owned Secret not listed here
-    # — one a future operator version introduces, or a transient object
-    # cert-manager creates mid-renewal — remains in scope of the label-only
-    # include. The per-user credentials are the known unbounded family: their
-    # names carry the username, so they cannot be enumerated here at all. They
-    # hold tenant-supplied values rather than platform secrets, so surfacing one
-    # back to its own tenant would not cross a privilege boundary the way the CA
-    # private key would, and they are already promoted on purpose by the
-    # user-secret label below. The primary defence stays the controller stamping
-    # only its own projection; this closes the enumerable set.
+    # Bounded, not absolute: matching is exact-name with no globs, so a Secret a
+    # future operator version introduces stays in scope of the label-only
+    # include. The primary defence is the lineage webhook stamping only what it
+    # can attribute; this closes the enumerable set. -default-user is excluded
+    # from the exclusion on purpose — it is included by name below.
     exclude:
       - resourceNames:
           - rabbitmq-{{ .name }}-ca

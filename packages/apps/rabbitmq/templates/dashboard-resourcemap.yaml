@@ -13,13 +13,12 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-default-user
-  {{- /* No TLS Secret is granted here. Both objects that carry ca.crt also carry a
-       private key: <release>-tls holds the server key (impersonation) and
-       <release>-ca holds the CA key (full trust-chain compromise). Granting read on
-       either to hand over a trust anchor would hand over the key with it, since RBAC
-       has no key-level filter. The tenant instead reads the key-free
+  {{- /* No TLS Secret is granted here, in either TLS state. Both objects carrying
+       ca.crt also carry a private key — <release>-tls the server key, <release>-ca
+       the CA key — and RBAC has no key-level filter, so granting read to deliver a
+       trust anchor would deliver the key with it. The tenant reads the key-free
        <release>.tenant-ca projection through core.cozystack.io/tenantsecrets, which
-       cozy:tenant:use:base already grants — no core/v1 Secret grant is involved. */}}
+       cozy:tenant:use:base already grants. */}}
   {{- range $name, $u := .Values.users }}
   - {{ $.Release.Name }}-{{ kebabcase $name }}-credentials
   {{- end }}

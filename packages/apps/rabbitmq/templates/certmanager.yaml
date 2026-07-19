@@ -16,22 +16,17 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secretName: {{ .Release.Name }}-ca
-  # Publish this CA to the tenant. The CA-extraction controller lifts ca.crt alone
-  # into the key-free <release>.tenant-ca Secret, so a tenant can verify the AMQPS
-  # and management HTTPS endpoints without gaining access to the CA private key
-  # stored here under tls.key. The label goes on the isCA Certificate, not the leaf
-  # <release>-tls: the leaf carries the server private key next to the same ca.crt.
-  # The release label is required on this leg: cert-manager issues the Secret, so it
-  # carries neither an OwnerReference nor Helm metadata to attribute it by.
+  # Publish this CA to the tenant: the CA-extraction controller lifts ca.crt alone
+  # into the key-free <release>.tenant-ca Secret. The label goes on the isCA
+  # Certificate rather than the leaf, whose Secret carries the server private key
+  # beside the same ca.crt. The release label is required on this leg because
+  # cert-manager issues the Secret with neither an OwnerReference nor Helm metadata
+  # to attribute it by.
   #
-  # TURNING TLS OFF DOES NOT WITHDRAW THIS ANCHOR. Helm removes the Certificate, but
-  # cert-manager leaves the Secret behind (enableCertificateOwnerRef=false), so it
-  # keeps matching the publish label and the controller keeps projecting it — while
-  # the endpoint has gone back to plaintext. Nothing the chart renders prevents this:
-  # the label leg withdraws on the source Secret disappearing, and Helm does not own
-  # that Secret. Until the controller gains a withdrawal signal for a removed
-  # Certificate, disabling TLS on a release that had it means deleting <release>-ca
-  # and <release>-tls by hand. Verification fails closed meanwhile; no key is exposed.
+  # Turning TLS off does NOT withdraw the anchor: cert-manager keeps the Secret
+  # (enableCertificateOwnerRef=false), so it keeps matching this label for an
+  # endpoint back on plaintext. Helm does not own that Secret, so nothing rendered
+  # here can prevent it — delete it by hand. See README "Turning TLS off again".
   secretTemplate:
     labels:
       internal.cozystack.io/publish-ca-cert: "true"
@@ -90,17 +85,11 @@ spec:
   (printf "*.%s-nodes.%s.svc" $name $ns)
   (printf "*.%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
 }}
-{{- /* Add the external hostname as a SAN when the platform supplies one. It is
-     skipped, not required: _namespace.host derives from _cluster.root-host, which
-     the platform treats as optional, and an external RabbitMQ is a bare
-     LoadBalancer Service with no Ingress and no hostname involvement. Failing
-     here would turn "external RabbitMQ on a cluster with no root host" — a
-     configuration that worked before this chart had TLS at all — into a render
-     error on upgrade, and those releases have no tls.enabled: false to fall back
-     on because the field did not exist when they were created.
-
-     Note this SAN is not backed by a DNS record the chart creates; see the README
-     on verifying an external endpoint. */}}
+{{- /* Add the external hostname as a SAN when the platform supplies one, and skip
+     it otherwise rather than failing: _namespace.host derives from the optional
+     _cluster.root-host, so requiring it would turn "external RabbitMQ on a cluster
+     with no root host" into a render error on upgrade. The chart creates no DNS
+     record for this name; see README "Verifying the server certificate". */}}
 {{- if .Values.external }}
   {{- $host := dig "host" "" (.Values._namespace | default dict) }}
   {{- if $host }}
