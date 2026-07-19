@@ -926,6 +926,19 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		className = "cilium"
 	}
 
+	// Gateway API caps spec.listeners at 64 and rejects the object
+	// wholesale past that — every app's HTTPS listener included. No
+	// single field can prevent it, because the total is the sum of
+	// published hostnames, passthrough services and passthrough
+	// listeners, and each is bounded on its own. Catch the sum here so
+	// the tenant gets a named budget on TenantGateway status instead of
+	// an admission error on a Gateway they do not manage.
+	if len(listeners) > maxGatewayListeners {
+		return nil, fmt.Errorf(
+			"gateway would have %d listeners, over the Gateway API cap of %d: reduce published hostnames, tlsPassthroughServices, or tlsPassthroughListeners (dns01 cert mode collapses per-hostname listeners into one wildcard listener)",
+			len(listeners), maxGatewayListeners)
+	}
+
 	gw := &gatewayv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tgw.Name,

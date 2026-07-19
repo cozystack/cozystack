@@ -204,6 +204,11 @@ const passthroughListenerPrefix = "tls-"
 // listener set wholesale.
 var reservedGatewayPorts = map[int32]struct{}{80: {}, 443: {}}
 
+// maxGatewayListeners mirrors the MaxItems Gateway API declares on
+// Gateway.spec.listeners. Exceeding it fails admission on the whole
+// Gateway, so renderGateway checks the assembled total against it.
+const maxGatewayListeners = 64
+
 // validateTLSPassthroughListeners enforces the cross-field invariants on
 // spec.tlsPassthroughListeners that the CRD schema cannot express on its
 // own: DNS-1123 label names unique across the list AND not colliding
@@ -300,6 +305,16 @@ func validatePassthroughHostname(hostname string) []string {
 // TenantGateway status. The leading "." in the suffix prevents a
 // sibling-domain false match ("evilfoo.example.com" is not under
 // "foo.example.com").
+//
+// It mirrors the VAP's shape, not its input: the VAP reads the
+// namespace's namespace.cozystack.io/host label, this reads
+// tgw.Spec.Apex. They are expected to be the same value — the tenant
+// chart writes both from the same computed host, and layers 4 and 5 of
+// the security model (packages/extra/gateway/README.md) restrict who
+// may change either — but nothing in this function enforces it. If they
+// ever diverge, this pre-check passes and the VAP still denies the
+// whole Gateway, which is the outcome the pre-check exists to convert
+// into a clean per-field status error.
 func hostnameWithinApex(hostname, apex string) bool {
 	return hostname == apex || strings.HasSuffix(hostname, "."+apex)
 }
@@ -505,8 +520,8 @@ func buildSolver(tgw *gatewayv1alpha1.TenantGateway) (*cmacmev1.ACMEChallengeSol
 func (r *Reconciler) renderWildcardCertificate(tgw *gatewayv1alpha1.TenantGateway, childApexes []string) (*cmv1.Certificate, error) {
 	dnsNames := []string{tgw.Spec.Apex, "*." + tgw.Spec.Apex}
 	seen := map[string]struct{}{
-		tgw.Spec.Apex:           {},
-		"*." + tgw.Spec.Apex:    {},
+		tgw.Spec.Apex:        {},
+		"*." + tgw.Spec.Apex: {},
 	}
 	for _, apex := range childApexes {
 		if apex == "" {
