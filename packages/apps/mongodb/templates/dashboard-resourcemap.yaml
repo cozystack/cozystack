@@ -18,9 +18,21 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-credentials
-  - {{ .Release.Name }}-ca-cert
-  - {{ .Release.Name }}-ssl
   verbs: ["get", "list", "watch"]
+# The TLS Secrets the PSMDB operator creates are deliberately NOT granted here.
+# Both carry private key material: <release>-ca-cert holds the CA private key
+# (full trust-chain compromise if leaked) and <release>-ssl holds the server
+# private key (impersonation / MITM). A tenant verifying the endpoint needs
+# ca.crt and nothing more, so neither belongs in a tenant-facing Role.
+#
+# The trust anchor reaches the tenant as the key-free <release>.tenant-ca
+# projection instead, through core.cozystack.io/tenantsecrets — which the base
+# tenant roles already grant and which gates on the internal.cozystack.io/
+# tenantresource LABEL stamped by the lineage webhook. Granting that projection
+# by NAME here would be wrong too: a name grant conveys whatever occupies the
+# name, and the CA-extraction controller refuses to overwrite a Secret at that
+# name it did not create. The label path is gated on what the platform vouched
+# for; a name grant is gated on a string.
 - apiGroups:
   - cozystack.io
   resources:
