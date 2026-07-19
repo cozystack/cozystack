@@ -80,7 +80,7 @@ The operator has no way to learn the external hostname, so verifying a connectio
 
 The default is `operator`, and it is not derived from `external`: switching issuer re-issues the server certificate under a new authority, which breaks any client that pinned the previous `ca.crt` without making anything safer — those instances already serve TLS.
 
-> The field is named for the issuer, not for on/off, because TLS is on either way. Other charts in this platform spell a similar-looking `tls.issuer` that *does* mean on/off; this one deliberately does not, and the enum makes the difference unreadable-as-a-switch.
+> The field is named for the issuer, not for on/off, because TLS is on either way. Some other charts here spell a similar-looking `tls.enabled` that *does* switch TLS on and off; this one deliberately does not, and the enum keeps it from reading as a switch. Epic [#2811](https://github.com/cozystack/cozystack/issues/2811) tracks converging the TLS surface across charts.
 
 Enforcement is separate. `tls.required: true` sets `require_secure_transport=ON` and refuses plaintext, under either issuer. It defaults to `false` because turning it on disconnects every client not yet using TLS — a decision to make once clients have the CA, not something an upgrade does.
 
