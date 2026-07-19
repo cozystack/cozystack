@@ -24,7 +24,7 @@ spec:
   commonName: {{ .Release.Name }}-ca
   secretName: {{ .Release.Name }}-ca-tls
   # This Secret is key-bearing and is never handed to the tenant, nor is it the
-  # source the trust anchor is published from: the ApplicationDefinition declares
+  # source the trust anchor is published from: the ApplicationDefinition names
   # the operator's key-free <release>-ca-bundle for that instead, so no
   # publication path ever runs next to the CA private key.
   #
