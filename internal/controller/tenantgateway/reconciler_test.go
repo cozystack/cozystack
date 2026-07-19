@@ -2297,6 +2297,16 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 		{"name collides with passthrough service", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("api", 5432, "api.foo.example.com"),
 		}, []string{"api", "vm-exportproxy", "cdi-uploadproxy"}, apex, true},
+		// tlsPassthroughServices is a plain array, not a set, so the
+		// schema permits a repeat. Two identical entries render the
+		// same tls-<svc> listener name twice and the Gateway is
+		// rejected wholesale — the failure this function converts into
+		// a status error for every other shape of the same mistake.
+		{"duplicate passthrough service", nil,
+			[]string{"api", "api"}, apex, true},
+		{"duplicate passthrough service alongside listeners", []gatewayv1alpha1.TLSPassthroughListener{
+			mk("postgres", 5432, "postgres.foo.example.com"),
+		}, []string{"api", "vm-exportproxy", "api"}, apex, true},
 		{"duplicate port", []gatewayv1alpha1.TLSPassthroughListener{
 			mk("pg", 5432, "a.foo.example.com"),
 			mk("pg2", 5432, "b.foo.example.com"),

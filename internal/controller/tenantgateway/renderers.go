@@ -233,6 +233,14 @@ const maxGatewayListeners = 64
 func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughListener, passthroughServices []string, apex string) error {
 	serviceNames := make(map[string]struct{}, len(passthroughServices))
 	for _, svc := range passthroughServices {
+		// A repeated entry renders the same tls-<svc> listener name
+		// twice, and Gateway API rejects the object for duplicate
+		// listener names — the same wholesale failure this function
+		// exists to convert into a status error. The schema does not
+		// catch it: the field is a plain array, not a set.
+		if _, dup := serviceNames[svc]; dup {
+			return fmt.Errorf("tlsPassthroughServices: duplicate entry %q; it would render the %s%s Gateway listener twice", svc, passthroughListenerPrefix, svc)
+		}
 		serviceNames[svc] = struct{}{}
 	}
 	seenNames := make(map[string]struct{}, len(listeners))
