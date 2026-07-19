@@ -280,6 +280,14 @@ spec:
                   sharing the tenant Gateway's address. It is independent of
                   TLSPassthroughServices, the layer-7 passthrough-on-443 form; the
                   two do not replace each other.
+
+                  The listener is all this field creates. Nothing is routed until a
+                  TLSRoute attaches to it by sectionName "tls-<name>" and names a
+                  backend Service, and the backend must present its own certificate
+                  for the listener's Hostname — a passthrough listener never
+                  terminates TLS, so the Gateway neither holds nor issues that
+                  certificate. Declaring an entry without attaching a TLSRoute opens
+                  the port and matches the SNI but has nowhere to forward the stream.
                 items:
                   description: |-
                     TLSPassthroughListener declares one layer-4 TLS-passthrough listener
