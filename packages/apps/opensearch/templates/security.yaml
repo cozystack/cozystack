@@ -1,4 +1,4 @@
-{{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- $clusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
 {{- $existingAdminCreds := lookup "v1" "Secret" .Release.Namespace (printf "%s-admin-credentials" .Release.Name) }}
 {{- $existingSecurityConfig := lookup "v1" "Secret" .Release.Namespace (printf "%s-security-config" .Release.Name) }}
 {{- $password := randAlphaNum 32 }}

@@ -1221,3 +1221,37 @@ tests:
           path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
           value: os-test-dashboards.example.cozy.local
         documentIndex: 1
+
+---
+---
+###############################################################################
+# The cluster domain read must survive _cluster being absent
+###############################################################################
+#
+# Every other suite in this file injects _cluster, which is what the platform does
+# in production — so none of them can see what happens without it. `index` on an
+# absent map is not a miss returning nil, it is a hard render error ("index of
+# untyped nil"), and it takes the whole chart down rather than the one value it
+# was reading. The default that follows the read never gets a chance to apply.
+#
+# No suite-level `set` here on purpose: adding _cluster back is exactly the thing
+# this suite must not do.
+suite: cluster domain defaulting without _cluster
+
+templates:
+  - templates/certmanager.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+tests:
+  - it: falls back to the default cluster domain when _cluster is absent
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.dnsNames[3]
+          value: os-test.tenant-test.svc.cozy.local
+        documentIndex: 3
