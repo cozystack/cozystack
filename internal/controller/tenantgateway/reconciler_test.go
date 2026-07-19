@@ -1909,6 +1909,17 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 			CertMode:           gatewayv1alpha1.CertModeHTTP01,
 			GatewayClassName:   "cilium",
 			AttachedNamespaces: []string{"cozy-harbor", "cozy-dashboard"},
+			// Native-port layer-4 passthrough listeners are in scope
+			// for Layer 1 too, and more sharply than the HTTPS ones:
+			// they forward the raw stream to a database on its native
+			// port, so a route attaching from outside the tenant
+			// reaches the backend directly. The loop below asserts
+			// over every rendered listener, so listing them here is
+			// what keeps "tls-<name>" inside the selector guarantee.
+			TLSPassthroughServices: []string{"api"},
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+			},
 		},
 	}
 	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
@@ -1924,6 +1935,26 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
 		t.Fatalf("get Gateway: %v", err)
 	}
+	// The two listener classes carry two DIFFERENT selector shapes, and
+	// the split is the security model, not an inconsistency:
+	//
+	//   - "http" (:80) pins an explicit kubernetes.io/metadata.name
+	//     allow-list — the tenant namespace plus the ACME challenge
+	//     namespace. That label is written by kube-apiserver and cannot
+	//     be spoofed, which is what keeps app HTTPRoutes off :80 where
+	//     they would serve plaintext (buildHTTPListenerAllowedRoutes).
+	//   - every other listener (HTTPS-terminate, :443 passthrough, and
+	//     native-port layer-4 passthrough) selects on the
+	//     namespace.cozystack.io/gateway label, which is how child
+	//     tenants opt in to their owner's Gateway (buildAllowedRoutes).
+	//
+	// Asserting a single shape across both classes is what previously
+	// made this test vacuous: the old fixture published no hostnames and
+	// declared no passthrough, so only the "http" listener ever reached
+	// the loop and the branch covering every other listener was dead.
+	// The fixture now renders a :443 passthrough listener and a
+	// native-port one so both branches carry weight.
+	sawGatewayLabelListener := false
 	for _, l := range gw.Spec.Listeners {
 		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil ||
 			l.AllowedRoutes.Namespaces.From == nil ||
@@ -1931,32 +1962,48 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 			t.Fatalf("listener %s missing Selector AllowedRoutes: %+v", l.Name, l.AllowedRoutes)
 		}
 		sel := l.AllowedRoutes.Namespaces.Selector
-		if sel == nil || len(sel.MatchExpressions) != 1 {
-			t.Fatalf("listener %s expected one MatchExpression, got %+v", l.Name, sel)
+		if sel == nil {
+			t.Fatalf("listener %s has nil selector", l.Name)
 		}
-		expr := sel.MatchExpressions[0]
-		if expr.Key != "kubernetes.io/metadata.name" {
-			t.Errorf("listener %s selector key=%q, want kubernetes.io/metadata.name", l.Name, expr.Key)
-		}
-		// http listener carries a narrower allowedRoutes (tenant ns
-		// + cert-manager challenge ns) — see TestReconcile_HTTPListenerExcludesAppNamespaces.
-		// Other listeners get the broad attached-namespaces list.
-		var want []string
+
 		if string(l.Name) == "http" {
-			want = []string{"tenant-foo", "cozy-cert-manager"}
-		} else {
-			want = []string{"tenant-foo", "cozy-harbor", "cozy-dashboard"}
-		}
-		got := expr.Values
-		if len(got) != len(want) {
-			t.Errorf("listener %s selector values=%v, want %v", l.Name, got, want)
+			if len(sel.MatchExpressions) != 1 {
+				t.Fatalf("listener %s expected one MatchExpression, got %+v", l.Name, sel)
+			}
+			expr := sel.MatchExpressions[0]
+			if expr.Key != "kubernetes.io/metadata.name" {
+				t.Errorf("listener %s selector key=%q, want kubernetes.io/metadata.name", l.Name, expr.Key)
+			}
+			want := []string{"tenant-foo", "cozy-cert-manager"}
+			got := expr.Values
+			if len(got) != len(want) {
+				t.Errorf("listener %s selector values=%v, want %v", l.Name, got, want)
+				continue
+			}
+			for i := range want {
+				if got[i] != want[i] {
+					t.Errorf("listener %s selector values[%d]=%q, want %q", l.Name, i, got[i], want[i])
+				}
+			}
 			continue
 		}
-		for i := range want {
-			if got[i] != want[i] {
-				t.Errorf("listener %s selector values[%d]=%q, want %q", l.Name, i, got[i], want[i])
-			}
+
+		sawGatewayLabelListener = true
+		if len(sel.MatchExpressions) != 0 {
+			t.Errorf("listener %s carries MatchExpressions %+v, want the gateway-label MatchLabels form", l.Name, sel.MatchExpressions)
 		}
+		if got := sel.MatchLabels[namespaceGatewayLabel]; got != "tenant-foo" {
+			t.Errorf("listener %s selector %s=%q, want tenant-foo", l.Name, namespaceGatewayLabel, got)
+		}
+		if len(sel.MatchLabels) != 1 {
+			t.Errorf("listener %s selector MatchLabels=%+v, want exactly %s", l.Name, sel.MatchLabels, namespaceGatewayLabel)
+		}
+	}
+	// Guards the regression that made this test vacuous for its whole
+	// prior life: if the fixture stops rendering non-http listeners, the
+	// loop above silently asserts nothing about them again.
+	if !sawGatewayLabelListener {
+		t.Fatal("no non-http listener rendered; the gateway-label branch asserted nothing")
 	}
 }
 
@@ -2109,6 +2156,30 @@ func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 		if l.AllowedRoutes == nil || len(l.AllowedRoutes.Kinds) != 1 ||
 			l.AllowedRoutes.Kinds[0].Kind != "TLSRoute" {
 			t.Errorf("%s AllowedRoutes.Kinds=%+v, want exactly [TLSRoute]", l.Name, l.AllowedRoutes)
+		}
+		// Restricting Kinds to TLSRoute bounds WHAT may attach; the
+		// namespace selector bounds WHO may attach. Only the pair is
+		// Layer 1 — a TLSRoute-only listener open to every namespace
+		// still lets a foreign tenant SNI-route this database port.
+		// These listeners inherit the same gateway-label selector the
+		// HTTPS and :443 passthrough listeners use, so a native port
+		// never widens attachment beyond what :443 already allows.
+		if l.AllowedRoutes.Namespaces == nil ||
+			l.AllowedRoutes.Namespaces.From == nil ||
+			*l.AllowedRoutes.Namespaces.From != gatewayv1.NamespacesFromSelector {
+			t.Errorf("%s AllowedRoutes.Namespaces is not From: Selector: %+v", l.Name, l.AllowedRoutes)
+			continue
+		}
+		sel := l.AllowedRoutes.Namespaces.Selector
+		if sel == nil {
+			t.Errorf("%s has nil namespace selector", l.Name)
+			continue
+		}
+		if got := sel.MatchLabels[namespaceGatewayLabel]; got != "tenant-foo" {
+			t.Errorf("%s selector %s=%q, want tenant-foo", l.Name, namespaceGatewayLabel, got)
+		}
+		if len(sel.MatchLabels) != 1 || len(sel.MatchExpressions) != 0 {
+			t.Errorf("%s selector=%+v, want exactly one %s label", l.Name, sel, namespaceGatewayLabel)
 		}
 	}
 	for name := range wanted {
