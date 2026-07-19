@@ -1336,6 +1336,12 @@ tests:
       - matchRegex:
           path: stringData["backup.sh"]
           pattern: 'is missing or empty'
+      # The Secret name is the "names it" half of this case, and the reason the
+      # CronJob carries MYSQL_CA_SECRET at all: the client reports a missing CA
+      # without saying which file or where it came from.
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'projected from Secret \$\{MYSQL_CA_SECRET\}'
       # Match the whole construct, not its parts. Asserting the test expression
       # and the message separately leaves the thing that makes it a guard —
       # aborting — unpinned: flipping the exit status to 0, or short-circuiting
