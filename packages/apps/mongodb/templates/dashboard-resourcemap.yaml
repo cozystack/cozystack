@@ -30,9 +30,13 @@ rules:
 # tenant roles already grant and which gates on the internal.cozystack.io/
 # tenantresource LABEL stamped by the lineage webhook. Granting that projection
 # by NAME here would be wrong too: a name grant conveys whatever occupies the
-# name, and the CA-extraction controller refuses to overwrite a Secret at that
-# name it did not create. The label path is gated on what the platform vouched
-# for; a name grant is gated on a string.
+# name, whereas the label path conveys only what the platform vouched for. A
+# name grant is gated on a string; the label path is gated on provenance.
+#
+# That distinction assumes the CA-extraction controller declines to overwrite a
+# Secret at its canonical name that it did not create. That is a requirement on
+# the controller, not an observed property — it has not shipped yet — and it is
+# stated here so the assumption is visible when it does.
 - apiGroups:
   - cozystack.io
   resources:

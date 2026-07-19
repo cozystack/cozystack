@@ -6,12 +6,18 @@
 # <release>-ssl / <release>-ssl-internal holding server private keys. The tenant
 # must receive only the key-free <release>.tenant-ca projection, reached by
 # label. These names are the contract between this file and the operator, and
-# nothing else in the repo checks them: the declaration is pruned at admission
-# until the CA-extraction controller ships, so a drifted name would surface as
-# an empty trust anchor with nothing red.
+# nothing else in the repo checks them at this level: end-to-end coverage
+# cannot reach the projection until the CA-extraction controller lands, since
+# the helm-controller refuses the caCert field while the CRD does not declare
+# it and the mongodb-rd release never reconciles.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mongodb-rd/cozyrds/mongodb.yaml"
+CRD="$REPO_ROOT/packages/system/application-definition-crd/definition/cozystack.io_applicationdefinitions.yaml"
+# The path every check below walks to reach the ApplicationDefinition's declared
+# spec fields. Bound once so the positive control and the assertion it protects
+# cannot drift apart.
+CRD_SPEC_PROPS='.spec.versions[].schema.openAPIV3Schema.properties.spec.properties'
 # Bound explicitly rather than read from BATS_TEST_FILENAME inside a test body.
 # These files run under hack/cozytest.sh, not bats: it executes each body with
 # set -u and never exports that variable, so a bare reference aborts the test —
@@ -138,6 +144,48 @@ SELF="$REPO_ROOT/hack/check-mongodb-rd-secrets.bats"
       exit 1
     fi
   done
+}
+
+@test "ApplicationDefinition CRD does not declare caCert yet, so the declaration is not live" {
+  # An activation signal, deliberately red on the transition rather than on a
+  # regression.
+  #
+  # While this passes, the caCert block above is declared but has no effect,
+  # and the release carrying it does not install at all: the helm-controller
+  # builds a typed patch from the CRD schema, refuses a field the schema does
+  # not declare, and mongodb-rd fails to reconcile. The red end-to-end run is
+  # that state, and it is what enforces the merge order.
+  #
+  # When the CA-extraction controller lands its Go type and regenerated CRD,
+  # this check goes red. That is the point. Everything else in this file greps
+  # the cozyrds source and would stay green through that transition, and the
+  # end-to-end run only flips from red to green — neither prompts anyone to
+  # confirm that the shape declared here matches the shape that shipped, or to
+  # assert that the projection is actually published. This does. On the flip:
+  # verify sourceSecretName and sourceKey against the landed field, check the
+  # projection converges, and replace this check with a real assertion on it.
+  known="$(yq "[$CRD_SPEC_PROPS | keys | .[]] | length" "$CRD")"
+  if [ "$known" -lt 6 ]; then
+    echo "spec.properties resolved to $known fields; the assertion below would be vacuous" >&2
+    exit 1
+  fi
+
+  # A second route to the same activation, worth separating because it arrives
+  # without the field ever appearing in properties: with this flag set the
+  # schema stops being closed, the typed patch accepts caCert, and the release
+  # installs while the field remains undeclared. That state needs looking at
+  # rather than passing silently — the block would be stored but not typed.
+  preserve="$(yq '[.spec.versions[].schema.openAPIV3Schema.properties.spec."x-kubernetes-preserve-unknown-fields" | select(. == true)] | length' "$CRD")"
+  if [ "$preserve" != "0" ]; then
+    echo "spec preserves unknown fields; caCert would be accepted without being declared" >&2
+    exit 1
+  fi
+
+  hits="$(yq "[$CRD_SPEC_PROPS | keys | .[] | select(. == \"caCert\")] | length" "$CRD")"
+  if [ "$hits" != "0" ]; then
+    echo "CRD now declares spec.caCert: the declaration is live — confirm it matches the landed field, then assert the projection directly" >&2
+    exit 1
+  fi
 }
 
 @test "mongodb-rd cozyrds still delivers the credentials secret" {
