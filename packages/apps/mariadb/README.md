@@ -67,9 +67,13 @@ more details:
 
 ### How to connect over TLS
 
-Instances created by this chart always serve TLS. The chart asks the operator for it in every configuration, and an instance that omits the setting gets TLS from the operator's own defaults anyway, so there has never been a plaintext-only MariaDB here. What `tls.enabled` selects is whether the instance gets a *managed* TLS setup — its own CA and server certificate issued through cert-manager, plus enforcement — rather than the operator's CA with no enforcement. It is managed automatically when `external` is `true`, and can be turned on independently by setting `tls.enabled: true`.
+Instances created by this chart always serve TLS. The chart asks the operator for it in every configuration, and an instance that omits the setting gets TLS from the operator's own defaults anyway, so there has never been a plaintext-only MariaDB here. What `tls.enabled` selects is whether the instance gets a *managed* TLS setup — its own CA and server certificate issued through cert-manager — rather than the operator's own CA. It is managed automatically when `external` is `true`, and can be turned on independently by setting `tls.enabled: true`.
 
-Whenever TLS is managed, `tls.required` defaults to `true`, which sets `require_secure_transport=ON` on the server: plaintext connections are refused. That enforcement, not the presence of TLS, is what existing clients notice. When TLS is unmanaged, enforcement is left to the operator, which does not enforce — so `tls.required` has no effect there.
+Enforcement is separate, and opt-in. `tls.required: true` sets `require_secure_transport=ON`, after which plaintext connections are refused. It defaults to `false`, so enabling managed TLS does not by itself cut off any existing client. When TLS is unmanaged, enforcement is left to the operator, which does not enforce, so `tls.required` has no effect there.
+
+The default is deliberate: enforcement has to follow the trust anchor rather than lead it. Until the platform publishes the CA to the tenant automatically, requiring TLS would tell clients they must encrypt while giving them nothing to verify the server against. Turn it on once your clients have the CA — see below.
+
+> This default is temporary. `tls.required` will default to `true` in a later release, as an announced change, once the published trust anchor is available everywhere.
 
 Certificates are issued by a per-instance CA managed by cert-manager. The server certificate covers the instance services (`<instance>`, `<instance>-primary`, `<instance>-secondary`), the headless service used for per-pod routing, `localhost`, and — when `external` is `true` — the external hostname.
 
@@ -93,17 +97,27 @@ Mounting that Secret into a client Pod is the usual in-cluster approach; nothing
 
 #### Migrating an existing instance
 
-Managing TLS on an instance that already has clients is a breaking change — not because TLS appears, it was always there, but because `tls.required: true` starts refusing plaintext connections as soon as the change is applied. This affects existing instances with `external: true`, because they gain enforcement automatically. The CA also changes hands, from the operator's to the one issued for this instance; a client that pinned the operator's `ca.crt` needs to re-read it, and `<instance>-ca-bundle` carries both across the switch.
+Turning on managed TLS does not disconnect anything by itself: enforcement is off by default, so existing clients keep working while you migrate them. What does change is who issues the server certificate — the CA moves from the operator's to one issued for this instance. A client that verifies against `<instance>-ca-bundle` follows that automatically, because the bundle carries the old and the new CA together; a client that copied `ca.crt` somewhere and pinned it has to re-read it.
 
-To migrate without downtime, take enforcement in a second step, once clients are updated:
+The order that avoids downtime:
 
-```yaml
-tls:
-  enabled: true
-  required: false
-```
+1. Enable managed TLS and leave enforcement off (the default):
 
-Move clients over to TLS one at a time, then drop `required: false` to enforce it.
+   ```yaml
+   tls:
+     enabled: true
+   ```
+
+2. Distribute `<instance>-ca-bundle` and move clients onto verified TLS one at a time.
+3. Once no plaintext clients remain, require it:
+
+   ```yaml
+   tls:
+     enabled: true
+     required: true
+   ```
+
+Step 3 is the only one that can refuse a connection, and it happens when you choose it rather than when a platform upgrade rolls through.
 
 ### Known issues
 
@@ -141,11 +155,11 @@ Move clients over to TLS one at a time, then drop `required: false` to enforce i
 
 ### TLS parameters
 
-| Name           | Description                                                                                                                                                                                                                                                                                                                                                                                 | Type     | Value  |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`          | TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Managed automatically when `external` is true.                                                                                                                                                                                    | `object` | `{}`   |
-| `tls.enabled`  | Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager, and enforce TLS by default. This does not switch TLS on: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA and enforcement instead of the operator's CA with no enforcement. When omitted, defaults to the value of `external`. | `*bool`  | `null` |
-| `tls.required` | Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies only when TLS is managed, where it defaults to true; when TLS is unmanaged, enforcement is left to the operator, which does not enforce. Set to false only during migration when legacy clients cannot use TLS yet.                                                                                     | `*bool`  | `null` |
+| Name           | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Type     | Value  |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`          | TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Managed automatically when `external` is true.                                                                                                                                                                                                                                                                                                                                                                                                    | `object` | `{}`   |
+| `tls.enabled`  | Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager. This does not switch TLS on, and does not enforce it: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA instead of the operator's. Enforcement is separate and opt-in, see `required`. When omitted, defaults to the value of `external`.                                                                                                                                                                                                       | `*bool`  | `null` |
+| `tls.required` | Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Enforcement is opt-in and defaults to false: it has to follow the trust anchor, not lead it, because requiring TLS before the platform publishes a CA to the tenant would demand encryption while leaving clients nothing to verify the server against. Set to true once your clients have the CA. This default is temporary and flips to true as an announced change, together with the published anchor. Applies only when TLS is managed; when it is unmanaged, enforcement is left to the operator, which does not enforce. | `*bool`  | `null` |
 
 
 ### Version parameters
