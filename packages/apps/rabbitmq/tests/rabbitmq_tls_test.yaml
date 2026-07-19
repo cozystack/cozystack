@@ -69,7 +69,12 @@ tests:
       - notExists:
           path: spec.tls.disableNonTLSListeners
 
-  - it: includes management ssl port in additionalConfig when tls.enabled is true
+  # The operator's own defaultTLSConf supplies ssl_options.certfile/keyfile,
+  # listeners.ssl.default and management.ssl.certfile/keyfile/port once
+  # spec.tls.secretName is set, so the chart must NOT restate them. cacertfile is
+  # the one key it does not set outside mutual TLS, so that is all we carry.
+
+  - it: sets spec.tls.secretName, which is what enables TLS operator-side
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -80,9 +85,9 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - matchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.port = 15671"
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
 
   - it: includes management ssl cacertfile in additionalConfig when tls.enabled is true
     release:
@@ -99,7 +104,7 @@ tests:
           path: spec.rabbitmq.additionalConfig
           pattern: "management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt"
 
-  - it: includes management ssl certfile in additionalConfig when tls.enabled is true
+  - it: does not restate operator-supplied management ssl keys
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -110,24 +115,31 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - matchRegex:
+      - notMatchRegex:
           path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.certfile = /etc/rabbitmq-tls/tls.crt"
+          pattern: "management.ssl.port"
+      - notMatchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.certfile"
+      - notMatchRegex:
+          path: spec.rabbitmq.additionalConfig
+          pattern: "management.ssl.keyfile"
 
-  - it: includes management ssl keyfile in additionalConfig when tls.enabled is true
+  - it: never sets disableNonTLSListeners, so plaintext listeners survive TLS
     release:
       name: myrabbitmq
       namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
     set:
-      tls.enabled: true
-      external: false
+      external: true
+      _namespace.host: example.com
     documentSelector:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - matchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.keyfile = /etc/rabbitmq-tls/tls.key"
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
 
   # -----------------------------------------------------------------------
   # Tri-state: external=true, tls.enabled not set (default ~) => TLS enabled
@@ -165,7 +177,7 @@ tests:
     asserts:
       - matchRegex:
           path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.port = 15671"
+          pattern: "management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt"
 
   # -----------------------------------------------------------------------
   # Tri-state: explicit tls.enabled=false beats external=true

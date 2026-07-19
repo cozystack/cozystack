@@ -89,7 +89,8 @@ spec:
   (printf "*.%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
 }}
 {{- if .Values.external }}
-  {{- $dnsNames = append $dnsNames (printf "%s.%s" $name .Values._namespace.host) }}
+  {{- $host := required "external is true but _namespace.host is not set, so the external DNS name cannot be added to the certificate SANs" (dig "host" "" (.Values._namespace | default dict)) }}
+  {{- $dnsNames = append $dnsNames (printf "%s.%s" $name $host) }}
 {{- end }}
 apiVersion: cert-manager.io/v1
 kind: Certificate
