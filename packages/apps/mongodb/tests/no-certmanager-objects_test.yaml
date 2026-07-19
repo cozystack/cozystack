@@ -9,6 +9,14 @@ suite: chart renders no cert-manager objects
 #
 # Deliberately NOT scoped with `templates:` — the point is to see every
 # document the chart produces, not one file.
+#
+# `any: true` is REQUIRED on every containsDocument below, and its absence is
+# not a style difference. Without it the matcher asserts that EVERY rendered
+# document matches, so negating it yields "not every document is a
+# Certificate" — true of any chart rendering more than one object, and this
+# one renders eight, which makes all four negatives below pass unconditionally.
+# The vacuity control is the guard against that: it fails if the negated form
+# ever stops discriminating.
 
 release:
   name: mg-test
@@ -19,12 +27,33 @@ set:
     cluster-domain: cozy.local
 
 tests:
+  # Positive control for the four negatives that follow. All of them are
+  # satisfied by a matcher that never matches anything, so they are only worth
+  # as much as the proof that this one does. Asserting a kind the chart
+  # certainly DOES render, through the same matcher shape and the same
+  # `any: true`, supplies it.
+  #
+  # Scoped to the one template that renders the CR, unlike the negatives. An
+  # unscoped assertion is ANDed across template files, so a positive one would
+  # demand the CR appear in backup-secret.yaml and credentials.yaml too and
+  # fail for the wrong reason. That same ANDing is what makes the unscoped
+  # negatives correct: they go red if ANY file renders the forbidden kind.
+  - it: the containsDocument matcher discriminates
+    templates:
+      - templates/mongodb.yaml
+    asserts:
+      - containsDocument:
+          kind: PerconaServerMongoDB
+          apiVersion: psmdb.percona.com/v1
+          any: true
+
   - it: renders no cert-manager Certificate
     asserts:
       - not: true
         containsDocument:
           kind: Certificate
           apiVersion: cert-manager.io/v1
+          any: true
 
   - it: renders no cert-manager Issuer
     asserts:
@@ -32,6 +61,7 @@ tests:
         containsDocument:
           kind: Issuer
           apiVersion: cert-manager.io/v1
+          any: true
 
   - it: renders no cert-manager objects with external access enabled
     set:
@@ -43,10 +73,12 @@ tests:
         containsDocument:
           kind: Certificate
           apiVersion: cert-manager.io/v1
+          any: true
       - not: true
         containsDocument:
           kind: Issuer
           apiVersion: cert-manager.io/v1
+          any: true
 
   - it: renders no cert-manager ClusterIssuer
     asserts:
@@ -54,3 +86,4 @@ tests:
         containsDocument:
           kind: ClusterIssuer
           apiVersion: cert-manager.io/v1
+          any: true
