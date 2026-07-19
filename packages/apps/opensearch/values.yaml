@@ -86,6 +86,9 @@ storageClass: ""
 ##   issues a certificate for in-cluster names only, so an external client reaching
 ##   the published name cannot verify it and must skip verification or supply its own
 ##   certificate out of band.
+##   Changing this on a release that already runs chart-managed TLS reissues the
+##   certificate with a different set of names, and the pods do not pick that up on
+##   their own — see the manual step described under tls.
 external: false
 
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
@@ -127,10 +130,18 @@ version: v2
 ##   The certificate is issued by a per-release private CA, so clients must trust it
 ##   explicitly. The platform publishes that trust anchor as the key-free Secret
 ##   <release>.tenant-ca, holding ca.crt alone; the private key never leaves the
-##   namespace. Rotating the server certificate is a deliberate act — it is mounted
-##   by subPath and is not refreshed in place — so delete the <release>-http-server
-##   Secret and restart the OpenSearch pods. Do not delete <release>-http-ca for this:
-##   that mints a new CA, and until the pods restart they still trust the old one.
+##   namespace. The certificate is mounted by subPath and is never refreshed in
+##   place, so ANY change to it needs a manual step, not just a deliberate rotation:
+##   changing external, the tenant host or the cluster domain makes cert-manager
+##   reissue with the new names while the pods keep serving the old certificate, with
+##   no error anywhere. In every such case, delete the <release>-http-server Secret
+##   and restart the OpenSearch pods. Do not delete <release>-http-ca to do this: that
+##   mints a new CA, and until the pods restart they still trust the old one.
+##   UPGRADE NOTE: an existing external release with this switch unset is on
+##   operator-managed TLS today and moves to chart-managed TLS the first time it is
+##   reconciled after this becomes available. That rolls the cluster and re-anchors it
+##   on a new CA, so anything pinned to the operator's CA must be repointed at
+##   <release>.tenant-ca. Set enabled: false beforehand to stay as you are.
 ##   Turning this off again on a release that had it on also needs a manual cleanup:
 ##   cert-manager keeps its Secrets after the certificates are removed, so the tenant
 ##   keeps receiving the old CA while the endpoint has moved to an operator-issued

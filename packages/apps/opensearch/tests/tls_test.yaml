@@ -477,6 +477,9 @@ tests:
     asserts:
       - contains:
           path: spec.usages
+          content: signing
+      - contains:
+          path: spec.usages
           content: cert sign
       - notContains:
           path: spec.usages
@@ -514,6 +517,30 @@ set:
     cluster-domain: cozy.local
 
 tests:
+  # THE UPGRADE PATH, pinned explicitly. An existing external release on a supported
+  # version has tls unset and runs operator-managed TLS today; once this chart ships
+  # the tri-state moves it onto chart-managed TLS. That is a deliberate default, but
+  # it rolls the cluster and re-anchors it on a new CA, so it must not change by
+  # accident — hence an assertion of its own rather than incidental coverage.
+  - it: moves an existing external release onto chart-managed TLS on a supported version
+    set:
+      version: v2
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-server
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test-http-ca
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.generate
+        documentIndex: 0
+
   # A v1 + external release never asked for chart-managed TLS — the tri-state
   # turned it on. Below 2.0.0 that combination degrades to operator-managed HTTP
   # TLS rather than failing, so such a release keeps working across an upgrade.
