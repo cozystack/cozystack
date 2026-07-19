@@ -36,7 +36,7 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Both are opt-in.
+	// TLS configuration. Selects who issues the certificates and whether plaintext is refused; TLS itself is always served.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
 	// MariaDB major.minor version to deploy
@@ -100,9 +100,9 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager. This does not switch TLS on, and does not enforce it: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA instead of the operator's. Enforcement is separate and opt-in, see `required`. Defaults to false, including when `external` is true: taking over the CA would re-issue the server certificate under a new authority, and any client pinning the operator's ca.crt would fail chain validation. That is a change of CA ownership rather than a security improvement — these instances already serve TLS — so it is opted into rather than applied on upgrade.
+	// Issue a dedicated CA and server certificate for this instance through cert-manager, instead of using the operator's own CA. TLS is served either way; this selects who issues it. Opt-in, and not derived from `external`.
 	Enabled *bool `json:"enabled,omitempty"`
-	// Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Enforcement is opt-in and defaults to false so that enabling it is a decision rather than something a platform upgrade does to a running instance: turning it on refuses every client that has not been moved to TLS yet. The trust anchor itself is available — the tenant can read it from `mariadb-<name>-ca-bundle` — so the sequence is to distribute that, move clients over, then set this to true. The default flips to true as an announced change once the anchor is published to tenants automatically.
+	// Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.
 	Required *bool `json:"required,omitempty"`
 }
 
