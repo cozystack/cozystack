@@ -70,6 +70,32 @@ It is reached through `tenantsecrets` rather than by reading the Secret directly
 
 > **Warning:** The CA rotates. The operator issues it with a 365-day duration and cert-manager renews it roughly 30 days before expiry, so a bundle copied once will stop verifying within a year. Re-read `<release>.tenant-ca` on a schedule (or mount it and let the kubelet refresh it) instead of baking `ca.crt` into a client image, ConfigMap, or truststore built at release time.
 
+### Verifying a connection
+
+Write the trust anchor to a file, then read the connection string out of `<release>-credentials`:
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get tenantsecret <release>.tenant-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode > ca.crt
+
+kubectl --context <ctx> --namespace <tenant> \
+  get secret <release>-credentials \
+  --output jsonpath='{.data.uri}' | base64 --decode
+```
+
+`mongosh` takes the bundle as a file, and the two TLS inputs are passed as flags rather than folded into the URI:
+
+```bash
+mongosh "<uri>" --tls --tlsCAFile ./ca.crt
+```
+
+Drivers take the same two inputs under their own names (`tls=true` plus a CA path). Prefer the flag form over appending `tls=true` to the connection string: the replica-set URI already carries a `?replicaSet=rs0` query and the sharded one carries none, so the correct separator differs between the two topologies.
+
+> **Omitting the TLS flags does not fail.** Because the server runs in `preferTLS`, a client that leaves them out is accepted on a plaintext connection and nothing reports the downgrade — the session simply is not encrypted. Verification is opt-in on the client side, so treat a working connection as evidence of nothing until the flags are present.
+
+Hostname verification succeeds against the in-cluster names out of the box, since the operator covers them in the leaf SANs. Verifying against an external LoadBalancer endpoint depends on the `splitHorizons` fold described above, and is unavailable in sharded mode — see below.
+
 ### Sharding and TLS
 
 In-cluster `mongos` SANs are fully covered: the operator appends the `mongos` and config-replset names (short, namespace, FQDN, and wildcard forms) to every certificate, for sharded and non-sharded clusters alike.
