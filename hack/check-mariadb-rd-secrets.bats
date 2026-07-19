@@ -75,14 +75,49 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 }
 
 @test "mariadb-rd does not expose key-bearing TLS Secrets by name" {
-  # Scoped to the secrets: block — a -tls entry under services: is a Service
-  # name, not a Secret, and must not trip this. Brace spacing is not pinned, the
-  # entry may be quoted, and a trailing comment must not hide it.
-  awk '/^  secrets:/{inblock=1; next} /^  [a-z]/{inblock=0} inblock' "$COZYRDS" \
+  # Scoped to secrets.include — a -tls entry under services: is a Service name,
+  # and under secrets.exclude it is the backstop doing its job; neither must
+  # trip this. Brace spacing is not pinned, the entry may be quoted, and a
+  # trailing comment must not hide it.
+  awk '/^    include:/{inblock=1; next} /^  [a-z]/{inblock=0} inblock' "$COZYRDS" \
     | sed 's/#.*$//' \
     | grep -E "^[[:space:]]*-[[:space:]].*-(ca-)?tls\"?[[:space:]]*$" && {
         echo "Found a key-bearing TLS Secret in the tenant include list" >&2
         exit 1
       }
   return 0
+}
+
+# Exclude backstop. The include selector matches by label with no name
+# constraint, so these names are the enumerable part of the gap: exclude wins
+# over include in matchResourceToExcludeInclude, so a Secret named here cannot
+# be promoted even if it acquires the label.
+@test "mariadb-rd excludes every key-bearing Secret" {
+  for n in ca-tls tls ca server-cert client-cert; do
+    grep -q "^          - mariadb-{{ .name }}-$n\$" "$COZYRDS" || {
+      echo "key-bearing Secret -$n missing from exclude" >&2
+      exit 1
+    }
+  done
+}
+
+@test "mariadb-rd excludes internal credentials and backup keys" {
+  for n in root password repl-password metrics-password backup regsecret; do
+    grep -q "^          - mariadb-{{ .name }}-$n\$" "$COZYRDS" || {
+      echo "credential Secret -$n missing from exclude" >&2
+      exit 1
+    }
+  done
+}
+
+# The backstop must not swallow what the tenant is supposed to receive: exclude
+# beats include, so an over-broad entry here silently removes the trust anchor.
+@test "mariadb-rd does not exclude the Secrets it exposes" {
+  excluded=$(awk '/^    exclude:/{i=1; next} /^    include:/{i=0} i' "$COZYRDS")
+  for n in credentials ca-bundle; do
+    if echo "$excluded" | grep -q -- "-$n\$"; then
+      echo "exclude list contains -$n, which the tenant is meant to read" >&2
+      exit 1
+    fi
+  done
 }
