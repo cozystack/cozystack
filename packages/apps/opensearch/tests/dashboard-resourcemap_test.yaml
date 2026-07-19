@@ -1,0 +1,74 @@
+suite: opensearch tenant RBAC for dashboard resources
+
+# The Role is the direct read grant for tenant subjects. It is a separate leg from
+# the ApplicationDefinition's spec.secrets.include, which only drives the lineage
+# webhook's tenant-resource label — listing a Secret there does not make it readable.
+# kafka wires both legs for its CA Secrets; opensearch does the same for the key-free
+# trust anchor.
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+tests:
+  - it: grants the tenant the credentials Secret and the key-free trust anchor
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Role
+      - contains:
+          path: rules[1].resourceNames
+          content: os-test-credentials
+      - contains:
+          path: rules[1].resourceNames
+          content: os-test.tenant-ca
+      - equal:
+          path: rules[1].resources
+          value:
+            - secrets
+
+  # The anchor is deliberately the key-free projection. Every other Secret in this
+  # chain carries a private key — the cert-manager CA under tls.key, and both leaves
+  # under tls.key — so granting any of them would hand the tenant key material.
+  - it: never grants the tenant a Secret holding a private key
+    documentIndex: 0
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: os-test-http-ca
+      - notContains:
+          path: rules[1].resourceNames
+          content: os-test-http-server
+      - notContains:
+          path: rules[1].resourceNames
+          content: os-test-dashboards-server
+      - lengthEqual:
+          path: rules[1].resourceNames
+          count: 2
+
+  - it: grants read only, never write
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: rules[1].verbs
+          value:
+            - get
+            - list
+            - watch
+
+  - it: binds the Role to tenant use subjects
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: RoleBinding
+      - equal:
+          path: roleRef.name
+          value: os-test-dashboard-resources

@@ -5,7 +5,7 @@
 # make generate (which requires cozyvalues-gen in PATH). They verify that:
 #   1. tls.enabled description is not truncated (ends with "off otherwise")
 #   2. topologySpreadPolicy appears outside the TLS section
-#   3. opensearch-rd cozyrds exposes the tenant CA and no server certificate
+#   3. opensearch-rd cozyrds labels the tenant CA and no server certificate
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 README="$REPO_ROOT/packages/apps/opensearch/README.md"
@@ -26,11 +26,11 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   grep -q "topologySpreadPolicy" "$README"
 }
 
-@test "cozyrds opensearch.yaml exposes the tenant CA to the tenant" {
-  # The key-free trust anchor the CA-extraction controller publishes. Selected by
-  # label rather than by name: the chart mints the HTTP CA through cert-manager
-  # and labels that Secret for publication, so opensearch resolves on the
-  # label-driven leg.
+@test "cozyrds opensearch.yaml labels the tenant CA for the tenant registry" {
+  # The key-free trust anchor the CA-extraction controller publishes, selected by
+  # label rather than by name. This entry drives the lineage webhook tenant-resource
+  # label only — direct read is a separate grant in the chart Role, which
+  # tests/dashboard-resourcemap_test.yaml covers.
   grep -q "internal.cozystack.io/tenant-ca" "$COZYRDS"
 }
 
