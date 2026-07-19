@@ -714,15 +714,26 @@ tests:
           path: spec.usages
           count: 2
 
-  - it: external SAN block fails clearly when _namespace.host missing
+  # A platform with no root host leaves the tenant host empty all the way down, which
+  # is a supported state. The certificate keeps its in-cluster names and simply omits
+  # the external ones rather than failing the release.
+  - it: omits the external SANs when the tenant host is empty
     set:
       tls:
         enabled: true
       external: true
       _namespace: {}
     asserts:
-      - failedTemplate:
-          errorMessage: "external is true but _namespace.host is not set"
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc.cozy.local
+        documentIndex: 3
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.
+        documentIndex: 3
 
 ---
 ---
@@ -786,6 +797,22 @@ tests:
         documentIndex: 0
       - notExists:
           path: spec.security.tls.http.secret
+        documentIndex: 0
+
+  # The part whose loss actually hurts: an empty tenant host must not stop the cluster
+  # itself from rendering. A hard failure here takes the OpenSearchCluster CR, the
+  # credentials Secret and the RBAC with it, so a running release goes not-Ready.
+  - it: still renders the cluster when external is on and the tenant host is empty
+    set:
+      external: true
+      _namespace: {}
+    asserts:
+      - isKind:
+          of: OpenSearchCluster
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: os-test
         documentIndex: 0
 
   # --- Transport TLS: always operator-managed, never touched ---
@@ -988,22 +1015,47 @@ set:
     cluster-domain: cozy.local
 
 tests:
-  - it: external-svc fails clearly when external true and _namespace.host missing
+  # An empty tenant host must not take the release down. The LoadBalancers still get
+  # addresses and still serve; only the external-dns hostname is withheld, because
+  # there is no name to publish. Previously this failed the whole render, which took
+  # the OpenSearchCluster CR with it on a configuration that works on main.
+  - it: still renders both Services when the tenant host is empty
     set:
       external: true
       _namespace: {}
+      dashboards:
+        enabled: true
     asserts:
-      - failedTemplate:
-          errorMessage: "external is true but _namespace.host is not set"
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: os-test-external
+        documentIndex: 0
+      - notExists:
+          path: metadata.annotations
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: os-test-dashboards-external
+        documentIndex: 1
+      - notExists:
+          path: metadata.annotations
+        documentIndex: 1
 
-  # _namespace absent entirely, not merely missing its host key. Without a default
-  # the deref raises a raw nil pointer before required can say anything useful.
-  - it: external-svc fails clearly when _namespace is absent entirely
+  # _namespace absent entirely, not merely missing its host key — the deref must not
+  # raise a nil pointer either.
+  - it: still renders both Services when _namespace is absent entirely
     set:
       external: true
+      dashboards:
+        enabled: true
     asserts:
-      - failedTemplate:
-          errorMessage: "external is true but _namespace.host is not set"
+      - hasDocuments:
+          count: 2
+      - notExists:
+          path: metadata.annotations
+        documentIndex: 0
 
   # The external-dns hostname is built from the tenant host, not the in-cluster
   # domain: cozy.local does not resolve outside the cluster, and the name published

@@ -187,8 +187,8 @@ spec:
     - {{ $name }}.{{ $ns }}.svc.{{ $clusterDomain }}
     # Headless discovery service the operator issues for as well
     - {{ $name }}-discovery
-    {{- if .Values.external | default false }}
-    {{- $extHost := required "external is true but _namespace.host is not set" (.Values._namespace | default dict).host }}
+    {{- $extHost := (.Values._namespace | default dict).host | default "" }}
+    {{- if and (.Values.external | default false) $extHost }}
     # External LoadBalancer DNS name (used by external-dns)
     - {{ printf "%s.%s" $name $extHost }}
     {{- end }}
@@ -236,8 +236,8 @@ spec:
     - {{ $name }}-dashboards.{{ $ns }}
     - {{ $name }}-dashboards.{{ $ns }}.svc
     - {{ $name }}-dashboards.{{ $ns }}.svc.{{ $clusterDomain }}
-    {{- if .Values.external | default false }}
-    {{- $extHost := required "external is true but _namespace.host is not set" (.Values._namespace | default dict).host }}
+    {{- $extHost := (.Values._namespace | default dict).host | default "" }}
+    {{- if and (.Values.external | default false) $extHost }}
     # External LoadBalancer DNS name (used by external-dns)
     - {{ printf "%s-dashboards.%s" $name $extHost }}
     {{- end }}
