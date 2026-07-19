@@ -23,9 +23,10 @@ spec:
   isCA: true
   commonName: {{ .Release.Name }}-ca
   secretName: {{ .Release.Name }}-ca-tls
-  # This Secret is key-bearing, so it is never handed to the tenant directly.
-  # The publish labels mark it as the source for the key-free CA projection that
-  # the platform publishes on the tenant's behalf.
+  # This Secret is key-bearing and is never handed to the tenant, nor is it the
+  # source the trust anchor is published from: the ApplicationDefinition declares
+  # the operator's key-free <release>-ca-bundle for that instead, so no
+  # publication path ever runs next to the CA private key.
   #
   # The operator only watches Secrets referenced by serverCASecretRef /
   # serverCertSecretRef when they carry its watch label. Without it, a
@@ -33,8 +34,6 @@ spec:
   # only picked up on the next full resync.
   secretTemplate:
     labels:
-      internal.cozystack.io/publish-ca-cert: "true"
-      internal.cozystack.io/publish-ca-cert-release: {{ .Release.Name }}
       k8s.mariadb.com/watch: ""
   duration: 43800h
   issuerRef:
@@ -71,6 +70,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   secretName: {{ .Release.Name }}-tls
+  # Set explicitly: cert-manager leaves the Subject CN empty otherwise, and a
+  # client that still verifies the hostname against the CN rather than the SANs
+  # fails outright against an empty one.
+  commonName: {{ .Release.Name }}
   # Watch label only: this Secret holds the server private key and is never a
   # publication source. rotationPolicy below replaces the key on every renewal,
   # so the operator has to observe the change to roll the pods onto it.
