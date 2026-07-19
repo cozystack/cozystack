@@ -76,10 +76,18 @@ storageClass: ""
 external: false
 
 ## @typedef {struct} TLS - TLS configuration for RabbitMQ.
-## @field {*bool} enabled - Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
+## @field {bool} [enabled] - Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Defaults to false.
 ## @field {bool} [disableNonTLSListeners] - Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.
 
-## @param {TLS} [tls] - TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
+## @param {TLS} [tls] - TLS configuration. TLS is off unless `tls.enabled` is set to true.
+## enabled defaults to false and is independent of `external`: an existing instance
+## keeps its current listeners and its published connection details across an
+## upgrade, and turning TLS on is always an explicit edit. That matters because the
+## operator rewrites the `port` key of the <release>-default-user Secret — the
+## Service Binding this chart hands the tenant — from 5672 to 5671 the moment
+## spec.tls.secretName is set, moving every client that resolves its endpoint from
+## the binding onto TLS.
+##
 ## When TLS is enabled, the trust anchor reaches the tenant as <release>.tenant-ca:
 ## an object holding ca.crt and nothing else, read through the
 ## core.cozystack.io/tenantsecrets API that the base tenant roles already grant.

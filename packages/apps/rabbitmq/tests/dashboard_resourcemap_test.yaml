@@ -64,13 +64,12 @@ tests:
           path: rules[0].resourceNames
           content: myrabbitmq-ca
 
-  - it: Role never grants key-bearing secrets when TLS is on via the external default
+  - it: Role never grants key-bearing secrets on the external TLS path
     release:
       name: myrabbitmq
       namespace: tenant-test
-    values:
-      - fixtures/tls_default_values.yaml
     set:
+      tls.enabled: true
       external: true
       _namespace.host: example.com
     documentIndex: 0

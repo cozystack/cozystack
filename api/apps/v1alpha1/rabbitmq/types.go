@@ -36,7 +36,7 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.
+	// TLS configuration. TLS is off unless `tls.enabled` is set to true.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
 	// RabbitMQ major.minor version to deploy
@@ -67,8 +67,8 @@ type Roles struct {
 type TLS struct {
 	// Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.
 	DisableNonTLSListeners bool `json:"disableNonTLSListeners,omitempty"`
-	// Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.
-	Enabled *bool `json:"enabled,omitempty"`
+	// Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Defaults to false.
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 type User struct {

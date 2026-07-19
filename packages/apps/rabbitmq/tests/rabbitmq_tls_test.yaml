@@ -110,10 +110,15 @@ tests:
           path: spec.tls.disableNonTLSListeners
 
   # -----------------------------------------------------------------------
-  # Tri-state: external=true, tls.enabled not set (default ~) => TLS enabled
+  # Default: external=true, tls.enabled not set => TLS stays off.
+  #
+  # `external` publishes the broker; it does not encrypt it. Wiring
+  # spec.tls.secretName here would make the operator rewrite the `port` key of
+  # <release>-default-user from 5672 to 5671, moving every client that reads its
+  # endpoint from that binding onto TLS without anyone asking for it.
   # -----------------------------------------------------------------------
 
-  - it: enables TLS when tls.enabled is unset (default) and external is true
+  - it: leaves TLS off when tls.enabled is unset and external is true
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -126,12 +131,11 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - equal:
-          path: spec.tls.secretName
-          value: myrabbitmq-tls
+      - notExists:
+          path: spec.tls
 
   # -----------------------------------------------------------------------
-  # Tri-state: explicit tls.enabled=false beats external=true
+  # Explicit tls.enabled=false with external=true is off for the same reason
   # -----------------------------------------------------------------------
 
   - it: disables TLS when tls.enabled is false even if external is true
@@ -293,9 +297,8 @@ tests:
     release:
       name: myrabbitmq
       namespace: tenant-test
-    values:
-      - fixtures/tls_default_values.yaml
     set:
+      tls.enabled: true
       external: true
       _namespace.host: example.com
     documentSelector:
@@ -398,7 +401,7 @@ tests:
       - failedTemplate:
           errorPattern: "would leave no listener at all"
 
-  - it: refuses the flag when TLS is off by default because external is false
+  - it: refuses the flag when tls.enabled is left at its default
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -406,8 +409,23 @@ tests:
       external: false
       tls.disableNonTLSListeners: true
     asserts:
-      # The likeliest way in: hardening an internal broker by setting only the
-      # flag, where tls.enabled defaults to external and so resolves to false.
+      # The likeliest way in: hardening a broker by setting only the flag and
+      # assuming it implies TLS. tls.enabled is unset here, so it resolves to
+      # false and the flag would close the only listeners there are.
+      - failedTemplate:
+          errorPattern: "would leave no listener at all"
+
+  - it: refuses the flag when tls.enabled is left at its default and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace.host: example.com
+      tls.disableNonTLSListeners: true
+    asserts:
+      # Same refusal on the published path: external does not supply the TLS
+      # that this flag needs, so it is still a request to close every listener.
       - failedTemplate:
           errorPattern: "would leave no listener at all"
 
