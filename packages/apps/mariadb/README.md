@@ -67,6 +67,8 @@ more details:
 
 ### How to connect over TLS
 
+> Kubernetes objects for an instance are named after the Helm release, which prefixes the instance name: an instance `mydb` produces the Service and Secrets `mariadb-mydb-*`. The names below use `mariadb-<name>` for that reason, while `<instance>` elsewhere in this document is the name of the `MariaDB` resource itself.
+
 Instances created by this chart always serve TLS. The chart asks the operator for it in every configuration, and an instance that omits the setting gets TLS from the operator's own defaults anyway, so there has never been a plaintext-only MariaDB here. What `tls.enabled` selects is whether the instance gets a *managed* TLS setup — its own CA and server certificate issued through cert-manager — rather than the operator's own CA. It is managed automatically when `external` is `true`, and can be turned on independently by setting `tls.enabled: true`.
 
 Enforcement is separate, and opt-in. `tls.required: true` sets `require_secure_transport=ON`, after which plaintext connections are refused. It defaults to `false`, so enabling managed TLS does not by itself cut off any existing client. It applies whether or not TLS is managed — enforcement works against the operator's own certificates too — so setting it is never silently ignored.
@@ -75,29 +77,29 @@ The default is deliberate: enforcement has to follow the trust anchor rather tha
 
 > This default is temporary. `tls.required` will default to `true` in a later release, as an announced change, once the published trust anchor is available everywhere.
 
-Certificates are issued by a per-instance CA managed by cert-manager. The server certificate covers the instance services (`<instance>`, `<instance>-primary`, `<instance>-secondary`), the headless service used for per-pod routing, `localhost`, and — when `external` is `true` — the external hostname.
+Certificates are issued by a per-instance CA managed by cert-manager. The server certificate covers the instance services (`mariadb-<name>`, `mariadb-<name>-primary`, `mariadb-<name>-secondary`), the headless service used for per-pod routing, `localhost`, and — when `external` is `true` — the external hostname.
 
 Connect with the MariaDB client by supplying the CA and asking for full verification:
 
 ```bash
-mysql -h <instance> -u <user> -p<password> --ssl-ca=/path/to/ca.crt --ssl-verify-server-cert
+mysql -h mariadb-<name> -u <user> -p<password> --ssl-ca=/path/to/ca.crt --ssl-verify-server-cert
 ```
 
 `--ssl-ca` alone establishes trust but leaves the hostname unchecked; `--ssl-verify-server-cert` is what validates the server name against the certificate. Note that these are MariaDB client options. The MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client does not accept.
 
-The trust anchor is available in the instance namespace as the Secret `<instance>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
+The trust anchor is available in the instance namespace as the Secret `mariadb-<name>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
 
 ```bash
-kubectl get secret <instance>-ca-bundle -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
+kubectl get secret mariadb-<name>-ca-bundle -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 ```
 
 Mounting that Secret into a client Pod is the usual in-cluster approach; nothing needs to be copied out of the namespace.
 
-> External clients additionally need a DNS record pointing at the LoadBalancer address. The certificate carries `<instance>.<host>` as a SAN but no IP SAN, so connecting to the address directly fails verification.
+> External clients additionally need a DNS record pointing at the LoadBalancer address. The certificate carries `mariadb-<name>.<host>` as a SAN but no IP SAN, so connecting to the address directly fails verification.
 
 #### Migrating an existing instance
 
-Managed TLS does not enforce anything by itself — enforcement is off by default — but it does change who issues the server certificate: the CA moves from the operator's to one issued for this instance. A client that reads `<instance>-ca-bundle` at connect time follows that automatically, because the operator keeps both CAs in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
+Managed TLS does not enforce anything by itself — enforcement is off by default — but it does change who issues the server certificate: the CA moves from the operator's to one issued for this instance. A client that reads `mariadb-<name>-ca-bundle` at connect time follows that automatically, because the operator keeps both CAs in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
 
 Note that instances with `external: true` get managed TLS automatically, so for those the CA change arrives with the platform upgrade rather than with an edit of your own. If you have pinned clients, set `tls.enabled: false` before upgrading to keep the operator's CA, then migrate deliberately.
 
@@ -110,7 +112,7 @@ The order that avoids downtime:
      enabled: true
    ```
 
-2. Distribute `<instance>-ca-bundle` and move clients onto verified TLS one at a time.
+2. Distribute `mariadb-<name>-ca-bundle` and move clients onto verified TLS one at a time.
 3. Once no plaintext clients remain, require it:
 
    ```yaml
