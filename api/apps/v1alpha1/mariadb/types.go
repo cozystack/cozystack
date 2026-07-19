@@ -100,9 +100,10 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Issue a dedicated CA and server certificate for this instance through cert-manager, instead of using the operator's own CA. TLS is served either way; this selects who issues it. Opt-in, and not derived from `external`.
-	Enabled *bool `json:"enabled,omitempty"`
-	// Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.
+	// Who issues the server certificate: `operator` uses the CA mariadb-operator manages itself, `cert-manager` gives the instance its own CA and is what covers the external hostname. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.
+	// +kubebuilder:default:="operator"
+	Issuer TLSIssuer `json:"issuer,omitempty"`
+	// Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies under either issuer. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.
 	Required *bool `json:"required,omitempty"`
 }
 
@@ -115,6 +116,9 @@ type User struct {
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string
+
+// +kubebuilder:validation:Enum="operator";"cert-manager"
+type TLSIssuer string
 
 // +kubebuilder:validation:Enum="v11.8";"v11.4";"v10.11";"v10.6"
 type Version string

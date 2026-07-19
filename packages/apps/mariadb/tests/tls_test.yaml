@@ -6,10 +6,10 @@ suite: TLS configuration for MariaDB
 # the operator serves it regardless — so no row here turns TLS off.
 #
 # Managing TLS is opt-in and is NOT derived from external:
-#   1. external=false, tls.enabled unset  → unmanaged
-#   2. external=true,  tls.enabled unset  → unmanaged (external does not imply it)
-#   3. external=true,  tls.enabled=false  → unmanaged (explicit, same result)
-#   4. external=any,   tls.enabled=true   → managed (the only way in)
+#   1. external=false, tls.issuer unset  → unmanaged
+#   2. external=true,  tls.issuer unset  → unmanaged (external does not imply it)
+#   3. external=true,  tls.issuer=operator  → unmanaged (explicit, same result)
+#   4. external=any,   tls.issuer=cert-manager   → managed (the only way in)
 
 release:
   name: my-mariadb
@@ -23,9 +23,9 @@ set:
 
 tests:
   # -------------------------------------------------------------------
-  # Case 1: external=false, tls.enabled unset → no TLS resources
+  # Case 1: external=false, tls.issuer unset → no TLS resources
   # -------------------------------------------------------------------
-  - it: "certmanager.yaml renders no documents when external=false and tls.enabled is unset"
+  - it: "certmanager.yaml renders no documents when external=false and tls.issuer is unset"
     templates:
       - templates/certmanager.yaml
     set:
@@ -34,13 +34,13 @@ tests:
       - hasDocuments:
           count: 0
 
-  # spec.tls.enabled is true in every configuration, because the operator
+  # spec.tls.issuer is true in every configuration, because the operator
   # substitutes TLS{Enabled: true} whenever spec.tls is absent — omitting the
   # block does not disable TLS, it only hides that TLS is on. Enforcement is
   # stated explicitly in every configuration too, defaulting to false. What the
   # unmanaged case must NOT carry is the certificate references: those select
   # chart-owned material that does not exist there.
-  - it: "mariadb.yaml declares TLS enabled but unmanaged when external=false and tls.enabled is unset"
+  - it: "mariadb.yaml declares TLS enabled but unmanaged when external=false and tls.issuer is unset"
     templates:
       - templates/mariadb.yaml
     set:
@@ -78,13 +78,13 @@ tests:
       - notExists:
           path: spec.tls.serverCertSecretRef
 
-  - it: "unmanaged TLS honours required=true even with tls.enabled explicitly false"
+  - it: "unmanaged TLS honours required=true even with tls.issuer explicitly false"
     templates:
       - templates/mariadb.yaml
     set:
       external: true
       tls:
-        enabled: false
+        issuer: operator
         required: true
     asserts:
       - equal:
@@ -94,15 +94,15 @@ tests:
           path: spec.tls.serverCASecretRef
 
   # -------------------------------------------------------------------
-  # Case 2: tls.enabled=true → managed. external only adds the external SAN;
+  # Case 2: tls.issuer=cert-manager → managed. external only adds the external SAN;
   # it does not select managed TLS on its own.
   # -------------------------------------------------------------------
-  - it: "certmanager.yaml renders 4 documents (selfsigned Issuer, CA Cert, CA Issuer, leaf Cert) when tls.enabled=true"
+  - it: "certmanager.yaml renders 4 documents (selfsigned Issuer, CA Cert, CA Issuer, leaf Cert) when tls.issuer=cert-manager"
     templates:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     asserts:
       - hasDocuments:
@@ -113,7 +113,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 0
     asserts:
@@ -134,7 +134,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 1
     asserts:
@@ -159,7 +159,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 2
     asserts:
@@ -178,7 +178,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -206,7 +206,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -264,7 +264,7 @@ tests:
     set:
       external: true
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - lengthEqual:
           path: spec.dnsNames
@@ -296,7 +296,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -304,12 +304,12 @@ tests:
           path: spec.dnsNames
           content: "my-mariadb.example.com"
 
-  - it: "mariadb.yaml has spec.tls.enabled=true and serverCertSecretRef + serverCASecretRef pointing to chart secrets when external=true"
+  - it: "mariadb.yaml sets spec.tls.enabled=true and serverCertSecretRef + serverCASecretRef pointing to chart secrets when external=true"
     templates:
       - templates/mariadb.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     asserts:
       - equal:
@@ -328,29 +328,29 @@ tests:
           path: spec.tls.serverCertIssuerRef
 
   # -------------------------------------------------------------------
-  # Case 3: external=true, tls.enabled=false → explicit override wins
+  # Case 3: external=true, tls.issuer=operator → explicit override wins
   # -------------------------------------------------------------------
-  - it: "certmanager.yaml renders no documents when tls.enabled=false even if external=true"
+  - it: "certmanager.yaml renders no documents when tls.issuer=operator even if external=true"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
       tls:
-        enabled: false
+        issuer: operator
     asserts:
       - hasDocuments:
           count: 0
 
-  # tls.enabled: false means "do not manage TLS", never "turn TLS off" — the
+  # tls.issuer: operator means "do not manage TLS", never "turn TLS off" — the
   # operator cannot be told to turn it off. Rendering enabled: false here would
   # be the one change that actually downgrades an existing instance.
-  - it: "mariadb.yaml keeps TLS enabled but unmanaged when tls.enabled=false even if external=true"
+  - it: "mariadb.yaml keeps TLS enabled but unmanaged when tls.issuer=operator even if external=true"
     templates:
       - templates/mariadb.yaml
     set:
       external: true
       tls:
-        enabled: false
+        issuer: operator
     asserts:
       - equal:
           path: spec.tls.enabled
@@ -364,26 +364,26 @@ tests:
           path: spec.tls.serverCASecretRef
 
   # -------------------------------------------------------------------
-  # Case 4: external=false, tls.enabled=true → explicit override wins
+  # Case 4: external=false, tls.issuer=cert-manager → explicit override wins
   # -------------------------------------------------------------------
-  - it: "certmanager.yaml renders 4 documents when tls.enabled=true even if external=false"
+  - it: "certmanager.yaml renders 4 documents when tls.issuer=cert-manager even if external=false"
     templates:
       - templates/certmanager.yaml
     set:
       external: false
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - hasDocuments:
           count: 4
 
-  - it: "leaf Certificate SAN list does NOT include external hostname when external=false but tls.enabled=true"
+  - it: "leaf Certificate SAN list does NOT include external hostname when external=false but tls.issuer=cert-manager"
     templates:
       - templates/certmanager.yaml
     set:
       external: false
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - notContains:
@@ -408,13 +408,13 @@ tests:
           path: spec.dnsNames
           content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
 
-  - it: "mariadb.yaml has spec.tls.enabled=true, serverCertSecretRef and serverCASecretRef when tls.enabled=true even if external=false"
+  - it: "mariadb.yaml sets spec.tls.enabled=true with both cert refs when tls.issuer=cert-manager even if external=false"
     templates:
       - templates/mariadb.yaml
     set:
       external: false
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - equal:
           path: spec.tls.enabled
@@ -439,7 +439,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 0
     asserts:
@@ -452,7 +452,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 1
     asserts:
@@ -465,7 +465,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 1
     asserts:
@@ -478,7 +478,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -491,7 +491,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -508,7 +508,7 @@ tests:
   # them in the Role. All four tri-state combinations are checked so a
   # regression cannot hide in the branch that happens to enable TLS.
   # -------------------------------------------------------------------
-  - it: "RBAC excludes TLS secrets when external=false and tls.enabled unset"
+  - it: "RBAC excludes TLS secrets when external=false and tls.issuer unset"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -522,7 +522,7 @@ tests:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
-  - it: "RBAC excludes TLS secrets when external=true and tls.enabled unset"
+  - it: "RBAC excludes TLS secrets when external=true and tls.issuer unset"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -536,13 +536,13 @@ tests:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
-  - it: "RBAC excludes TLS secrets when tls.enabled=false even if external=true"
+  - it: "RBAC excludes TLS secrets when tls.issuer=operator even if external=true"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
       external: true
       tls:
-        enabled: false
+        issuer: operator
     documentIndex: 0
     asserts:
       - notContains:
@@ -552,13 +552,13 @@ tests:
           path: rules[1].resourceNames
           content: my-mariadb-ca-tls
 
-  - it: "RBAC excludes TLS secrets when tls.enabled=true even if external=false"
+  - it: "RBAC excludes TLS secrets when tls.issuer=cert-manager even if external=false"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
       external: false
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 0
     asserts:
       - notContains:
@@ -601,7 +601,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 1
     asserts:
       - notContains:
@@ -628,7 +628,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 1
     asserts:
       - contains:
@@ -645,7 +645,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - equal:
@@ -657,7 +657,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 1
     asserts:
       - equal:
@@ -677,7 +677,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - notContains:
@@ -685,9 +685,9 @@ tests:
           content: "my-mariadb.example.com"
 
   # -------------------------------------------------------------------
-  # B2: tls.enabled unset falls through to external (tri-state)
-  # kindIs "invalid" catches the unset case. The schema types tls.enabled as
-  # "boolean", so an explicit tls.enabled: null is rejected before rendering
+  # B2: tls.issuer unset falls through to external (tri-state)
+  # kindIs "invalid" catches the unset case. The schema types tls.issuer as
+  # "boolean", so an explicit tls.issuer: null is rejected before rendering
   # and only the unset path reaches external inheritance. This says nothing
   # about tls: null — blanking the whole map is a different value, is allowed,
   # and is covered separately above.
@@ -696,7 +696,7 @@ tests:
   # existing external instance on the next platform upgrade, with no action from
   # its owner, and without raising the security floor — those instances already
   # serve TLS under the operator's CA.
-  - it: "tls.enabled unset with external=true does NOT manage TLS"
+  - it: "tls.issuer unset with external=true does NOT manage TLS"
     templates:
       - templates/certmanager.yaml
     set:
@@ -705,7 +705,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "tls.enabled unset with external=false keeps TLS off"
+  - it: "tls.issuer unset with external=false keeps TLS off"
     templates:
       - templates/certmanager.yaml
     set:
@@ -729,7 +729,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - contains:
@@ -764,7 +764,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - contains:
@@ -772,18 +772,18 @@ tests:
           content: digital signature
 
   # -------------------------------------------------------------------
-  # Integer tls.enabled edge case
-  # The JSON schema enforces type "boolean" for tls.enabled, so integer
+  # Integer tls.issuer edge case
+  # The JSON schema enforces type "boolean" for tls.issuer, so integer
   # values (e.g. 1) are rejected by schema validation before the helper
   # even runs. Only explicit bool true is accepted; unset falls through
   # to external inheritance via kindIs "invalid".
   # -------------------------------------------------------------------
-  - it: "boolean true for tls.enabled survives the toString round-trip in the helper"
+  - it: "boolean true for tls.issuer survives the toString round-trip in the helper"
     templates:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - hasDocuments:
           count: 4
@@ -799,7 +799,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -821,7 +821,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
     documentIndex: 3
     asserts:
@@ -846,7 +846,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       external: true
       _namespace: null
     asserts:
@@ -863,7 +863,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 1
     asserts:
       - equal:
@@ -878,7 +878,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - equal:
@@ -893,7 +893,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 1
     asserts:
       - equal:
@@ -905,7 +905,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     documentIndex: 3
     asserts:
       - equal:
@@ -918,12 +918,12 @@ tests:
   # SSL flags to connect. The anchor comes from the operator's ca-bundle, not
   # from the leaf Secret — see the volume test below for why.
   # -------------------------------------------------------------------
-  - it: "backup CronJob has tls-ca volumeMount when tls.enabled=true"
+  - it: "backup CronJob has tls-ca volumeMount when tls.issuer=cert-manager"
     templates:
       - templates/backup-cronjob.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -938,12 +938,12 @@ tests:
 
   # The trust anchor comes from the operator's CA bundle, not the leaf Secret:
   # the bundle spans a CA rollover, the leaf only holds the current signer.
-  - it: "backup CronJob takes tls-ca volume from the operator CA bundle when tls.enabled=true"
+  - it: "backup CronJob takes tls-ca volume from the operator CA bundle when tls.issuer=cert-manager"
     templates:
       - templates/backup-cronjob.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -974,12 +974,12 @@ tests:
   # now always mounted, because the backup client always verifies. They also
   # never actually asserted that: notContains compares whole list entries, so
   # a partial {name: tls-ca} matched nothing and passed either way.
-  - it: "backup CronJob mounts the CA bundle when tls.enabled=false"
+  - it: "backup CronJob mounts the CA bundle when tls.issuer=operator"
     templates:
       - templates/backup-cronjob.yaml
     set:
       tls:
-        enabled: false
+        issuer: operator
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -996,7 +996,7 @@ tests:
               - key: ca.crt
                 path: ca.crt
 
-  - it: "backup CronJob mounts the CA bundle when external=false and tls.enabled unset"
+  - it: "backup CronJob mounts the CA bundle when external=false and tls.issuer unset"
     templates:
       - templates/backup-cronjob.yaml
     set:
@@ -1039,7 +1039,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - equal:
           path: spec.isCA
@@ -1063,7 +1063,7 @@ tests:
     documentIndex: 3
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - equal:
           path: spec.commonName
@@ -1075,7 +1075,7 @@ tests:
     documentIndex: 3
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - equal:
           path: spec.isCA
@@ -1095,7 +1095,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - exists:
           path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
@@ -1111,7 +1111,7 @@ tests:
       - templates/certmanager.yaml
     set:
       tls:
-        enabled: false
+        issuer: operator
     asserts:
       - hasDocuments:
           count: 0
@@ -1127,7 +1127,7 @@ tests:
     documentIndex: 0
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - notContains:
           path: rules[1].resourceNames
@@ -1153,7 +1153,7 @@ tests:
     documentIndex: 0
     set:
       tls:
-        enabled: false
+        issuer: operator
     asserts:
       - contains:
           path: rules[1].resourceNames
@@ -1191,7 +1191,7 @@ tests:
       - templates/mariadb.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
     asserts:
       - equal:
           path: spec.tls.required
@@ -1206,7 +1206,7 @@ tests:
       - templates/mariadb.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
         required: null
     asserts:
       - failedTemplate:
@@ -1217,7 +1217,7 @@ tests:
       - templates/mariadb.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
         required: true
     asserts:
       - equal:
@@ -1229,7 +1229,7 @@ tests:
       - templates/mariadb.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
         required: false
     asserts:
       - equal:
@@ -1253,7 +1253,7 @@ tests:
     documentIndex: 3
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       _cluster: null
     asserts:
       - contains:
@@ -1266,7 +1266,7 @@ tests:
     documentIndex: 3
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       # helm-unittest deep-merges `set` over the suite defaults, so the key is
       # blanked rather than removed to exercise the fallback branch.
       _cluster:
@@ -1334,12 +1334,12 @@ tests:
             name: MYSQL_CA_SECRET
             value: my-mariadb-ca-bundle
 
-  - it: "backup-script Secret uses MariaDB TLS verification flags when tls.enabled=true"
+  - it: "backup-script Secret uses MariaDB TLS verification flags when tls.issuer=cert-manager"
     templates:
       - templates/backup-script.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -1359,12 +1359,12 @@ tests:
   # any TLS state. Anchored on the option name so both --ssl-mode=VALUE and a
   # bare --ssl-mode are caught. All three states that reach the client are
   # covered: explicit, inherited from external, and off.
-  - it: "backup-script Secret never emits the MySQL-only --ssl-mode option (tls.enabled=true)"
+  - it: "backup-script Secret never emits the MySQL-only --ssl-mode option (tls.issuer=cert-manager)"
     templates:
       - templates/backup-script.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -1377,7 +1377,7 @@ tests:
   # The inherited path is what an external instance actually gets by default,
   # so it is the one most likely to run the backup against a TLS-enforcing
   # server — it needs the same guarantees as the explicit path.
-  - it: "backup-script Secret uses MariaDB flags on the inherited path (external=true, tls.enabled unset)"
+  - it: "backup-script Secret uses MariaDB flags on the inherited path (external=true, tls.issuer unset)"
     templates:
       - templates/backup-script.yaml
     set:
@@ -1404,7 +1404,7 @@ tests:
       - templates/backup-script.yaml
     set:
       tls:
-        enabled: true
+        issuer: cert-manager
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -1422,12 +1422,12 @@ tests:
   # gain from connecting unverified — and enforcement can be switched on
   # independently of managed TLS, which would make an unverified backup client
   # fail outright.
-  - it: "backup-script Secret still uses MariaDB TLS flags when tls.enabled=false"
+  - it: "backup-script Secret still uses MariaDB TLS flags when tls.issuer=operator"
     templates:
       - templates/backup-script.yaml
     set:
       tls:
-        enabled: false
+        issuer: operator
       backup:
         enabled: true
         s3Bucket: s3.example.org/test
@@ -1488,7 +1488,7 @@ tests:
               - key: ca.crt
                 path: ca.crt
 
-  - it: "backup CronJob has tls-ca volumeMount when external=true and tls.enabled unset"
+  - it: "backup CronJob has tls-ca volumeMount when external=true and tls.issuer unset"
     templates:
       - templates/backup-cronjob.yaml
     set:

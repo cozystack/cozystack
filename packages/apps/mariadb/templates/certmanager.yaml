@@ -1,5 +1,5 @@
-{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
-{{- if $tlsEnabled }}
+{{- $certManagerIssued := (include "mariadb.tls.certManagerIssued" .) | eq "true" -}}
+{{- if $certManagerIssued }}
 {{- /* default (dict) keeps `index` from erroring when _cluster is absent or null, which is what makes the cozy.local fallback below actually reachable. */}}
 {{- $clusterDomain := (index (default (dict) .Values._cluster) "cluster-domain") | default "cozy.local" }}
 ---

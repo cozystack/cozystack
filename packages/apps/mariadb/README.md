@@ -69,19 +69,22 @@ more details:
 
 > Kubernetes objects for an instance are named after the Helm release, which prefixes the instance name: an instance `mydb` produces the Service and Secrets `mariadb-mydb-*`. The names below use `mariadb-<name>` for that reason, while `<instance>` elsewhere in this document is the name of the `MariaDB` resource itself.
 
-Instances created by this chart always serve TLS. The chart asks the operator for it in every configuration, and an instance that omits the setting gets TLS from the operator's own defaults anyway, so there has never been a plaintext-only MariaDB here. What `tls.enabled` selects is whether the instance gets a *managed* TLS setup — its own CA and server certificate issued through cert-manager — rather than the operator's own CA. It is opt-in: set `tls.enabled: true`. It is **not** derived from `external`, so enabling external access does not change the CA of an instance on its own.
+TLS is always served. `tls.issuer` selects who issues the certificate:
 
-Enforcement is separate, and opt-in. `tls.required: true` sets `require_secure_transport=ON`, after which plaintext connections are refused. It defaults to `false`, so enabling managed TLS does not by itself cut off any existing client. It applies whether or not TLS is managed — enforcement works against the operator's own certificates too — so setting it is never silently ignored.
+| `tls.issuer` | issued by | covers |
+| --- | --- | --- |
+| `operator` (default) | mariadb-operator's own CA | `mariadb-<name>`, `-primary`, `-secondary`, the headless service, `localhost` |
+| `cert-manager` | a CA issued for this instance | the same, plus the external hostname when `external` is `true` |
 
-The default is deliberate: switching enforcement on refuses every client that has not been moved to TLS yet, so it should be a decision you make rather than something a platform upgrade does to a running instance. The anchor to migrate clients with is already available (see below); turn enforcement on once they are using it.
+The operator has no way to learn the external hostname, so verifying a connection from outside the cluster requires `tls.issuer: cert-manager`.
 
-> This default is temporary. `tls.required` will default to `true` in a later release, as an announced change, once the published trust anchor is available everywhere.
+The default is `operator`, and it is not derived from `external`: switching issuer re-issues the server certificate under a new authority, which breaks any client that pinned the previous `ca.crt` without making anything safer — those instances already serve TLS.
 
-Which names the certificate covers depends on who issued it.
+> The field is named for the issuer, not for on/off, because TLS is on either way. Other charts in this platform spell a similar-looking `tls.issuer` that *does* mean on/off; this one deliberately does not, and the enum makes the difference unreadable-as-a-switch.
 
-Unmanaged (the default), the operator issues it and covers the in-cluster names only: the instance services (`mariadb-<name>`, `mariadb-<name>-primary`, `mariadb-<name>-secondary`), the headless service used for per-pod routing, and `localhost`. It has no way to know the external hostname, so it is not in the certificate.
+Enforcement is separate. `tls.required: true` sets `require_secure_transport=ON` and refuses plaintext, under either issuer. It defaults to `false` because turning it on disconnects every client not yet using TLS — a decision to make once clients have the CA, not something an upgrade does.
 
-Managed (`tls.enabled: true`), the chart issues it and covers the same in-cluster names plus, when `external` is `true`, the external hostname.
+> `tls.required` will default to `true` in a later release, as an announced change, once the trust anchor is published to tenants automatically.
 
 Connect with the MariaDB client by supplying the CA and asking for full verification:
 
@@ -101,27 +104,27 @@ kubectl get secret mariadb-<name>-ca-bundle -o jsonpath='{.data.ca\.crt}' | base
 
 Mounting that Secret into a client Pod is the usual in-cluster approach; nothing needs to be copied out of the namespace.
 
-> **Verifying an external connection requires `tls.enabled: true`.** The operator's certificate does not carry the external hostname, so a client connecting from outside with `--ssl-verify-server-cert` fails hostname verification against an unmanaged instance no matter which CA it trusts. Managed TLS is what puts `mariadb-<name>.<host>` in the certificate.
+> **Verifying an external connection requires `tls.issuer: cert-manager`.** The operator's certificate does not carry the external hostname, so a client connecting from outside with `--ssl-verify-server-cert` fails hostname verification against an unmanaged instance no matter which CA it trusts. A cert-manager-issued certificate is what puts `mariadb-<name>.<host>` in the certificate.
 >
 > Such clients also need a DNS record pointing at the LoadBalancer address: the hostname is a SAN, the address is not, so connecting to the IP directly fails verification either way.
 
 #### Migrating an existing instance
 
-An existing instance keeps the operator's CA and its current enforcement whether or not you upgrade; setting `tls.enabled: true` is what moves it to a CA issued for it, and that is the step to plan around.
+An existing instance keeps the operator's CA and its current enforcement whether or not you upgrade; setting `tls.issuer: cert-manager` is what moves it to a CA issued for it, and that is the step to plan around.
 
 One thing does change on upgrade, and only for instances using the deprecated `backup.*` CronJob: the backup client now verifies the server it connects to, where before it connected without checking. It verifies against the operator's own CA bundle, which is present on every instance, and the operator's certificate already covers the hostname the job connects to — so this needs no action. It is called out because it is a behaviour change to a running job rather than something you opted into.
 
-Managed TLS does not enforce anything by itself — enforcement is a separate opt-in — but it does change who issues the server certificate. A client that reads `mariadb-<name>-ca-bundle` at connect time follows the change automatically, because the operator keeps both the old and the new CA in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
+Switching issuer does not enforce anything by itself — enforcement is a separate opt-in — but it does change who issues the server certificate. A client that reads `mariadb-<name>-ca-bundle` at connect time follows the change automatically, because the operator keeps both the old and the new CA in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
 
-> On a fresh instance created with `tls.enabled: true`, the pods do not start until cert-manager has issued the certificates: the operator needs the server certificate before it creates the StatefulSet. This resolves on its own within a reconcile or two — the chart labels the Secrets so the operator is woken as soon as they appear — but the instance looks stalled in the meantime.
+> On a fresh instance created with `tls.issuer: cert-manager`, the pods do not start until cert-manager has issued the certificates: the operator needs the server certificate before it creates the StatefulSet. This resolves on its own within a reconcile or two — the chart labels the Secrets so the operator is woken as soon as they appear — but the instance looks stalled in the meantime.
 
 The order that avoids downtime:
 
-1. Enable managed TLS and leave enforcement off (the default):
+1. Switch the issuer and leave enforcement off (the default):
 
    ```yaml
    tls:
-     enabled: true
+     issuer: cert-manager
    ```
 
 2. Distribute `mariadb-<name>-ca-bundle` and move clients onto verified TLS one at a time.
@@ -129,13 +132,13 @@ The order that avoids downtime:
 
    ```yaml
    tls:
-     enabled: true
+     issuer: cert-manager
      required: true
    ```
 
 Step 3 is the only one that can refuse a connection, and it happens when you choose it rather than when a platform upgrade rolls through.
 
-Going back is the same change in reverse: setting `tls.enabled: false` hands issuance back to the operator, and clients have to pick up the operator's CA from the bundle again.
+Going back is the same change in reverse: setting `tls.issuer: operator` hands issuance back, and clients have to pick up the operator's CA from the bundle again.
 
 One thing does not clean itself up. The Certificates are removed, but cert-manager is configured not to own the Secrets it issued, so `mariadb-<name>-ca-tls` (the CA private key) and `mariadb-<name>-tls` (the server private key) stay in the namespace. No tenant grant exposes them, but they are private keys, so remove them.
 
@@ -184,11 +187,11 @@ Uninstalling the instance does this for you; only the turn-it-off-and-keep-runni
 
 ### TLS parameters
 
-| Name           | Description                                                                                                                                                                                                                | Type     | Value  |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`          | TLS configuration. Selects who issues the certificates and whether plaintext is refused; TLS itself is always served.                                                                                                      | `object` | `{}`   |
-| `tls.enabled`  | Issue a dedicated CA and server certificate for this instance through cert-manager, instead of using the operator's own CA. TLS is served either way; this selects who issues it. Opt-in, and not derived from `external`. | `*bool`  | `null` |
-| `tls.required` | Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.            | `*bool`  | `null` |
+| Name           | Description                                                                                                                                                                                                                                                                                                                                 | Type     | Value      |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ---------- |
+| `tls`          | TLS configuration. Selects who issues the certificates and whether plaintext is refused; TLS itself is always served.                                                                                                                                                                                                                       | `object` | `{}`       |
+| `tls.issuer`   | Who issues the server certificate: `operator` uses the CA mariadb-operator manages itself, `cert-manager` gives the instance its own CA and is what covers the external hostname. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off. | `string` | `operator` |
+| `tls.required` | Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies under either issuer. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.                                                                                                                                       | `*bool`  | `null`     |
 
 
 ### Version parameters
