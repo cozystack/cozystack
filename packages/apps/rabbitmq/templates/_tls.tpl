@@ -23,6 +23,19 @@ so `tls: false` or `tls: "x"` is rejected by Helm's own schema validation ("got
 boolean, want object") before any template renders, on every path including a
 HelmRelease. Only null slips through, which is what the dig form covers.
 */}}
+{{/*
+rabbitmq.clusterDomain returns the cluster DNS domain, defaulting to cozy.local.
+Used by the certificate SAN list and by the topology-operator connection URI, which
+must agree on how a Service is named.
+*/}}
+{{- define "rabbitmq.clusterDomain" -}}
+{{-   $domain := "cozy.local" -}}
+{{-   if .Values._cluster -}}
+{{-     $domain = (index .Values._cluster "cluster-domain") | default "cozy.local" -}}
+{{-   end -}}
+{{-   $domain -}}
+{{- end -}}
+
 {{- define "rabbitmq.tls.enabled" -}}
 {{-   $enabled := dig "enabled" nil (.Values.tls | default dict) -}}
 {{-   if kindIs "invalid" $enabled -}}

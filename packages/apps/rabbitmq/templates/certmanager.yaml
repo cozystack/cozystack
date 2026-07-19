@@ -64,17 +64,22 @@ spec:
   ca:
     secretName: {{ .Release.Name }}-ca
 ---
-{{- $clusterDomain := "cozy.local" }}
-{{- if .Values._cluster }}
-  {{- $clusterDomain = (index .Values._cluster "cluster-domain") | default "cozy.local" }}
-{{- end }}
+{{- $clusterDomain := include "rabbitmq.clusterDomain" . }}
 {{- $ns := .Release.Namespace }}
 {{- $name := .Release.Name }}
+{{- /* Each Service name is covered in all three resolvable forms: bare (same
+     namespace), two-segment <name>.<namespace> (the cross-namespace shorthand that
+     the DNS search path resolves), and the fully qualified .svc / .svc.<domain>.
+     Omitting the two-segment form is the easy mistake: it resolves fine, so a
+     client connecting to amqps://<name>.<namespace>:5671 fails only at hostname
+     verification, which reads as a certificate bug rather than a missing SAN. */}}
 {{- $dnsNames := list
   $name
+  (printf "%s.%s" $name $ns)
   (printf "%s.%s.svc" $name $ns)
   (printf "%s.%s.svc.%s" $name $ns $clusterDomain)
   (printf "%s-nodes" $name)
+  (printf "%s-nodes.%s" $name $ns)
   (printf "%s-nodes.%s.svc" $name $ns)
   (printf "%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
   (printf "*.%s-nodes.%s.svc" $name $ns)

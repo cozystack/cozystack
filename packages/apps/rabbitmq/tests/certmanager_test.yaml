@@ -568,7 +568,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.dnsNames
-          count: 8
+          count: 10
 
   - it: adds exactly one SAN when _namespace.host is set
     release:
@@ -582,7 +582,7 @@ tests:
     asserts:
       - lengthEqual:
           path: spec.dnsNames
-          count: 9
+          count: 11
 
   - it: renders the external DNS name as a SAN when _namespace.host is set
     release:
@@ -597,3 +597,50 @@ tests:
       - contains:
           path: spec.dnsNames
           content: myrabbitmq.example.com
+
+  # -----------------------------------------------------------------------
+  # Two-segment SANs. <name>.<namespace> resolves through the DNS search path,
+  # so a client using that form reaches the broker and then fails ONLY hostname
+  # verification — which reads as a certificate bug rather than a missing SAN.
+  # -----------------------------------------------------------------------
+
+  - it: covers the client Service in all resolvable forms
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq.tenant-test.svc.cozy.local
+
+  - it: covers the headless Service in all resolvable forms
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test
+      - contains:
+          path: spec.dnsNames
+          content: myrabbitmq-nodes.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: "*.myrabbitmq-nodes.tenant-test.svc.cozy.local"

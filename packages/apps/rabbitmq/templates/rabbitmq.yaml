@@ -7,6 +7,27 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+  {{- if $tlsEnabled }}
+  {{- /* Keep messaging-topology-operator on the plaintext management port.
+       Setting spec.tls.secretName makes RabbitmqCluster.TLSEnabled() true, and the
+       topology operator computes
+         useTLSForConnection = TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())
+       with connectUsingHTTP coming from CONNECT_USING_PLAIN_HTTP, which the
+       cozystack Deployment does not set. So it would switch to https://…:15671 and
+       verify against x509.SystemCertPool() — a process-wide pool that cannot
+       contain a per-release self-signed CA. Every User, Vhost and Permission this
+       chart renders would then fail with "certificate signed by unknown
+       authority": already-applied users would linger while password rotation, new
+       users and permission changes silently stopped.
+
+       This annotation short-circuits that: extractURIandScheme reports
+       tlsEnabled=false for an http:// scheme, so the operator uses the plaintext
+       management listener — which the chart deliberately keeps open. That listener
+       is load-bearing, not merely tolerated. Broker traffic is unaffected; this
+       governs only the operator's own management connection. */}}
+  annotations:
+    rabbitmq.com/operator-connection-uri: "http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "rabbitmq.clusterDomain" . }}:15672"
+  {{- end }}
 spec:
   replicas: {{ .Values.replicas }}
   image: 'rabbitmq:{{ include "rabbitmq.versionMap" $ }}-management'

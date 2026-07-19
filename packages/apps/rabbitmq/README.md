@@ -56,6 +56,8 @@ And **the published metrics port changes**. The operator exposes *either* `prome
 
 Messaging clients are unaffected — the plaintext AMQP and management listeners stay open, as above. Set `tls.enabled: false` explicitly to keep the previous behaviour entirely.
 
+**The plaintext management listener is load-bearing.** `messaging-topology-operator` is what reconciles the `User`, `Vhost` and `Permission` objects this chart creates from `users` and `vhosts`, and it talks to the broker over the management API. Once TLS is on it would switch to HTTPS on 15671 and verify the broker against the operator process's system certificate pool, which cannot contain a per-release self-signed CA — so every user and permission would fail to reconcile with `certificate signed by unknown authority`. The chart therefore annotates the cluster with `rabbitmq.com/operator-connection-uri` pointing at plaintext `http://…:15672`, keeping that operator on the in-cluster plaintext port. This affects only the operator's own management connection, never broker traffic. Setting `disableNonTLSListeners` by hand would break it.
+
 Intra-cluster Erlang distribution (port 25672) also remains plaintext, and `disableNonTLSListeners` would not change that either — the operator never applies it to the headless Service that carries the distribution port. Inter-node mTLS via `spec.tls.caSecretName` is not wired by this chart.
 
 ## Verifying the server certificate
