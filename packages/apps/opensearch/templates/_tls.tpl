@@ -31,8 +31,10 @@ have opposite correct answers:
     HTTP TLS is what such a release already runs today, so degrading keeps it
     working instead of breaking it on upgrade.
 
-The comparison runs against the resolved image tag rather than the version
-enum, so it stays correct if the version mapping changes.
+The comparison runs against the resolved version string rather than the enum —
+the same value that goes into spec.general.version, which is the field the
+operator itself branches on. So the floor tracks the version mapping, and an
+images.opensearch override cannot move it out from under the operator either.
 */}}
 {{- define "opensearch.tls.enabled" -}}
 {{- /*
