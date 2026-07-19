@@ -293,6 +293,27 @@ tests:
           path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
           value: "http://myrabbitmq.tenant-test.svc.cozy.local:15672"
 
+  - it: builds the operator connection URI from the cluster domain, not a literal
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      _cluster.cluster-domain: custom.example
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # Every other assertion on this annotation runs on the default domain, so a
+      # hardcoded cozy.local would satisfy them all. On a cluster that sets its
+      # own cluster-domain that URI does not resolve, and messaging-topology-
+      # operator loses the broker entirely — no User, Vhost or Permission
+      # reconciles. This is the case that tells the two apart.
+      - equal:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          value: "http://myrabbitmq.tenant-test.svc.custom.example:15672"
+
   - it: pins the operator connection on the external path too
     release:
       name: myrabbitmq
