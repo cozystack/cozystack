@@ -140,6 +140,25 @@ tests:
       - notExists:
           path: spec.tls.allowInvalidCertificates
 
+  - it: chart does not set certValidityDuration, leaving the operator default
+    documentIndex: 0
+    asserts:
+      # Same class as allowInvalidCertificates above: the leaf lifetime is the
+      # operator's to choose, not this chart's. Deliberately left unpinned.
+      # Nothing in the tenant contract keys off it — the operator reissues and
+      # rolls the StatefulSet on its own, and unlike the CA's annual rotation
+      # there is no client-side action to take, so a change in the default is
+      # absorbed rather than breaking anyone. Pinning a value here would also
+      # freeze the chart against upstream shortening it, which is the direction
+      # a certificate lifetime is likely to move.
+      #
+      # Setting spec.tls for the mode does NOT suppress this default: the
+      # operator backfills certValidityDuration on its own branch when the
+      # field is zero, so leaving it out really does inherit rather than
+      # silently render a zero duration.
+      - notExists:
+          path: spec.tls.certValidityDuration
+
   ############################################################
   # nothing may disable TLS behind the rendered mode
   ############################################################

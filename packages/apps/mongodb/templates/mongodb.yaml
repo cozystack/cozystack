@@ -14,7 +14,10 @@ CR. The operator creates the full certificate chain itself:
      The CA therefore ROTATES annually — clients must re-read the trust anchor
      rather than bake it into an image or ConfigMap.
   3. CA-backed Issuer
-  4. Leaf server+client cert (default certValidityDuration 90 days) with a SAN
+  4. Leaf server+client cert, lifetime left to the operator's own
+     certValidityDuration default (90 days at 1.22.0 — an operator default this
+     chart deliberately does not pin, so treat the number as informational) and
+     reissued by it without client action, with a SAN
      list covering the per-replset service (short, namespace, FQDN), the
      matching wildcards — which is what covers the per-pod headless names,
      rather than a separate entry each — mongos and config-replset names, and
