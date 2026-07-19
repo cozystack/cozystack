@@ -35,9 +35,10 @@ spec:
   # ORDERING: caCert is not yet a field of ApplicationDefinitionSpec, so until
   # the CA-extraction controller ships the Go type and the regenerated CRD,
   # THIS BRANCH DOES NOT INSTALL. The failure is not a silent prune at
-  # admission: the helm-controller builds a typed patch against the CRD schema
-  # and refuses a field the schema does not declare, so the request never
-  # reaches the API server and the release fails to reconcile outright —
+  # admission: the schema is structural with no preserve-unknown-fields, so
+  # Flux v2.8's Server-Side Apply enforces it at the API server and the apply
+  # is rejected outright; under v2.7's client-side patch the same block would
+  # have been dropped silently and been merely inert —
   #
   #   Helm upgrade failed for release cozy-system/mongodb-rd: failed to create
   #   typed patch object (Kind=ApplicationDefinition): .spec.caCert: field not
