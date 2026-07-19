@@ -20,6 +20,20 @@ apiVersion: databases.spotahome.com/v1
 kind: RedisFailover
 metadata:
   name: {{ .Release.Name }}
+  {{- if $tlsEnabled }}
+  annotations:
+    # Roll the Redis pods when cert-manager rewrites the leaf Secret. Redis
+    # reads tls-cert-file once at startup, so without this the pods keep
+    # serving the certificate they booted with until something restarts them,
+    # and the renewed one never takes effect before the old one expires.
+    #
+    # This has to sit on the RedisFailover rather than in spec.redis.podAnnotations:
+    # the operator copies the CR's own annotations onto the StatefulSet's
+    # metadata, which is where stakater reloader looks, while podAnnotations
+    # land on the pod template where it does not. Covers Redis only — see the
+    # TLS section of README.md for why Sentinel cannot be wired the same way.
+    secret.reloader.stakater.com/reload: {{ .Release.Name }}-tls
+  {{- end }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}

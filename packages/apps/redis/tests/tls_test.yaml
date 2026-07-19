@@ -774,3 +774,37 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "my-redis-external-lb"
+
+  # Rotation reload. The annotation must sit on the RedisFailover's own
+  # metadata, not in spec.redis.podAnnotations: the operator copies the CR's
+  # annotations onto the StatefulSet, which is where stakater reloader looks,
+  # while podAnnotations land on the pod template where it does not. Getting
+  # this wrong renders an annotation that looks correct and never fires.
+  - it: "RedisFailover carries the reloader annotation on its own metadata when TLS is on"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: true
+      tls:
+        enabled: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
+          value: my-redis-tls
+      - notExists:
+          path: spec.redis.podAnnotations
+
+  - it: "RedisFailover carries no reloader annotation when TLS is off"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: metadata.annotations["secret.reloader.stakater.com/reload"]
