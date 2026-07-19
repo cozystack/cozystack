@@ -188,6 +188,22 @@ tests:
           value: os-test-ca
         documentIndex: 3
 
+  # The two labels are not interchangeable, and collapsing them leaks the CA key.
+  # publish-ca-cert marks a SOURCE for the extraction controller, which copies ca.crt
+  # alone into a separate key-free Secret. tenant-ca marks that PROJECTION, and it is
+  # what the ApplicationDefinition selects to hand to the tenant. This Secret holds
+  # the CA private key under tls.key, so it must never carry the projection's label:
+  # the ApplicationDefinition selects purely by label, so one renamed key here would
+  # make the CA private key tenant-readable with every other test still passing.
+  - it: keeps the key-bearing CA secret off the tenant-visible label
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+        documentIndex: 1
+
   # Only the CA may be published. The leaf carries the HTTPS server private key, so
   # labelling it would hand that key to the extraction controller as a CA source.
   - it: does not label the leaf server certificate for publication
@@ -674,6 +690,15 @@ tests:
       - failedTemplate:
           errorMessage: "external is true but _namespace.host is not set"
 
+  # _namespace absent entirely, not merely missing its host key. Without a default
+  # the deref raises a raw nil pointer before required can say anything useful.
+  - it: external-svc fails clearly when _namespace is absent entirely
+    set:
+      external: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"
+
   # The external-dns hostname is built from the tenant host, not the in-cluster
   # domain: cozy.local does not resolve outside the cluster, and the name published
   # here has to be one the leaf certificate carries a SAN for.
@@ -693,4 +718,3 @@ tests:
           path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
           value: os-test-dashboards.example.cozy.local
         documentIndex: 1
-

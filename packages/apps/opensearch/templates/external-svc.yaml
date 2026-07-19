@@ -1,5 +1,5 @@
 {{- if .Values.external }}
-{{- $extHost := required "external is true but _namespace.host is not set" .Values._namespace.host }}
+{{- $extHost := required "external is true but _namespace.host is not set" (.Values._namespace | default dict).host }}
 ---
 apiVersion: v1
 kind: Service

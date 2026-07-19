@@ -116,15 +116,19 @@ metadata:
   name: {{ .Release.Name }}-http-server
 spec:
   secretName: {{ .Release.Name }}-http-server
-  # LIFETIME MATCHES THE CA, AND THERE IS NO renewBefore, because a renewal cannot
+  # LIFETIME MATCHES THE CA, AND THERE IS NO renewBefore, because a reissue cannot
   # reach the running pods. Passing http.caSecret — which securityadmin needs — moves
   # the operator off mountFolder onto three mount() calls, and those carry
   # SubPath: filename. The kubelet never refreshes a subPath-mounted Secret file, and
-  # nothing in the operator restarts the pods when the Secret changes. A shorter
-  # lifetime would therefore not rotate anything: cert-manager would reissue into the
-  # Secret while the pods kept serving the old leaf until it expired outright, taking
-  # HTTPS on 9200 down and breaking securityadmin on a timer. Rotating this
-  # certificate is a deliberate act — delete the Secret and restart the pods.
+  # nothing in the operator restarts the pods when the Secret changes, so whatever
+  # cert-manager writes back is not what the pods serve. A one-year leaf therefore
+  # expired in place: cert-manager reissued into the Secret while the pods kept
+  # serving the old certificate until it ran out, taking HTTPS on 9200 down and
+  # breaking securityadmin on a timer. Matching the CA's lifetime removes that fuse.
+  # (Dropping renewBefore does not disable reissue — cert-manager still defaults to
+  # duration/3 — it only stops promising a 30-day cycle nothing can honour.)
+  # Rotating this certificate is a deliberate act: delete the Secret named below,
+  # then restart the OpenSearch pods so the new material is actually mounted.
   duration: 87600h  # 10 years, matching the CA above
   isCA: false
   usages:
@@ -143,7 +147,7 @@ spec:
     - {{ $name }}-dashboards.{{ $ns }}.svc
     - {{ $name }}-dashboards.{{ $ns }}.svc.{{ $clusterDomain }}
     {{- if .Values.external | default false }}
-    {{- $extHost := required "external is true but _namespace.host is not set" .Values._namespace.host }}
+    {{- $extHost := required "external is true but _namespace.host is not set" (.Values._namespace | default dict).host }}
     # External LoadBalancer DNS name (used by external-dns)
     - {{ printf "%s.%s" $name $extHost }}
     - {{ printf "%s-dashboards.%s" $name $extHost }}
