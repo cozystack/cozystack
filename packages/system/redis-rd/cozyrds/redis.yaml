@@ -37,19 +37,23 @@ spec:
   # key-free projection, <release>.tenant-ca, which the label selector further
   # down then surfaces to the tenant.
   #
-  # This block blocks installation until the CA-extraction controller lands.
-  # ApplicationDefinition's schema does not declare spec.caCert yet and carries
-  # no x-kubernetes-preserve-unknown-fields, and Flux applies the object as a
-  # typed patch — so helm-controller rejects it before the API server is ever
-  # asked, with "failed to create typed patch object: .spec.caCert: field not
-  # declared in schema", and the whole redis-rd release fails. It is not
-  # pruned and it does not degrade quietly; nothing installs.
+  # This block prevents the redis-rd release from installing until the
+  # ApplicationDefinition CRD declares spec.caCert, which ships with the
+  # CA-extraction controller that reads it. The CRD does not declare it today
+  # and carries no x-kubernetes-preserve-unknown-fields, so
+  # Flux v2.8's Server-Side Apply enforces the CRD schema and rejects the
+  # apply with "field not declared in schema", taking the whole release
+  # not-ready. Under v2.7's client-side patch the same block would have been
+  # dropped silently and been merely inert — same trap as the ones noted in
+  # packages/apps/foundationdb/templates/cluster.yaml and
+  # packages/apps/kafka/templates/kafka.yaml.
   #
-  # That is the intent rather than an oversight: it makes the merge order
-  # mechanically enforced instead of relying on a note, so this cannot land
-  # ahead of the controller and leave a broken definition behind. E2E is red
-  # by construction until then. Keep the block; do not "fix" the red run by
-  # deleting it.
+  # Keeping it is a deliberate call, made after that behaviour was understood
+  # rather than planned for from the start: it makes the merge order
+  # mechanically enforced instead of resting on a note, so this cannot land
+  # ahead of the controller and leave a definition behind that references a
+  # field nothing reads. E2E stays red until then. Do not "fix" the red run
+  # by deleting this block.
   caCert:
     sourceSecretName: "{{ .release }}-ca-cert"
     sourceKey: ca.crt
