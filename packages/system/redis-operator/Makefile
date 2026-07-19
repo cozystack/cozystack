@@ -5,11 +5,21 @@ export NAMESPACE=cozy-$(NAME)
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+# The chart is vendored from the cozystack fork, the same source the operator
+# image is built from, and pinned to the tag in images/redis-operator/Dockerfile.
+# Upstream spotahome must not be used here: the RedisFailover CRD shipped in
+# crds/ carries the fork's spec.tls fields, so re-vendoring from spotahome would
+# drop them and every RedisFailover the redis chart renders would be rejected.
+# The fork keeps the chart directory as charts/redisoperator while the chart
+# itself is named redis-operator, hence the rename after extraction.
 update:
 	rm -rf charts
-	helm repo add redis-operator https://spotahome.github.io/redis-operator
-	helm repo update redis-operator
-	helm pull redis-operator/redis-operator --untar --untardir charts
+	mkdir -p charts
+	cd charts && \
+	tag=$(REDIS_OPERATOR_TAG) && \
+	curl -sSL https://github.com/cozystack/redis-operator/archive/refs/tags/$${tag}.tar.gz | \
+	tar xzvf - --strip 2 redis-operator-$${tag#v}/charts/redisoperator && \
+	mv redisoperator redis-operator
 	sed -i '/{{/d' charts/redis-operator/crds/databases.spotahome.com_redisfailovers.yaml
 
 image:
