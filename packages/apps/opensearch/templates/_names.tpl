@@ -15,13 +15,23 @@ in some of them. The suffixes, longest first:
 
   -dashboards-external  (20)  Service, when external and dashboards are both on
   -dashboards           (11)  operator-created Service and a SAN label, when dashboards is on
-  -discovery            (10)  SAN label, when chart-managed TLS is on
+  -discovery            (10)  Service the operator always creates, and a SAN label when
+                              chart-managed TLS is on. NewDiscoveryServiceForCR runs on
+                              every path, so this name exists regardless of TLS — the
+                              TLS branch below is about the SAN, not about the Service.
   -external              (9)  Service, when external is on
 
 The guard takes the longest suffix that the current values actually produce and caps
 the release name at 63 minus its length. It is invoked from every template that
 renders one of these names, including the ones that render with TLS off, because the
 Service names have nothing to do with TLS.
+
+REACHABILITY: Helm itself rejects a release name over 53 characters
+(chartutil.ValidateReleaseName), so only the two bounds below 53 can ever fire —
+-dashboards-external (43) and -dashboards (52). The -discovery (53) and -external
+(54) bounds are unreachable through Helm and kept as a backstop only: they are what
+makes the table above complete, and the arithmetic stays correct if the suffixes
+change. Do not read a passing render at 53 characters as those branches working.
 */}}
 {{- define "opensearch.validateReleaseName" -}}
 {{- $external := .Values.external | default false -}}
