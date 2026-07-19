@@ -26,6 +26,13 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
   fi
 }
 
+# The RBAC grant in dashboard-resourcemap.yaml and this list have to agree:
+# the Role decides whether the tenant may read the bundle, this decides whether
+# it is surfaced as a tenant resource at all.
+@test "mariadb-rd exposes the operator CA bundle by name" {
+  grep -q "mariadb-{{ .name }}-ca-bundle" "$COZYRDS"
+}
+
 @test "mariadb-rd selects the tenant CA projection by label" {
   # Must appear inside a matchLabels selector, not merely somewhere in the file:
   # the label only exposes the projection when it is what the selector matches on.
