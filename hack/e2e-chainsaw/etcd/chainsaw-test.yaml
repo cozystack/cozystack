@@ -160,6 +160,8 @@ spec:
         timeout: 3m
         content: |
           set -eu
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/etcd-probe.sh
           sel='app.kubernetes.io/name=etcd,app.kubernetes.io/instance=etcd,app.kubernetes.io/managed-by=etcd-operator'
           mport=$(kubectl -n "$NAMESPACE" get pods -l "$sel" \
             --field-selector=status.phase=Running \
@@ -169,10 +171,33 @@ spec:
             -o jsonpath='{.items[0].status.podIP}')
           [ -n "$mport" ] || { echo "no container port named 'metrics' on member Pod (VMPodScrape would scrape nothing)" >&2; exit 1; }
           [ -n "$pod_ip" ] || { echo "no running member Pod IP found for metrics probe" >&2; exit 1; }
+          # This delete must wait for the Pod to be gone, for two reasons:
+          # `kubectl run` below would otherwise race a still-terminating Pod of
+          # the same name, and the log re-read would have a previous
+          # incarnation's marker to find. Do not give this one --wait=false.
           kubectl -n "$NAMESPACE" delete pod etcd-metrics-probe --ignore-not-found >/dev/null 2>&1
-          probe_out=$(kubectl -n "$NAMESPACE" run etcd-metrics-probe --rm --restart=Never --attach \
+          # No --rm: it deletes the Pod the instant the container exits, taking
+          # with it the log that etcd_probe_resolve re-reads when --attach loses
+          # the stream of a container that finished before the attach connection
+          # was up. Deleted explicitly below once the result is in hand.
+          #
+          # --pod-running-timeout is set rather than left at kubectl's 1m default
+          # because curlimages/curl is not otherwise used on these nodes, so the
+          # probe pays a cold pull; a pull that outruns the budget yields no
+          # marker and fails the step exactly as a broken endpoint would.
+          attach_out=$(kubectl -n "$NAMESPACE" run etcd-metrics-probe --restart=Never --attach \
+            --pod-running-timeout=90s \
             --image=curlimages/curl:8.10.1 \
             --overrides="{\"spec\":{\"securityContext\":{\"runAsNonRoot\":true,\"runAsUser\":1000,\"seccompProfile\":{\"type\":\"RuntimeDefault\"}},\"containers\":[{\"name\":\"c\",\"image\":\"curlimages/curl:8.10.1\",\"command\":[\"sh\",\"-c\",\"curl -fsS -o /dev/null -w code=%{http_code} http://${pod_ip}:${mport}/metrics\"],\"securityContext\":{\"allowPrivilegeEscalation\":false,\"capabilities\":{\"drop\":[\"ALL\"]}}}]}}" 2>&1) || true
+          probe_out=$(etcd_probe_resolve "$attach_out" \
+            kubectl -n "$NAMESPACE" logs etcd-metrics-probe)
+          # Fire-and-forget: the result is already captured, so nothing depends
+          # on the Pod actually being gone before the check below runs. `|| true`
+          # because the step does depend on this command's exit status otherwise
+          # -- under `set -e` a transient API error here would abort with the
+          # result in hand but unreported, and with stderr already suppressed.
+          kubectl -n "$NAMESPACE" delete pod etcd-metrics-probe \
+            --ignore-not-found --wait=false >/dev/null 2>&1 || true
           echo "$probe_out" | grep -q "code=200" || { echo "metrics endpoint did not return 200 over http on the 'metrics' port; got: $probe_out" >&2; exit 1; }
         check:
           ($error == null): true
