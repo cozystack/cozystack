@@ -128,12 +128,12 @@
       "default": false
     },
     "tls": {
-      "description": "TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Managed automatically when `external` is true.",
+      "description": "TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Both are opt-in.",
       "type": "object",
       "default": {},
       "properties": {
         "enabled": {
-          "description": "Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager. This does not switch TLS on, and does not enforce it: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA instead of the operator's. Enforcement is separate and opt-in, see `required`. When omitted, defaults to the value of `external`.",
+          "description": "Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager. This does not switch TLS on, and does not enforce it: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA instead of the operator's. Enforcement is separate and opt-in, see `required`. Defaults to false, including when `external` is true: taking over the CA would re-issue the server certificate under a new authority, and any client pinning the operator's ca.crt would fail chain validation. That is a change of CA ownership rather than a security improvement — these instances already serve TLS — so it is opted into rather than applied on upgrade.",
           "type": "boolean"
         },
         "required": {

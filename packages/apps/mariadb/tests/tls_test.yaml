@@ -99,6 +99,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     asserts:
       - hasDocuments:
@@ -108,6 +110,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 0
     asserts:
@@ -127,6 +131,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 1
     asserts:
@@ -150,6 +156,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 2
     asserts:
@@ -167,6 +175,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -193,6 +203,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -233,10 +245,52 @@ tests:
           path: spec.dnsNames
           content: "*.my-mariadb-internal.tenant-test.svc.cluster.local"
 
+  # The full SAN set, pinned exactly. The operator cannot issue this certificate
+  # for us — its TLS spec has no alt-names field, so the external hostname could
+  # never be included — which means this list is maintained by hand against the
+  # operator's service naming. Pinning the exact set turns a drift in that naming
+  # into a failing test instead of a handshake failure in a cluster. lengthEqual
+  # is what makes it catch additions, not just removals.
+  - it: "leaf Certificate SAN set is exactly the expected list"
+    templates:
+      - templates/certmanager.yaml
+    documentIndex: 3
+    set:
+      external: true
+      tls:
+        enabled: true
+    asserts:
+      - lengthEqual:
+          path: spec.dnsNames
+          count: 18
+      - equal:
+          path: spec.dnsNames
+          value:
+            - localhost
+            - "*.my-mariadb-internal"
+            - "*.my-mariadb-internal.tenant-test"
+            - "*.my-mariadb-internal.tenant-test.svc"
+            - "*.my-mariadb-internal.tenant-test.svc.cluster.local"
+            - my-mariadb
+            - my-mariadb.tenant-test
+            - my-mariadb.tenant-test.svc
+            - my-mariadb.tenant-test.svc.cluster.local
+            - my-mariadb-primary
+            - my-mariadb-primary.tenant-test
+            - my-mariadb-primary.tenant-test.svc
+            - my-mariadb-primary.tenant-test.svc.cluster.local
+            - my-mariadb-secondary
+            - my-mariadb-secondary.tenant-test
+            - my-mariadb-secondary.tenant-test.svc
+            - my-mariadb-secondary.tenant-test.svc.cluster.local
+            - my-mariadb.example.com
+
   - it: "leaf Certificate SAN list includes external hostname when external=true"
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -248,6 +302,8 @@ tests:
     templates:
       - templates/mariadb.yaml
     set:
+      tls:
+        enabled: true
       external: true
     asserts:
       - equal:
@@ -376,6 +432,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 0
     asserts:
@@ -387,6 +445,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 1
     asserts:
@@ -398,6 +458,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 1
     asserts:
@@ -409,6 +471,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -420,6 +484,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -509,7 +575,8 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "tri-state survives explicit tls=null with external=true (inherits external)"
+  # tls: null is the same as unset, and unset no longer means "follow external".
+  - it: "tri-state survives explicit tls=null with external=true (stays unmanaged)"
     templates:
       - templates/certmanager.yaml
     set:
@@ -517,7 +584,7 @@ tests:
       external: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 0
 
   # -------------------------------------------------------------------
   # B1: CA cert usages — signing + cert sign + crl sign, no key encipherment
@@ -619,14 +686,18 @@ tests:
   # about tls: null — blanking the whole map is a different value, is allowed,
   # and is covered separately above.
   # -------------------------------------------------------------------
-  - it: "tls.enabled unset with external=true enables TLS (auto-on path)"
+  # external no longer implies managed TLS. Deriving it would swap the CA of an
+  # existing external instance on the next platform upgrade, with no action from
+  # its owner, and without raising the security floor — those instances already
+  # serve TLS under the operator's CA.
+  - it: "tls.enabled unset with external=true does NOT manage TLS"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
     asserts:
       - hasDocuments:
-          count: 4
+          count: 0
 
   - it: "tls.enabled unset with external=false keeps TLS off"
     templates:
@@ -721,6 +792,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -741,6 +814,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
     documentIndex: 3
     asserts:
@@ -764,6 +839,8 @@ tests:
     templates:
       - templates/certmanager.yaml
     set:
+      tls:
+        enabled: true
       external: true
       _namespace: null
     asserts:

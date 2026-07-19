@@ -36,7 +36,7 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Managed automatically when `external` is true.
+	// TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Both are opt-in.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
 	// MariaDB major.minor version to deploy
@@ -100,7 +100,7 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager. This does not switch TLS on, and does not enforce it: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA instead of the operator's. Enforcement is separate and opt-in, see `required`. When omitted, defaults to the value of `external`.
+	// Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager. This does not switch TLS on, and does not enforce it: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA instead of the operator's. Enforcement is separate and opt-in, see `required`. Defaults to false, including when `external` is true: taking over the CA would re-issue the server certificate under a new authority, and any client pinning the operator's ca.crt would fail chain validation. That is a change of CA ownership rather than a security improvement — these instances already serve TLS — so it is opted into rather than applied on upgrade.
 	Enabled *bool `json:"enabled,omitempty"`
 	// Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Enforcement is opt-in and defaults to false: it has to follow the trust anchor, not lead it, because requiring TLS before the platform publishes a CA to the tenant would demand encryption while leaving clients nothing to verify the server against. Set to true once your clients have the CA. This default is temporary and flips to true as an announced change, together with the published anchor.
 	Required *bool `json:"required,omitempty"`

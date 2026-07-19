@@ -63,6 +63,18 @@ spec:
 # Leaf server TLS Certificate passed to mariadb-operator via spec.tls.serverCertSecretRef.
 # The SAN list covers the base, primary, and secondary services plus, when external is
 # true, the external DNS name for the LoadBalancer service.
+#
+# The operator can issue this leaf itself, via spec.tls.serverCertIssuerRef
+# pointed at the CA Issuer above, which would remove this hand-written list.
+# It is not used because the operator computes the SAN list from the cluster's
+# own service names and offers no way to extend it: its TLS spec has no
+# alt-names field of any kind, so the external hostname — the only reason
+# external: true exists — could never appear in the certificate, and an
+# external client would fail hostname verification against it.
+#
+# The consequence is that this list has to track the operator's service naming
+# by hand. The test suite pins the full expected set so a drift shows up as a
+# failing test rather than as a handshake error in a cluster.
 apiVersion: cert-manager.io/v1
 kind: Certificate
 metadata:
