@@ -1,5 +1,4 @@
 {{- if .Values.backup.enabled }}
-{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
 ---
 apiVersion: v1
 kind: Secret
@@ -20,12 +19,14 @@ stringData:
       hostname against the certificate SANs. Keep this rationale in a template
       comment rather than a shell comment so the MySQL-only option name never
       appears in the rendered script.
+
+      The options are unconditional. The server always serves TLS, and the
+      operator reconciles the CA bundle in every configuration, so verifying is
+      always possible; gating them on managed TLS would leave the backup client
+      connecting in plaintext against a server that may be enforcing TLS, and
+      every run would fail.
     */}}
-    {{- if $tlsEnabled }}
     SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-verify-server-cert"
-    {{- else }}
-    SSL_OPTS=""
-    {{- end }}
     JOB_ID="job-$(uuidgen|cut -f1 -d-)"
     DB_LIST=$(mysql -u "$MYSQL_USER" -h "$MYSQL_HOST" $SSL_OPTS -sNe 'SHOW DATABASES;' | grep -v '^\(#.*\|mysql\|sys\|information_schema\|performance_schema\)$')
     echo DB_LIST=$(echo "$DB_LIST" | shuf) # shuffle list
