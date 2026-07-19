@@ -36,7 +36,7 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// TLS configuration. TLS itself is always on, because the operator enables it unconditionally; these settings select CA ownership and enforcement. Managed automatically when `external` is true.
+	// TLS configuration. The chart always asks the operator to serve TLS, so these settings select CA ownership and enforcement rather than whether TLS exists. Managed automatically when `external` is true.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
 	// MariaDB major.minor version to deploy
@@ -100,10 +100,9 @@ type Resources struct {
 }
 
 type TLS struct {
-	// Manage TLS for this instance: issue a dedicated CA and server certificate, and enforce TLS by default. This does not switch TLS on or off — the operator always serves TLS — it selects whether the instance gets its own CA and enforcement instead of the operator's unenforced defaults. When omitted, defaults to the value of `external`.
+	// Manage TLS for this instance: issue a dedicated CA and server certificate through cert-manager, and enforce TLS by default. This does not switch TLS on: the chart always asks the operator to serve TLS, so what this selects is whether the instance gets its own CA and enforcement instead of the operator's CA with no enforcement. When omitted, defaults to the value of `external`.
 	Enabled *bool `json:"enabled,omitempty"`
-	// Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Defaults to true when TLS is managed. Set to false only during migration when legacy clients cannot use TLS yet.
-	// +kubebuilder:default:=true
+	// Enforce TLS for all connections (sets MariaDB require_secure_transport=ON). Applies only when TLS is managed, where it defaults to true; when TLS is unmanaged, enforcement is left to the operator, which does not enforce. Set to false only during migration when legacy clients cannot use TLS yet.
 	Required bool `json:"required,omitempty"`
 }
 
