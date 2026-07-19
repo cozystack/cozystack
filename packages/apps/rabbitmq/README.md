@@ -54,8 +54,10 @@ Intra-cluster Erlang distribution (port 25672) also remains plaintext, and `disa
 
 The certificates are issued by a per-release self-signed CA, so a client must be given that CA to verify the endpoint. The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
 
+Throughout this section `<release>` means the Helm release name, which is the application name prefixed with `rabbitmq-`. A RabbitMQ named `orders` is release `rabbitmq-orders`, so its trust anchor is `rabbitmq-orders.tenant-ca` and its certificate Secrets are `rabbitmq-orders-tls` and `rabbitmq-orders-ca`.
+
 ```bash
-kubectl get tenantsecret <release>.tenant-ca \
+kubectl get tenantsecret rabbitmq-<name>.tenant-ca \
   -o jsonpath='{.data.ca\.crt}' | base64 -d > ca.crt
 ```
 

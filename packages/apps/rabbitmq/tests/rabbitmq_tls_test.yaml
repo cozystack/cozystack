@@ -89,7 +89,7 @@ tests:
           path: spec.tls.secretName
           value: myrabbitmq-tls
 
-  - it: includes management ssl cacertfile in additionalConfig when tls.enabled is true
+  - it: adds no additionalConfig, since the operator supplies the TLS config itself
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -100,30 +100,13 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - matchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt"
-
-  - it: does not restate operator-supplied management ssl keys
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - notMatchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.port"
-      - notMatchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.certfile"
-      - notMatchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.keyfile"
+      # defaultTLSConf already gives ssl_options.certfile/keyfile,
+      # listeners.ssl.default and management.ssl.certfile/keyfile/port once
+      # spec.tls.secretName is set. No cacertfile on either listener: it would
+      # only matter for verifying CLIENT certificates, which also needs
+      # verify_peer, and setting it on one listener only left them inconsistent.
+      - notExists:
+          path: spec.rabbitmq
 
   - it: never sets disableNonTLSListeners, so plaintext listeners survive TLS
     release:
@@ -175,9 +158,9 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - matchRegex:
-          path: spec.rabbitmq.additionalConfig
-          pattern: "management.ssl.cacertfile = /etc/rabbitmq-tls/ca.crt"
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
 
   # -----------------------------------------------------------------------
   # Tri-state: explicit tls.enabled=false beats external=true
@@ -322,7 +305,7 @@ tests:
   # Baseline (no TLS): RabbitmqCluster always renders
   # -----------------------------------------------------------------------
 
-  - it: always renders RabbitmqCluster
+  - it: renders no TLS block at all when TLS is off
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -333,5 +316,7 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - isKind:
-          of: RabbitmqCluster
+      # Selecting by kind and then asserting the kind cannot fail; assert the
+      # TLS-dependent shape instead.
+      - notExists:
+          path: spec.tls
