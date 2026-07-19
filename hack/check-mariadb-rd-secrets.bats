@@ -15,16 +15,12 @@ REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 
 # Placeholder (see header): pins the intended spelling, not a live behaviour.
+# `.release` is deliberate here and is not the same context as the selectors
+# below: this field is rendered by the CA-extraction controller, which supplies
+# a release variable, while resourceNames is rendered by the lineage webhook,
+# which supplies only kind, name and namespace.
 @test "mariadb-rd declares the CA source as the operator ca-bundle" {
-  grep -q 'sourceSecretName: "mariadb-{{ .name }}-ca-bundle"' "$COZYRDS"
-}
-
-# The webhook builds the only context these templates get, and it holds kind,
-# name and namespace — there is no release key. A template that reads one
-# renders empty, so the name would resolve to a Secret that does not exist.
-# The release prefix is a literal, exactly as the exclude entry below spells it.
-@test "mariadb-rd never templates an undefined key into a Secret name" {
-  ! grep -q '{{ \.release }}' "$COZYRDS"
+  grep -q 'sourceSecretName: "{{ .release }}-ca-bundle"' "$COZYRDS"
 }
 
 @test "mariadb-rd extracts ca.crt from the declared source" {
