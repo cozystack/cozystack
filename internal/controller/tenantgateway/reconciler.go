@@ -877,7 +877,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// cdi-uploadproxy) attach to these listeners by sectionName.
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
-		passthroughAllowed := *allowedRoutes
+		passthroughAllowed := allowedRoutes.DeepCopy()
 		passthroughAllowed.Kinds = port443Kinds
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
@@ -887,7 +887,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			TLS: &gatewayv1.ListenerTLSConfig{
 				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
 			},
-			AllowedRoutes: &passthroughAllowed,
+			AllowedRoutes: passthroughAllowed,
 		})
 	}
 
@@ -905,7 +905,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// TLSRoute, certificate, and CA plumbing land in later phases.
 	for _, pl := range tgw.Spec.TLSPassthroughListeners {
 		host := gatewayv1.Hostname(pl.Hostname)
-		passthroughAllowed := *allowedRoutes
+		passthroughAllowed := allowedRoutes.DeepCopy()
 		passthroughAllowed.Kinds = []gatewayv1.RouteGroupKind{
 			{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
 		}
@@ -917,7 +917,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 			TLS: &gatewayv1.ListenerTLSConfig{
 				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
 			},
-			AllowedRoutes: &passthroughAllowed,
+			AllowedRoutes: passthroughAllowed,
 		})
 	}
 
