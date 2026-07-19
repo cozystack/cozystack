@@ -79,6 +79,51 @@ spec:
             name: mongodb-test-ca-cert
           (data."ca.crt" != null): true
 
+  # The README tells operators no manual cleanup of the TLS Secrets is needed,
+  # which reverses the instruction it replaced. That promise rests entirely on
+  # an ownerReference: the operator's deletion finalizer enumerates only the
+  # users, internal-<release>, internal-<release>-users and encryption-key
+  # Secrets, so nothing else would reclaim these three.
+  #
+  # The reference is patched on at reconcile time rather than set at creation —
+  # cert-manager creates the Secret unowned and WaitForCerts adds the CR
+  # reference afterwards — so this asserts the outcome on the path a normal
+  # install takes, and goes red if Percona stops patching. Matched on the owner
+  # kind rather than on a non-empty list, because the Secret acquiring some
+  # other owner is the failure this is meant to catch, not a pass.
+  #
+  # Pinned to PerconaServerMongoDB specifically because the platform ships
+  # cert-manager with enableCertificateOwnerRef: false, which is the leg where
+  # the CR owns the Secret directly. Were that flag ever flipped, the owner
+  # becomes the Certificate and this step correctly goes red rather than
+  # quietly accepting a different ownership graph than the README describes.
+  - name: verify-tls-secrets-are-owned-by-the-cr
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ca-cert
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'])): 1
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'])): 1
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test-ssl-internal
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'])): 1
+
   # The Secrets the operator creates for TLS all carry private key material and
   # must never be reachable by a tenant. The chart tests pin this at render
   # time; this pins the object that is actually deployed.
