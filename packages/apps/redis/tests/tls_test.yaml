@@ -502,3 +502,25 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "rfr-my-redis.tenant-test.svc.cluster.local"
+
+  - it: "leaf Certificate renders when the platform injects no _cluster map at all"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+      # Drops _cluster entirely. Indexing a nil map is a template error that
+      # fires before any default can apply, so without a guard on the parent
+      # map this render fails outright rather than falling back.
+      _cluster: null
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cozy.local"
+      - contains:
+          path: spec.dnsNames
+          content: "*.rfr-my-redis.tenant-test.svc.cozy.local"
+      - notContains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cluster.local"
