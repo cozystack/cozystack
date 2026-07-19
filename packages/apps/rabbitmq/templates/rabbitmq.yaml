@@ -1,5 +1,20 @@
 {{- $tlsEnabled := (include "rabbitmq.tls.enabled" .) | eq "true" }}
-{{- $disableNonTLS := and $tlsEnabled (dig "disableNonTLSListeners" false (.Values.tls | default dict)) }}
+{{- $wantDisableNonTLS := dig "disableNonTLSListeners" false (.Values.tls | default dict) }}
+
+{{- /* Refuse the contradiction rather than drop it. Asking to close the plaintext
+     listeners while TLS is off leaves nothing listening at all, and the operator
+     rejects the combination itself — reconcile_tls.go returns
+     "TLS must be enabled if disableNonTLSListeners is set to true" and sets
+     ReconcileSuccess=False. Silently ignoring the flag here would be worse than
+     what the operator does: it at least records a TLSError event, whereas a
+     dropped flag renders a healthy-looking cluster with every plaintext listener
+     open and no trace of the request. The likely way to reach this is an operator
+     hardening an internal broker who sets only disableNonTLSListeners, since TLS
+     is off by default when external is false. */}}
+{{- if and $wantDisableNonTLS (not $tlsEnabled) }}
+{{-   fail "tls.disableNonTLSListeners is set but TLS is off, which would leave no listener at all: set tls.enabled: true (it defaults to the value of external). The RabbitMQ operator rejects this combination too." }}
+{{- end }}
+{{- $disableNonTLS := and $tlsEnabled $wantDisableNonTLS }}
 
 {{- /* disableNonTLSListeners closes the plaintext management port, and
      messaging-topology-operator has no working route to the broker without it.
@@ -42,7 +57,13 @@ metadata:
        tlsEnabled=false for an http:// scheme, so the operator uses the plaintext
        management listener — which the chart deliberately keeps open. That listener
        is load-bearing, not merely tolerated. Broker traffic is unaffected; this
-       governs only the operator's own management connection. */}}
+       governs only the operator's own management connection.
+
+       Note it does not stay on this object: ReconcileAndFilterAnnotations strips
+       only keys containing kubernetes.io or k8s.io, so this annotation is copied
+       onto every child the operator builds — Service, StatefulSet, ServiceAccount,
+       Role and the default-user Secret the tenant reads. Harmless, but it is why
+       an internal plumbing annotation shows up on tenant-visible objects. */}}
   annotations:
     rabbitmq.com/operator-connection-uri: "http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "rabbitmq.clusterDomain" . }}:15672"
   {{- end }}

@@ -383,7 +383,7 @@ tests:
           path: spec.tls.disableNonTLSListeners
           value: true
 
-  - it: ignores the flag when TLS is off, since the operator rejects that combination
+  - it: refuses the flag when TLS is explicitly off
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -391,12 +391,25 @@ tests:
       tls.enabled: false
       external: false
       tls.disableNonTLSListeners: true
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
     asserts:
-      - notExists:
-          path: spec.tls
+      # Dropping the request silently would render a healthy-looking cluster with
+      # every plaintext listener open. The operator rejects this combination too,
+      # and at least leaves a TLSError event; a swallowed flag leaves nothing.
+      - failedTemplate:
+          errorPattern: "would leave no listener at all"
+
+  - it: refuses the flag when TLS is off by default because external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      external: false
+      tls.disableNonTLSListeners: true
+    asserts:
+      # The likeliest way in: hardening an internal broker by setting only the
+      # flag, where tls.enabled defaults to external and so resolves to false.
+      - failedTemplate:
+          errorPattern: "would leave no listener at all"
 
   - it: drops the operator connection annotation when the plaintext port is closed
     release:
