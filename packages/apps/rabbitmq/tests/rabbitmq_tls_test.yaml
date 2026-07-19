@@ -167,27 +167,6 @@ tests:
           path: spec.rabbitmq.additionalConfig
           pattern: "management.ssl.port = 15671"
 
-  - it: renders LoadBalancer override ports when tls.enabled is unset (default) and external is true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    values:
-      - fixtures/tls_default_values.yaml
-    set:
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - contains:
-          path: spec.override.service.spec.ports
-          content:
-            name: management-tls
-            port: 15671
-            targetPort: 15671
-            protocol: TCP
-
   # -----------------------------------------------------------------------
   # Tri-state: explicit tls.enabled=false beats external=true
   # -----------------------------------------------------------------------
@@ -228,22 +207,23 @@ tests:
           path: spec.tls.disableNonTLSListeners
 
   # -----------------------------------------------------------------------
-  # B1: spec.override.service.spec.ports only when TLS+external (LoadBalancer)
+  # B1: no spec.override.service is rendered, in any combination.
   #
-  # The operator applies spec.override.service.spec.ports via
-  # strategicpatch.StrategicMergePatch using patchMergeKey:"port"
-  # (corev1.ServiceSpec.Ports). This MERGES by port number rather than
-  # replacing the whole list; operator-generated defaults (amqp:5672,
-  # amqps:5671, management:15672) are unaffected.
+  # Listing only the TLS ports there would READ as "plaintext is not published",
+  # but it cannot do that. The operator rebuilds its default port set from
+  # generateServicePortsMap() on every reconcile and only then applies the
+  # override as a strategic merge patch keyed on `port` (corev1.ServiceSpec tags
+  # Ports patchMergeKey:"port"), so a partial list can add or mutate entries but
+  # never remove them. With TLS on, amqps:5671 and management-tls:15671 are also
+  # byte-identical to what the operator already generates, making such an
+  # override a pure no-op that credits itself with a guarantee it does not
+  # provide. These tests pin its absence so it cannot come back as decoration.
   #
-  # The override is only emitted for LoadBalancer (external=true) because:
-  #   - For ClusterIP the operator already adds management-tls:15671 itself
-  #     when spec.tls.secretName is set; no override is required.
-  #   - For LoadBalancer we include amqp, amqps, management, management-tls
-  #     so the intent is explicit and reviewable in the rendered manifest.
+  # Closing plaintext requires spec.tls.disableNonTLSListeners, which is a
+  # broker-level switch affecting in-cluster clients too — see the block below.
   # -----------------------------------------------------------------------
 
-  - it: override.service is absent when TLS is on but external is false
+  - it: no service override is rendered when TLS is on and external is false
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -255,126 +235,9 @@ tests:
       value: RabbitmqCluster
     asserts:
       - notExists:
-          path: spec.override.service.spec.ports
+          path: spec.override.service
 
-  - it: management HTTPS port 15671 is NOT added when TLS is disabled
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: false
-      external: true
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - notExists:
-          path: spec.override.service.spec.ports
-
-  # -----------------------------------------------------------------------
-  # F: LoadBalancer exposes only TLS ports when external+TLS enabled
-  #
-  # Plaintext AMQP (5672) and management (15672) MUST NOT be on the LB
-  # when TLS is active. Only amqps (5671) and management-tls (15671) are
-  # exposed. In-cluster ClusterIP plain listeners are not affected.
-  # -----------------------------------------------------------------------
-
-  - it: LoadBalancer override contains amqps port when TLS and external are true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - contains:
-          path: spec.override.service.spec.ports
-          content:
-            name: amqps
-            port: 5671
-            targetPort: 5671
-            protocol: TCP
-
-  - it: LoadBalancer override contains management-tls port when TLS and external are true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - contains:
-          path: spec.override.service.spec.ports
-          content:
-            name: management-tls
-            port: 15671
-            targetPort: 15671
-            protocol: TCP
-
-  - it: LoadBalancer override does NOT contain plain amqp port when TLS and external are true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - notContains:
-          path: spec.override.service.spec.ports
-          content:
-            name: amqp
-            port: 5672
-            targetPort: 5672
-            protocol: TCP
-
-  - it: LoadBalancer override does NOT contain plain management port when TLS and external are true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - notContains:
-          path: spec.override.service.spec.ports
-          content:
-            name: management
-            port: 15672
-            targetPort: 15672
-            protocol: TCP
-
-  - it: LoadBalancer override contains plain amqp port when external is true but TLS is disabled
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: false
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - notExists:
-          path: spec.override.service.spec.ports
-
-  - it: LoadBalancer override contains only TLS ports when tls.enabled is unset (default) and external is true
+  - it: no service override is rendered when TLS and external are both on
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -387,34 +250,39 @@ tests:
       path: kind
       value: RabbitmqCluster
     asserts:
-      - contains:
-          path: spec.override.service.spec.ports
-          content:
-            name: amqps
-            port: 5671
-            targetPort: 5671
-            protocol: TCP
-      - contains:
-          path: spec.override.service.spec.ports
-          content:
-            name: management-tls
-            port: 15671
-            targetPort: 15671
-            protocol: TCP
-      - notContains:
-          path: spec.override.service.spec.ports
-          content:
-            name: amqp
-            port: 5672
-            targetPort: 5672
-            protocol: TCP
-      - notContains:
-          path: spec.override.service.spec.ports
-          content:
-            name: management
-            port: 15672
-            targetPort: 15672
-            protocol: TCP
+      - notExists:
+          path: spec.override.service
+
+  - it: no service override is rendered when external is on but TLS is off
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service
+
+  - it: the statefulSet override is still rendered, so override itself is not empty
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - exists:
+          path: spec.override.statefulSet
 
   # -----------------------------------------------------------------------
   # Inter-node Erlang distribution TLS scope boundary
