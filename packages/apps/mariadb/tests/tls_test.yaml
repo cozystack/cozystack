@@ -1116,7 +1116,8 @@ tests:
         documentIndex: 3
 
   # The publication labels are rendered inside the cert-manager gate, so under
-  # the chain does not exist at all and nothing is marked for publication.
+  # the operator issuer the chain does not exist at all and nothing is marked
+  # for publication.
   - it: "no CA publication labels are rendered under the operator issuer"
     templates:
       - templates/certmanager.yaml

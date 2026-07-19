@@ -114,7 +114,7 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 }
 
 @test "mariadb-rd excludes internal credentials and backup keys" {
-  for n in root password repl-password metrics-password backup regsecret; do
+  for n in root password repl-password metrics-password metrics-config backup regsecret; do
     grep -q "^          - mariadb-{{ .name }}-$n\$" "$COZYRDS" || {
       echo "credential Secret -$n missing from exclude" >&2
       exit 1
