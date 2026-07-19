@@ -31,12 +31,22 @@ spec:
   # the new one across a rollover, so it is the trust anchor to publish from —
   # a source the CA private key never sits next to at all.
   #
-  # NOTE: this declaration is inert until the CA-extraction controller lands.
-  # That controller, the spec.caCert API field, and the tenant-ca label are all
-  # part of a separate change; against the current API this block is pruned on
-  # apply. It is declared here so the engine is wired the moment that merges.
-  # Until then the tenant reaches the anchor through the resourceNames entry
-  # below, which needs nothing new.
+  # WARNING: this block does not install until the change that adds spec.caCert
+  # to the ApplicationDefinition CRD lands (#3299). The field is not in the
+  # schema yet, and it is not dropped quietly on the way in: helm-controller
+  # builds its server-side-apply patch against the schema the API server
+  # publishes, and an undeclared field fails that patch with "field not declared
+  # in schema" before any request is sent. The HelmRelease fails as a whole, so
+  # the result is no install rather than a degraded one.
+  #
+  # That makes the merge order mechanically forced rather than a sequencing
+  # preference: the CRD change goes first, and only then does anything here
+  # reconcile. The end-to-end suite failing on this branch is that enforcement
+  # working, not a separate defect to chase — it cannot pass until the field
+  # exists, and it starts passing once it does. The CA-extraction controller
+  # and the tenant-ca label are part of the same separate change and make this
+  # block live once they land. Until then the tenant reaches the anchor through
+  # the resourceNames entry below, which needs nothing new.
   caCert:
     sourceSecretName: "{{ .release }}-ca-bundle"
     sourceKey: ca.crt
