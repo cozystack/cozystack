@@ -90,11 +90,20 @@ spec:
           # -ca-bundle is the operator-reconciled trust bundle. It carries both
           # the old and the new CA across a rollover, whereas the leaf Secret
           # only ever holds the CA that signed the current certificate. Mounted
-          # unconditionally: the server always serves TLS and the bundle always
-          # exists, so the backup client can always verify.
+          # unconditionally: the server always serves TLS, so the backup client
+          # always has something to verify against.
+          #
+          # optional so a missing bundle fails the run instead of stopping it.
+          # The operator reconciles the bundle only after certificates settle, so
+          # there is a window on first install where it does not exist yet; a
+          # required mount would leave the pod in ContainerCreating, and with
+          # concurrencyPolicy: Forbid that one stuck pod blocks every later
+          # backup indefinitely. Absent the file, the client fails to start with
+          # a message naming it, the Job retries, and the schedule keeps moving.
           - name: tls-ca
             secret:
               secretName: {{ .Release.Name }}-ca-bundle
+              optional: true
               items:
               - key: ca.crt
                 path: ca.crt
