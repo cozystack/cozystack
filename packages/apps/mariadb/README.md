@@ -77,7 +77,11 @@ The default is deliberate: switching enforcement on refuses every client that ha
 
 > This default is temporary. `tls.required` will default to `true` in a later release, as an announced change, once the published trust anchor is available everywhere.
 
-Certificates are issued by a per-instance CA managed by cert-manager. The server certificate covers the instance services (`mariadb-<name>`, `mariadb-<name>-primary`, `mariadb-<name>-secondary`), the headless service used for per-pod routing, `localhost`, and — when `external` is `true` — the external hostname.
+Which names the certificate covers depends on who issued it.
+
+Unmanaged (the default), the operator issues it and covers the in-cluster names only: the instance services (`mariadb-<name>`, `mariadb-<name>-primary`, `mariadb-<name>-secondary`), the headless service used for per-pod routing, and `localhost`. It has no way to know the external hostname, so it is not in the certificate.
+
+Managed (`tls.enabled: true`), the chart issues it and covers the same in-cluster names plus, when `external` is `true`, the external hostname.
 
 Connect with the MariaDB client by supplying the CA and asking for full verification:
 
@@ -95,7 +99,9 @@ kubectl get secret mariadb-<name>-ca-bundle -o jsonpath='{.data.ca\.crt}' | base
 
 Mounting that Secret into a client Pod is the usual in-cluster approach; nothing needs to be copied out of the namespace.
 
-> External clients additionally need a DNS record pointing at the LoadBalancer address. The certificate carries `mariadb-<name>.<host>` as a SAN but no IP SAN, so connecting to the address directly fails verification.
+> **Verifying an external connection requires `tls.enabled: true`.** The operator's certificate does not carry the external hostname, so a client connecting from outside with `--ssl-verify-server-cert` fails hostname verification against an unmanaged instance no matter which CA it trusts. Managed TLS is what puts `mariadb-<name>.<host>` in the certificate.
+>
+> Such clients also need a DNS record pointing at the LoadBalancer address: the hostname is a SAN, the address is not, so connecting to the IP directly fails verification either way.
 
 #### Migrating an existing instance
 
