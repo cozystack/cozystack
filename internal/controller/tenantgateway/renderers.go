@@ -249,9 +249,10 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 	// occupy (<svc>.<apex>, matching renderGateway) so the check below
 	// spans both lists: a listener entry can collide with a service
 	// hostname while their names differ, which the name checks miss.
-	seenHostnames := make(map[string]string, len(listeners)+len(passthroughServices))
+	type claimedHostname struct{ hostname, listener string }
+	seenHostnames := make([]claimedHostname, 0, len(listeners)+len(passthroughServices))
 	for _, svc := range passthroughServices {
-		seenHostnames[svc+"."+apex] = passthroughListenerPrefix + svc
+		seenHostnames = append(seenHostnames, claimedHostname{svc + "." + apex, passthroughListenerPrefix + svc})
 	}
 	for _, l := range listeners {
 		if errs := validation.IsDNS1123Label(l.Name); len(errs) > 0 {
@@ -301,16 +302,57 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		// a raw stream forwarded to the wrong backend, with Accepted
 		// and Programmed both true and nothing on the status to show
 		// for it. Reject the shape instead.
-		if other, dup := seenHostnames[l.Hostname]; dup {
-			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is already used by listener %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners sharing a hostname, even on different ports", l.Name, l.Hostname, other)
+		for _, claimed := range seenHostnames {
+			if !hostnamesOverlap(l.Hostname, claimed.hostname) {
+				continue
+			}
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps listener %q hostname %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners whose hostnames match the same ClientHello, even on different ports", l.Name, l.Hostname, claimed.listener, claimed.hostname)
 		}
-		seenHostnames[l.Hostname] = passthroughListenerPrefix + l.Name
+		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, passthroughListenerPrefix + l.Name})
 
 		if !hostnameWithinApex(l.Hostname, apex) {
 			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
 		}
 	}
 	return nil
+}
+
+// hostnamesOverlap reports whether two listener hostnames can match the
+// same ClientHello SNI. Exact-string equality is not enough: a wildcard
+// matches any number of labels to its left, per Gateway API's Hostname
+// contract, so "*.foo.example.com" covers both "api.foo.example.com"
+// and "a.b.foo.example.com" — and covers "*.db.foo.example.com" too.
+// A wildcard does NOT match the bare suffix itself ("*.foo.example.com"
+// does not match "foo.example.com"), which is why the exact leg tests
+// for the leading dot.
+//
+// This matters because the caller rejects overlapping hostnames on the
+// premise that Cilium routes passthrough by SNI alone. An exact-match
+// check would let a single "*.<apex>" entry silently shadow the
+// tls-<svc> listeners the chart ships by default (api, vm-exportproxy,
+// cdi-uploadproxy all render <svc>.<apex>), which is the exact failure
+// the check exists to prevent, reachable from stock values.
+func hostnamesOverlap(a, b string) bool {
+	if a == b {
+		return true
+	}
+	return hostnameCovers(a, b) || hostnameCovers(b, a)
+}
+
+// hostnameCovers reports whether wildcard hostname w matches hostname x.
+// Returns false when w is not a wildcard; the equality case is handled
+// by the caller.
+func hostnameCovers(w, x string) bool {
+	suffix, ok := strings.CutPrefix(w, "*.")
+	if !ok {
+		return false
+	}
+	// A wildcard covers another wildcard when it covers everything that
+	// one could match, i.e. when the other's suffix sits under ours.
+	if inner, isWildcard := strings.CutPrefix(x, "*."); isWildcard {
+		return inner == suffix || strings.HasSuffix(inner, "."+suffix)
+	}
+	return strings.HasSuffix(x, "."+suffix)
 }
 
 // validatePassthroughHostname accepts an exact RFC 1123 hostname or a
