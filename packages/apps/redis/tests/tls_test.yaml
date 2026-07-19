@@ -738,3 +738,39 @@ tests:
       - contains:
           path: rules[1].resourceNames
           content: "my-redis-ca-cert"
+
+  # The chart creates <release>-external-lb itself when external is on. It
+  # resolves in-cluster like any Service, so a client dialing it by name needs
+  # it in the SAN list; without it the handshake fails hostname verification
+  # against a Service this very chart owns.
+  - it: "leaf Certificate covers the external LoadBalancer Service name"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "my-redis-external-lb"
+      - contains:
+          path: spec.dnsNames
+          content: "my-redis-external-lb.tenant-test.svc"
+      - contains:
+          path: spec.dnsNames
+          content: "my-redis-external-lb.tenant-test.svc.cluster.local"
+
+  - it: "leaf Certificate omits the external LoadBalancer name when external is off"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: false
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: "my-redis-external-lb"

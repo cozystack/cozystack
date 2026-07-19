@@ -8,4 +8,11 @@ redis-operator:
     # v1.4.0 and v1.4.1-rc1 guards a nil watcher before watch.Filter wraps it;
     # dropping back to v1.4.0 reinstates that crash. A stable v1.4.1 retag of
     # the same commit has been requested; repin to it when it exists.
+    #
+    # This digest is maintained by hand. The root Makefile does not run
+    # `make -C packages/system/redis-operator image`, so nothing in CI builds
+    # images/redis-operator/Dockerfile and nothing reproduces this artifact —
+    # editing that Dockerfile changes no shipped bits until the image is built
+    # and this line is updated. Whether to restore the build here is a
+    # release-engineering call, deliberately left alone by the TLS work.
     tag: v1.4.1-rc1@sha256:404c84c23ef3df181a2eac974d5823f6664f75e9d6b4e4d944d0841ad0750edf

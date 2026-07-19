@@ -86,6 +86,15 @@ spec:
     - {{ printf "*.%s.%s.svc" $redisSvc $ns | quote }}
     - {{ printf "*.%s.%s.svc.%s" $redisSvc $ns $clusterDomain | quote }}
     {{- if .Values.external | default false }}
+    {{- /* The external LoadBalancer Service this chart creates alongside the
+           operator's own services. It resolves in-cluster like any Service, so
+           a client dialing it by name has to find it in the SAN list or fail
+           hostname verification. */}}
+    {{- $extSvc := printf "%s-external-lb" .Release.Name }}
+    - {{ $extSvc | quote }}
+    - {{ printf "%s.%s" $extSvc $ns | quote }}
+    - {{ printf "%s.%s.svc" $extSvc $ns | quote }}
+    - {{ printf "%s.%s.svc.%s" $extSvc $ns $clusterDomain | quote }}
     {{- /* A tenant without a host is a legitimate shape — packages/apps/tenant
            leaves the computed host empty when neither the tenant nor its parent
            sets one — and such a tenant has no external name to certify. Emit
