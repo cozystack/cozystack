@@ -79,7 +79,7 @@ kubectl get secret redis-<name>.ca-cert -o jsonpath='{.data.ca\.crt}' | base64 -
 redis-cli --tls --cacert ca.crt -h <host> -p 6379
 ```
 
-`<host>` has to be a name the certificate covers. In-cluster that is any of the `rfr-`, `rfrm-`, `rfrs-` and `rfs-` service names, and those resolve normally.
+`<host>` has to be a name the certificate covers. In-cluster that is any of the `rfr-`, `rfrm-`, `rfrs-` and `rfs-` service names, and `<release>-external-lb` when `external` is on; all of them resolve normally.
 
 From outside the cluster the only covered name is `<release>.<tenant-host>`, and the chart does not publish DNS for it: the external Service is a plain LoadBalancer with no `external-dns` annotation, so nothing points that name at the LoadBalancer address. Connecting to the LoadBalancer IP instead fails for any client that verifies the hostname, because the only IP addresses in the certificate are the loopback ones the in-pod probes and the metrics sidecar use; `redis-cli` is not such a client, it checks the chain and not the name, so it connects to the IP and hides the mismatch. Until the name is published, an external client has to be pointed at it manually — a DNS record or a hosts entry mapping `<release>.<tenant-host>` to the LoadBalancer address.
 
