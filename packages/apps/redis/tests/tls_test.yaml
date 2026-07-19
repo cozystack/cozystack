@@ -478,3 +478,27 @@ tests:
       - contains:
           path: spec.dnsNames
           content: "*.rfr-my-redis.tenant-test.svc.my.cluster.local"
+
+  - it: "leaf Certificate SAN list falls back to the cozystack cluster domain when none is set"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      tls:
+        enabled: true
+      # Blanks the suite-level cluster-domain so the template falls back. The
+      # platform always injects it; this pins the fallback to cozystack's own
+      # domain rather than the upstream Kubernetes default, so a SAN list built
+      # without it still matches the names services actually resolve under.
+      _cluster:
+        cluster-domain: ""
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cozy.local"
+      - contains:
+          path: spec.dnsNames
+          content: "*.rfr-my-redis.tenant-test.svc.cozy.local"
+      - notContains:
+          path: spec.dnsNames
+          content: "rfr-my-redis.tenant-test.svc.cluster.local"
