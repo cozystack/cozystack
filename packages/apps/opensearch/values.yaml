@@ -73,6 +73,12 @@ size: 10Gi
 storageClass: ""
 
 ## @param {bool} external - Enable external access from outside the cluster.
+##   The LoadBalancer Services are published to external-dns as
+##   <release>.<tenant-host> and <release>-dashboards.<tenant-host>, and those are
+##   the names the TLS certificate carries SANs for. Releases created before this
+##   naming was introduced were published under the in-cluster domain instead, which
+##   does not resolve outside the cluster; enabling or re-applying external access
+##   retires the old record and publishes the new name.
 external: false
 
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
@@ -111,6 +117,11 @@ version: v2
 ##   securityadmin cannot authenticate. Setting enabled: true on such a version
 ##   fails the release; leaving it unset falls back to operator-managed HTTP TLS
 ##   instead, so an external release on an older version keeps working.
+##   The certificate is issued by a per-release private CA, so clients must trust it
+##   explicitly. The platform publishes that trust anchor as the key-free Secret
+##   <release>.tenant-ca, holding ca.crt alone; the private key never leaves the
+##   namespace. Rotating the certificate is a deliberate act — it is mounted by
+##   subPath and is not refreshed in place — so delete the Secret and restart the pods.
 
 ## @param {TLS} tls - HTTP-layer TLS configuration.
 tls: {}
