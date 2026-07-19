@@ -132,12 +132,17 @@
       "type": "object",
       "default": {},
       "properties": {
-        "enabled": {
-          "description": "Issue a dedicated CA and server certificate for this instance through cert-manager, instead of using the operator's own CA. TLS is served either way; this selects who issues it. Opt-in, and not derived from `external`.",
-          "type": "boolean"
+        "issuer": {
+          "description": "Who issues the server certificate: `operator` uses the CA mariadb-operator manages itself, `cert-manager` gives the instance its own CA and is what covers the external hostname. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.",
+          "type": "string",
+          "default": "operator",
+          "enum": [
+            "operator",
+            "cert-manager"
+          ]
         },
         "required": {
-          "description": "Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies whether or not TLS is managed. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.",
+          "description": "Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies under either issuer. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.",
           "type": "boolean"
         }
       }

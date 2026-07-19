@@ -1,4 +1,4 @@
-{{- $tlsEnabled := (include "mariadb.tls.enabled" .) | eq "true" -}}
+{{- $certManagerIssued := (include "mariadb.tls.certManagerIssued" .) | eq "true" -}}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: MariaDB
@@ -95,36 +95,21 @@ spec:
 
   {{- $tlsMap := default (dict) .Values.tls }}
   {{- $tlsRequired := index $tlsMap "required" }}
-  # The chart always asks for TLS. The operator does support enabled: false,
-  # but omitting spec.tls does not select it — SetDefaults substitutes
-  # TLS{Enabled: true} whenever the field is absent, so instances built by this
-  # chart have always served TLS. Sending it explicitly makes the manifest say
-  # what actually runs, and keeps the resolved values from silently turning TLS
-  # off on an instance that has it today.
-  #
-  # What the chart's tls values select is therefore who owns the CA and whether
-  # TLS is enforced, not whether TLS exists.
+  # Always true, and load-bearing: the operator substitutes an enabled TLS spec
+  # only when spec.tls is absent entirely, so sending the block without this
+  # would turn TLS off.
   tls:
     enabled: true
-    # required: true enforces require_secure_transport=ON (strict TLS for all
-    # connections). It is emitted in every configuration, not only the managed
-    # one: enforcement is a sibling of enabled in the operator API and works
-    # against operator-issued certificates too, so gating it here would accept
-    # required: true and silently drop it — the worst outcome for a setting
-    # whose whole purpose is refusing unprotected connections.
-    #
-    # It defaults to false so that enforcement is a decision rather than
-    # something a platform upgrade does to a running instance: switching it on
-    # refuses every client not yet moved to TLS. The anchor to move them with is
-    # already reachable — the tenant can read <release>-ca-bundle — so the order
-    # is distribute, migrate, then enforce.
-    #
-    # This default is temporary. It flips to true as an announced change, in the
-    # same release that makes the published anchor universal.
+    # Emitted under either issuer: enforcement works against operator-issued
+    # certificates too, so gating it would accept required: true and silently
+    # not enforce. Defaults to false because switching it on refuses every
+    # client not yet moved to TLS — a decision to make, not something an upgrade
+    # does. Flips to true as an announced change once the trust anchor is
+    # published to tenants automatically.
     #
     # `kindIs "invalid"` guards against unset field; an explicit value is preserved.
     required: {{ if kindIs "invalid" $tlsRequired }}false{{ else }}{{ $tlsRequired }}{{ end }}
-  {{- if $tlsEnabled }}
+  {{- if $certManagerIssued }}
     serverCertSecretRef:
       name: {{ .Release.Name }}-tls
     serverCASecretRef:
