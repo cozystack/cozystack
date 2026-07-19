@@ -128,7 +128,7 @@
       "default": false
     },
     "tls": {
-      "description": "TLS configuration. When `tls.enabled` is not set, TLS is enabled automatically when `external` is true.",
+      "description": "TLS configuration. TLS is off unless `tls.enabled` is set to true.",
       "type": "object",
       "default": {},
       "properties": {
@@ -137,7 +137,7 @@
           "type": "boolean"
         },
         "enabled": {
-          "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). When omitted, defaults to the value of `external`.",
+          "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Defaults to false.",
           "type": "boolean"
         }
       }

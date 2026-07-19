@@ -6,7 +6,7 @@
      drop the flag and render a cluster that looks healthy with every plaintext
      listener open. */}}
 {{- if and $wantDisableNonTLS (not $tlsEnabled) }}
-{{-   fail "tls.disableNonTLSListeners is set but TLS is off, which would leave no listener at all: set tls.enabled: true (it defaults to the value of external). The RabbitMQ operator rejects this combination too." }}
+{{-   fail "tls.disableNonTLSListeners is set but TLS is off, which would leave no listener at all: set tls.enabled: true as well. The RabbitMQ operator rejects this combination too." }}
 {{- end }}
 {{- $disableNonTLS := and $tlsEnabled $wantDisableNonTLS }}
 

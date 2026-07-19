@@ -299,11 +299,15 @@ tests:
           content: myrabbitmq.example.com
 
   # -----------------------------------------------------------------------
-  # Tri-state: tls.enabled not set (uses default from values.yaml: ~) +
-  # external=true => TLS enabled by default
+  # Default: tls.enabled unset => no certificate chain, whatever external is.
+  #
+  # The external=true case is the one that matters. Issuing a chain there would
+  # mean an upgrade of an existing published broker starts pulling in
+  # cert-manager and rolling pods on its own, so this pins that `external` is
+  # not a second way to switch TLS on.
   # -----------------------------------------------------------------------
 
-  - it: renders TLS chain when tls.enabled is unset (default) and external is true
+  - it: renders no TLS chain when tls.enabled is unset and external is true
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -314,13 +318,9 @@ tests:
       _namespace.host: example.com
     asserts:
       - hasDocuments:
-          count: 4
-      - contains:
-          path: spec.dnsNames
-          content: myrabbitmq.example.com
-        documentIndex: 3
+          count: 0
 
-  - it: does not render TLS chain when tls.enabled is unset (default) and external is false
+  - it: renders no TLS chain when tls.enabled is unset and external is false
     release:
       name: myrabbitmq
       namespace: tenant-test
