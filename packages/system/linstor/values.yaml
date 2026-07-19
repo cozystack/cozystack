@@ -1,7 +1,7 @@
 piraeusServer:
   image:
     repository: ghcr.io/cozystack/cozystack/piraeus-server
-    tag: v1.5.2@sha256:8a4038a01032a4bbf65ca8da767c52b95ca21e6cdef73460b4860953cc0eeb4f
+    tag: v1.5.3@sha256:8a4038a01032a4bbf65ca8da767c52b95ca21e6cdef73460b4860953cc0eeb4f
 # Talos-specific workarounds (disable for generic Linux like Ubuntu/Debian)
 talos:
   enabled: true
@@ -13,4 +13,4 @@ linstor:
 linstorCSI:
   image:
     repository: ghcr.io/cozystack/cozystack/linstor-csi
-    tag: v1.5.2@sha256:c7ff3f3a19f1079bd0fe67b26319fbc07ee318a826f207ee7ec92a6c7b8a4761
+    tag: v1.5.3@sha256:c7ff3f3a19f1079bd0fe67b26319fbc07ee318a826f207ee7ec92a6c7b8a4761
