@@ -91,7 +91,7 @@ mysql -h mariadb-<name> -u <user> -p --ssl-ca=/path/to/ca.crt --ssl-verify-serve
 
 `-p` without a value prompts for the password, which keeps it out of shell history and out of the process arguments other users can read.
 
-`--ssl-ca` supplies the trust anchor; `--ssl-verify-server-cert` is what checks the server name against the certificate. Whether that check is on by default depends on the client version: it is off through 10.11 and on from 11.4, so of the versions this chart offers, `v10.6` and `v10.11` leave it off while `v11.4` and `v11.8` enable it. Passing it explicitly is correct on both, and it is the difference between an encrypted connection and a verified one. Note these are MariaDB client options — the MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client rejects outright.
+`--ssl-ca` supplies the trust anchor; `--ssl-verify-server-cert` is what checks the server name against the certificate. Whether that check is on by default depends on the version of the *client* you connect with, not the server version selected by `version`: it is off through 10.11 and on from 11.4. A modern client verifies by default against any server; an older one does not. Passing it explicitly is correct on both, and it is the difference between an encrypted connection and a verified one. Note these are MariaDB client options — the MySQL 8 client spells the same intent as `--ssl-mode=VERIFY_IDENTITY`, which the MariaDB client rejects outright.
 
 The trust anchor is available in the instance namespace as the Secret `mariadb-<name>-ca-bundle`, under the key `ca.crt`. It is reconciled by the operator whenever TLS is enabled, contains no private key, and follows CA rollovers, so it is the certificate to distribute to clients:
 
@@ -112,6 +112,8 @@ An existing instance keeps the operator's CA and its current enforcement whether
 One thing does change on upgrade, and only for instances using the deprecated `backup.*` CronJob: the backup client now verifies the server it connects to, where before it connected without checking. It verifies against the operator's own CA bundle, which is present on every instance, and the operator's certificate already covers the hostname the job connects to — so this needs no action. It is called out because it is a behaviour change to a running job rather than something you opted into.
 
 Managed TLS does not enforce anything by itself — enforcement is a separate opt-in — but it does change who issues the server certificate. A client that reads `mariadb-<name>-ca-bundle` at connect time follows the change automatically, because the operator keeps both the old and the new CA in the bundle. A client that copied `ca.crt` out and pinned it will fail chain validation once the new certificate is served, and has to re-read the bundle.
+
+> On a fresh instance created with `tls.enabled: true`, the pods do not start until cert-manager has issued the certificates: the operator needs the server certificate before it creates the StatefulSet. This resolves on its own within a reconcile or two — the chart labels the Secrets so the operator is woken as soon as they appear — but the instance looks stalled in the meantime.
 
 The order that avoids downtime:
 

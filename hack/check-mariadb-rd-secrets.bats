@@ -1,13 +1,20 @@
 #!/usr/bin/env bats
-# Unit test: mariadb-rd cozyrds must publish the trust anchor from the
-# operator's key-free CA bundle and must expose it to the tenant through a
-# specific label selector. The chart's own helm-unittest suite cannot cover
-# this file, so the invariants that decide whether a private key can reach a
-# tenant are pinned here.
+# Unit test: mariadb-rd cozyrds. The chart's helm-unittest suite cannot reach
+# this file, so its Secret-exposure invariants are pinned here.
+#
+# Read the coverage honestly. Two of these tests are live: the bundle is exposed
+# by name and no key-bearing Secret is listed, both against secrets.include,
+# which the API accepts today. The empty-selector guards are live too. The three
+# touching caCert and the tenant-ca label are placeholders — that field is not
+# in ApplicationDefinitionSpec yet and nothing writes that label, so they check
+# that the block we intend to ship is present and spelled consistently, not that
+# it does anything. If the API lands with different names they will need
+# updating; they cannot detect that on their own.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 
+# Placeholder (see header): pins the intended spelling, not a live behaviour.
 @test "mariadb-rd declares the CA source as the operator ca-bundle" {
   grep -q 'sourceSecretName: "{{ .release }}-ca-bundle"' "$COZYRDS"
 }
@@ -18,6 +25,8 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
 
 # -ca-tls and -tls hold the CA and server private keys. Declaring either as the
 # publication source would run the extraction next to private key material.
+# Placeholder (see header): the declaration is inert, but keeping a key-bearing
+# name out of it means the block is already correct when the API arrives.
 @test "mariadb-rd never names a key-bearing Secret as the CA source" {
   # Quote-agnostic: an unquoted value is just as wrong as a quoted one.
   if grep -E "sourceSecretName:.*-(ca-)?tls[\"[:space:]]*$" "$COZYRDS"; then
@@ -33,6 +42,7 @@ COZYRDS="$REPO_ROOT/packages/system/mariadb-rd/cozyrds/mariadb.yaml"
   grep -q "mariadb-{{ .name }}-ca-bundle" "$COZYRDS"
 }
 
+# Placeholder (see header): nothing writes this label yet.
 @test "mariadb-rd selects the tenant CA projection by label" {
   # Must appear inside a matchLabels selector, not merely somewhere in the file:
   # the label only exposes the projection when it is what the selector matches on.
