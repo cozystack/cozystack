@@ -28,13 +28,18 @@ stringData:
     */}}
     SSL_OPTS="--ssl-ca=/etc/mysql-ssl/ca.crt --ssl-verify-server-cert"
 
-    # The client reports a missing CA as "TLS/SSL error: No such file or
-    # directory" without naming the file, which is not enough to act on. The
-    # volume is an optional mount, so the file is absent exactly when the
+    # The client reports a missing or unusable CA as "TLS/SSL error: No such
+    # file or directory" without naming the file, which is not enough to act on.
+    # The volume is an optional mount, so the file is absent exactly when the
     # operator has not reconciled the trust bundle yet; say so.
-    if [ ! -r /etc/mysql-ssl/ca.crt ]; then
-      echo "ERROR: cannot read /etc/mysql-ssl/ca.crt, projected from Secret ${MYSQL_CA_SECRET}." >&2
-      echo "The operator reconciles that Secret once TLS certificates settle; retry after it exists." >&2
+    #
+    # Empty counts as unusable: the operator drops expired certificates when it
+    # builds the bundle, so a fully expired CA set produces a present but empty
+    # ca.crt. Testing only for readability would let that through to the same
+    # opaque client error this check exists to replace.
+    if [ ! -r /etc/mysql-ssl/ca.crt ] || [ ! -s /etc/mysql-ssl/ca.crt ]; then
+      echo "ERROR: /etc/mysql-ssl/ca.crt is missing or empty, projected from Secret ${MYSQL_CA_SECRET}." >&2
+      echo "The operator reconciles that Secret once TLS certificates settle; retry once it holds a CA." >&2
       exit 1
     fi
 

@@ -1290,12 +1290,19 @@ tests:
         s3Bucket: s3.example.org/test
         cleanupStrategy: "--keep-last=3"
     asserts:
+      # -s as well as -r: the operator drops expired certificates when building
+      # the bundle, so a fully expired CA set leaves ca.crt present but empty,
+      # and a readability-only check would fall through to the opaque client
+      # error this guard exists to replace.
       - matchRegex:
           path: stringData["backup.sh"]
-          pattern: 'if \[ ! -r /etc/mysql-ssl/ca\.crt \]'
+          pattern: '! -r /etc/mysql-ssl/ca\.crt'
       - matchRegex:
           path: stringData["backup.sh"]
-          pattern: 'cannot read /etc/mysql-ssl/ca\.crt'
+          pattern: '! -s /etc/mysql-ssl/ca\.crt'
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: 'is missing or empty'
 
   - it: "backup CronJob passes the CA Secret name to the script"
     templates:
