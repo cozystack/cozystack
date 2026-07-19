@@ -53,8 +53,10 @@ spec:
           - mariadb-{{ .name }}-ca-bundle
       # The key-free trust anchor the CA-extraction controller will publish;
       # inert until it lands, see the note above. The selector is deliberately
-      # specific: an empty one compiles to a match-everything selector and
-      # would project every Secret in the namespace to the tenant.
+      # specific: an empty one compiles to match-everything, and the lineage
+      # webhook evaluates it against every Secret whose ownership resolves to
+      # this instance — which includes -ca-tls and -tls, the two the design
+      # exists to keep away from the tenant.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:

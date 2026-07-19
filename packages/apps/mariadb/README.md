@@ -135,9 +135,12 @@ Step 3 is the only one that can refuse a connection, and it happens when you cho
 
 Going back is the same change in reverse: setting `tls.enabled: false` hands issuance back to the operator, and clients have to pick up the operator's CA from the bundle again.
 
-One thing does not clean itself up. The Certificates are removed, but cert-manager is configured not to own the Secrets it issued, so `mariadb-<name>-ca-tls` (the CA private key) and `mariadb-<name>-tls` (the server private key) stay in the namespace. Nothing reads them at that point and no tenant grant exposes them, but they are private keys, so remove them:
+One thing does not clean itself up. The Certificates are removed, but cert-manager is configured not to own the Secrets it issued, so `mariadb-<name>-ca-tls` (the CA private key) and `mariadb-<name>-tls` (the server private key) stay in the namespace. No tenant grant exposes them, but they are private keys, so remove them.
+
+Wait for the rollout first. `mariadb-<name>-tls` is mounted into the running pods for as long as the instance still serves the chart-issued certificate, so deleting it before the operator has reissued and rolled the StatefulSet leaves the next pod unable to start:
 
 ```bash
+kubectl rollout status statefulset/mariadb-<name>
 kubectl delete secret mariadb-<name>-ca-tls mariadb-<name>-tls --ignore-not-found
 ```
 
