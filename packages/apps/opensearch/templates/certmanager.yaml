@@ -4,8 +4,11 @@ with perNode: true). This file covers HTTP layer (port 9200) and Dashboards HTTP
 Setting tls.enabled: false does NOT disable transport mTLS — the operator enforces it
 regardless, as it is required by the OpenSearch security plugin.
 
-Design: ONE combined leaf Certificate covers both the HTTP API (port 9200) and Dashboards
-(port 5601) SANs. This keeps the chain at 4 resources and avoids duplicating the CA Issuer.
+Design: ONE leaf Certificate PER SERVICE — the HTTP API (port 9200) and Dashboards
+(port 5601) each get their own, from a shared CA Issuer. They are deliberately not
+combined: a single leaf covering both would hand the Dashboards pod a private key
+valid for the API names. The Dashboards leaf renders last and only when Dashboards is
+enabled, so the chain is 4 resources without it and 5 with it.
 
 IMPORTANT: The CA secret is named {{ .Release.Name }}-http-ca (NOT {{ .Release.Name }}-ca).
 The opensearch-operator hardcodes <clusterName>-ca as the name of its own internal transport
@@ -206,8 +209,13 @@ metadata:
   name: {{ .Release.Name }}-dashboards-server
 spec:
   secretName: {{ .Release.Name }}-dashboards-server
-  # Same lifetime and reasoning as the API certificate above: mounted material is
-  # not refreshed in place, so a shorter life would expire rather than rotate.
+  # Same lifetime as the API certificate, for a DIFFERENT reason — the subPath
+  # argument above does not apply here. The operator mounts an externally provided
+  # Dashboards certificate as a whole secret volume with no SubPath, so the kubelet
+  # does refresh those files. What does not happen is Dashboards noticing: it reads
+  # server.ssl.certificate and server.ssl.key once at startup, and the operator adds
+  # no checksum annotation for a provided secret, so nothing restarts the Deployment
+  # when the material changes. A shorter life would still expire rather than rotate.
   duration: 87600h  # 10 years, matching the CA
   isCA: false
   usages:
