@@ -27,7 +27,9 @@ templates:
   - templates/certmanager.yaml
 
 tests:
-  - it: fails when release name exceeds the 47-char cert-manager naming limit
+  # Both sides of the boundary, so the limit cannot drift in either direction: 48
+  # rejected, 47 accepted and rendering the full chain.
+  - it: fails when the release name exceeds the 47-char limit
     release:
       name: os-test-name-that-is-definitely-too-long-xxxxxxx
       namespace: tenant-test
@@ -36,7 +38,22 @@ tests:
         enabled: true
     asserts:
       - failedTemplate:
-          errorMessage: "Release name \"os-test-name-that-is-definitely-too-long-xxxxxxx\" is 48 chars; opensearch TLS requires <=47 chars so cert-manager resource names fit in the 63-char Kubernetes limit (longest suffix: -http-selfsigned)."
+          errorMessage: "Release name \"os-test-name-that-is-definitely-too-long-xxxxxxx\" is 48 chars; opensearch TLS requires <=47 chars so the generated certificate stays within the 63-char DNS label limit on its SANs (longest: os-test-name-that-is-definitely-too-long-xxxxxxx-dashboards) and the 64-char limit on the CA common name."
+
+  - it: accepts a release name at exactly the 47-char limit
+    release:
+      name: os-test-name-that-is-definitely-too-long-xxxxxx
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: os-test-name-that-is-definitely-too-long-xxxxxx-dashboards
+        documentIndex: 3
 
   # Version floor: below OpenSearch 2.0.0 the operator signs the admin certificate
   # with the transport CA instead of http.caSecret, so securityadmin cannot verify
