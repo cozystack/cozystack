@@ -22,7 +22,11 @@ COZYRDS="$REPO_ROOT/packages/system/opensearch-rd/cozyrds/opensearch.yaml"
   ! awk '/### TLS configuration/{found=1; next} found && /^### /{exit} found' "$README" | grep -q "topologySpreadPolicy"
 }
 
-@test "topologySpreadPolicy appears in README outside TLS section" {
+@test "topologySpreadPolicy appears in README at all" {
+  # Deliberately only presence. This is what stops the test above passing
+  # vacuously: a README that lost the row entirely would satisfy "not in the TLS
+  # section" without documenting the parameter anywhere. The "outside the TLS
+  # section" half is that test's job, not this one's.
   grep -q "topologySpreadPolicy" "$README"
 }
 
