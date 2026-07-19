@@ -1,0 +1,98 @@
+suite: RabbitMQ TLS tri-state agreement across templates
+
+# rabbitmq.yaml and certmanager.yaml both branch on whether TLS is on. They used
+# to carry byte-identical copies of the resolution logic, which had already begun
+# to drift (a third copy in dashboard-resourcemap.yaml outlived its only reader).
+# Both now call the rabbitmq.tls.enabled helper. These tests render both
+# templates together across every external x tls.enabled combination and assert
+# they reach the SAME answer — the certificate chain must exist exactly when the
+# cluster asks the operator to serve TLS. A chart that issued certificates nobody
+# used, or asked for a secret that was never created, would pass each template's
+# own suite and fail here.
+#
+# certmanager.yaml renders 4 documents when TLS is on (selfsigned Issuer, CA
+# Certificate, CA Issuer, leaf Certificate) and 0 when it is off.
+
+templates:
+  - templates/rabbitmq.yaml
+  - templates/certmanager.yaml
+
+tests:
+  # --- TLS ON: explicitly enabled, external off ---
+
+  - it: both templates turn TLS on when explicitly enabled
+    release: {name: myrabbitmq, namespace: tenant-test}
+    set: {tls.enabled: true, external: false}
+    asserts:
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
+        template: templates/rabbitmq.yaml
+        documentSelector: {path: kind, value: RabbitmqCluster}
+      - hasDocuments: {count: 4}
+        template: templates/certmanager.yaml
+
+  # --- TLS ON: inherited from external ---
+
+  - it: both templates turn TLS on when inherited from external
+    release: {name: myrabbitmq, namespace: tenant-test}
+    values: [fixtures/tls_default_values.yaml]
+    set: {external: true, _namespace.host: example.com}
+    asserts:
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
+        template: templates/rabbitmq.yaml
+        documentSelector: {path: kind, value: RabbitmqCluster}
+      - hasDocuments: {count: 4}
+        template: templates/certmanager.yaml
+
+  # --- TLS OFF: both templates must agree there is nothing to do ---
+
+  - it: both templates stay off when both inputs are off
+    release: {name: myrabbitmq, namespace: tenant-test}
+    set: {tls.enabled: false, external: false}
+    asserts:
+      - notExists:
+          path: spec.tls
+        template: templates/rabbitmq.yaml
+        documentSelector: {path: kind, value: RabbitmqCluster}
+      - hasDocuments: {count: 0}
+        template: templates/certmanager.yaml
+
+  - it: explicit false beats external true in BOTH templates
+    release: {name: myrabbitmq, namespace: tenant-test}
+    set: {tls.enabled: false, external: true, _namespace.host: example.com}
+    asserts:
+      - notExists:
+          path: spec.tls
+        template: templates/rabbitmq.yaml
+        documentSelector: {path: kind, value: RabbitmqCluster}
+      - hasDocuments: {count: 0}
+        template: templates/certmanager.yaml
+
+  # --- null-safety: reachable through a HelmRelease values override, where
+  # structural-schema pruning does not apply ---
+
+  - it: tls set to null resolves instead of panicking, inheriting external false
+    release: {name: myrabbitmq, namespace: tenant-test}
+    set: {tls: null, external: false}
+    asserts:
+      - notExists:
+          path: spec.tls
+        template: templates/rabbitmq.yaml
+        documentSelector: {path: kind, value: RabbitmqCluster}
+      - hasDocuments: {count: 0}
+        template: templates/certmanager.yaml
+
+  - it: tls set to null with external true turns TLS on in both templates
+    release: {name: myrabbitmq, namespace: tenant-test}
+    set: {tls: null, external: true, _namespace.host: example.com}
+    asserts:
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
+        template: templates/rabbitmq.yaml
+        documentSelector: {path: kind, value: RabbitmqCluster}
+      - hasDocuments: {count: 4}
+        template: templates/certmanager.yaml

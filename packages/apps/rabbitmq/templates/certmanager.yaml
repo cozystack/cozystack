@@ -1,12 +1,4 @@
-{{/*
-Tri-state TLS resolution: explicit non-null tls.enabled wins; when absent or null,
-defaults to external. A null tls.enabled is treated as "inherit from external".
-kindIs "invalid" detects both the missing-key and explicit-null cases.
-*/}}
-{{- $tlsEnabled := .Values.external }}
-{{- if not (kindIs "invalid" .Values.tls.enabled) }}
-  {{- $tlsEnabled = .Values.tls.enabled }}
-{{- end }}
+{{- $tlsEnabled := (include "rabbitmq.tls.enabled" .) | eq "true" }}
 
 {{- if $tlsEnabled }}
 apiVersion: cert-manager.io/v1
