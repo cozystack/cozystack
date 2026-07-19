@@ -78,7 +78,7 @@ tests:
       - notExists:
           path: spec.tls.serverCertSecretRef
 
-  - it: "unmanaged TLS honours required=true even with tls.issuer explicitly false"
+  - it: "operator-issued TLS honours required=true even with issuer set explicitly"
     templates:
       - templates/mariadb.yaml
     set:
@@ -502,10 +502,10 @@ tests:
   # -------------------------------------------------------------------
   # NB6: dashboard-resourcemap.yaml exposure is TLS-state independent.
   #
-  # The tenant grant used to follow the tri-state and hand out the
+  # The tenant grant used to follow the issuer and hand out the
   # cert-manager Secrets whenever TLS was on. Those Secrets carry private
   # keys, so the grant is now a flat invariant instead: no TLS state may put
-  # them in the Role. All four tri-state combinations are checked so a
+  # them in the Role. All four issuer/external combinations are checked so a
   # regression cannot hide in the branch that happens to enable TLS.
   # -------------------------------------------------------------------
   - it: "RBAC excludes TLS secrets when external=false and tls.issuer unset"
@@ -569,9 +569,9 @@ tests:
           content: my-mariadb-ca-tls
 
   # -------------------------------------------------------------------
-  # B2: tri-state must survive explicit tls=null without panic
+  # B2: issuer resolution must survive explicit tls=null without panic
   # -------------------------------------------------------------------
-  - it: "tri-state survives explicit tls=null without panic (certmanager renders 0 docs)"
+  - it: "issuer resolution survives explicit tls=null without panic (certmanager renders 0 docs)"
     templates:
       - templates/certmanager.yaml
     set:
@@ -582,7 +582,7 @@ tests:
           count: 0
 
   # tls: null is the same as unset, and unset no longer means "follow external".
-  - it: "tri-state survives explicit tls=null with external=true (stays unmanaged)"
+  - it: "issuer resolution survives explicit tls=null with external=true (stays operator-issued)"
     templates:
       - templates/certmanager.yaml
     set:
@@ -685,12 +685,12 @@ tests:
           content: "my-mariadb.example.com"
 
   # -------------------------------------------------------------------
-  # B2: tls.issuer unset falls through to external (tri-state)
-  # kindIs "invalid" catches the unset case. The schema types tls.issuer as
-  # "boolean", so an explicit tls.issuer: null is rejected before rendering
-  # and only the unset path reaches external inheritance. This says nothing
-  # about tls: null — blanking the whole map is a different value, is allowed,
-  # and is covered separately above.
+  # B2: tls.issuer unset resolves to the operator
+  # kindIs "invalid" catches the unset case. The schema constrains the field to
+  # the enum, so an explicit tls.issuer: null is rejected before rendering and
+  # only the unset path reaches the helper. This says nothing about tls: null —
+  # blanking the whole map is a different value, is allowed, and is covered
+  # separately above.
   # -------------------------------------------------------------------
   # external no longer implies managed TLS. Deriving it would swap the CA of an
   # existing external instance on the next platform upgrade, with no action from
@@ -705,7 +705,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "tls.issuer unset with external=false keeps TLS off"
+  - it: "tls.issuer unset with external=false renders no chart certificates"
     templates:
       - templates/certmanager.yaml
     set:
@@ -772,13 +772,13 @@ tests:
           content: digital signature
 
   # -------------------------------------------------------------------
-  # Integer tls.issuer edge case
-  # The JSON schema enforces type "boolean" for tls.issuer, so integer
-  # values (e.g. 1) are rejected by schema validation before the helper
-  # even runs. Only explicit bool true is accepted; unset falls through
-  # to external inheritance via kindIs "invalid".
+  # tls.issuer round-trip through the helper
+  # The schema constrains the field to the enum, so anything outside it — a
+  # number, a typo — is rejected before the helper runs. What reaches the
+  # helper is one of the two strings, and it compares them as strings; unset
+  # resolves to the operator via kindIs "invalid".
   # -------------------------------------------------------------------
-  - it: "boolean true for tls.issuer survives the toString round-trip in the helper"
+  - it: "cert-manager issuer survives the toString round-trip in the helper"
     templates:
       - templates/certmanager.yaml
     set:
@@ -1104,9 +1104,9 @@ tests:
           path: spec.secretTemplate.labels["k8s.mariadb.com/watch"]
         documentIndex: 3
 
-  # The publication labels are rendered inside the TLS gate, so with TLS off
+  # The publication labels are rendered inside the cert-manager gate, so under
   # the chain does not exist at all and nothing is marked for publication.
-  - it: "no CA publication labels are rendered when TLS is disabled"
+  - it: "no CA publication labels are rendered under the operator issuer"
     templates:
       - templates/certmanager.yaml
     set:
@@ -1358,7 +1358,7 @@ tests:
   # Regression guard: no MySQL-8-only option may reach the MariaDB client, in
   # any TLS state. Anchored on the option name so both --ssl-mode=VALUE and a
   # bare --ssl-mode are caught. All three states that reach the client are
-  # covered: explicit, inherited from external, and off.
+  # covered: both issuers, and an external instance on the default issuer.
   - it: "backup-script Secret never emits the MySQL-only --ssl-mode option (tls.issuer=cert-manager)"
     templates:
       - templates/backup-script.yaml
@@ -1374,10 +1374,10 @@ tests:
           path: stringData["backup.sh"]
           pattern: "--ssl-mode"
 
-  # The inherited path is what an external instance actually gets by default,
+  # An external instance on the default issuer is the common case,
   # so it is the one most likely to run the backup against a TLS-enforcing
   # server — it needs the same guarantees as the explicit path.
-  - it: "backup-script Secret uses MariaDB flags on the inherited path (external=true, tls.issuer unset)"
+  - it: "backup-script Secret uses MariaDB flags for an external instance on the default issuer"
     templates:
       - templates/backup-script.yaml
     set:
