@@ -30,11 +30,11 @@ Service utilizes the Spotahome Redis Operator for efficient management and orche
 
 ### TLS parameters
 
-| Name              | Description                                                                                                                                                                                                                         | Type     | Value  |
-| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
-| `tls`             | TLS configuration. When omitted, TLS is enabled automatically when `external` is true.                                                                                                                                              | `object` | `{}`   |
-| `tls.enabled`     | Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`. | `*bool`  | `null` |
-| `tls.authClients` | Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.                                                                                 | `string` | `{}`   |
+| Name              | Description                                                                                                                                                                                                                                                                                                                         | Type     | Value  |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- | ------ |
+| `tls`             | TLS configuration. TLS is opt-in and is not inferred from `external`.                                                                                                                                                                                                                                                               | `object` | `{}`   |
+| `tls.enabled`     | Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`. | `*bool`  | `null` |
+| `tls.authClients` | Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.                                                                                                                                                                                 | `string` | `{}`   |
 
 
 ### Application-specific parameters
@@ -66,9 +66,9 @@ See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-pr
 
 ### tls
 
-`tls.enabled` turns on TLS for Redis and Sentinel connections. When it is not set the value of `external` is used, so a Redis reachable from outside the cluster is encrypted by default.
+`tls.enabled` turns on TLS for Redis and Sentinel connections. It is off unless set, including when `external` is true.
 
-> **Breaking change for existing `external: true` instances.** TLS replaces plaintext rather than running beside it: with TLS on, Redis and Sentinel are configured with `port 0` and serve only on the TLS port. Because `tls.enabled` defaults to the value of `external`, an already-deployed instance with `external: true` switches to TLS-only the first time it reconciles after this upgrade, and every existing client connecting in plaintext breaks. Set `tls.enabled: false` explicitly to keep the previous behaviour, or migrate the clients to TLS using the CA certificate described below.
+> **Enabling TLS is a one-way door for existing clients.** TLS replaces plaintext rather than running beside it: with TLS on, Redis and Sentinel are configured with `port 0` and serve only on the TLS port. Every client of that instance has to move to TLS at the same time, using the CA certificate described below. This is why TLS is not inferred from `external` — an instance reachable from outside the cluster is the one most likely to have clients that an upgrade must not disconnect.
 
 Enabling TLS makes the chart issue a per-release cert-manager chain: a self-signed bootstrap Issuer, a CA certificate, a CA Issuer, and the server leaf certificate the operator mounts into the Redis and Sentinel pods. The CA belongs to this release alone; it is not a cluster-wide trust root, and nothing outside the release trusts it.
 

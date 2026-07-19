@@ -39,7 +39,7 @@ type ConfigSpec struct {
 	// Redis major version to deploy
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
-	// TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
+	// TLS configuration. TLS is opt-in and is not inferred from `external`.
 	// +kubebuilder:default:={}
 	Tls TLS `json:"tls,omitempty"`
 	// Enable password generation.
@@ -57,7 +57,7 @@ type Resources struct {
 type TLS struct {
 	// Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.
 	AuthClients AuthClients `json:"authClients,omitempty"`
-	// Enable TLS for Redis and Sentinel connections. When omitted, defaults to the value of `external`. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
+	// Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.
 	Enabled *bool `json:"enabled,omitempty"`
 }
 

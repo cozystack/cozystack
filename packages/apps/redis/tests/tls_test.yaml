@@ -1,10 +1,10 @@
 suite: TLS configuration for Redis
 
-# Tests cover the tri-state tls.enabled logic:
-#   1. external=false, tls.enabled unset  -> TLS disabled
-#   2. external=true,  tls.enabled unset  -> TLS enabled (inherits external)
-#   3. external=true,  tls.enabled=false  -> TLS disabled (explicit overrides)
-#   4. external=false, tls.enabled=true   -> TLS enabled (explicit overrides)
+# TLS is opt-in and is never inferred from external. Tests cover:
+#   1. tls.enabled unset (any external)   -> TLS disabled
+#   2. tls.enabled=true                   -> TLS enabled
+#   3. tls.enabled=false                  -> TLS disabled
+#   4. tls null / empty map               -> TLS disabled
 # Plus authClients propagation, SAN coverage and dashboard RBAC.
 
 release:
@@ -19,9 +19,9 @@ set:
 
 tests:
   # ------------------------------------------------------------------
-  # Case 1: external=false, tls.enabled unset -> no TLS resources
+  # Case 1: tls.enabled unset -> no TLS resources, whatever external says
   # ------------------------------------------------------------------
-  - it: "certmanager.yaml renders no documents when external=false and tls.enabled is unset"
+  - it: "certmanager.yaml renders no documents when tls.enabled is unset"
     templates:
       - templates/certmanager.yaml
     set:
@@ -30,7 +30,49 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "redisfailover.yaml does not have spec.tls when external=false and tls.enabled is unset"
+  # The load-bearing assertion of the opt-in decision. TLS replaces plaintext
+  # in this operator, so inferring it from external would move an already
+  # running externally-reachable Redis to a TLS-only listener on its first
+  # reconcile after an upgrade and cut every plaintext client. Enabling TLS
+  # stays an explicit act.
+  - it: "external=true alone does not enable TLS"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "external=true alone leaves the operator with no spec.tls"
+    templates:
+      - templates/redisfailover.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  - it: "external=true alone grants the tenant no TLS secrets"
+    templates:
+      - templates/dashboard-resourcemap.yaml
+    set:
+      external: true
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-ca-cert"
+      - notContains:
+          path: rules[1].resourceNames
+          content: "my-redis-tls"
+
+  - it: "redisfailover.yaml does not have spec.tls when tls.enabled is unset"
     templates:
       - templates/redisfailover.yaml
     set:
@@ -42,7 +84,7 @@ tests:
       - notExists:
           path: spec.tls
 
-  - it: "dashboard-resourcemap.yaml does not list TLS secrets when external=false and tls.enabled is unset"
+  - it: "dashboard-resourcemap.yaml does not list TLS secrets when tls.enabled is unset"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
@@ -59,22 +101,26 @@ tests:
           content: "my-redis-ca-cert"
 
   # ------------------------------------------------------------------
-  # Case 2: external=true, tls.enabled unset -> TLS enabled via external
+  # Case 2: tls.enabled=true -> the full cert-manager chain
   # ------------------------------------------------------------------
-  - it: "certmanager.yaml renders 4 documents when external=true and tls.enabled is unset"
+  - it: "certmanager.yaml renders 4 documents when tls.enabled=true"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     asserts:
       - hasDocuments:
           count: 4
 
-  - it: "first document is a selfsigned Issuer when TLS enabled via external"
+  - it: "first document is a selfsigned Issuer when TLS is enabled"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 0
     asserts:
       - equal:
@@ -89,11 +135,13 @@ tests:
       - exists:
           path: spec.selfSigned
 
-  - it: "second document is the CA Certificate when TLS enabled via external"
+  - it: "second document is the CA Certificate when TLS is enabled"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 1
     asserts:
       - equal:
@@ -121,11 +169,13 @@ tests:
           path: spec.privateKey.size
           value: 256
 
-  - it: "third document is the CA Issuer when TLS enabled via external"
+  - it: "third document is the CA Issuer when TLS is enabled"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 2
     asserts:
       - equal:
@@ -138,11 +188,13 @@ tests:
           path: spec.ca.secretName
           value: my-redis-ca-tls
 
-  - it: "fourth document is the leaf Certificate when TLS enabled via external"
+  - it: "fourth document is the leaf Certificate when TLS is enabled"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - equal:
@@ -175,6 +227,8 @@ tests:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - contains:
@@ -195,6 +249,8 @@ tests:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - contains:
@@ -240,6 +296,8 @@ tests:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - contains:
@@ -252,22 +310,26 @@ tests:
           path: spec.dnsNames
           content: "*.rfr-my-redis.tenant-test.svc.cluster.local"
 
-  - it: "leaf Certificate SAN list includes external tenant hostname when external=true"
+  - it: "leaf Certificate SAN list includes external tenant hostname when external=true and TLS is on"
     templates:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - contains:
           path: spec.dnsNames
           content: "my-redis.example.com"
 
-  - it: "redisfailover.yaml passes TLS settings to the operator when external=true"
+  - it: "redisfailover.yaml passes TLS settings to the operator when TLS is enabled"
     templates:
       - templates/redisfailover.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentSelector:
       path: kind
       value: RedisFailover
@@ -293,6 +355,8 @@ tests:
       - templates/certmanager.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       # redis_exporter dials rediss://127.0.0.1 and verifies against the CA. A
@@ -305,11 +369,13 @@ tests:
           path: spec.ipAddresses
           content: "::1"
 
-  - it: "dashboard-resourcemap.yaml grants only the CA-only secret in RBAC when external=true and authClients defaults to no"
+  - it: "dashboard-resourcemap.yaml grants only the CA-only secret in RBAC when authClients defaults to no"
     templates:
       - templates/dashboard-resourcemap.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentSelector:
       path: kind
       value: Role
@@ -333,6 +399,7 @@ tests:
     set:
       external: true
       tls:
+        enabled: true
         authClients: "yes"
     documentSelector:
       path: kind
@@ -358,6 +425,7 @@ tests:
     set:
       external: true
       tls:
+        enabled: true
         authClients: "optional"
     documentSelector:
       path: kind
@@ -376,7 +444,7 @@ tests:
   # ------------------------------------------------------------------
   # Case 3: external=true, tls.enabled=false -> TLS explicitly off
   # ------------------------------------------------------------------
-  - it: "certmanager.yaml renders no documents when tls.enabled=false overrides external=true"
+  - it: "certmanager.yaml renders no documents when tls.enabled=false and external=true"
     templates:
       - templates/certmanager.yaml
     set:
@@ -387,7 +455,7 @@ tests:
       - hasDocuments:
           count: 0
 
-  - it: "redisfailover.yaml has no spec.tls when tls.enabled=false overrides external=true"
+  - it: "redisfailover.yaml has no spec.tls when tls.enabled=false and external=true"
     templates:
       - templates/redisfailover.yaml
     set:
@@ -561,6 +629,8 @@ tests:
       external: true
       _namespace:
         host: ""
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - contains:
@@ -576,6 +646,8 @@ tests:
     set:
       external: true
       _namespace: null
+      tls:
+        enabled: true
     documentIndex: 3
     asserts:
       - contains:
@@ -583,11 +655,11 @@ tests:
           content: "rfr-my-redis.tenant-test.svc.cluster.local"
 
   # ------------------------------------------------------------------
-  # Null forms of the tri-state. Both guards in _tls.tpl exist for these
-  # exact shapes: `default (dict)` for a nil tls map, and `kindIs "invalid"`
-  # for a present-but-null enabled key, which hasKey reports as set.
+  # Null and empty forms. The `default (dict)` guard in _tls.tpl covers a nil
+  # tls map and `kindIs "invalid"` covers a map with no enabled key; both
+  # resolve to off, same as omitting tls entirely.
   # ------------------------------------------------------------------
-  - it: "tls set to null is treated as unset and follows external=true"
+  - it: "tls set to null leaves TLS off even when external is true"
     templates:
       - templates/certmanager.yaml
     set:
@@ -595,9 +667,9 @@ tests:
       tls: null
     asserts:
       - hasDocuments:
-          count: 4
+          count: 0
 
-  - it: "tls set to null is treated as unset and follows external=false"
+  - it: "tls set to null leaves TLS off when external is false"
     templates:
       - templates/certmanager.yaml
     set:
@@ -612,7 +684,7 @@ tests:
   # test here. The kindIs "invalid" guard in _tls.tpl covers the reachable
   # shape: tls present as a map with no enabled key at all, which index returns
   # nil for. That is the tls: {} case, exercised below.
-  - it: "tls given as an empty map follows external=true"
+  - it: "tls given as an empty map leaves TLS off even when external is true"
     templates:
       - templates/certmanager.yaml
     set:
@@ -620,9 +692,9 @@ tests:
       tls: {}
     asserts:
       - hasDocuments:
-          count: 4
+          count: 0
 
-  - it: "tls given as an empty map follows external=false"
+  - it: "tls given as an empty map leaves TLS off when external is false"
     templates:
       - templates/certmanager.yaml
     set:
@@ -642,6 +714,8 @@ tests:
       - templates/redisfailover.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentSelector:
       path: kind
       value: RedisFailover
@@ -655,6 +729,8 @@ tests:
       - templates/dashboard-resourcemap.yaml
     set:
       external: true
+      tls:
+        enabled: true
     documentSelector:
       path: kind
       value: Role
