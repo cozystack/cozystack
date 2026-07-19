@@ -116,6 +116,14 @@ excluded_block() {
        sec && ex' "$COZYRDS"
 }
 
+# The names below only constrain anything while they sit under resourceNames:
+# matchName returns true for every name when resourceNames is nil, so an exclude
+# entry that lost that key would match everything and void the backstop while
+# each name was still present in the block.
+@test "mariadb-rd scopes the exclude entries by name" {
+  excluded_block | grep -q "^      - resourceNames:\$"
+}
+
 # Exclude backstop. The include selector matches by label with no name
 # constraint, so these names are the enumerable part of the gap: exclude wins
 # over include in matchResourceToExcludeInclude, so a Secret named here cannot
