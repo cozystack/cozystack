@@ -199,9 +199,9 @@ type TLSPassthroughListener struct {
 // TenantGatewaySpec describes the desired state of a per-tenant Gateway.
 //
 // The tlsPassthroughListeners rules below are enforced at admission
-// rather than only in the controller because renderGateway is the FIRST
-// step of the reconcile chain: a spec the apiserver accepts but the
-// renderer rejects aborts everything behind it — Issuer, wildcard
+// rather than only in the controller because renderGateway is the first
+// thing that renders: a spec the apiserver accepts but the renderer
+// rejects aborts everything behind it — Issuer, wildcard
 // Certificate, per-listener Certificates, route status, the http→https
 // redirect. One mistyped hostname would stall certificate renewal for
 // every published app on the tenant, with nothing but Ready=False to
@@ -212,8 +212,20 @@ type TLSPassthroughListener struct {
 // what it reads, and it is the layer the unit tests can exercise
 // directly.
 //
-// Name uniqueness is not restated here — the listType=map/listMapKey=name
-// markers on the field already make the apiserver enforce it.
+// Two rules are deliberately absent. Name uniqueness is carried by the
+// listType=map/listMapKey=name markers on the field, and duplicate
+// tlsPassthroughServices entries by listType=set — both are enforced by
+// the apiserver at no CEL cost.
+//
+// Hostname overlap is the one real exception: it stays controller-only.
+// Expressing it needs wildcard-aware matching across two lists, which
+// in CEL is a nested scan whose estimated cost the apiserver charges
+// against a budget these four rules already sit close under — adding it
+// is what pushed the CRD over and made it un-installable while the
+// per-request tests stayed green. TestCRDPassesInstallTimeValidation
+// keeps that honest. The consequence is accepted knowingly: an
+// overlapping hostname reaches etcd and surfaces as Ready=False rather
+// than a rejected write.
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.port != 80 && l.port != 443)",message="tlsPassthroughListeners: ports 80 and 443 are reserved for the Gateway's own http and TLS-terminate listeners; use the engine's native port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
