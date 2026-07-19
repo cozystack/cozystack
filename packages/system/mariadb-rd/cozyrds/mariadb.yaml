@@ -29,9 +29,14 @@ spec:
   # The operator reconciles <release>-ca-bundle whenever TLS is on. It holds
   # ca.crt alone, never a private key, and it keeps the previous CA alongside
   # the new one across a rollover, so it is the trust anchor to publish from —
-  # a source the CA private key never sits next to at all. The CA-extraction
-  # controller copies ca.crt into the key-free <release>.tenant-ca Secret; the
-  # include selector below then makes that projection readable by the tenant.
+  # a source the CA private key never sits next to at all.
+  #
+  # NOTE: this declaration is inert until the CA-extraction controller lands.
+  # That controller, the spec.caCert API field, and the tenant-ca label are all
+  # part of a separate change; against the current API this block is pruned on
+  # apply. It is declared here so the engine is wired the moment that merges.
+  # Until then the tenant reaches the anchor through the resourceNames entry
+  # below, which needs nothing new.
   caCert:
     sourceSecretName: "{{ .release }}-ca-bundle"
     sourceKey: ca.crt
@@ -46,10 +51,10 @@ spec:
           # Secret the documentation tells clients to fetch never surfaces in
           # the API. Same shape kafka uses for its CA certificates.
           - mariadb-{{ .name }}-ca-bundle
-      # The key-free trust anchor published by the CA-extraction controller.
-      # The selector is deliberately specific: an empty one compiles to a
-      # match-everything selector and would project every Secret in the
-      # namespace to the tenant.
+      # The key-free trust anchor the CA-extraction controller will publish;
+      # inert until it lands, see the note above. The selector is deliberately
+      # specific: an empty one compiles to a match-everything selector and
+      # would project every Secret in the namespace to the tenant.
       - matchLabels:
           internal.cozystack.io/tenant-ca: "true"
   services:
