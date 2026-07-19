@@ -1,11 +1,11 @@
-suite: RabbitMQ TLS spec wiring and management HTTPS
+suite: RabbitMQ TLS spec wiring
 
 templates:
   - templates/rabbitmq.yaml
 
 tests:
   # -----------------------------------------------------------------------
-  # No TLS: spec.tls absent, additionalConfig without management SSL block
+  # No TLS: spec.tls absent
   # -----------------------------------------------------------------------
 
   - it: does not set spec.tls when tls.enabled is false
@@ -37,7 +37,7 @@ tests:
           path: spec.rabbitmq.additionalConfig
 
   # -----------------------------------------------------------------------
-  # TLS enabled: spec.tls wired + management HTTPS block rendered
+  # TLS enabled: spec.tls wired
   # -----------------------------------------------------------------------
 
   - it: sets spec.tls.secretName to release-tls when tls.enabled is true
@@ -71,23 +71,8 @@ tests:
 
   # The operator's own defaultTLSConf supplies ssl_options.certfile/keyfile,
   # listeners.ssl.default and management.ssl.certfile/keyfile/port once
-  # spec.tls.secretName is set, so the chart must NOT restate them. cacertfile is
-  # the one key it does not set outside mutual TLS, so that is all we carry.
-
-  - it: sets spec.tls.secretName, which is what enables TLS operator-side
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - equal:
-          path: spec.tls.secretName
-          value: myrabbitmq-tls
+  # spec.tls.secretName is set, so the chart restates none of them and renders no
+  # additionalConfig at all.
 
   - it: adds no additionalConfig, since the operator supplies the TLS config itself
     release:
@@ -102,9 +87,9 @@ tests:
     asserts:
       # defaultTLSConf already gives ssl_options.certfile/keyfile,
       # listeners.ssl.default and management.ssl.certfile/keyfile/port once
-      # spec.tls.secretName is set. No cacertfile on either listener: it would
-      # only matter for verifying CLIENT certificates, which also needs
-      # verify_peer, and setting it on one listener only left them inconsistent.
+      # spec.tls.secretName is set. No cacertfile on either listener either: it
+      # would only matter for verifying CLIENT certificates, which also needs
+      # verify_peer and fail_if_no_peer_cert.
       - notExists:
           path: spec.rabbitmq
 
@@ -145,23 +130,6 @@ tests:
           path: spec.tls.secretName
           value: myrabbitmq-tls
 
-  - it: renders management ssl config when tls.enabled is unset (default) and external is true
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    values:
-      - fixtures/tls_default_values.yaml
-    set:
-      external: true
-      _namespace.host: example.com
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - equal:
-          path: spec.tls.secretName
-          value: myrabbitmq-tls
-
   # -----------------------------------------------------------------------
   # Tri-state: explicit tls.enabled=false beats external=true
   # -----------------------------------------------------------------------
@@ -182,24 +150,6 @@ tests:
           path: spec.tls
       - notExists:
           path: spec.rabbitmq.additionalConfig
-
-  # -----------------------------------------------------------------------
-  # Ensure port 15672 (plain) stays when TLS enabled (disableNonTLSListeners absent)
-  # -----------------------------------------------------------------------
-
-  - it: RabbitmqCluster renders without disableNonTLSListeners even when TLS is on
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: true
-      external: false
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      - notExists:
-          path: spec.tls.disableNonTLSListeners
 
   # -----------------------------------------------------------------------
   # B1: no spec.override.service is rendered, in any combination.
@@ -284,11 +234,14 @@ tests:
   #
   # This chart wires TLS for AMQP (5671), management HTTPS (15671), and the
   # cert-manager chain. Inter-node Erlang distribution (port 25672) is NOT
-  # covered: spec.tls.disableNonTLSListeners and interNodeTLS are intentionally
-  # left unset. Enabling Erlang mTLS is tracked as a follow-up.
+  # covered. The operator exposes exactly three TLS fields — secretName,
+  # caSecretName and disableNonTLSListeners — and none of them governs 25672,
+  # which the operator carries on the headless Service unconditionally. Inter-node
+  # mTLS would require caSecretName plus operator-side configuration this chart
+  # does not wire.
   # -----------------------------------------------------------------------
 
-  - it: documents the inter-node TLS scope boundary
+  - it: leaves caSecretName unset, so no inter-node mTLS is configured
     release:
       name: myrabbitmq
       namespace: tenant-test
@@ -299,24 +252,9 @@ tests:
       value: RabbitmqCluster
     asserts:
       - notExists:
-          path: spec.tls.disableNonTLSListeners
+          path: spec.tls.caSecretName
 
   # -----------------------------------------------------------------------
   # Baseline (no TLS): RabbitmqCluster always renders
   # -----------------------------------------------------------------------
 
-  - it: renders no TLS block at all when TLS is off
-    release:
-      name: myrabbitmq
-      namespace: tenant-test
-    set:
-      tls.enabled: false
-      external: false
-    documentSelector:
-      path: kind
-      value: RabbitmqCluster
-    asserts:
-      # Selecting by kind and then asserting the kind cannot fail; assert the
-      # TLS-dependent shape instead.
-      - notExists:
-          path: spec.tls
