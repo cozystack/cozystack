@@ -29,9 +29,10 @@ spec:
   # publication path ever runs next to the CA private key.
   #
   # The operator only watches Secrets referenced by serverCASecretRef /
-  # serverCertSecretRef when they carry its watch label. Without it, a
-  # cert-manager renewal does not trigger a reconcile and the new material is
-  # only picked up on the next full resync.
+  # serverCertSecretRef when they carry its watch label, and it sets the same
+  # label on Certificates it builds itself. Without it a cert-manager renewal
+  # does not wake a reconcile immediately; the operator requeues every five
+  # minutes while TLS is on, so this buys promptness, not correctness.
   secretTemplate:
     labels:
       k8s.mariadb.com/watch: ""

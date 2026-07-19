@@ -56,8 +56,10 @@ spec:
     exclude:
       - resourceNames:
           # Private keys. -ca-tls and -tls are issued by this chart through
-          # cert-manager and hold the CA and server keys; -ca, -server-cert and
-          # -client-cert are the operator's equivalents when it issues its own.
+          # cert-manager and hold the CA and server keys. Of the operator's own,
+          # -server-cert exists only when it issues the server leg, but -ca and
+          # -client-cert exist under both issuers: the chart never sets the
+          # client refs, so that leg is never delegated to cert-manager.
           - mariadb-{{ .name }}-ca-tls
           - mariadb-{{ .name }}-tls
           - mariadb-{{ .name }}-ca
