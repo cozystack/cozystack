@@ -85,6 +85,7 @@ spec:
   (printf "%s-nodes.%s" $name $ns)
   (printf "%s-nodes.%s.svc" $name $ns)
   (printf "%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
+  (printf "*.%s-nodes" $name)
   (printf "*.%s-nodes.%s" $name $ns)
   (printf "*.%s-nodes.%s.svc" $name $ns)
   (printf "*.%s-nodes.%s.svc.%s" $name $ns $clusterDomain)
@@ -124,9 +125,13 @@ spec:
     {{- range $dnsNames }}
     - {{ . | quote }}
     {{- end }}
+  {{- /* No `key encipherment`: that bit authorises RSA key transport, and this is
+       an ECDSA key. ECDSA cipher suites establish the session over ECDHE and use
+       the certificate only to sign the exchange, so `digital signature` is the
+       bit that does the work. Requesting the other one asks for a capability the
+       key type cannot supply. */}}
   usages:
     - digital signature
-    - key encipherment
     - server auth
   privateKey:
     algorithm: ECDSA
