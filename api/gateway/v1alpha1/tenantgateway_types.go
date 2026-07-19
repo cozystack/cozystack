@@ -219,6 +219,14 @@ type TLSPassthroughListener struct {
 type TenantGatewaySpec struct {
 	// Apex is the tenant's apex hostname. The Gateway listeners are
 	// constrained to this apex and its subdomains.
+	//
+	// MaxLength is the DNS ceiling for a fully qualified name, so it
+	// rejects nothing that was ever resolvable. It is required rather
+	// than cosmetic: the tlsPassthroughListeners CEL rules concatenate
+	// this value, and without a declared bound the apiserver's
+	// install-time cost estimator assumes the maximum string size and
+	// refuses the whole CRD.
+	// +kubebuilder:validation:MaxLength=253
 	// +required
 	Apex string `json:"apex"`
 
@@ -251,14 +259,26 @@ type TenantGatewaySpec struct {
 
 	// AttachedNamespaces lists namespace names that are allowed to
 	// attach HTTPRoute or TLSRoute to this tenant's Gateway. The
-	// publishing tenant namespace is implicit. Selector is by built-in
-	// kubernetes.io/metadata.name (kube-apiserver-written, unspoofable).
+	// publishing tenant namespace is implicit. The controller grants
+	// access by stamping the namespace.cozystack.io/gateway label on
+	// each listed namespace; the Gateway's HTTPS and TLS-passthrough
+	// listeners select on that label. Writing it requires patch on
+	// Namespace, which tenants do not hold. Only the port-80 listener
+	// selects on kubernetes.io/metadata.name.
 	// +optional
 	AttachedNamespaces []string `json:"attachedNamespaces,omitempty"`
 
 	// TLSPassthroughServices names services exposed via TLS-passthrough
 	// (mode: Passthrough listeners). Each service gets a dedicated
 	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
+	//
+	// The bounds exist for the CEL cost estimator, same as on Apex: the
+	// name-collision rule scans this list, and an unbounded list of
+	// unbounded strings makes the estimate exceed the per-CRD budget.
+	// The item length is a DNS-1123 label; the count leaves the
+	// listener budget room.
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=63
 	// +optional
 	TLSPassthroughServices []string `json:"tlsPassthroughServices,omitempty"`
 
@@ -279,13 +299,15 @@ type TenantGatewaySpec struct {
 	// terminates TLS, so the Gateway neither holds nor issues that
 	// certificate. Declaring an entry without attaching a TLSRoute opens
 	// the port and matches the SNI but has nowhere to forward the stream.
-	// The cap is 62, not Gateway API's 64: renderGateway always emits
-	// the port-80 http listener and at least one terminate listener
-	// besides these, so allowing 64 entries here would let a spec that
-	// satisfies every rule above render 65 listeners and be rejected
-	// wholesale — taking every app's HTTPS listener down with it, the
-	// exact failure the other rules exist to prevent. It also bounds
-	// the cost estimate for the CEL rules above.
+	// The cap bounds what THIS field contributes to the Gateway's 64
+	// listener slots; it does not by itself guarantee the total fits.
+	// The rendered count is the port-80 listener plus one per published
+	// hostname, one per tlsPassthroughServices entry, and one per entry
+	// here — so a tenant can exceed 64 with far fewer than 62 of these.
+	// The controller checks the assembled total and fails with a named
+	// budget; this cap only keeps a single field from consuming the
+	// whole allowance. It also bounds the cost estimate for the CEL
+	// rules above.
 	// +optional
 	// +listType=map
 	// +listMapKey=name

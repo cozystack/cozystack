@@ -20,10 +20,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 
 	apiextensions "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apiextvalidation "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	schemacel "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
 	apiservervalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
@@ -53,11 +55,15 @@ type admissionCheck struct {
 	schema     apiservervalidation.SchemaValidator
 }
 
-// specValidator compiles the spec schema exactly as the apiserver
-// would. A CEL rule that fails to compile, or whose estimated cost
-// exceeds the per-CRD budget, surfaces here — which matters because a
-// CRD the apiserver refuses to install takes the whole platform's
-// gateway API down, and nothing else in this suite would notice.
+// specValidator compiles the spec schema the way the apiserver
+// evaluates an incoming object: structural validation plus the CEL
+// rules against the per-request runtime budget.
+//
+// This does NOT check whether the apiserver would accept the CRD in the
+// first place. Install-time cost estimation is a separate code path
+// with a separate budget, and a CRD can pass everything here while
+// being refused on install — which is exactly what happened once these
+// rules were added. TestCRDPassesInstallTimeValidation covers that.
 func specValidator(t *testing.T) *admissionCheck {
 	t.Helper()
 
@@ -261,15 +267,55 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 	}
 }
 
+// TestCRDPassesInstallTimeValidation runs the validation kube-apiserver
+// applies when the CRD itself is written. It is a different budget from
+// the per-request one the other tests exercise: the install-time
+// estimator assumes the largest value each declared type permits, so an
+// unbounded string or list inside a CEL rule blows the estimate even
+// though every real object is small.
+//
+// This is not hypothetical. The XValidation rules on TenantGatewaySpec
+// were merged into this file's CRD in a state the apiserver refuses
+// outright — on CREATE and on UPDATE — because spec.apex and
+// spec.tlsPassthroughServices carried no size bounds. The CRD ships in
+// the cozystack-controller chart, so the failure mode is the whole
+// TenantGateway API freezing across every cluster, fresh or upgraded.
+// The full suite was green at the time; nothing else would have caught it.
+func TestCRDPassesInstallTimeValidation(t *testing.T) {
+	raw, err := os.ReadFile(crdPath)
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+	var v1crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(raw, &v1crd); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+	// A CRD manifest on disk has no status; validation demands at least
+	// one stored version, so supply what the apiserver would have
+	// written. Without this the run fails on an unrelated status error
+	// and tells us nothing about cost.
+	v1crd.Status.StoredVersions = []string{"v1alpha1"}
+
+	var internal apiextensions.CustomResourceDefinition
+	if err := apiextensionsv1.Convert_v1_CustomResourceDefinition_To_apiextensions_CustomResourceDefinition(&v1crd, &internal, nil); err != nil {
+		t.Fatalf("convert CRD: %v", err)
+	}
+	for _, e := range apiextvalidation.ValidateCustomResourceDefinition(context.TODO(), &internal) {
+		t.Errorf("apiserver would reject this CRD: %v", e)
+	}
+}
+
 // TestPassthroughListenerCapFitsGatewayAPI pins that a spec filled to
-// the schema's maxItems still renders a Gateway the apiserver accepts.
-// Gateway API caps spec.listeners at 64 and renderGateway always adds
-// the port-80 listener plus the terminate listeners, so a cap of 64
-// here would let a spec that satisfies every other rule render 65 and
-// be rejected wholesale — taking every app's HTTPS listener down with
-// it, the outcome the validation exists to avoid. The bound is read
-// from the generated CRD so raising the marker without re-checking the
+// the schema's maxItems, on a tenant publishing one app, still renders
+// within Gateway API's 64-listener cap. The bound is read from the
+// generated CRD so raising the marker without re-checking the
 // arithmetic fails here rather than in a cluster.
+//
+// This is a bound on one field's contribution, not proof the total
+// always fits — the rendered count also grows with published hostnames
+// and passthrough services, and a tenant can exceed 64 with far fewer
+// entries than the cap. TestRenderGatewayRejectsOverListenerCap covers
+// the total.
 func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
 	const gatewayAPIListenerCap = 64
 
@@ -320,6 +366,49 @@ func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
 	}
 	if got := len(gw.Spec.Listeners); got > gatewayAPIListenerCap {
 		t.Errorf("maxItems=%d renders %d listeners, over the Gateway API cap of %d", maxItems, got, gatewayAPIListenerCap)
+	}
+}
+
+// TestRenderGatewayRejectsOverListenerCap pins the total-count guard.
+// Each individual field is bounded, but the Gateway's 64 slots are
+// shared between the port-80 listener, per-hostname HTTPS listeners,
+// passthrough services and passthrough listeners — so a spec where
+// every field is within its own cap can still overflow. Without the
+// guard the overflow surfaces as the apiserver rejecting the whole
+// Gateway, which drops every app's HTTPS listener and reports nothing
+// on the TenantGateway the tenant actually manages.
+func TestRenderGatewayRejectsOverListenerCap(t *testing.T) {
+	listeners := make([]gatewayv1alpha1.TLSPassthroughListener, 0, 62)
+	for i := 0; i < 62; i++ {
+		listeners = append(listeners, gatewayv1alpha1.TLSPassthroughListener{
+			Name:     fmt.Sprintf("db%d", i),
+			Port:     int32(10000 + i),
+			Hostname: fmt.Sprintf("db%d.foo.example.com", i),
+		})
+	}
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                    "foo.example.com",
+			CertMode:                gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:        "cilium",
+			TLSPassthroughListeners: listeners,
+		},
+	}
+
+	r := &Reconciler{Scheme: newScheme(t)}
+	// 1 http + 62 passthrough + 2 published hostnames = 65.
+	_, err := r.renderGateway(tgw, []string{"a.foo.example.com", "b.foo.example.com"}, nil)
+	if err == nil {
+		t.Fatal("expected an error for a 65-listener Gateway, got nil")
+	}
+	if !strings.Contains(err.Error(), "over the Gateway API cap") {
+		t.Errorf("error does not name the budget: %v", err)
+	}
+
+	// One fewer published hostname lands exactly on the cap.
+	if _, err := r.renderGateway(tgw, []string{"a.foo.example.com"}, nil); err != nil {
+		t.Errorf("64 listeners should be accepted, got %v", err)
 	}
 }
 
