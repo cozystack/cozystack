@@ -30,8 +30,12 @@ metadata:
     # This has to sit on the RedisFailover rather than in spec.redis.podAnnotations:
     # the operator copies the CR's own annotations onto the StatefulSet's
     # metadata, which is where stakater reloader looks, while podAnnotations
-    # land on the pod template where it does not. Covers Redis only — see the
-    # TLS section of README.md for why Sentinel cannot be wired the same way.
+    # land on the pod template where it does not.
+    #
+    # Two limits, both spelled out in the TLS section of README.md: it covers
+    # Redis but not Sentinel, whose Deployment the operator builds without an
+    # annotations field, and it does nothing at all on the isp-hosted system
+    # variant, which permits the paas bundle but does not install reloader.
     secret.reloader.stakater.com/reload: {{ .Release.Name }}-tls
   {{- end }}
   labels:
