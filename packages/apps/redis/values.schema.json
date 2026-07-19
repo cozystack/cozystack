@@ -127,6 +127,15 @@
       "type": "boolean",
       "default": false
     },
+    "version": {
+      "description": "Redis major version to deploy",
+      "type": "string",
+      "default": "v8",
+      "enum": [
+        "v8",
+        "v7"
+      ]
+    },
     "tls": {
       "description": "TLS configuration. When omitted, TLS is enabled automatically when `external` is true.",
       "type": "object",
@@ -146,15 +155,6 @@
           "type": "boolean"
         }
       }
-    },
-    "version": {
-      "description": "Redis major version to deploy",
-      "type": "string",
-      "default": "v8",
-      "enum": [
-        "v8",
-        "v7"
-      ]
     },
     "authEnabled": {
       "description": "Enable password generation.",

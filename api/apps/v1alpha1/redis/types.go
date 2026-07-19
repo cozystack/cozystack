@@ -36,12 +36,12 @@ type ConfigSpec struct {
 	// Enable external access from outside the cluster.
 	// +kubebuilder:default:=false
 	External bool `json:"external"`
-	// TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
-	// +kubebuilder:default:={}
-	Tls TLS `json:"tls,omitempty"`
 	// Redis major version to deploy
 	// +kubebuilder:default:="v8"
 	Version Version `json:"version"`
+	// TLS configuration. When omitted, TLS is enabled automatically when `external` is true.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls,omitempty"`
 	// Enable password generation.
 	// +kubebuilder:default:=true
 	AuthEnabled bool `json:"authEnabled"`
