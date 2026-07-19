@@ -83,8 +83,9 @@ spec:
 # set, which catches an accidental edit here, but it compares this template
 # against a copy of itself — it cannot notice the operator renaming a service.
 # The operator does not check either: with both serverCASecretRef and
-# serverCertSecretRef supplied it skips certificate reconciliation entirely and
-# never looks at the SANs. So an upstream rename surfaces as a handshake failure
+# serverCertSecretRef supplied it skips certificate issuance, so the code that
+# would validate SANs is never reached. It still reads the Secret — for the pod
+# annotation hash and for status — but never inspects the names in it. So an upstream rename surfaces as a handshake failure
 # in a cluster, and closing that gap needs an e2e case that connects, not
 # another rendering assertion.
 apiVersion: cert-manager.io/v1

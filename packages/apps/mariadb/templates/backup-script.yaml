@@ -37,6 +37,12 @@ stringData:
     # builds the bundle, so a fully expired CA set produces a present but empty
     # ca.crt. Testing only for readability would let that through to the same
     # opaque client error this check exists to replace.
+    #
+    # It does not cover every case. On a fresh install with managed TLS the
+    # operator writes the bundle before cert-manager has issued the chart CA, so
+    # the file can be present and non-empty while holding only the operator's
+    # client CA — the connection then fails on verification rather than here.
+    # That window closes on the next reconcile.
     if [ ! -r /etc/mysql-ssl/ca.crt ] || [ ! -s /etc/mysql-ssl/ca.crt ]; then
       echo "ERROR: /etc/mysql-ssl/ca.crt is missing or empty, projected from Secret ${MYSQL_CA_SECRET}." >&2
       echo "The operator reconciles that Secret once TLS certificates settle; retry once it holds a CA." >&2
