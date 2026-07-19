@@ -90,6 +90,10 @@ storageClass: ""
 ##   Changing this on a release that already runs chart-managed TLS reissues the
 ##   certificate with a different set of names, and the pods do not pick that up on
 ##   their own — see the manual step described under tls.
+##   On a platform with no root host the tenant host is empty. External access still
+##   works by LoadBalancer address: no external-dns record is published and the
+##   certificate carries in-cluster names only, since there is no external name to
+##   put in either.
 external: false
 
 ## @enum {string} TopologySpreadPolicy - Pod distribution policy across nodes/zones.
