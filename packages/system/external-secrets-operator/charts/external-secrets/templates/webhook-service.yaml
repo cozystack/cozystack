@@ -23,7 +23,7 @@ spec:
   {{- end }}
   ports:
   - port: 443
-    targetPort: {{ .Values.webhook.port }}
+    targetPort: webhook
     protocol: TCP
     name: webhook
   {{- if .Values.webhook.metrics.service.enabled }}

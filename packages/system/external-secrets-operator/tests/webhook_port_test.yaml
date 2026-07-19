@@ -1,0 +1,115 @@
+suite: external-secrets webhook port
+
+# Keeps the webhook off the kubelet's port. The values.yaml override and
+# patches/webhook-service-named-target-port.patch carry the reasoning; it is
+# not repeated here.
+#
+# Two of these are regression guards. The first pins the listener flag and
+# the advertised containerPort; the second pins the Service to the container
+# port *name*, which is what lets the port move without dropping traffic —
+# carried as a vendored patch here, and upstream's own shape since chart
+# 0.19.1 (external-secrets/external-secrets#5108), so it survives a future
+# chart bump unchanged. This chart's values.schema.json sets no
+# additionalProperties: false, so an upstream rename of webhook.port is
+# accepted and silently ignored rather than failing helm — these tests are
+# the only thing between a re-vendored chart and a silent revert to 10250.
+#
+# The rest pin preconditions that already hold and that the reasoning in
+# values.yaml depends on: that the port lives in the Pod's network namespace
+# rather than the node's, that admission fails closed, and that CRD
+# conversion routes through the same Service the port change moves.
+
+templates:
+  - charts/external-secrets/templates/webhook-deployment.yaml
+  - charts/external-secrets/templates/webhook-service.yaml
+  - charts/external-secrets/templates/validatingwebhook.yaml
+  - charts/external-secrets/templates/crds/externalsecret.yaml
+
+release:
+  name: external-secrets-operator
+  namespace: cozy-external-secrets-operator
+
+tests:
+  - it: serves the webhook on 10260, not the kubelet's 10250
+    template: charts/external-secrets/templates/webhook-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --port=10260
+      - contains:
+          path: spec.template.spec.containers[0].ports
+          content:
+            containerPort: 10260
+            protocol: TCP
+            name: webhook
+
+  - it: reaches the webhook by container-port name, so the port can move without a traffic gap
+    template: charts/external-secrets/templates/webhook-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      # A name, not a number. The vendored chart renders targetPort from
+      # webhook.port, which every endpoint then shares regardless of what its
+      # Pod actually listens on; the named form makes the EndpointSlice
+      # controller resolve it per-Pod instead. Applied by the vendored patch
+      # here and shipped by upstream since chart 0.19.1. If this ever reverts
+      # to an integer, a future port change silently reintroduces the gap.
+      - equal:
+          path: spec.ports[0].targetPort
+          value: webhook
+      - equal:
+          path: spec.ports[0].name
+          value: webhook
+
+  - it: keeps the webhook off the host network, so the port lives in the Pod netns
+    template: charts/external-secrets/templates/webhook-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: false
+
+  - it: fails admission closed, which is what makes a misroute cluster-wide
+    template: charts/external-secrets/templates/validatingwebhook.yaml
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ValidatingWebhookConfiguration
+      - equal:
+          path: metadata.name
+          value: externalsecret-validate
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Fail
+
+  - it: leaves the secretstore webhooks on the apiserver's default failurePolicy of Fail
+    template: charts/external-secrets/templates/validatingwebhook.yaml
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: metadata.name
+          value: secretstore-validate
+      # These two carry no explicit failurePolicy and inherit Fail from the
+      # apiserver. Asserting absence pins that: an upstream addition of
+      # "Ignore" here would quietly widen the blast radius reasoning in
+      # values.yaml without any other test noticing.
+      - notExists:
+          path: webhooks[0].failurePolicy
+      - notExists:
+          path: webhooks[1].failurePolicy
+
+  - it: routes CRD conversion through the same Service, so the port change reaches it too
+    template: charts/external-secrets/templates/crds/externalsecret.yaml
+    asserts:
+      - isKind:
+          of: CustomResourceDefinition
+      - equal:
+          path: spec.conversion.strategy
+          value: Webhook
+      - equal:
+          path: spec.conversion.webhook.clientConfig.service.name
+          value: external-secrets-operator-webhook
