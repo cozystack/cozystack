@@ -250,6 +250,18 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		if _, reserved := reservedGatewayPorts[l.Port]; reserved {
 			return fmt.Errorf("tlsPassthroughListeners: listener %q port %d is reserved for the Gateway's http (80) and terminate (443) listeners; use the engine's native port", l.Name, l.Port)
 		}
+		// One listener per port is a phase-1 narrowing, not a Gateway
+		// API requirement: TLS listeners are distinct by the (port,
+		// protocol, hostname) triple, so several passthrough listeners
+		// could share a port and be selected by SNI — the port-443
+		// tls-<svc> listeners above already do exactly that. It is
+		// narrowed here because the field's purpose is the engine's
+		// native port, where a second listener means two engines
+		// answering on one port and the SNI deciding which, and
+		// nothing downstream (routing, certificates) exists yet to
+		// make that configuration testable. Lifting the restriction is
+		// removing this check — no API or schema change — so it stays
+		// available once the later phases land.
 		if _, dup := seenPorts[l.Port]; dup {
 			return fmt.Errorf("tlsPassthroughListeners: duplicate port %d (listener %q)", l.Port, l.Name)
 		}
