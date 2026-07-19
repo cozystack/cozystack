@@ -14,14 +14,18 @@ include ../../../hack/package.mk
 # itself is named redis-operator, hence the rename after extraction.
 #
 # Note on the ClusterRole this vendors: it grants create/get/patch/update on
-# Secrets and full verbs on cert-manager Certificates cluster-wide, which is
-# wider than this platform needs — the operator only reads the TLS Secret and
-# publishes the CA-only one, and it never takes the cert-manager path because
-# the chart always supplies spec.tls.certificateSecret. It is not narrowed here
-# because everything under charts/ is overwritten by the update target above;
-# the fix belongs in the fork, either as a namespace-scoped Role or behind a
-# chart value, and a downstream edit would be silently reverted on the next
-# `make update`.
+# Secrets and every verb on cert-manager Certificates, cluster-wide via a
+# ClusterRoleBinding. That is wider than this platform uses — the operator only
+# reads the TLS Secret and publishes the CA-only one, and it never takes the
+# cert-manager path because the chart always supplies
+# spec.tls.certificateSecret.
+#
+# Narrowing it downstream IS possible: several packages here (grafana-operator,
+# fluxcd-operator, fluxcd, kamaji, ingress-nginx) keep a patches/*.diff applied
+# at the end of update:, which survives re-vendoring by construction. It is not
+# done here because the choice between a downstream patch and a fix in the fork
+# is a maintainer decision that the TLS work deliberately left open, not
+# because the mechanism is unavailable.
 update:
 	rm -rf charts
 	mkdir -p charts
