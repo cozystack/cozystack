@@ -524,3 +524,13 @@ tests:
       - notContains:
           path: spec.dnsNames
           content: "rfr-my-redis.tenant-test.svc.cluster.local"
+
+  - it: "leaf Certificate fails with a named error when external is on and no namespace host is injected"
+    templates:
+      - templates/certmanager.yaml
+    set:
+      external: true
+      _namespace: null
+    asserts:
+      - failedTemplate:
+          errorMessage: "external is true but _namespace.host is not set"
