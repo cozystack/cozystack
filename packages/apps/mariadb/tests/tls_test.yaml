@@ -1,10 +1,13 @@
 suite: TLS configuration for MariaDB
 
-# Tests cover the tri-state tls.enabled logic:
-#   1. external=false, tls.enabled unset  → TLS disabled
-#   2. external=true,  tls.enabled unset  → TLS enabled (inherits external)
-#   3. external=true,  tls.enabled=false  → TLS disabled (explicit overrides)
-#   4. external=false, tls.enabled=true   → TLS enabled (explicit overrides)
+# Tests cover the tri-state tls.enabled logic. "Managed" means the chart issues
+# the CA and server certificate and enforces TLS; "unmanaged" means the operator
+# keeps its own CA and does not enforce. TLS itself is on in every row — the
+# operator serves it regardless — so no row here turns TLS off:
+#   1. external=false, tls.enabled unset  → unmanaged
+#   2. external=true,  tls.enabled unset  → managed (inherits external)
+#   3. external=true,  tls.enabled=false  → unmanaged (explicit overrides)
+#   4. external=false, tls.enabled=true   → managed (explicit overrides)
 
 release:
   name: my-mariadb
@@ -596,9 +599,11 @@ tests:
 
   # -------------------------------------------------------------------
   # B2: tls.enabled unset falls through to external (tri-state)
-  # kindIs "invalid" catches the unset case. The schema enforces type
-  # "boolean" for tls.enabled — null is rejected by schema validation
-  # before rendering; only the unset path triggers external inheritance.
+  # kindIs "invalid" catches the unset case. The schema types tls.enabled as
+  # "boolean", so an explicit tls.enabled: null is rejected before rendering
+  # and only the unset path reaches external inheritance. This says nothing
+  # about tls: null — blanking the whole map is a different value, is allowed,
+  # and is covered separately above.
   # -------------------------------------------------------------------
   - it: "tls.enabled unset with external=true enables TLS (auto-on path)"
     templates:
@@ -682,7 +687,7 @@ tests:
   # even runs. Only explicit bool true is accepted; unset falls through
   # to external inheritance via kindIs "invalid".
   # -------------------------------------------------------------------
-  - it: "string true for tls.enabled enables TLS (toString round-trip is safe for bool)"
+  - it: "boolean true for tls.enabled survives the toString round-trip in the helper"
     templates:
       - templates/certmanager.yaml
     set:
@@ -811,10 +816,10 @@ tests:
           value: Always
 
   # -------------------------------------------------------------------
-  # E: backup CronJob mounts TLS CA secret when TLS is enabled
-  # When require_secure_transport=ON, the backup mysqldump/mysql commands
-  # need SSL flags to connect. The leaf Secret bundles ca.crt alongside
-  # tls.crt/tls.key so it is the right source for the trust anchor.
+  # E: backup CronJob mounts the TLS trust anchor when TLS is managed.
+  # When require_secure_transport=ON, the backup mysqldump/mysql commands need
+  # SSL flags to connect. The anchor comes from the operator's ca-bundle, not
+  # from the leaf Secret — see the volume test below for why.
   # -------------------------------------------------------------------
   - it: "backup CronJob has tls-ca volumeMount when tls.enabled=true"
     templates:
@@ -1160,7 +1165,8 @@ tests:
 
   # Regression guard: no MySQL-8-only option may reach the MariaDB client, in
   # any TLS state. Anchored on the option name so both --ssl-mode=VALUE and a
-  # bare --ssl-mode are caught.
+  # bare --ssl-mode are caught. All three states that reach the client are
+  # covered: explicit, inherited from external, and off.
   - it: "backup-script Secret never emits the MySQL-only --ssl-mode option (tls.enabled=true)"
     templates:
       - templates/backup-script.yaml
@@ -1172,6 +1178,29 @@ tests:
         s3Bucket: s3.example.org/test
         cleanupStrategy: "--keep-last=3"
     asserts:
+      - notMatchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-mode"
+
+  # The inherited path is what an external instance actually gets by default,
+  # so it is the one most likely to run the backup against a TLS-enforcing
+  # server — it needs the same guarantees as the explicit path.
+  - it: "backup-script Secret uses MariaDB flags on the inherited path (external=true, tls.enabled unset)"
+    templates:
+      - templates/backup-script.yaml
+    set:
+      external: true
+      backup:
+        enabled: true
+        s3Bucket: s3.example.org/test
+        cleanupStrategy: "--keep-last=3"
+    asserts:
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-ca=/etc/mysql-ssl/ca\\.crt"
+      - matchRegex:
+          path: stringData["backup.sh"]
+          pattern: "--ssl-verify-server-cert"
       - notMatchRegex:
           path: stringData["backup.sh"]
           pattern: "--ssl-mode"
