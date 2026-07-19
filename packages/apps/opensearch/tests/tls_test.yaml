@@ -30,22 +30,42 @@ templates:
   - templates/certmanager.yaml
 
 tests:
-  # Both sides of the boundary, so the limit cannot drift in either direction: 48
-  # rejected, 47 accepted and rendering the full chain.
-  - it: fails when the release name exceeds the 47-char limit
+  # Both sides of both boundaries. The limit is the one the SANs actually impose —
+  # 52 with Dashboards on, because <release>-dashboards is the longest DNS label
+  # built, and 53 without it, where <release>-discovery binds instead. A tighter
+  # fixed number would reject release names the platform accepts (its own cap is 53)
+  # and that render today.
+  - it: rejects a name only when the dashboards SAN would exceed the label limit
     release:
-      name: os-test-name-that-is-definitely-too-long-xxxxxxx
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch TLS requires <=52 here so the SAN "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
+
+  - it: accepts that same name when dashboards is off and -discovery binds instead
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
     set:
       tls:
         enabled: true
     asserts:
-      - failedTemplate:
-          errorMessage: "Release name \"os-test-name-that-is-definitely-too-long-xxxxxxx\" is 48 chars; opensearch TLS requires <=47 chars so the generated certificate stays within the 63-char DNS label limit on its SANs (longest: os-test-name-that-is-definitely-too-long-xxxxxxx-dashboards) and the 64-char limit on the CA common name."
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-discovery
+        documentIndex: 3
 
-  - it: accepts a release name at exactly the 47-char limit
+  - it: accepts the longest name that fits with dashboards enabled
     release:
-      name: os-test-name-that-is-definitely-too-long-xxxxxx
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
       namespace: tenant-test
     set:
       tls:
@@ -57,8 +77,22 @@ tests:
           count: 5
       - contains:
           path: spec.dnsNames
-          content: os-test-name-that-is-definitely-too-long-xxxxxx-dashboards
+          content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards
         documentIndex: 4
+
+  # The auto-on path must not lose a release to a name length either: this one never
+  # asked for chart-managed TLS, and at 53 chars with dashboards off it is fine.
+  - it: still renders a long-named external release that never asked for TLS
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
 
   # Version floor: below OpenSearch 2.0.0 the operator signs the admin certificate
   # with the transport CA instead of http.caSecret, so securityadmin cannot verify

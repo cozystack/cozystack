@@ -37,14 +37,18 @@ object names — Certificate, Issuer and Secret names are DNS subdomains, bounde
   - the CA's commonName is an X.509 CN, bounded at 64, and "<release>-http-ca"
     caps the release at 56.
 
-The guard is set at 47, comfortably under all three, so it holds even if a longer
-suffix is introduced later. Fail fast with a clear message rather than emitting a
-certificate that would be rejected at issue time.
+The guard therefore tracks the binding limit rather than sitting under it: 52 when
+Dashboards is enabled, 53 otherwise. A tighter fixed number would reject names the
+platform itself accepts — the aggregated API admits release names up to 53 — and
+those releases render today. Fail only where the certificate genuinely could not be
+issued, with a message naming the label that actually binds.
 */}}
 {{- $tlsEnabled := (include "opensearch.tls.enabled" .) | eq "true" -}}
 {{- if $tlsEnabled }}
-{{- if gt (len .Release.Name) 47 -}}
-{{- fail (printf "Release name %q is %d chars; opensearch TLS requires <=47 chars so the generated certificate stays within the 63-char DNS label limit on its SANs (longest: %s-dashboards) and the 64-char limit on the CA common name." .Release.Name (len .Release.Name) .Release.Name) -}}
+{{- $longestSuffix := ternary "-dashboards" "-discovery" (.Values.dashboards.enabled | default false) -}}
+{{- $maxReleaseLen := sub 63 (len $longestSuffix) | int -}}
+{{- if gt (len .Release.Name) $maxReleaseLen -}}
+{{- fail (printf "Release name %q is %d chars; opensearch TLS requires <=%d here so the SAN %q stays within the 63-char DNS label limit." .Release.Name (len .Release.Name) $maxReleaseLen (printf "%s%s" .Release.Name $longestSuffix)) -}}
 {{- end -}}
 {{- /*
 The OpenSearch >= 2.0.0 floor for chart-managed HTTP TLS is enforced in
