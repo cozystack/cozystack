@@ -1,0 +1,35 @@
+{{- if .Values.dbAutoscaler.webhook.enabled }}
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: db-autoscaler-replicas-ownership
+  annotations:
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/db-autoscaler
+  labels:
+    app: db-autoscaler
+webhooks:
+  - name: replicas.autoscaling.cozystack.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    clientConfig:
+      service:
+        name: db-autoscaler
+        namespace: {{ .Release.Namespace }}
+        path: /validate-helmrelease-replicas
+    # Guards the backing Flux HelmRelease, NOT the aggregated apps.cozystack.io
+    # API: kube-apiserver does not run admission webhooks for aggregated
+    # APIServices (it proxies them to the extension server). The HelmRelease is
+    # the CRD that stores replicas at spec.values.replicas and the object a
+    # force-applying GitOps writer targets directly. The handler no-ops for any
+    # HelmRelease without the projected managed-by marker.
+    rules:
+      - operations: ["UPDATE"]
+        apiGroups: ["helm.toolkit.fluxcd.io"]
+        apiVersions: ["v2", "v2beta2", "v2beta1"]
+        resources: ["helmreleases"]
+    # Ignore, not Fail: a webhook outage must never block Flux reconciliation of
+    # unrelated HelmReleases. Enforcement then degrades to the controller's
+    # advisory marker + convergence-based conflict detection.
+    failurePolicy: Ignore
+    timeoutSeconds: 5
+{{- end }}

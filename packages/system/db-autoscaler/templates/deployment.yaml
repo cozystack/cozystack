@@ -1,0 +1,88 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: db-autoscaler
+  labels:
+    app: db-autoscaler
+spec:
+  replicas: {{ .Values.dbAutoscaler.replicas }}
+  selector:
+    matchLabels:
+      app: db-autoscaler
+  template:
+    metadata:
+      labels:
+        app: db-autoscaler
+    spec:
+      serviceAccountName: db-autoscaler
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: db-autoscaler
+      containers:
+      - name: db-autoscaler
+        image: "{{ .Values.dbAutoscaler.image }}"
+        args:
+        - --leader-elect
+        - --operator-username=system:serviceaccount:{{ .Release.Namespace }}:db-autoscaler
+        - --enable-webhook={{ .Values.dbAutoscaler.webhook.enabled }}
+        {{- if .Values.dbAutoscaler.metrics.enabled }}
+        - --metrics-bind-address={{ .Values.dbAutoscaler.metrics.bindAddress }}
+        {{- end }}
+        {{- if .Values.dbAutoscaler.debug }}
+        - --zap-log-level=debug
+        {{- else }}
+        - --zap-log-level=info
+        {{- end }}
+        ports:
+        {{- if .Values.dbAutoscaler.metrics.enabled }}
+        - name: metrics
+          containerPort: {{ splitList ":" .Values.dbAutoscaler.metrics.bindAddress | mustLast }}
+        {{- end }}
+        - name: webhook
+          containerPort: 9443
+        - name: health
+          containerPort: 8081
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        {{- with .Values.dbAutoscaler.resources }}
+        resources: {{- . | toYaml | nindent 10 }}
+        {{- end }}
+        volumeMounts:
+        - name: webhook-certs
+          mountPath: /tmp/k8s-webhook-server/serving-certs
+          readOnly: true
+      volumes:
+      - name: webhook-certs
+        secret:
+          secretName: db-autoscaler-cert
+          defaultMode: 0400

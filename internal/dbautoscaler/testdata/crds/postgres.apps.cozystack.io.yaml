@@ -1,0 +1,27 @@
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: postgreses.apps.cozystack.io
+spec:
+  group: apps.cozystack.io
+  names:
+    kind: Postgres
+    listKind: PostgresList
+    plural: postgreses
+    singular: postgres
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          # Mirrors the aggregated Application projection: an opaque spec blob.
+          # This fixture lets envtest exercise the reconciler's dynamic get/patch
+          # of the replicas value without the real cozystack-api extension server.
+          properties:
+            spec:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+          x-kubernetes-preserve-unknown-fields: true

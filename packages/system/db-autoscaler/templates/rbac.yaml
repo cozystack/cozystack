@@ -1,0 +1,31 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: autoscaling.cozystack.io:db-autoscaler
+rules:
+# DHA: watch spec, write status.
+- apiGroups: ["autoscaling.cozystack.io"]
+  resources: ["databasehorizontalautoscalers"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["autoscaling.cozystack.io"]
+  resources: ["databasehorizontalautoscalers/status"]
+  verbs: ["get", "update", "patch"]
+# Applications (aggregated apps API): read and patch the replicas value.
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["*"]
+  verbs: ["get", "list", "watch", "patch"]
+# WorkloadMonitor: operational / convergence signal.
+- apiGroups: ["cozystack.io"]
+  resources: ["workloadmonitors"]
+  verbs: ["get", "list", "watch"]
+# Tenant-quota guardrail and metric scoping.
+- apiGroups: [""]
+  resources: ["resourcequotas", "namespaces", "pods"]
+  verbs: ["get", "list", "watch"]
+# Leader election (--leader-elect).
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]
