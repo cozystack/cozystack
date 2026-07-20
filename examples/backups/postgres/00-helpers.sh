@@ -32,10 +32,13 @@ export PG_PASSWORD="${PG_PASSWORD:-Xai7Wepo0aeThie8}"
 # S3 endpoint CA. cozystack's default seaweedfs serves its S3 endpoint with a
 # self-signed certificate whose CA lives in this Secret; the demo copies its
 # ca.crt into a per-app Secret the barman-cloud ObjectStore trusts via
-# endpointCA. On a cluster whose S3 endpoint is signed by a publicly-trusted
-# CA, set S3_CA_SECRET="" to skip the copy and drop endpointCA from the
-# manifests.
-export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-system-ca-cert}"
+# endpointCA. The name follows the seaweedfs chart's fullnameOverride
+# ("seaweedfs" -> "seaweedfs-ca-cert"); run-all.sh auto-discovers the CA
+# Certificate's actual secret when this default is absent, so an upstream
+# fullname change does not silently break the copy. On a cluster whose S3
+# endpoint is signed by a publicly-trusted CA, set S3_CA_SECRET="" to skip the
+# copy and drop endpointCA from the manifests.
+export S3_CA_SECRET="${S3_CA_SECRET:-seaweedfs-ca-cert}"
 export S3_CA_NAMESPACE="${S3_CA_NAMESPACE:-tenant-root}"
 export S3_CA_KEY="${S3_CA_KEY:-ca.crt}"
 

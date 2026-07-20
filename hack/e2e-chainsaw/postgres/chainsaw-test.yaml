@@ -143,7 +143,8 @@ spec:
 # tenant-root Pod reaches it over same-tenant egress. The harness targets the
 # in-cluster endpoint (S3_ENDPOINT below) instead of the BucketInfo external
 # ingress URL, which in CI is an unroutable placeholder, and trusts its
-# self-signed cert by copying seaweedfs-system-ca-cert into the per-app
+# self-signed cert by copying the seaweedfs CA secret (seaweedfs-ca-cert,
+# auto-discovered from the cert-manager Certificate) into the per-app
 # endpointCA Secret. (The bucket suite's mc checks lean on the same
 # tenant-root seaweedfs, just from the test runner via port-forward.)
 apiVersion: chainsaw.kyverno.io/v1alpha1

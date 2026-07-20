@@ -58,6 +58,28 @@ S3_HOST=${S3_ENDPOINT#https://}; S3_HOST=${S3_HOST#http://}
 log_success "Bucket '${BUCKET}' at endpoint '${S3_ENDPOINT}'."
 
 print_header "Step 05a: Materialise the Secrets the barman-cloud ObjectStore references"
+# Resolve the S3 endpoint CA secret. The default name tracks the seaweedfs
+# chart's fullnameOverride (seaweedfs -> seaweedfs-ca-cert), but a downstream
+# fullname change would rename it, so fall back to discovering the cert-manager
+# CA Certificate (the seaweedfs-labelled one with spec.isCA=true) and read its
+# secretName. Leave S3_CA_SECRET empty to skip the copy on a public-CA endpoint.
+if [[ -n "$S3_CA_SECRET" ]] \
+    && ! kubectl -n "$S3_CA_NAMESPACE" get secret "$S3_CA_SECRET" >/dev/null 2>&1; then
+    log_warning "S3 CA secret ${S3_CA_NAMESPACE}/${S3_CA_SECRET} not found; discovering the seaweedfs CA Certificate..."
+    # List every seaweedfs Certificate as "<isCA> <secretName>" and pick the CA
+    # one in shell — avoids kubectl jsonpath's finicky boolean-literal filter.
+    DISCOVERED_CA=$(kubectl -n "$S3_CA_NAMESPACE" get certificates.cert-manager.io \
+        -l app.kubernetes.io/name=seaweedfs \
+        -o jsonpath='{range .items[*]}{.spec.isCA}{" "}{.spec.secretName}{"\n"}{end}' 2>/dev/null \
+        | awk '$1=="true"{print $2; exit}' || true)
+    if [[ -n "$DISCOVERED_CA" ]]; then
+        log_success "Discovered seaweedfs CA secret ${S3_CA_NAMESPACE}/${DISCOVERED_CA}"
+        S3_CA_SECRET="$DISCOVERED_CA"
+    else
+        log_error "No seaweedfs CA Certificate found in ${S3_CA_NAMESPACE}; set S3_CA_SECRET explicitly (or empty for a public-CA endpoint)."
+        exit 1
+    fi
+fi
 # The chart (05) and the strategy (10) both reference <app>-cnpg-backup-creds
 # and <app>-cnpg-backup-ca. The barman-cloud sidecar reads AWS_ACCESS_KEY_ID /
 # AWS_SECRET_ACCESS_KEY from the creds Secret and trusts ca.crt from the CA
