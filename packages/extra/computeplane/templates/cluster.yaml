@@ -77,29 +77,15 @@ spec:
       retries: -1
   # Cozystack-enablement. A ComputePlane is not a vanilla Kubernetes cluster:
   # placement: ComputePlane apps (e.g. cozyllm Jupyter/n8n/Langflow) render
-  # child HelmReleases (-> fluxcd), Certificate resources (-> certManager) and
-  # Ingress objects (-> ingressNginx) into the target cluster. Enabling these
-  # addons makes the provisioned cluster a Cozystack-prepared environment so
-  # those resources reconcile on it instead of failing with "no matches for
-  # kind". Flux merges spec.values after valuesFrom, so nothing injected via
-  # cozystack-values can disable them.
+  # Certificate resources (-> certManager) and Ingress objects
+  # (-> ingressNginx) into the target cluster, so those controllers must run
+  # inside it. No in-cluster Flux is needed: consumer HelmReleases live on the
+  # management cluster and carry spec.kubeConfig, so the management Flux
+  # resolves their charts and applies the rendered manifests remotely. Flux
+  # merges spec.values after valuesFrom, so nothing injected via
+  # cozystack-values can disable these pins.
   values:
     addons:
-      fluxcd:
-        enabled: true
-        # The kubernetes-app fluxcd addon (cozy-fluxcd chart) defaults the
-        # FluxInstance spec.distribution.artifact to "", which fails CRD
-        # validation ("must be of type string"). ComputePlane is the first real
-        # consumer of the fluxcd addon, so set the distribution artifact here
-        # so the in-cluster Flux installs and can reconcile the child
-        # HelmReleases that placement: ComputePlane apps render. Pinned to the
-        # flux-operator version vendored in system/fluxcd-operator — bump the
-        # two together.
-        valuesOverride:
-          flux-instance:
-            instance:
-              distribution:
-                artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:v0.50.0"
       certManager:
         enabled: true
       ingressNginx:

@@ -8,8 +8,10 @@ suite: computeplane module renders the operator-owned cluster HelmRelease
 #     the derived release name makes Kamaji write the admin kubeconfig to
 #     computeplane-cluster-admin-kubeconfig, which placement: ComputePlane
 #     applications consume and computeplane-rd withholds from tenants;
-#   - the Cozystack-enablement addons (fluxcd/certManager/ingressNginx) are
-#     inline spec.values, so nothing injected via valuesFrom can disable them;
+#   - the Cozystack-enablement addons (certManager/ingressNginx) are inline
+#     spec.values, so nothing injected via valuesFrom can disable them; no
+#     in-cluster Flux — consumer HelmReleases reconcile from the management
+#     cluster via spec.kubeConfig;
 #   - the chart comes from this package's own source-only ExternalArtifact,
 #     keeping the module self-contained.
 templates:
@@ -34,9 +36,8 @@ tests:
 
   - it: pins the Cozystack-enablement addons as inline values
     asserts:
-      - equal:
-          path: spec.values.addons.fluxcd.enabled
-          value: true
+      - notExists:
+          path: spec.values.addons.fluxcd
       - equal:
           path: spec.values.addons.certManager.enabled
           value: true
