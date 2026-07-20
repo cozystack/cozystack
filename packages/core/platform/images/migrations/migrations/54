@@ -1,0 +1,49 @@
+#!/bin/sh
+# Migration 54 --> 55
+# Remove the tenant-cluster FluxCD addon (packages/system/fluxcd-operator and
+# packages/system/fluxcd).
+#
+# Those charts were the last vendored copyleft-licensed content in the
+# repository and only served the optional `addons.fluxcd` toggle of the
+# Kubernetes app, which deployed a Flux Operator + FluxInstance into a tenant
+# cluster through a pair of HelmReleases living in the management cluster. The
+# addon is dropped as a breaking change.
+#
+# For any tenant that had it enabled, orphan those HelmReleases rather than let
+# them be pruned: suspend reconciliation, drop the Flux finalizer so the delete
+# does NOT trigger a Helm uninstall inside the tenant cluster, then delete the
+# now-inert object from the management cluster. The Flux release already running
+# inside the tenant keeps running untouched. This mirrors the orphan idiom used
+# by migration 29.
+#
+# Runs as a pre-upgrade hook, i.e. before the new (addon-less) Kubernetes chart
+# reaches the tenant HelmReleases, so the finalizer is removed before any
+# pruning can fire.
+
+set -eu
+
+# shellcheck source=lib/cozystack-version.sh
+. "$(dirname "$0")/lib/cozystack-version.sh"
+
+# The addon HelmReleases are the only ones referencing these ExternalArtifact
+# charts, so match on chartRef.name to select them across every tenant namespace.
+hrs=$(kubectl get helmreleases.helm.toolkit.fluxcd.io --all-namespaces -o json 2>/dev/null \
+  | jq -r '.items[]
+      | select(.spec.chartRef.name == "cozystack-kubernetes-application-kubevirt-kubernetes-fluxcd"
+            or .spec.chartRef.name == "cozystack-kubernetes-application-kubevirt-kubernetes-fluxcd-operator")
+      | "\(.metadata.namespace) \(.metadata.name)"' || true)
+
+if [ -n "$hrs" ]; then
+  printf '%s\n' "$hrs" | while read -r ns name; do
+    [ -n "$ns" ] || continue
+    echo "Orphaning FluxCD addon HelmRelease ${ns}/${name}"
+    kubectl -n "$ns" patch helmrelease "$name" --type=merge \
+      -p '{"spec":{"suspend":true}}' 2>/dev/null || true
+    kubectl -n "$ns" patch helmrelease "$name" --type=merge \
+      -p '{"metadata":{"finalizers":null}}' 2>/dev/null || true
+    kubectl -n "$ns" delete helmrelease "$name" --ignore-not-found --wait=false || true
+  done
+fi
+
+# Stamp version
+stamp_cozystack_version 55
