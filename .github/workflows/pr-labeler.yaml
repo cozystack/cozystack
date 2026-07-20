@@ -85,6 +85,7 @@ jobs:
 
               // area/monitoring
               'monitoring':          'area/monitoring',
+              'metrics-server':      'area/monitoring',
               'vlogs':               'area/monitoring',
               'vmstack':             'area/monitoring',
               'grafana':             'area/monitoring',
@@ -104,6 +105,8 @@ jobs:
 
               // area/platform
               'platform':            'area/platform',
+              'cert-manager':        'area/platform',
+              'external-secrets':    'area/platform',
               'bundle':              'area/platform',
               'flux':                'area/platform',
               'fluxcd':              'area/platform',
