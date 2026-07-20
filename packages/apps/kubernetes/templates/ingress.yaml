@@ -1,5 +1,5 @@
 {{- $ingress := .Values._namespace.ingress }}
-{{- if eq .Values.addons.ingressNginx.exposeMethod "Proxied" }}
+{{- if and .Values.addons.ingressNginx.enabled (eq .Values.addons.ingressNginx.exposeMethod "Proxied") }}
 {{- if .Values.addons.ingressNginx.hosts }}
 ---
 apiVersion: networking.k8s.io/v1
@@ -44,10 +44,13 @@ spec:
   {{- end }}
 {{- end }}
 ---
-# The proxy Service is created whenever exposeMethod is Proxied (independent of
-# `hosts`) so that external consumers — e.g. a ComputePlane app's per-app management
-# Ingress — can route to the tenant cluster's ingress-nginx without the tenant module
-# having to know every app host in advance.
+# The proxy Service is created whenever the addon is enabled with exposeMethod
+# Proxied (independent of `hosts`) so that external consumers — e.g. a ComputePlane
+# app's per-app management Ingress — can route to the tenant cluster's ingress-nginx
+# without the tenant module having to know every app host in advance. The addon
+# gate matters: exposeMethod defaults to Proxied while the addon defaults to off,
+# so gating on exposeMethod alone would emit a selector-less Service on every
+# cluster that runs no ingress-nginx at all.
 apiVersion: v1
 kind: Service
 metadata:
