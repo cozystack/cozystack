@@ -47,13 +47,16 @@ spec:
   {{- end }}
 {{- end }}
 ---
-# The proxy Service is created whenever the addon is enabled with exposeMethod
-# Proxied (independent of `hosts`) so that external consumers — e.g. a ComputePlane
-# app's per-app management Ingress — can route to the tenant cluster's ingress-nginx
-# without the tenant module having to know every app host in advance. The addon
-# gate matters: exposeMethod defaults to Proxied while the addon defaults to off,
-# so gating on exposeMethod alone would emit a selector-less Service on every
-# cluster that runs no ingress-nginx at all.
+# The proxy Service is created whenever the addon is enabled on an etcd-backed
+# tenant with exposeMethod Proxied (independent of `hosts`) so that external
+# consumers — e.g. a ComputePlane app's per-app management Ingress — can route to
+# the tenant cluster's ingress-nginx without the tenant module having to know
+# every app host in advance. Both gates match the addon HelmRelease this Service
+# fronts: exposeMethod defaults to Proxied while the addon defaults to off, so
+# gating on exposeMethod alone would emit a selector-less Service on every cluster
+# that runs no ingress-nginx at all; and on an etcd-less tenant the chart collapses
+# to the awaiting-etcd beacon, so the Service would select a controller that never
+# renders.
 apiVersion: v1
 kind: Service
 metadata:
