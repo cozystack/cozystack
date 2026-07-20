@@ -67,6 +67,7 @@ tests:
           maxReplicas: 3
           instanceType: u1.large
           diskSize: 32Gi
+          roles: ["ingress-nginx"]
     asserts:
       - equal:
           path: spec.values.nodeGroups.md0.maxReplicas
@@ -74,3 +75,39 @@ tests:
       - equal:
           path: spec.values.nodeGroups.md0.instanceType
           value: u1.large
+
+  # Supplied nodeGroups are authoritative (not merged with the wrapped chart's
+  # default md0), while the module pins ingress-nginx on — groups without the
+  # role would leave the controller Pending forever, so the render must refuse.
+  - it: rejects nodeGroups without an ingress-nginx role
+    set:
+      nodeGroups:
+        gpu0:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: []
+    asserts:
+      - failedTemplate:
+          errorPattern: "at least one nodeGroup must carry roles"
+
+  - it: accepts nodeGroups when any group carries the ingress-nginx role
+    set:
+      nodeGroups:
+        gpu0:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: []
+        edge:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: ["ingress-nginx"]
+    asserts:
+      - equal:
+          path: spec.values.nodeGroups.edge.roles[0]
+          value: ingress-nginx

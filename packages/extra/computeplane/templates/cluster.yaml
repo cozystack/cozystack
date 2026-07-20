@@ -26,6 +26,25 @@
   a talos-reconcile Job that cannot become Ready until worker nodes exist, so
   the parent must not block on them.
 */}}
+{{- /*
+  Supplied nodeGroups are authoritative — the wrapped chart does not merge
+  them with its default md0 (which carries roles: [ingress-nginx]) — while the
+  module pins the ingress-nginx addon on and its controller only schedules
+  onto nodes with that role. Without this guard, any tenant-supplied
+  nodeGroups lacking the role would leave the controller Pending forever and
+  the ComputePlane ingress would never come up.
+*/}}
+{{- if .Values.nodeGroups }}
+{{- $hasIngressRole := false }}
+{{- range $name, $group := .Values.nodeGroups }}
+{{- if has "ingress-nginx" (default (list) $group.roles) }}
+{{- $hasIngressRole = true }}
+{{- end }}
+{{- end }}
+{{- if not $hasIngressRole }}
+{{- fail "computeplane: at least one nodeGroup must carry roles: [ingress-nginx] — the module pins the ingress-nginx addon on, and its controller only schedules onto ingress-nginx nodes" }}
+{{- end }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

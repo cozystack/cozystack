@@ -2,5 +2,34 @@
 ## @section Cluster shape
 ##
 
-## @param {object} nodeGroups - Worker node groups of the ComputePlane cluster (cluster shape only — the security posture is fixed by the module and cannot be overridden). Uses the same structure as the `kubernetes` application's `nodeGroups`. When left empty, the wrapped `kubernetes` chart emits its default scale-from-zero `md0` group, so the cluster sits idle until a pending Pod (e.g. the ingress-nginx controller) triggers the cluster-autoscaler.
+## @typedef {struct} Resources - Explicit CPU and memory configuration for a node or component.
+## @field {quantity} [cpu] - CPU available.
+## @field {quantity} [memory] - Memory (RAM) available.
+
+## @typedef {struct} GPU - GPU configuration.
+## @field {string} name - Name of GPU, such as "nvidia.com/AD102GL_L40S".
+## @x-cozystack-options {source: gpu}
+
+## @typedef {struct} Kubelet - Kubelet resource reservations for worker nodes.
+## @field {string} [systemReservedMemory] - Memory reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedMemory] - Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [systemReservedCpu] - CPU reserved for host OS. Auto-computed from instanceType if empty.
+## @field {string} [kubeReservedCpu] - CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
+## @field {string} [evictionHardMemory]="7%" - Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).
+## @field {string} [evictionSoftMemory]="10%" - Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).
+
+## @typedef {struct} NodeGroup - Worker node group configuration.
+## @field {int} minReplicas=0 - Minimum number of replicas.
+## @field {int} maxReplicas=10 - Maximum number of replicas.
+## @field {string} instanceType="u1.medium" - Virtual machine instance type.
+## @x-cozystack-options {source: instancetype}
+## @field {quantity} diskSize="20Gi" - System disk size for the worker VM. Carries the Talos OS image, kubelet state, containerd image cache, and any local-path PVCs.
+## @field {string} [storageClass] - StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass of the wrapped kubernetes app.
+## @x-cozystack-options {source: storageclass}
+## @field {[]string} roles - List of node roles. At least one group must carry `ingress-nginx` — the module pins the ingress-nginx addon on, and its controller only schedules onto nodes with that role (enforced at render time).
+## @field {Resources} [resources] - Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Set both `cpu` and `memory` together or neither.
+## @field {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
+## @field {Kubelet} [kubelet] - Kubelet resource reservations for this node group.
+
+## @param {map[string]NodeGroup} nodeGroups - Worker node groups of the ComputePlane cluster (cluster shape only — the security posture is fixed by the module and cannot be overridden). Same structure as the `kubernetes` application's `nodeGroups`. When left empty, the wrapped `kubernetes` chart emits its default scale-from-zero `md0` group with `roles: [ingress-nginx]`, so the cluster sits idle until a pending Pod (e.g. the ingress-nginx controller) triggers the cluster-autoscaler. Supplied groups are authoritative (not merged with the default), so at least one of them must carry `roles: [ingress-nginx]` — enforced at render time.
 nodeGroups: {}
