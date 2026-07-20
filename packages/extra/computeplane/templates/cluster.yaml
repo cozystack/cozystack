@@ -8,13 +8,17 @@
   packages/core/platform/sources/computeplane-application.yaml), so the module
   is self-contained.
 
-  The Helm release is named "computeplane" (spec.releaseName below) so Kamaji
-  writes the cluster's admin kubeconfig to the Secret
-  `computeplane-admin-kubeconfig` (key super-admin.svc) — the fixed contract
-  consumed by the HelmReleases of `placement: ComputePlane` applications. The
-  HelmRelease object itself is named computeplane-cluster because the module's
-  own HelmRelease already occupies the object name "computeplane" in the
-  tenant namespace.
+  The HelmRelease is named computeplane-cluster (the module's own HelmRelease
+  occupies the object name "computeplane" in the tenant namespace) and sets no
+  spec.releaseName: the aggregated API cannot represent releaseName — the
+  conversion rebuilds HelmRelease specs without it — so both releases must let
+  Flux derive the name from the object name, like every other tenant module.
+  Kamaji therefore writes the cluster's admin kubeconfig to the Secret
+  `computeplane-cluster-admin-kubeconfig` (key super-admin.svc) — the derived
+  contract consumed by the HelmReleases of `placement: ComputePlane`
+  applications, and the exact name computeplane-rd withholds from
+  tenant-visible secrets. Renaming this object renames the Secret and breaks
+  both; don't.
 
   Everything security-relevant is fixed here and unreachable by the tenant:
   the tenant holds no admin kubeconfig for this cluster and the module exposes
@@ -53,7 +57,6 @@ metadata:
     sharding.fluxcd.io/key: tenants
     internal.cozystack.io/computeplane: "true"
 spec:
-  releaseName: computeplane
   chartRef:
     kind: ExternalArtifact
     name: cozystack-computeplane-application-kubevirt-kubernetes
@@ -83,14 +86,16 @@ spec:
         # The kubernetes-app fluxcd addon (cozy-fluxcd chart) defaults the
         # FluxInstance spec.distribution.artifact to "", which fails CRD
         # validation ("must be of type string"). ComputePlane is the first real
-        # consumer of the fluxcd addon, so set the canonical distribution
-        # artifact here so the in-cluster Flux installs and can reconcile the
-        # child HelmReleases that placement: ComputePlane apps render.
+        # consumer of the fluxcd addon, so set the distribution artifact here
+        # so the in-cluster Flux installs and can reconcile the child
+        # HelmReleases that placement: ComputePlane apps render. Pinned to the
+        # flux-operator version vendored in system/fluxcd-operator — bump the
+        # two together.
         valuesOverride:
           flux-instance:
             instance:
               distribution:
-                artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:latest"
+                artifact: "oci://ghcr.io/controlplaneio-fluxcd/flux-operator-manifests:v0.50.0"
       certManager:
         enabled: true
       ingressNginx:
