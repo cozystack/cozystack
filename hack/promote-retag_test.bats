@@ -48,6 +48,17 @@
   # At least one cozystack-owned image is selected.
   grep -q 'docker://ghcr.io/cozystack/cozystack/' "$tmp/out"
 
+  # Images whose digest is embedded in `tag` ({repository, tag: <t>@sha256:<d>})
+  # must be selected too. The "at least one owned ref" check above cannot catch
+  # their absence — it is satisfied by the shapes that already worked, which is
+  # why eight images across six packages were silently skipped while this suite
+  # stayed green. Naming concrete packages is deliberate: a count or a generic
+  # pattern would drift back to proving nothing. linstor-csi and piraeus-server
+  # are the two whose absence from GHCR broke the nightly e2e at image pre-pull.
+  for owned in linstor-csi piraeus-server kamaji redis-operator; do
+    grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
+  done
+
   # Every docker:// ref in the copy plan is under the cozystack registry — no
   # third-party repos and no malformed arg-string refs leak through.
   bad=$(grep -oE 'docker://[^ ]+' "$tmp/out" | sed 's|docker://||' \

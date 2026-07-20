@@ -50,10 +50,29 @@ yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
 # Collect "repo@sha256:..." refs from every package values.yaml, across the
-# three shapes the build writes:
+# four shapes the build writes:
 #   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
 #   2. split map       {repository, tag, digest}      (e.g. .cilium.image)
-#   3. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}
+#   3. split map       {repository, tag: <tag>@sha256:<digest>}  (e.g. .linstorCSI.image)
+#   4. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}
+#
+# Shape 3 is the dominant one: most package Makefiles set `.image.tag` to
+# "$(IMAGE_TAG)@$(digest)" in a single yq call instead of maintaining a separate
+# `digest` key. It matches neither shape 2 (no `digest` key) nor, usefully, shape
+# 1 — that rule sees only the bare tag value, which carries no repository, so
+# ref_repo() reduces "<tag>@sha256:<digest>" to "<tag>" and the ownership filter
+# drops it. Omitting this rule silently skipped eight images across six packages
+# (kamaji, kilo, linstor-csi, piraeus-server, linstor-gui, metallb-controller,
+# metallb-speaker, redis-operator): the promotion reported success while never
+# creating their :<version> tags. Unlike the nightly mirror this retags within one
+# registry, so the digests still resolve and digest-pinned installs are unaffected
+# — but the release does not carry the tags it claims to, and nothing detects it.
+#
+# The `tag == "!!str"` guard is load-bearing: yq's test() aborts the expression on
+# a non-string tag ("cannot match with !!int"), and since this invocation swallows
+# stderr and status, that abort would silently drop every shape-3 ref in the same
+# file. `tag: 1.24` unquoted in a neighbouring third-party block is enough. Rule 1
+# is immune — its `select(tag == "!!str")` already precedes its test().
 collect_refs() {
   for f in packages/*/*/values.yaml; do
     [ -f "$f" ] || continue
@@ -62,6 +81,8 @@ collect_refs() {
     # shape 2
     yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | .repository + "@" + .digest' "$f" 2>/dev/null || true
     # shape 3
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
+    # shape 4
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
   done
 }
