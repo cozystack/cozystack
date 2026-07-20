@@ -40,9 +40,9 @@ kubernetesProvider:
       apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
       metadata: {name: ignored-kmt, namespace: tenant-test}
     # The golden for the default talos.* (present and populated, so builtin clones
-    # succeed). storage 6Gi mirrors the catalog default, so the diskSize>=golden
-    # guard has a size to compare against; phase Succeeded satisfies the readiness
-    # gate.
+    # succeed). storage 6Gi and storageClassName replicated mirror the catalog
+    # defaults, giving the diskSize>=golden and same-StorageClass guards real values
+    # to compare against; phase Succeeded satisfies the readiness gate.
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
       metadata:
@@ -53,6 +53,7 @@ kubernetesProvider:
           resources:
             requests:
               storage: 6Gi
+          storageClassName: replicated
       status:
         phase: Succeeded
     # A golden mid-import, for the readiness gate.
@@ -66,8 +67,23 @@ kubernetesProvider:
           resources:
             requests:
               storage: 6Gi
+          storageClassName: replicated
       status:
         phase: ImportInProgress
+    # A populated golden with no storageClassName (cluster default), for the
+    # skip-when-unresolvable arm of the StorageClass guard.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-nosc-v1.0.0
+        namespace: cozy-public
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 6Gi
+      status:
+        phase: Succeeded
 
 tests:
   - it: image omitted imports over HTTP from the cluster talos.* factory (back-compat)
@@ -256,6 +272,70 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'golden DataVolume "talos-worker-importing-v1\.0\.0" in cozy-public is not ready to clone \(phase ImportInProgress, want Succeeded\)'
+
+  # Cross-StorageClass clone: CDI would silently fall back to a host-assisted copy
+  # over the pod network, the exact transfer image.builtin exists to avoid.
+  - it: image.builtin fails when the group storageClass differs from the golden's
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          storageClass: local
+          image:
+            builtin: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'storageClass "local" differs from golden image .* storageClass "replicated"'
+
+  - it: image.builtin clones when the group storageClass matches the golden's
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          storageClass: replicated
+          image:
+            builtin: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515-v1.13.6
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # A golden with no storageClassName resolves to the cluster default, which the
+  # render cannot know — the guard skips rather than guessing a mismatch.
+  - it: image.builtin clones when the golden has no explicit storageClass
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          storageClass: local
+          image:
+            builtin:
+              schematicID: nosc
+              version: v1.0.0
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-nosc-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
 
   # Regression guard for the no-worker-roll invariant: an image-omitted group must
   # render a KubevirtMachineTemplate whose content-hash name is stable. If a future
