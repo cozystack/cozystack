@@ -3,6 +3,9 @@ export NAMESPACE=cozy-monitoring
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 update:
 	rm -rf charts
 	helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/
