@@ -54,7 +54,7 @@ prep() {
      "talos":{"version":"v1.13.0","schematicID":"deadbeef","imageFactoryURL":"https://factory.talos.dev","installerRepository":"factory.talos.dev/installer"},
      "version":"v1.32",
      "storageClass":"replicated",
-     "images":{"kubectl":"example.io/kubectl:v1.32"}}}}
+     "images":{"kubectl":"example.io/kubectl:v1.32","waitForKubeconfig":"drop-me","talosCsrSigner":"drop-me"}}}}
 ]}
 JSON
 }
@@ -81,6 +81,10 @@ JSON
   [ "$(jq -r '.spec.values.talos.schematicID' "$FAKE_CHILD_HR")" = "deadbeef" ]
   [ "$(jq -r '.spec.values.version' "$FAKE_CHILD_HR")" = "v1.32" ]
   [ "$(jq -r '.spec.values.images.kubectl' "$FAKE_CHILD_HR")" = "example.io/kubectl:v1.32" ]
+  # images is narrowed to the declared kubectl key only — the parent's
+  # waitForKubeconfig/talosCsrSigner (undeclared in the KubernetesNodes schema)
+  # must NOT leak into the adopted pool values.
+  [ "$(jq -r '.spec.values.images | keys | join(",")' "$FAKE_CHILD_HR")" = "kubectl" ]
 
   # Group fields and the storageClass cluster-level fallback carry through.
   [ "$(jq -r '.spec.values.minReplicas' "$FAKE_CHILD_HR")" = "1" ]

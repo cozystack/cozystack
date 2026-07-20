@@ -30,6 +30,12 @@
 # Runs as a pre-upgrade/pre-install hook, i.e. BEFORE any tenant HelmRelease
 # reconciles the new chart, which is the only safe window for the keep +
 # re-annotation to land ahead of the parent's control-plane-only re-render.
+# That window is not perfectly quiet: if a parent kubernetes-<cluster> HR is
+# upgraded during it (a user edit, a forced reconcile, any values change) it
+# renders the OLD chart, still emits the pool objects, and Helm rejects the
+# apply with an ownership-metadata error. It self-heals once the new chart
+# artifact lands, but operators should avoid editing Kubernetes CRs during a
+# platform upgrade (also called out in the release notes).
 #
 # _cluster and nodeHealthCheck are NOT copied into the child values: _cluster is
 # injected at runtime from the cozystack-values Secret (referenced via the
@@ -97,6 +103,18 @@ adopt_one() {
     app.kubernetes.io/managed-by=Helm --overwrite
 }
 
+# pin_keep <resource> <object-name> <namespace> -- protect an object from the
+# parent's control-plane-only re-render prune without transferring ownership.
+# Used for pools we cannot adopt (name overflow): the workers keep running,
+# unmanaged, until the operator gives the cluster a shorter name.
+pin_keep() {
+  res=$1; obj=$2; ns=$3
+  if kubectl get "$res" "$obj" -n "$ns" >/dev/null 2>&1; then
+    echo "    pinning $res/$obj with resource-policy=keep"
+    kubectl annotate "$res" "$obj" -n "$ns" helm.sh/resource-policy=keep --overwrite
+  fi
+}
+
 kubectl get helmrelease --all-namespaces \
   -l apps.cozystack.io/application.kind=Kubernetes -o json |
   jq -c '.items[] | {ns: .metadata.namespace, name: .metadata.name, values: (.spec.values // {})}' |
@@ -122,12 +140,28 @@ kubectl get helmrelease --all-namespaces \
       app_name="${cluster}-${group}"
       grp=$(printf '%s' "$groups_json" | jq -c --arg g "$group" '.[$g]')
 
-      # Helm refuses release names longer than 53 characters (cozystack-api
-      # enforces the same cap for natively created CRs). Fail loudly naming the
-      # offending pool rather than creating an HR Helm will reject.
+      # Helm refuses release names longer than 53 characters. A legal long
+      # cluster name (up to 42 chars per rest.go) plus the longer
+      # kubernetes-nodes- prefix can overflow. Do NOT fail the whole migration
+      # here: exiting would deadlock the platform pre-upgrade hook for EVERY
+      # tenant, with no path out. Instead pin this pool's worker objects with
+      # resource-policy=keep so the parent's control-plane-only re-render cannot
+      # prune them, skip creating the child HelmRelease, warn loudly, and move
+      # on. The pool keeps running unmanaged until the operator recreates the
+      # cluster with a shorter name (cluster+pool must fit in 36 chars).
       if [ "${#child_name}" -gt 53 ]; then
-        echo "  child release name '$child_name' exceeds 53 chars; shorten cluster/pool '$cluster'/'$group'" >&2
-        exit 1
+        echo "  WARNING: child release name '$child_name' (${#child_name} chars) exceeds Helm's 53-char limit" >&2
+        echo "  WARNING: pinning pool '$cluster'/'$group' objects with resource-policy=keep and skipping adoption" >&2
+        echo "  WARNING: remedy: recreate the cluster with a shorter name (cluster+pool must fit in 36 chars)" >&2
+        pin_keep "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns"
+        pin_keep "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns"
+        pin_keep "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns"
+        for kmt in $(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
+                       -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+                     grep -E "^kubernetes-${cluster}-${group}-[0-9a-f]{6}$" || true); do
+          pin_keep "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns"
+        done
+        continue
       fi
 
       child_values=$(printf '%s' "$values" | jq -c \
@@ -149,7 +183,12 @@ kubectl get helmrelease --all-namespaces \
             elif ((.nodeHealthCheck | type) == "object" and (.nodeHealthCheck | has("nodeStartupTimeout"))) then {nodeStartupTimeout: .nodeHealthCheck.nodeStartupTimeout}
             else {} end)
          # cluster-level inputs the pool templates consume verbatim
-         + pick(.; ["version","talos","images"])
+         + pick(.; ["version","talos"])
+         # images: copy only the declared kubectl override, not the whole
+         # parent images map (which carries waitForKubeconfig/talosCsrSigner that
+         # the KubernetesNodes schema does not declare and a dashboard round-trip
+         # would drop).
+         + (if ((.images | type) == "object" and (.images | has("kubectl"))) then {images: {kubectl: .images.kubectl}} else {} end)
         )')
 
       # Adopt the worker objects the parent rendered for this group BEFORE

@@ -13,13 +13,34 @@ case "$verb" in
     case "$args" in
       *helmrelease*--all-namespaces*)
         cat "$FAKE_HR_LIST"; exit 0 ;;
-      *kubevirtmachinetemplate*)
-        exit 0 ;;                       # empty jsonpath list -> KMT loop is a no-op
       *helmrelease*kubernetes-nodes-*)
         exit 1 ;;                       # child HR absent -> script takes the create path
-      *)
-        exit 1 ;;                       # MD/MHC/WM adopt_one reads -> absent -> skip (no-op-safe)
-    esac ;;
+    esac
+    # tokenize: $1=resource, $2=object-name (or a flag for list queries)
+    # shellcheck disable=SC2086
+    set -- $args
+    res=$1; name=$2
+    case "$res" in
+      kubevirtmachinetemplate*)
+        case "$name" in
+          -*|"")                        # KMT range/list query
+            [ -n "${FAKE_KMT_NAMES:-}" ] && printf '%s\n' "$FAKE_KMT_NAMES"
+            exit 0 ;;
+        esac ;;
+    esac
+    # Named-object get. When FAKE_OBJS is set (adoption-path tests), look the
+    # object up there: a matching line "<res> <name> <release-name>" means present.
+    # Without FAKE_OBJS every named get is "absent" (value-mapping tests rely on
+    # adopt_one short-circuiting on absent).
+    if [ -n "${FAKE_OBJS:-}" ] && [ -f "$FAKE_OBJS" ]; then
+      line=$(grep -E "^${res}[[:space:]]+${name}([[:space:]]|$)" "$FAKE_OBJS" || true)
+      [ -z "$line" ] && exit 1                              # absent
+      case "$args" in
+        *release-name*) printf '%s' "$(printf '%s\n' "$line" | awk '{print $3}')"; exit 0 ;;
+        *) exit 0 ;;                                        # existence check
+      esac
+    fi
+    exit 1 ;;                           # default: absent
   apply)
     payload=$(cat)
     if printf '%s' "$payload" | grep -q 'HelmRelease'; then
