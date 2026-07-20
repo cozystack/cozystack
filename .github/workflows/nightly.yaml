@@ -83,13 +83,22 @@ jobs:
         id: resolve
         run: |
           set -eu
-          # Pin :main to its current digest first, then read the revision
-          # annotation and pull the baked tree from that SAME digest below, so a
-          # concurrent build-main push of :main cannot make us check out commit A
-          # while mirroring tree B.
-          packages_ref="$(skopeo inspect --format '{{.Digest}}' "docker://${SRC_REGISTRY}/cozystack-packages:main")"
-          rev="$(skopeo inspect --raw "docker://${SRC_REGISTRY}/cozystack-packages@${packages_ref}" \
-            | yq -r '.annotations["org.opencontainers.image.revision"] // ""' -p json 2>/dev/null || true)"
+          # Fetch the :main manifest ONCE and derive BOTH its digest and the
+          # revision annotation from those exact bytes, then pull the baked tree
+          # from that SAME digest below, so a concurrent build-main push of :main
+          # cannot make us check out commit A while mirroring tree B.
+          #
+          # --raw is mandatory here: cozystack-packages is a Flux OCI artifact
+          # (config mediaType application/vnd.cncf.flux.config.v1+json), not a
+          # container image, so a plain `skopeo inspect` attempts an
+          # image-specific operation and fatals on it. `manifest-digest` hashes
+          # the manifest bytes, which is exactly what the registry addresses it
+          # by — no image-specific parsing involved.
+          manifest="${RUNNER_TEMP}/cozystack-packages-main.json"
+          skopeo inspect --raw "docker://${SRC_REGISTRY}/cozystack-packages:main" > "$manifest"
+          packages_ref="$(skopeo manifest-digest "$manifest")"
+          rev="$(yq -r '.annotations["org.opencontainers.image.revision"] // ""' -p json "$manifest" 2>/dev/null || true)"
+          rm -f "$manifest"
           # revision is "<git-describe>:<sha>"; take the sha.
           sha="${rev##*:}"
           # The sha flows into `actions/checkout` ref: — validate it is a bare
@@ -118,7 +127,12 @@ jobs:
       # Pull the digest-vendored tree build-main baked (but never committed).
       # Pinned to the digest resolved above, not the mutable :main tag.
       - name: Pull baked package tree
-        run: flux pull artifact "oci://${SRC_REGISTRY}/cozystack-packages@${{ steps.resolve.outputs.packages_ref }}" --output _baked
+        run: |
+          set -eu
+          # `flux pull artifact` rejects an --output path that does not already
+          # exist ("invalid output path"), so create it first.
+          rm -rf _baked && mkdir -p _baked
+          flux pull artifact "oci://${SRC_REGISTRY}/cozystack-packages@${{ steps.resolve.outputs.packages_ref }}" --output _baked
 
       # Copy every cozystack-owned component image OCIR -> GHCR by digest and
       # rewrite the baked tree's image hosts to GHCR (digests untouched).
@@ -239,6 +253,9 @@ jobs:
           PACKAGES_DIGEST: ${{ needs.mirror.outputs.packages_digest }}
         run: |
           set -eu
+          # `flux pull artifact` rejects an --output path that does not already
+          # exist ("invalid output path"), so create it first.
+          rm -rf _rw && mkdir -p _rw
           flux pull artifact "oci://${DST_REGISTRY}/cozystack-packages:${VERSION}" --output _rw
           cp -r _rw/. packages/
           yq -i ".cozystackOperator.platformSourceUrl = \"oci://${DST_REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
