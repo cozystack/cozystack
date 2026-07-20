@@ -1,6 +1,15 @@
 global:
   target: cozy-monitoring
 
+prometheus-node-exporter:
+  resources:
+    limits:
+      cpu: 250m
+      memory: 180Mi
+    requests:
+      cpu: 100m
+      memory: 180Mi
+
 kube-state-metrics:
   extraArgs:
     - --metric-labels-allowlist=pods=[*],deployments=[*]
