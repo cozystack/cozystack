@@ -17,12 +17,12 @@
 #
 # Run with: hack/cozytest.sh hack/nightly-mirror_test.bats
 
-# Build a synthetic baked tree exercising all three image-ref shapes plus the
+# Build a synthetic baked tree exercising all four image-ref shapes plus the
 # refs that MUST be filtered (third-party host, cozystack-packages artifact).
 _make_tree() {
   D="$(printf 'a%.0s' $(seq 1 64))"   # 64-hex fake digest body
   t="$1"
-  mkdir -p "$t/system/foo" "$t/system/bar" "$t/system/third" "$t/core/installer"
+  mkdir -p "$t/system/foo" "$t/system/bar" "$t/system/split" "$t/system/third" "$t/core/installer"
   # shape 1: single string, cozystack-owned -> copied
   printf 'image: iad.ocir.io/idyksih5sir9/cozystack/foo:main@sha256:%s\n' "$D" > "$t/system/foo/values.yaml"
   # shape 2: split map, cozystack-owned -> copied
@@ -32,9 +32,37 @@ _make_tree() {
     echo '  tag: main'
     printf '  digest: sha256:%s\n' "$D"
   } > "$t/system/bar/values.yaml"
-  # third-party single string -> skipped
-  printf 'image: docker.io/clastix/kubectl:1.0@sha256:%s\n' "$D" > "$t/system/third/values.yaml"
-  # shape 3: operator (cozystack-owned -> copied) + platformSource (cozystack-packages -> skipped)
+  # shape 3: split map with the digest embedded in `tag`, cozystack-owned -> copied.
+  # This is what most package Makefiles write (a single yq call setting .image.tag
+  # to "$(IMAGE_TAG)@$(digest)"), so it is the dominant real-world shape — linstor,
+  # kamaji, kilo, metallb and redis-operator all use it. It matches neither shape 1
+  # (rule 1 sees only the repository-less tag value, which ref_repo() reduces to the
+  # tag) nor shape 2 (no `digest` key), so until it was matched explicitly these
+  # images were silently never mirrored while the host rewrite still repointed them
+  # at the dest registry — a dangling ref that 404s at pull time.
+  {
+    echo 'image:'
+    echo '  repository: iad.ocir.io/idyksih5sir9/cozystack/split'
+    printf '  tag: main@sha256:%s\n' "$D"
+  } > "$t/system/split/values.yaml"
+  # third-party single string -> skipped, and a NUMERIC tag in the same file as a
+  # cozystack-owned shape-3 ref. `tag: 123` is ordinary YAML, but yq's test()
+  # aborts on a non-string ("cannot match with !!int"), and collect_refs swallows
+  # stderr and status — so without a type guard this abort discards the shape-3
+  # ref alongside it and `numeric` is silently never mirrored. Co-locating the two
+  # in one file is the point: the failure is per-file, not per-value.
+  {
+    printf 'image: docker.io/clastix/kubectl:1.0@sha256:%s\n' "$D"
+    echo 'vendored:'
+    echo '  image:'
+    echo '    repository: docker.io/vendor/thing'
+    echo '    tag: 123'
+    echo 'ours:'
+    echo '  image:'
+    echo '    repository: iad.ocir.io/idyksih5sir9/cozystack/numeric'
+    printf '    tag: main@sha256:%s\n' "$D"
+  } > "$t/system/third/values.yaml"
+  # shape 4: operator (cozystack-owned -> copied) + platformSource (cozystack-packages -> skipped)
   {
     echo 'cozystackOperator:'
     printf '  image: iad.ocir.io/idyksih5sir9/cozystack/cozystack-operator:main@sha256:%s\n' "$D"
@@ -58,15 +86,22 @@ _make_tree() {
     return "$rc"
   fi
 
-  # The three cozystack-owned component images are each copied to GHCR by digest.
+  # The four cozystack-owned component images are each copied to GHCR by digest.
   grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/foo@sha256:.* docker://ghcr.io/cozystack/cozystack/foo:0.0.0-nightly.test' "$tmp/out"
   grep -q 'docker://ghcr.io/cozystack/cozystack/bar:0.0.0-nightly.test' "$tmp/out"
   grep -q 'docker://ghcr.io/cozystack/cozystack/cozystack-operator:0.0.0-nightly.test' "$tmp/out"
+  # shape 3 — the source ref must carry the REPOSITORY, not the bare tag: a rule
+  # that matched the tag alone would plan a copy from "main@sha256:..." and be
+  # dropped as non-SRC_REGISTRY, so assert the full source ref, not just the dest.
+  grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/split@sha256:.* docker://ghcr.io/cozystack/cozystack/split:0.0.0-nightly.test' "$tmp/out"
+  # A shape-3 ref sharing a file with a non-string tag survives — see _make_tree.
+  grep -q 'docker://ghcr.io/cozystack/cozystack/numeric:0.0.0-nightly.test' "$tmp/out"
   # A floating tag is moved alongside the pinned version.
   grep -q 'docker://ghcr.io/cozystack/cozystack/foo:nightly' "$tmp/out"
 
   # Third-party images never appear in the copy plan.
   ! grep -q 'docker.io/clastix' "$tmp/out"
+  ! grep -q 'docker.io/vendor' "$tmp/out"
   # The cozystack-packages artifact is excluded — it is rebuilt downstream.
   ! grep -qE 'skopeo copy.*cozystack-packages' "$tmp/out"
 

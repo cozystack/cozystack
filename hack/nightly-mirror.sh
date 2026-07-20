@@ -48,16 +48,37 @@ command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1;
 yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
-# Collect "repo@sha256:..." refs from every package values.yaml, across the three
+# Collect "repo@sha256:..." refs from every package values.yaml, across the four
 # shapes the build writes (identical to hack/promote-retag.sh):
 #   1. single string  <repo>:<tag>@sha256:<digest>
 #   2. split map       {repository, tag, digest}
-#   3. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=...}
+#   3. split map       {repository, tag: <tag>@sha256:<digest>}
+#   4. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=...}
+#
+# Shape 3 is what most package Makefiles actually write: they set `.image.tag` to
+# "$(IMAGE_TAG)@$(digest)" in one yq call rather than maintaining a separate
+# `digest` key. It is NOT covered by shape 2 (no `digest` key) and only partially
+# matches shape 1 — rule 1 grabs the bare tag value "<tag>@sha256:<digest>", which
+# carries no repository, so ref_repo() reduces it to "<tag>" and the SRC_REGISTRY
+# case below drops it. The image is then never copied, while the host rewrite at
+# the end of this script still rewrites its repository to DST_REGISTRY, leaving a
+# dangling reference to an image that was never pushed there. Shape 3 must be
+# matched explicitly for those images to be mirrored at all.
+#
+# The `tag == "!!str"` guard on shape 3 is load-bearing, not defensive noise:
+# yq's test() aborts the whole expression with "cannot match with !!int, can only
+# match strings" on a non-string tag, and `tag: 1.24` is ordinary YAML a
+# third-party chart may well carry unquoted. Because the invocation swallows both
+# stderr and status, that abort would silently discard every shape-3 ref in the
+# SAME FILE — reintroducing the exact silent skip this rule exists to fix, in a
+# file that merely happens to sit next to an unquoted version number. Rule 1 is
+# immune because its `select(tag == "!!str")` already precedes its test().
 collect_refs() {
   for f in "$TREE"/*/*/values.yaml; do
     [ -f "$f" ] || continue
     yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$f" 2>/dev/null || true
     yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | .repository + "@" + .digest' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
   done
 }
