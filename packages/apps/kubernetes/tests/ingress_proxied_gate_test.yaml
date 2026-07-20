@@ -47,3 +47,16 @@ tests:
     asserts:
       - hasDocuments:
           count: 2
+
+  # Deliberate behaviour change pinned: hosts with the addon disabled used to
+  # render the Ingress; "the addon is off" now means nothing renders at all.
+  - it: renders nothing when hosts are set but the addon is disabled
+    set:
+      addons:
+        ingressNginx:
+          enabled: false
+          exposeMethod: Proxied
+          hosts: ["app.example.com"]
+    asserts:
+      - hasDocuments:
+          count: 0
