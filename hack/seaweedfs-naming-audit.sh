@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # SeaweedFS 4.31 rename — fleet audit (READ-ONLY).
 #
 # Classifies every SeaweedFS tenant into the three states the chart's naming guard
@@ -45,7 +45,15 @@
 # Usage:  hack/seaweedfs-naming-audit.sh [namespace...]
 #         KUBECONFIG=<file> hack/seaweedfs-naming-audit.sh
 # Exit:   0 always (audit only). Nothing is mutated.
-set -uo pipefail
+#
+# POSIX sh, deliberately. hack/seaweedfs-naming-audit.bats sources this file, and
+# cozytest.sh sources the converted test into its own /bin/sh — which is dash on
+# the CI runner. A bash shebang would not save it: `.` runs the file's contents in
+# the caller's shell and the shebang is just a comment. Keeping the script POSIX
+# is what makes the tested shell and the executed shell the same one; anything
+# bash-only here is untested in CI and unavailable at run time. `pipefail` in
+# particular is not POSIX and dash 0.5.12 (Ubuntu) rejects it outright.
+set -u
 
 # renamed_volume_prefix <release> -- reconstruct the name 4.31 gives the volume
 # component of <release>. Mirrors seaweedfs.fullname + seaweedfs.componentName
