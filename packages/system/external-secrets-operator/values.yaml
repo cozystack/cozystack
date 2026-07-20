@@ -2,3 +2,61 @@ external-secrets:
   bitwarden-sdk-server:
     enabled: false  
   installCRDs: true
+  webhook:
+    # Upstream defaults this to 10250, the port the kubelet serves on. When a
+    # connection to the webhook Service resolves to a node IP rather than a
+    # Pod IP, it reaches the kubelet, which completes the TLS handshake with
+    # its node serving certificate, and the apiserver rejects the call with
+    # "x509: certificate is valid for <node>, not
+    # external-secrets-operator-webhook.cozy-external-secrets-operator.svc".
+    # The certificate is valid — it is simply the wrong server's — so the
+    # error reads as a PKI fault and hides the misroute that caused it. This
+    # does not prevent the misroute; it moves the listener to a port nothing
+    # else answers on, so the same misroute surfaces as a connection refusal
+    # that names the real problem.
+    #
+    # 10250 is not an accident upstream, and the reason is worth stating
+    # before overriding it. cert-manager's chart spells out why charts pick
+    # it: in GKE private clusters the apiserver may reach nodes only on 443
+    # and 10250, so 10250 works there without extra firewall rules. That is a
+    # property of a managed platform's node firewall, not of Kubernetes. This
+    # package is installed into the management cluster only, so the caller is
+    # always that cluster's apiserver, and on cozystack's own substrates —
+    # Talos, generic k3s, kubeadm — nothing filters it from a Pod port. The
+    # exception to check is the hosted variant (cozystackOperator.variant:
+    # hosted, bundle isp-hosted), which exists to run on managed control
+    # planes, EKS and GKE among them. Its stock preset does not render this
+    # package and the package is opt-in besides, so reaching the bad
+    # combination takes enabling both deliberately — but on a platform that
+    # restricts apiserver egress this override is wrong and should be
+    # dropped.
+    #
+    # The replacement port only helps if nothing answers on it in the node's
+    # network namespace, since that is where the misroute lands. That rules
+    # out 9443, the controller-runtime default and the number most webhooks
+    # here use: the etcd kube-rbac-proxy binds it on host-network, as
+    # packages/system/cilium-networkpolicy records, so 9443 would swap the
+    # kubelet's certificate for that proxy's and reproduce the same misleading
+    # error. Nothing in this repo binds 10260. It is
+    # CloudControllerManagerWebhookPort in k8s.io/cloud-provider, worth
+    # remembering if a host-network workload here ever links that framework.
+    # Neither cloud-controller-manager present does today: local-ccm does run
+    # host-network, but it is a bespoke binary whose flags carry no webhook or
+    # secure-port listener, and the kubevirt one is a pod-networked
+    # Deployment, so whatever it binds stays in a Pod namespace.
+    #
+    # Under webhook.hostNetwork the webhook would itself join the node
+    # namespace, where the clusterwide policy in cilium-networkpolicy denies
+    # 10250 from the world but has no entry for 10260 — enabling hostNetwork
+    # means revisiting that policy.
+    #
+    # Moving this port is only safe because patches/ points the Service at the
+    # "webhook" container-port name. Upstream renders targetPort from this
+    # value as a number, which every endpoint shares regardless of what its
+    # Pod listens on, so a port change would leave the Service aimed at a port
+    # the outgoing Pod does not serve until the replacement passes readiness —
+    # rejecting admission for externalsecrets, secretstores and
+    # clustersecretstores, and breaking CRD conversion, which routes through
+    # the same Service. A named targetPort resolves per-Pod and closes that
+    # window. See patches/webhook-service-named-target-port.patch.
+    port: 10260

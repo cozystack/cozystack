@@ -1,0 +1,28 @@
+# Upstream renders the webhook Service's targetPort from webhook.port as a
+# number. A numeric targetPort is copied into every endpoint regardless of
+# what each Pod actually listens on, so changing webhook.port aims the
+# Service at a port the outgoing Pod does not serve until its replacement
+# passes readiness — rejecting admission for externalsecrets, secretstores
+# and clustersecretstores, and breaking CRD conversion, which routes through
+# the same Service. A named targetPort is resolved per-Pod by the
+# EndpointSlice controller, so old and new Pods are each reached on the port
+# they serve and the rollout has no gap.
+#
+# The containerPort is already named "webhook" upstream, and the metrics port
+# in this same Service already uses its name, so this only makes the webhook
+# port consistent with its neighbour. It belongs upstream; until it lands
+# there, values.yaml depends on this patch to change webhook.port safely.
+#
+diff --git a/packages/system/external-secrets-operator/charts/external-secrets/templates/webhook-service.yaml b/packages/system/external-secrets-operator/charts/external-secrets/templates/webhook-service.yaml
+index 59dbddc95..4c98cbcf0 100644
+--- a/packages/system/external-secrets-operator/charts/external-secrets/templates/webhook-service.yaml
++++ b/packages/system/external-secrets-operator/charts/external-secrets/templates/webhook-service.yaml
+@@ -23,7 +23,7 @@ spec:
+   {{- end }}
+   ports:
+   - port: 443
+-    targetPort: {{ .Values.webhook.port }}
++    targetPort: webhook
+     protocol: TCP
+     name: webhook
+   {{- if .Values.webhook.metrics.service.enabled }}
