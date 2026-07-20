@@ -1,4 +1,63 @@
 metrics-server:
+  # Upstream defaults this to 10250 — the kubelet's port, and the port
+  # metrics-server itself scrapes every kubelet on.
+  #
+  # That default makes hostNetwork unusable. The chart offers
+  # hostNetwork.enabled for clusters whose apiserver cannot reach Pod IPs, but
+  # enabling it at the default puts metrics-server in the node's namespace
+  # where the kubelet already holds 10250, and the process exits with "bind:
+  # address already in use". Upstream has had this reported
+  # (kubernetes-sigs/metrics-server#1026) and kept the default anyway, on the
+  # view that hostNetwork is non-standard here and that those users can set a
+  # port themselves. This is that port, picked before the need rather than
+  # after it.
+  #
+  # It also removes a collision that would make a misrouted connection hard to
+  # read. Were a connection to the metrics-server Service to arrive at a node
+  # IP instead of a Pod IP, it would reach the kubelet, listening on the same
+  # number. Nothing here establishes that this happens — with pod-networked
+  # endpoints there is no ordinary path to it — so this is not the fix for a
+  # known routing bug. It only decides how such a misroute would present: as a
+  # connection refusal, rather than as a rejection from an unexpected daemon.
+  # That distinction is sharper here than for a webhook, because this chart's
+  # APIService sets insecureSkipTLSVerify, so the aggregation layer never
+  # checks whose certificate it received and nothing in the resulting error
+  # would name the mismatch.
+  #
+  # What the override gives up is worth stating. Upstream moved to 10250 so
+  # metrics-server would be covered by the firewall rules most clusters
+  # already have between control plane and nodes, and work without new ones. A
+  # substrate permitting only 443 and 10250 to nodes therefore needs this
+  # value reconsidered. Cozystack's own — Talos, k3s, kubeadm — do not filter
+  # it, but this package also ships into every tenant cluster and no e2e
+  # exercises the metrics API, so a wrong guess here would first surface as a
+  # user's HPA quietly not scaling, or as the dashboard's cluster-usage view
+  # going blank.
+  #
+  # 4443 is the value upstream's manifests carried through v0.6.4, before
+  # v0.7.0 shipped 10250, so it is a number already associated with this
+  # component. It sits clear of the 10248-10259 block the node components
+  # occupy, and nothing in this repo binds it.
+  #
+  # Under hostNetwork this listener joins the node's namespace, where the
+  # clusterwide policy in packages/system/cilium-networkpolicy denies 10250
+  # from the world but has no entry for 4443. That matters more than it would
+  # elsewhere, because metrics.enabled below makes the chart add
+  # --authorization-always-allow-paths=/metrics, leaving that one path
+  # unauthenticated. What it exposes is metrics-server's own scrape
+  # instrumentation, not the resource data, which stays behind the
+  # authenticated aggregated API — but enabling hostNetwork still means adding
+  # 4443 to that policy first rather than opening it on every node IP.
+  #
+  # Every reference to the port inside the chart is by name — the Service's
+  # targetPort and both probes — so the number moves without aiming any
+  # endpoint at a port its Pod does not serve. (The ServiceMonitor names the
+  # Service port rather than this one, so it is unaffected either way.)
+  # tests/container_port_test.yaml pins that and the value itself: the
+  # vendored chart ships no values.schema.json, so an upstream rename of this
+  # key would be silently ignored rather than failing helm.
+  containerPort: 4443
+
   defaultArgs:
     - --cert-dir=/tmp
     - --kubelet-preferred-address-types=InternalIP,ExternalIP,Hostname

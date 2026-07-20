@@ -1,0 +1,84 @@
+suite: metrics-server container port
+
+# Keeps metrics-server's own listener off 10250, the port it scrapes kubelets
+# on. The values.yaml override this guards carries the reasoning; it is not
+# repeated here.
+#
+# The first test is the regression guard. The vendored chart ships no
+# values.schema.json, so an upstream rename of `containerPort` is accepted and
+# silently ignored rather than failing helm — this test is the only thing
+# between a re-vendored chart and a silent return to 10250.
+#
+# The rest pin preconditions the fix depends on and that already hold on their
+# own: that the port lives in the Pod's network namespace rather than the
+# node's, and that the Service and both probes reach it by name rather than by
+# number, which is what lets the number move without anything else having to
+# be taught to follow it. `make update` re-vendors this chart wholesale, so
+# these are the regression surface for that too.
+
+templates:
+  - charts/metrics-server/templates/deployment.yaml
+  - charts/metrics-server/templates/service.yaml
+
+release:
+  name: metrics-server
+  namespace: cozy-monitoring
+
+tests:
+  - it: serves on 4443, not 10250, the port it scrapes kubelets on
+    template: charts/metrics-server/templates/deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --secure-port=4443
+      - equal:
+          path: spec.template.spec.containers[0].ports[0]
+          value:
+            name: https
+            protocol: TCP
+            containerPort: 4443
+
+  # Also a tripwire: enabling hostNetwork here trips this test, which is the
+  # intended prompt to go and add 4443 to the clusterwide policy in
+  # packages/system/cilium-networkpolicy before the listener joins the node's
+  # namespace. See the reasoning in values.yaml.
+  - it: keeps metrics-server off the host network, so the port lives in the Pod netns
+    template: charts/metrics-server/templates/deployment.yaml
+    asserts:
+      # The template emits the key only when hostNetwork.enabled is truthy, so
+      # absence is the only shape a disabled hostNetwork can take here.
+      # isNullOrEmpty would not do: it fails on a path that does not exist.
+      - notExists:
+          path: spec.template.spec.hostNetwork
+
+  - it: reaches the container by port name, so the port can move without a traffic gap
+    template: charts/metrics-server/templates/service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.ports[0].name
+          value: https
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      # A name, not a number. A numeric targetPort is copied into every
+      # endpoint regardless of what each Pod actually listens on, which would
+      # aim the Service at a port the outgoing Pod does not serve until its
+      # replacement passes readiness. Upstream already names it here; if that
+      # ever regresses to an integer, moving the port reintroduces that gap.
+      - equal:
+          path: spec.ports[0].targetPort
+          value: https
+
+  - it: probes the container by port name, so a port change cannot strand readiness
+    template: charts/metrics-server/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: https
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: https
