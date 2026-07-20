@@ -20,11 +20,15 @@
 ## a `Kubernetes` resource; the app then clones the golden named deterministically
 ## `talos-worker-<schematicID>-<version>` from cozy-public. The tenant render fails
 ## rather than degrade silently when the referenced (schematicID, version) has no
-## matching entry in this catalog, when its golden has not finished importing
-## (phase != Succeeded), or when the node group's storageClass differs from the
+## matching entry in this catalog, when its golden terminally failed to import
+## (`phase: Failed`), or when the node group's storageClass differs from the
 ## golden's — so keep the catalog in sync with the (schematicID, version) pairs and
-## StorageClasses that tenant node groups reference. Node groups that do not set
-## `image.builtin` import over HTTP and never touch this catalog.
+## StorageClasses that tenant node groups reference. A golden that is merely
+## mid-import is not an error: CDI holds the worker disk until the source populates.
+## Goldens carry `helm.sh/resource-policy: keep`, so removing an `images[]` entry
+## stops managing that golden rather than deleting it — delete it by hand once no
+## node group clones it. Node groups that do not set `image.builtin` import over
+## HTTP and never touch this catalog.
 
 ## @param {string} imageFactoryURL - Default base URL of the Talos Image Factory serving the raw worker OS image (`<url>/image/<schematicID>/<version>/openstack-amd64.raw.xz`). Overridable per image. No trailing slash.
 imageFactoryURL: "https://factory.talos.dev"

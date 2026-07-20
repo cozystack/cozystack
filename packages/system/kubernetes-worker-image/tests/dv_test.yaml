@@ -45,6 +45,13 @@ tests:
           path: metadata.annotations["cdi.kubevirt.io/storage.bind.immediate.requested"]
           value: "true"
         documentIndex: 0
+      # Pruning a golden that tenants still clone makes their whole Kubernetes
+      # HelmRelease fail to render, so removing an images[] entry must orphan the
+      # DataVolume rather than delete it.
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+        documentIndex: 0
 
   # Per-image overrides + name format for a non-default (schematicID, version).
   - it: honours per-image overrides and keeps the contract name format

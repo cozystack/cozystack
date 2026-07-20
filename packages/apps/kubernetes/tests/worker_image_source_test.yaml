@@ -56,7 +56,8 @@ kubernetesProvider:
           storageClassName: replicated
       status:
         phase: Succeeded
-    # A golden mid-import, for the readiness gate.
+    # A golden mid-import: transient, so the render proceeds and CDI holds the
+    # worker DataVolume until the source is populated.
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
       metadata:
@@ -70,6 +71,21 @@ kubernetesProvider:
           storageClassName: replicated
       status:
         phase: ImportInProgress
+    # A golden whose import terminally failed: never recovers on its own, so the
+    # render fails rather than pinning workers to a source that will never populate.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-failed-v1.0.0
+        namespace: cozy-public
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 6Gi
+          storageClassName: replicated
+      status:
+        phase: Failed
     # A populated golden with no storageClassName (cluster default), for the
     # skip-when-unresolvable arm of the StorageClass guard.
     - kind: DataVolume
@@ -250,11 +266,11 @@ tests:
       - failedTemplate:
           errorPattern: 'diskSize 4Gi is smaller than golden image .* storage 6Gi'
 
-  # A golden that exists but is not yet populated must fail the render rather than
-  # clone (which would block the worker DataVolume with no signal) and rather than
-  # fall back to HTTP (which would flip the KMT hash once the golden went Ready and
-  # roll the group). The HelmRelease retries every 17s, so this self-heals.
-  - it: image.builtin fails the render while the golden is still importing
+  # A golden mid-import must NOT fail the render: a helm fail() aborts the whole
+  # Kubernetes HelmRelease of every tenant pinned to that golden, which would block
+  # unrelated scale/addon operations for the length of an import. CDI holds the
+  # worker DataVolume until the source populates, so rendering the clone is correct.
+  - it: image.builtin still clones while the golden is mid-import
     set:
       _namespace: {etcd: true, ingress: true, host: example.com}
       _cluster: {cluster-domain: cozy.local}
@@ -270,8 +286,31 @@ tests:
               schematicID: importing
               version: v1.0.0
     asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.pvc.name
+          value: talos-worker-importing-v1.0.0
+        documentSelector: {path: kind, value: KubevirtMachineTemplate}
+
+  # Terminal failure is the one phase worth aborting the render for: it never
+  # recovers without operator action, so cloning would block workers forever.
+  - it: image.builtin fails the render when the golden import terminally failed
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin:
+              schematicID: failed
+              version: v1.0.0
+    asserts:
       - failedTemplate:
-          errorPattern: 'golden DataVolume "talos-worker-importing-v1\.0\.0" in cozy-public is not ready to clone \(phase ImportInProgress, want Succeeded\)'
+          errorPattern: 'golden DataVolume "talos-worker-failed-v1\.0\.0" in cozy-public failed to import \(phase Failed\)'
 
   # Cross-StorageClass clone: CDI would silently fall back to a host-assisted copy
   # over the pod network, the exact transfer image.builtin exists to avoid.
