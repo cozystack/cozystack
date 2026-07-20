@@ -10,12 +10,19 @@ spec:
     namespace: cozy-system
     path: /
   variants:
+    # The variant mirrors the kubernetes-application variant whose chart it
+    # re-sources: the wrapped cluster substrate is the kubevirt flavour of
+    # apps/kubernetes, and the artifact naming contract
+    # (cozystack-computeplane-application-kubevirt-*) carries that provenance.
+    # A future non-kubevirt substrate would arrive as a sibling variant.
     - name: kubevirt
-      # cozystack-engine serves the ApplicationDefinition CRD that the
-      # computeplane-rd component installs; the kubernetes-application edge is
-      # needed because the wrapped apps/kubernetes chart renders child
-      # HelmReleases whose chartRefs point at that package's addon artifacts
-      # (cozystack-kubernetes-application-kubevirt-*).
+      # Variant dependsOn gates only the components that carry an install:
+      # block — here computeplane-rd alone. cozystack-engine serves the
+      # ApplicationDefinition CRD that computeplane-rd installs; the
+      # kubernetes-application edge orders that install after the kubernetes
+      # machinery (CAPI providers, Kamaji, the addon artifacts) is present, so
+      # the ComputePlane kind is not registered — and cannot be instantiated —
+      # on a cluster that lacks what it provisions.
       dependsOn:
         - cozystack.cozystack-engine
         - cozystack.kubernetes-application
