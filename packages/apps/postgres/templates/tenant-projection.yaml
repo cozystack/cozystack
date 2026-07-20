@@ -1,0 +1,26 @@
+{{/*
+  CNPG generates its own self-signed CA in the Secret <release>-ca, storing the
+  CA PRIVATE KEY (ca.key) next to ca.crt, and offers no way to label that Secret.
+  A client that needs to verify PostgreSQL TLS must therefore trust ca.crt
+  WITHOUT ever seeing ca.key.
+
+  This sentinel declares that trust anchor to the CA-extraction controller
+  (internal/controller/cacert): it lifts ca.crt alone out of <release>-ca into
+  the key-free, tenant-readable <release>.tenant-ca Secret and owns that
+  projection through an OwnerReference back to this object.
+
+  It carries NO ownerReferences of its own — Flux stamps
+  helm.toolkit.fluxcd.io/name, through which the lineage webhook resolves the
+  application, and deleting this release prunes the sentinel and garbage-collects
+  the projection with it.
+*/}}
+---
+apiVersion: internal.cozystack.io/v1alpha1
+kind: TenantProjection
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  projections:
+    - type: CACert
+      sourceSecretName: {{ .Release.Name }}-ca
+      sourceKey: ca.crt

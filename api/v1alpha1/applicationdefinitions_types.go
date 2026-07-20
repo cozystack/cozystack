@@ -59,53 +59,8 @@ type ApplicationDefinitionSpec struct {
 	// Ingress selectors
 	Ingresses ApplicationDefinitionResources `json:"ingresses,omitempty"`
 
-	// CACert declares where this application's TLS trust anchor comes from,
-	// so the platform can publish a key-free copy of it to the tenant.
-	//
-	// It is only needed for engines whose operator creates the CA Secret
-	// itself and offers no way to label its output. Engines that can label
-	// their CA Secret opt in through the label internal.cozystack.io/publish-ca-cert
-	// instead and need no entry here.
-	//
-	// When this field is set it is AUTHORITATIVE: the named Secret is the only
-	// source consulted, and a labelled Secret in the namespace does not override
-	// it. This is deliberate — the declaration lives on this platform-owned
-	// object, whereas the label sits on a Secret a namespace writer could forge,
-	// so a declared engine's trust anchor cannot be swapped by a labelled one. To
-	// migrate an engine onto the label leg, remove this field in the same change
-	// that starts labelling its Secret.
-	// +optional
-	CACert *ApplicationDefinitionCACert `json:"caCert,omitempty"`
-
 	// Dashboard configuration for this resource
 	Dashboard *ApplicationDefinitionDashboard `json:"dashboard,omitempty"`
-}
-
-// ApplicationDefinitionCACert names the Secret an application's operator
-// creates to hold its CA, for the engines that cannot label it themselves.
-// The named Secret is expected to carry private key material next to the
-// certificate — that is precisely why the platform copies a single key out
-// of it instead of exposing it — so nothing here widens what a tenant can
-// read: only the extracted, key-free certificate is ever published.
-type ApplicationDefinitionCACert struct {
-	// SourceSecretName is the name of the Secret the operator creates in the
-	// release namespace. It is a Go template with the same variables as
-	// ApplicationDefinitionResourceSelector.ResourceNames, plus the release
-	// name:
-	//   - {{ .name }}: the name of the application instance
-	//   - {{ .kind }}: the lowercased kind of the application
-	//   - {{ .namespace }}: the namespace of the application instance
-	//   - {{ .release }}: the Helm release name (<prefix><name>)
-	//
-	// Example: "{{ .release }}-ca"
-	SourceSecretName string `json:"sourceSecretName"`
-
-	// SourceKey is the key inside that Secret holding the CA certificate in
-	// PEM form. The certificate is always republished under "ca.crt",
-	// whatever it is called at the source.
-	// +optional
-	// +kubebuilder:default=ca.crt
-	SourceKey string `json:"sourceKey,omitempty"`
 }
 
 type ApplicationDefinitionApplication struct {
