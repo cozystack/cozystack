@@ -15,7 +15,9 @@
 # (the chart resolves the VirtualMachineClusterInstancetype via `lookup`, which
 # returns nil under `helm template`), so every case here uses explicit
 # `resources` sizing. The GPU and kubelet-reservation branches ARE offline
-# renderable and are covered below.
+# renderable and are covered below. Scope: only the four pool objects are
+# compared; the talos-reconcile Job's rendered output is not (its own
+# content-hash name makes a divergence there visible separately).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
