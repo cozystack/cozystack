@@ -20,15 +20,16 @@
 ## a `Kubernetes` resource; the app then clones the golden named deterministically
 ## `talos-worker-<schematicID>-<version>` from cozy-public. The tenant render fails
 ## rather than degrade silently when the referenced (schematicID, version) has no
-## matching entry in this catalog, or when its golden has not finished importing
-## (phase != Succeeded) — so keep the catalog in sync with the (schematicID,
-## version) pairs that tenant node groups reference. Node groups that do not set
+## matching entry in this catalog, when its golden has not finished importing
+## (phase != Succeeded), or when the node group's storageClass differs from the
+## golden's — so keep the catalog in sync with the (schematicID, version) pairs and
+## StorageClasses that tenant node groups reference. Node groups that do not set
 ## `image.builtin` import over HTTP and never touch this catalog.
 
 ## @param {string} imageFactoryURL - Default base URL of the Talos Image Factory serving the raw worker OS image (`<url>/image/<schematicID>/<version>/openstack-amd64.raw.xz`). Overridable per image. No trailing slash.
 imageFactoryURL: "https://factory.talos.dev"
 
-## @param {string} storageClass - Default StorageClass for the golden image(s). Must use the same CSI driver as the tenant worker disks so csi-clone works, and be snapshot-capable (linstor ships the default VolumeSnapshotClass). Overridable per image.
+## @param {string} storageClass - Default StorageClass for the golden image(s). Must match the StorageClass of the worker disks that clone it: CDI cannot CSI-clone across StorageClasses and would silently fall back to a host-assisted copy over the pod network, so the tenant render rejects a mismatch outright. Must also be snapshot-capable (linstor ships the default VolumeSnapshotClass). Overridable per image.
 storageClass: "replicated"
 
 ## @param {quantity} storage - Default storage size allocated for each golden image. Must be >= the imported raw image virtual size and <= the smallest worker diskSize that clones it. The Talos v1.13.x openstack raw is ~4.15 GiB, so 6Gi leaves headroom; bump per image if a future Talos version's raw grows. Overridable per image.

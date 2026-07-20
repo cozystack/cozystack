@@ -132,9 +132,10 @@ spec:
       {{- end }}
       {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
       {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
-      {{- /* A builtin group whose golden is absent or not yet populated fails loudly
-             here rather than degrading silently. And because a CDI clone target must
-             be at least as large as its source, a worker diskSize below the golden's
+      {{- /* A builtin group whose golden is absent, not yet populated, or on a
+             StorageClass the worker disk cannot CSI-clone from fails loudly here
+             rather than degrading silently. And because a CDI clone target must be
+             at least as large as its source, a worker diskSize below the golden's
              storage would fail the clone at runtime — reject it at render when the
              golden's size is known (lookup is empty under `helm template`, so all
              of these guards are no-ops there). */}}
@@ -156,6 +157,20 @@ spec:
       {{-   $goldenPhase := dig "status" "phase" "" $goldenDV | toString | default "<none>" }}
       {{-   if ne $goldenPhase "Succeeded" }}
       {{-     fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public is not ready to clone (phase %s, want Succeeded) — wait for the kubernetes-worker-image import to finish; if it never does, check the importer pod in cozy-public." .groupName $goldenName $goldenPhase) }}
+      {{-   end }}
+      {{- /* CDI takes the storage-layer CSI-clone path only when source and target
+             share a StorageClass; across classes it silently falls back to a
+             host-assisted copy over the pod network — exactly the per-worker
+             network transfer image.builtin exists to avoid (#3231). Reject the
+             case we can prove. Either side empty means "cluster default", which is
+             not resolvable at render time, so skip rather than guess. This rules
+             out the guaranteed-host-assisted case, not every one: a matching
+             StorageClass still leaves the strategy to the CDI StorageProfile,
+             which the worker DataVolume inherits. */}}
+      {{-   $workerSC := .group.storageClass | default $.Values.storageClass | toString }}
+      {{-   $goldenSC := dig "spec" "storage" "storageClassName" "" $goldenDV | toString }}
+      {{-   if and $workerSC $goldenSC (ne $workerSC $goldenSC) }}
+      {{-     fail (printf "nodeGroup %q: storageClass %q differs from golden image %q storageClass %q — CDI cannot CSI-clone across StorageClasses and would fall back to a host-assisted copy over the pod network. Set the kubernetes-worker-image catalog entry's storageClass to %q, or point this group at %q, or switch this group to image.factory." .groupName $workerSC $goldenName $goldenSC $workerSC $goldenSC) }}
       {{-   end }}
       {{-   $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
       {{-   if $goldenStorage }}
