@@ -22,6 +22,15 @@ rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch", "update"]
+# CACertReconciler reconciles TenantProjection sentinels a chart renders and
+# writes their Ready status. It never creates or deletes a sentinel; that is
+# the chart's (helm-controller's) job, gated by a ValidatingAdmissionPolicy.
+- apiGroups: ["internal.cozystack.io"]
+  resources: ["tenantprojections"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["internal.cozystack.io"]
+  resources: ["tenantprojections/status"]
+  verbs: ["get", "update", "patch"]
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "patch", "update"]
@@ -42,10 +51,10 @@ rules:
 #    terminates TLS; tenant ingress controllers / Gateways still read only the
 #    replica in their own namespace.
 #  - CACertReconciler projects an application's CA certificate into the key-free
-#    "<release>.tenant-ca" Secret of the same namespace, and deletes that
-#    projection when the application stops publishing a CA (the owner reference
-#    to the HelmRelease only collects it when the whole application goes away).
-#    It only ever deletes a Secret it created itself.
+#    "<release>.tenant-ca" Secret of the same namespace. It only ever creates or
+#    updates that projection; the projection is garbage-collected through its
+#    owner reference to the TenantProjection sentinel when the application (and so
+#    the sentinel) is deleted, so this reconciler itself never deletes a Secret.
 #
 # The read verbs (get/list/watch) are listed explicitly so the rule fully
 # describes both reconcilers' Secret access on its own and keeps working if the
@@ -73,8 +82,9 @@ rules:
 # compromise of every Secret in the cluster — including the CA private keys the
 # CA-extraction controller exists to keep away from tenants. The controller's own
 # code is what confines it: the CA reconciler lifts exactly one whitelisted key,
-# re-guards the bytes on every write, and only ever deletes a Secret it created
-# itself. That is a code-level confinement of an RBAC-level power, which is
+# re-guards the bytes on every write, and never deletes a projection at all —
+# garbage collection removes it through the sentinel owner reference. That is a
+# code-level confinement of an RBAC-level power, which is
 # strictly weaker than not holding the power — the honest reading is that the
 # guard is the boundary, and the RBAC is not.
 #
