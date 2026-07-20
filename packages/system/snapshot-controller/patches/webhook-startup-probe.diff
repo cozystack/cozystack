@@ -1,0 +1,40 @@
+diff --git a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
+index ad24b32..3ac9bd6 100644
+--- a/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
++++ b/charts/snapshot-controller/templates/deployment_validation_webhook.yaml
+@@ -50,6 +50,35 @@ spec:
+           volumeMounts:
+             - mountPath: /etc/snapshot-validation
+               name: tls-config
++          # cozystack: startupProbe covers the post-Started window where the
++          # webhook binary is coming up but has not yet bound `:8443`. The
++          # upstream chart hard-codes liveness without any startup grace
++          # (kubelet defaults periodSeconds=10 failureThreshold=3 = ~30s from
++          # container Started to first liveness kill), which is insufficient
++          # on a loaded E2E sandbox and cascades into install-wide failure
++          # via `snapshot-controller` HR through piraeus, linstor, and ~20
++          # operators. See cozystack/cozystack#3203.
++          #
++          # Budget: 5s * 45 = 225s. Sized to comfortably clear the actual
++          # bind-time on a loaded sandbox (single-digit-second range in the
++          # healthy case) while staying well inside the operator's default
++          # 10m HR install timeout (--helmrelease-install-timeout in
++          # cmd/cozystack-operator/main.go). A larger budget would race the
++          # HR timeout.
++          #
++          # This fix covers the "container Started, still binding :8443"
++          # window. It does NOT cover a separate class of failure where the
++          # container self-exits (e.g. cert-mount race producing an empty
++          # tls-config volume); that would need an initContainer that waits
++          # for the Certificate's Secret to have non-empty tls.crt/tls.key.
++          # Filed as a follow-up on cozystack/cozystack#3203.
++          startupProbe:
++            httpGet:
++              path: /readyz
++              port: https
++              scheme: HTTPS
++            periodSeconds: 5
++            failureThreshold: 45
+           livenessProbe:
+             httpGet:
+               path: /readyz

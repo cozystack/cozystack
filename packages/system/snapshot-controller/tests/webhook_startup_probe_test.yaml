@@ -1,0 +1,67 @@
+suite: cozy-snapshot-controller webhook startup-probe cozystack patch
+release:
+  name: snapshot-controller
+  namespace: cozy-snapshot-controller
+tests:
+  # cozystack carries a `patches/webhook-startup-probe.diff` on the vendored
+  # piraeus-charts/snapshot-controller v3.0.5 subchart because the upstream
+  # `deployment_validation_webhook.yaml` hard-codes the liveness and readiness
+  # probes without any `initialDelaySeconds` or `startupProbe` and does NOT
+  # expose them via values, so a slow cert-manager Certificate issuance under
+  # E2E-sandbox load cascades into the whole install failing through this HR
+  # (see cozystack/cozystack#3203). If a future `make update` bump re-pulls
+  # upstream and the local diff drops off, or an upstream refactor renames
+  # or replaces this Deployment, these asserts catch it before the flake
+  # returns.
+  - it: webhook Deployment carries a startupProbe covering the HTTPS-listener bind window
+    template: charts/snapshot-controller/templates/deployment_validation_webhook.yaml
+    asserts:
+      - exists:
+          path: spec.template.spec.containers[0].startupProbe
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.port
+          value: https
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.httpGet.scheme
+          value: HTTPS
+      # Budget = periodSeconds * failureThreshold. Pinning both exact values
+      # locks the total (5 * 45 = 225s) as a regression sentinel: a chart
+      # bump that silently zeroed one of them would still fall out here.
+      # Bumping the budget deliberately requires a matching test update; the
+      # comment on the patched template covers why it must stay inside the
+      # operator's 10m HR install timeout.
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.periodSeconds
+          value: 5
+      - equal:
+          path: spec.template.spec.containers[0].startupProbe.failureThreshold
+          value: 45
+
+  # Liveness / readiness must survive the patch unchanged. startupProbe
+  # covers the slow-start window, and once it passes the kubelet gates on
+  # the normal probes at their default cadence. If an upstream refactor
+  # renamed the port or dropped the scheme, this catches the drift.
+  - it: webhook Deployment leaves upstream liveness and readiness intact on the same HTTPS endpoint
+    template: charts/snapshot-controller/templates/deployment_validation_webhook.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.port
+          value: https
+      - equal:
+          path: spec.template.spec.containers[0].livenessProbe.httpGet.scheme
+          value: HTTPS
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.path
+          value: /readyz
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.port
+          value: https
+      - equal:
+          path: spec.template.spec.containers[0].readinessProbe.httpGet.scheme
+          value: HTTPS
