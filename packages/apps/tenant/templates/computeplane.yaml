@@ -9,6 +9,21 @@
   cozystack/community.
 */}}
 {{- if .Values.computeplane }}
+{{- /*
+  Fail loudly when the module is toggled on without its backing package: the
+  computeplane-application package ships in the iaas bundle while this toggle
+  arrives with tenant-rd in the system bundle, and bundles are independent
+  booleans. Without this guard a system+paas install would render a
+  HelmRelease pointing at a nonexistent ExternalArtifact and retry forever
+  with no diagnostic. The Capabilities gate keeps the check active in-cluster
+  (the Package CRD is always installed there) while letting offline renders
+  (helm template / helm-unittest, where lookup returns nothing) pass.
+*/}}
+{{- if .Capabilities.APIVersions.Has "cozystack.io/v1alpha1" }}
+{{- if not (lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.computeplane-application") }}
+{{- fail "computeplane module is enabled, but the cozystack.computeplane-application package is not installed — it ships in the iaas bundle (set bundles.iaas.enabled: true)" }}
+{{- end }}
+{{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:
