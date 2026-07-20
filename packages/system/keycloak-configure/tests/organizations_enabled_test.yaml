@@ -1,0 +1,38 @@
+suite: keycloak realm organizations toggle
+
+# organizationsEnabled must reach ClusterKeycloakRealm.spec.organizationsEnabled:
+# the keycloak-operator PUTs the rendered spec back on every reconcile, so a
+# toggle flipped in the admin console is reverted unless it is a chart value.
+# The default must render false — no behaviour change on stock installs.
+release:
+  name: keycloak-configure
+  namespace: cozy-keycloak
+tests:
+  - it: default renders organizationsEnabled false
+    template: templates/configure-kk.yaml
+    documentSelector:
+      path: kind
+      value: ClusterKeycloakRealm
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+    asserts:
+      - equal:
+          path: spec.organizationsEnabled
+          value: false
+
+  - it: organizationsEnabled true renders through to the realm spec
+    template: templates/configure-kk.yaml
+    documentSelector:
+      path: kind
+      value: ClusterKeycloakRealm
+    set:
+      _cluster:
+        root-host: example.com
+        kube-root-ca: ""
+      organizationsEnabled: true
+    asserts:
+      - equal:
+          path: spec.organizationsEnabled
+          value: true
