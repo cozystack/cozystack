@@ -30,6 +30,7 @@
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
+{{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- $group := dict
       "minReplicas" .Values.minReplicas

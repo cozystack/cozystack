@@ -105,3 +105,28 @@ it reconciles.
 {{- end -}}
 {{- end -}}
 {{- end -}}
+
+{{- /*
+kubernetes-nodes.assertParentVersion fails the render when the pool's Kubernetes
+minor version does not match the parent cluster's. Workers must not run a kubelet
+ahead of the apiserver (unsupported skew), and the split removed the single
+`version` that used to feed both control plane and workers. Looks up the parent
+KamajiControlPlane (named like the reconstructed clusterName) and compares its
+spec.version major.minor against .Values.version. Skipped when the lookup is
+empty (helm template / unittest, or the parent not yet present) so it validates
+only against a real cluster and never blocks offline rendering.
+*/}}
+{{- define "kubernetes-nodes.assertParentVersion" -}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
+{{- $kcp := lookup "controlplane.cluster.x-k8s.io/v1alpha1" "KamajiControlPlane" .Release.Namespace $clusterName -}}
+{{- if $kcp -}}
+{{- $parentVer := dig "spec" "version" "" $kcp -}}
+{{- if $parentVer -}}
+{{- $parentMinor := regexFind "v?[0-9]+\\.[0-9]+" $parentVer -}}
+{{- $poolMinor := regexFind "v?[0-9]+\\.[0-9]+" (.Values.version | toString) -}}
+{{- if and $parentMinor $poolMinor (ne $parentMinor $poolMinor) -}}
+{{- fail (printf "kubernetes-nodes: pool version %q does not match parent cluster %q version %q — a worker kubelet may not run ahead of the apiserver. Set .version to the parent Kubernetes CR's version." (.Values.version | toString) $clusterName $parentVer) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

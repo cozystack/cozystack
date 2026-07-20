@@ -3,6 +3,7 @@
 ##
 
 ## @param {string} cluster - Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-<cluster>`; the KubernetesNodes CR must be named `<cluster>-<pool>`. The pool name (the part after `<cluster>-`) must not collide with a nodeGroup still managed by the parent kubernetes chart (e.g. the default `md0`), or the render fails on ownership conflict.
+## @immutable
 cluster: ""
 
 ##
@@ -11,6 +12,7 @@ cluster: ""
 
 ## @param {string} storageClass - StorageClass for the worker node system disk. When empty, the cluster default applies. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so prefer a replicated/DRBD class.
 ## @x-cozystack-options {source: storageclass}
+## @immutable
 storageClass: replicated
 
 ##

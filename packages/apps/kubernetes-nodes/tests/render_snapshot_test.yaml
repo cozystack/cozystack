@@ -9,6 +9,12 @@ suite: worker node pool golden render snapshot
 # the content-hashed KubevirtMachineTemplate and churn live worker VMs on
 # upgrade) fails here until the snapshot is regenerated deliberately with
 # `helm unittest -u`.
+#
+# Coverage note: every case sets instanceType: "" with explicit resources,
+# because the instancetype-sized branch resolves the VirtualMachineClusterInstancetype
+# via `lookup`, which returns nil under helm unittest. The default (u1.medium)
+# shape is therefore not pinned here; the e2e exercises that branch on a real
+# cluster.
 
 templates:
   - templates/nodegroup.yaml
