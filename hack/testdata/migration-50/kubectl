@@ -8,7 +8,42 @@
 #   FAKE_LEGACY_CRD   "1" => the etcd.aenix.io CRD exists (default 1)
 #   FAKE_CLUSTERS     newline list of "<ns> <name>" legacy clusters
 #   FAKE_STRATEGY     "1" => the cozy-default-etcd Strategy CR resolves (default 1)
+#   FAKE_STRATEGY_ENDPOINT  the CR's s3.endpoint (default: the v1.5.x plaintext
+#                            seaweedfs default)
+#   FAKE_STRATEGY_BUCKET    the CR's s3.bucket (default cozy-backups-7f3a)
+#   FAKE_STRATEGY_REGION    the CR's s3.region (default us-east-1)
+#   FAKE_STRATEGY_FPS       the CR's s3.forcePathStyle (default true)
 #   FAKE_CREDS        "1" => cozy-backups-creds (with AWS_* keys) exists (default 1)
+#   FAKE_CREDS_ENDPOINT     the projected `endpoint` value; always a BARE host.
+#                            Set to the EMPTY string to drop the key entirely
+#                            (default s3.example.com)
+#   FAKE_CREDS_BUCKET       the projected `bucketName` value (default
+#                            cozy-backups-7f3a). Copied from the admin's source
+#                            Secret on the external path, so it can disagree
+#                            with the CR's bucket outright.
+#   FAKE_CREDS_REGION       the projected `region` value (default us-east-1)
+#   FAKE_CREDS_FPS          the projected `forcePathStyle` value (default true)
+#   FAKE_CLAIM_CRD    "1"     => the bucketclaims.objectstorage.k8s.io CRD
+#                                exists, i.e. COSI is installed (default 1)
+#                     "0"     => genuinely absent: `--ignore-not-found -o name`
+#                                prints nothing at rc=0
+#                     "error" => the read FAILS (rc!=0) -- a transient API
+#                                error, which is NOT the same answer as absent
+#   FAKE_CLAIM_LIST_ERR "1" => the cluster-wide claim list read fails (default 0)
+#   FAKE_CLAIM_LIST_SHAPE   emit an unexpected list document instead of a List:
+#                            "items-not-array" | "no-items" | "not-json"
+#                            (default: a well-formed List). No real producer
+#                            emits these; they pin that an uninterpretable list
+#                            is never silently read as "no claim" = external.
+#   FAKE_CLAIMS       newline list of BucketClaims, one per line, as
+#                     "<ns> <name> <status.bucketName|-> <deletionTimestamp|->"
+#                     (default: one healthy claim provisioned into the same
+#                     bucket the projected Secret advertises => COSI path)
+#   FAKE_CLAIM_FILLER N synthetic extra claims appended AFTER FAKE_CLAIMS, with
+#                     realistically long bucket-<uuid> status names (default 0).
+#                     Models a big multi-tenant cluster: the FAKE_CLAIMS entries
+#                     stay FIRST, i.e. the matching claim is NOT last, which is
+#                     the position a first-match-exit consumer gets wrong.
 #   FAKE_CERTS        "1" => server/peer cert-manager Certificates exist and
 #                            initially LACK the native wildcard SAN (default 0,
 #                            i.e. no Certificate -> ensure_wildcard_sans skips)
@@ -22,13 +57,84 @@ state_dir="${FAKE_CMDLOG%/*}"
 # arg_after KEY -- echoes the token following KEY in the argument vector.
 arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
 
-# Strategy CR JSON (rendered with real S3 coordinates by the backupstrategy-
-# controller; forcePathStyle true => the script must add --backup-s3-force-path-style).
-strategy_json='{"spec":{"template":{"destination":{"s3":{"endpoint":"http://seaweedfs-s3.tenant-root.svc.cozy.local:8333","bucket":"cozy-backups-7f3a","region":"us-east-1","forcePathStyle":true}}}}}'
+b64() { printf '%s' "$1" | base64 | tr -d '\n'; }
+
+# Strategy CR JSON as the version being upgraded FROM rendered it. The default
+# endpoint is the static v1.5.x one: plaintext against SeaweedFS's :8333 TLS
+# listener, i.e. unusable. The script must NOT take its endpoint from here on the
+# COSI path. FAKE_STRATEGY=0 models the other v1.5.x shape, where the CR was
+# never rendered at all (its template is guarded by a bucketName lookup that
+# races the BucketClaim on first install) — a shape reachable ONLY under
+# provisionBucket: true, since the lookup is skipped entirely for external S3.
+strategy_endpoint="${FAKE_STRATEGY_ENDPOINT:-http://seaweedfs-s3.tenant-root.svc.cozy.local:8333}"
+strategy_json='{"spec":{"template":{"destination":{"s3":{"endpoint":"'"$strategy_endpoint"'","bucket":"'"${FAKE_STRATEGY_BUCKET:-cozy-backups-7f3a}"'","region":"'"${FAKE_STRATEGY_REGION:-us-east-1}"'","forcePathStyle":'"${FAKE_STRATEGY_FPS:-true}"'}}}}}'
 # cozy-backups-creds as eagerly projected into cozy-velero (carries owner/anno
 # metadata the stage copy must strip, plus the AWS_* keys). It also carries a
 # tenantresource label here so the test can prove the stage copy strips it.
-creds_json='{"apiVersion":"v1","kind":"Secret","metadata":{"name":"cozy-backups-creds","namespace":"cozy-velero","resourceVersion":"123","uid":"abc","ownerReferences":[{"name":"projector"}],"labels":{"internal.cozystack.io/tenantresource":"true"},"annotations":{"reconcile.io/x":"y"}},"data":{"AWS_ACCESS_KEY_ID":"QUtJQUVYQU1QTEU=","AWS_SECRET_ACCESS_KEY":"c2VjcmV0a2V5"}}'
+#
+# The projector ALWAYS writes a bare-host `endpoint`: it scheme-strips it and
+# refuses to project (ReasonSourceMalformed) when it would be empty, so there is
+# no reachable state in which it is missing — that is why its presence cannot
+# discriminate COSI from external S3, and why the BucketClaim data does. The
+# empty FAKE_CREDS_ENDPOINT (drop the key) models NO reachable projector state;
+# it exists only to pin the defensive CR fallback.
+# bucketName/region/forcePathStyle ARE droppable: the projector's setOrDelete
+# deletes a key whose value is empty. FAKE_CREDS_COORDS=0 models that.
+creds_endpoint_key=''
+[ -z "${FAKE_CREDS_ENDPOINT-s3.example.com}" ] \
+  || creds_endpoint_key='"endpoint":"'"$(b64 "${FAKE_CREDS_ENDPOINT-s3.example.com}")"'",'
+creds_coords='"bucketName":"'"$(b64 "${FAKE_CREDS_BUCKET:-cozy-backups-7f3a}")"'","region":"'"$(b64 "${FAKE_CREDS_REGION:-us-east-1}")"'","forcePathStyle":"'"$(b64 "${FAKE_CREDS_FPS:-true}")"'",'
+[ "${FAKE_CREDS_COORDS:-1}" = "1" ] || creds_coords=''
+creds_json='{"apiVersion":"v1","kind":"Secret","metadata":{"name":"cozy-backups-creds","namespace":"cozy-velero","resourceVersion":"123","uid":"abc","ownerReferences":[{"name":"projector"}],"labels":{"internal.cozystack.io/tenantresource":"true"},"annotations":{"reconcile.io/x":"y"}},"data":{'"$creds_endpoint_key$creds_coords"'"AWS_ACCESS_KEY_ID":"QUtJQUVYQU1QTEU=","AWS_SECRET_ACCESS_KEY":"c2VjcmV0a2V5"}}'
+
+# BucketClaims as data. The COSI driver assigns .status.bucketName and the
+# projector republishes exactly that as the `bucketName` key, so the DEFAULT
+# claim is provisioned into the same bucket the creds advertise => COSI path.
+# A claim whose status names a DIFFERENT bucket (a stale/Terminating leftover)
+# must not classify the cluster as COSI, which is why the probe matches on
+# status rather than on the claim's existence.
+FAKE_CLAIMS="${FAKE_CLAIMS-tenant-root bucket-cozy-backups cozy-backups-7f3a -}"
+
+# claims_all emits FAKE_CLAIMS followed by FAKE_CLAIM_FILLER synthetic claims.
+# Filler status names are full-length bucket-<uuid> strings because it is the
+# BYTE SIZE of the rendered list, not the claim count, that pushes a streaming
+# consumer past a pipe write boundary.
+claims_all() {
+  printf '%s\n' "$FAKE_CLAIMS"
+  local i=1 n="${FAKE_CLAIM_FILLER:-0}"
+  while [ "$i" -le "$n" ]; do
+    printf 'tenant-f%04d bucket-f%04d bucket-%08x-956e-4630-91f4-e1d265de5f51 -\n' "$i" "$i" "$i"
+    i=$((i + 1))
+  done
+}
+
+# claims_json renders claims_all as a real `kubectl get -A -o json` List.
+claims_json() {
+  local first=1 out='{"apiVersion":"v1","kind":"List","items":[' ns name bn dts item
+  while read -r ns name bn dts; do
+    [ -n "${ns:-}" ] || continue
+    item='{"apiVersion":"objectstorage.k8s.io/v1alpha1","kind":"BucketClaim","metadata":{"namespace":"'"$ns"'","name":"'"$name"'","finalizers":["cosi.objectstorage.k8s.io/bucketclaim-protection"]'
+    [ "${dts:--}" = "-" ] || item="$item"',"deletionTimestamp":"'"$dts"'"'
+    item="$item"'}'
+    if [ "${bn:--}" = "-" ]; then item="$item"',"status":{}}'; else item="$item"',"status":{"bucketName":"'"$bn"'"}}'; fi
+    [ "$first" = 1 ] && { out="$out$item"; first=0; } || out="$out,$item"
+  done < <(claims_all)
+  printf '%s]}\n' "$out"
+}
+
+# claim_exists <ns> <name> -- 0 iff FAKE_CLAIMS lists that claim, regardless of
+# its status. Models the name-keyed single GET, which succeeds for a Terminating
+# claim too (the bucketclaim-protection finalizer keeps the object around).
+claim_exists() {
+  local want_ns="$1" want_name="$2" ns name bn dts
+  while read -r ns name bn dts; do
+    [ -n "${ns:-}" ] || continue
+    [ "$ns" = "$want_ns" ] && [ "$name" = "$want_name" ] && return 0
+  done <<EOF
+$FAKE_CLAIMS
+EOF
+  return 1
+}
 
 emit_clusters_name() { printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns name; do [ -n "$ns" ] && printf 'etcdcluster.etcd.aenix.io/%s\n' "$name"; done; }
 emit_clusters_jsonpath() { printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns name; do [ -n "$ns" ] && printf '%s %s\n' "$ns" "$name"; done; }
@@ -53,6 +159,39 @@ case "$args" in
   *"etcds.strategy.backups.cozystack.io"*)
     [ "${FAKE_STRATEGY:-1}" = "1" ] || exit 1
     printf '%s\n' "$strategy_json"; exit 0 ;;
+
+  # COSI presence. With --ignore-not-found real kubectl distinguishes a genuinely
+  # absent CRD (rc=0, no output) from a failed read (rc!=0) — the script must
+  # treat only the former as "external".
+  *"get crd bucketclaims.objectstorage.k8s.io"*)
+    log "CLAIM-CRD-PROBE"
+    case "${FAKE_CLAIM_CRD:-1}" in
+      1) printf 'customresourcedefinition.apiextensions.k8s.io/bucketclaims.objectstorage.k8s.io\n'; exit 0 ;;
+      0) exit 0 ;;   # --ignore-not-found: absent is a rc=0 empty answer
+      *) exit 1 ;;   # transient read error
+    esac ;;
+
+  # Cluster-wide claim list: the data the probe matches the projected bucketName
+  # against.
+  *"bucketclaims.objectstorage.k8s.io"*"-A"*)
+    log "BUCKETCLAIM-LIST"
+    [ "${FAKE_CLAIM_LIST_ERR:-0}" = "1" ] && exit 1
+    [ "${FAKE_CLAIM_CRD:-1}" = "1" ] || exit 1
+    case "${FAKE_CLAIM_LIST_SHAPE:-}" in
+      items-not-array) printf '{"items":"oops"}\n'; exit 0 ;;
+      no-items)        printf '{"apiVersion":"v1","kind":"List"}\n'; exit 0 ;;
+      not-json)        printf 'definitely not json\n'; exit 0 ;;
+    esac
+    claims_json; exit 0 ;;
+
+  # Name-keyed single GET. Nothing in the migration issues this any more; kept so
+  # the pre-fix script can still be driven against this fixture to prove the new
+  # tests bite.
+  *"bucketclaims.objectstorage.k8s.io"*)
+    log "BUCKETCLAIM-GET"
+    [ "${FAKE_CLAIM_CRD:-1}" = "1" ] || exit 1
+    claim_exists "$(arg_after -n "$@")" "$(arg_after bucketclaims.objectstorage.k8s.io "$@")" || exit 1
+    printf 'bucketclaim.objectstorage.k8s.io/x\n'; exit 0 ;;
 
   *"get secret cozy-backups-creds"*)   # both-keys validation probe AND stage source
     [ "${FAKE_CREDS:-1}" = "1" ] || exit 1

@@ -29,7 +29,46 @@ DRY_RUN="${MIGRATION_DRY_RUN:-0}"
 # than turn "no backup storage" into a total upgrade block, an operator who
 # accepts adopting live etcd WITHOUT a snapshot can set ETCD_ADOPT_SKIP_BACKUP=1
 # to pass etcd-migrate's --skip-backup. Default 0 keeps the fail-loud behaviour.
+# The platform renders this from migrations.etcdAdoptSkipBackup
+# (templates/migration-hook.yaml), which is the only route an operator has:
+# nothing else can set a var on a Helm-hook Job. Keep the two in lockstep —
+# an unreachable hatch is what the failure messages below used to advertise.
 SKIP_BACKUP="${ETCD_ADOPT_SKIP_BACKUP:-0}"
+
+# _is_true accepts the spellings an operator can plausibly arrive at. The
+# platform renders this var through migrations.etcdAdoptSkipBackup and always
+# emits "1"/"0", so the extra spellings are for the hand-set paths (running this
+# image directly, or a Job edited in place) where "true" is the natural thing to
+# type. A safety valve that is set but silently ignored is the worst outcome
+# here — worse than one that is not offered at all — so recognise the obvious
+# spellings rather than only the documented one. Everything else, including
+# typos, stays false: skipping the snapshot must need an affirmative answer.
+_is_true() {
+  case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+    1 | true | yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# _print_skip_backup_hatch spells out how to actually take the hatch. Naming the
+# env var alone is useless advice: this Job is a Helm hook rendered by the
+# platform chart, so an operator cannot set the variable directly and nothing
+# they can edit survives the next render. The Package CR is the only supported
+# route (it is cluster-scoped; the platform chart's own values sit under
+# components.platform). Deliberately not sold as a quick fix — it is a values
+# change plus a re-reconcile, and it must be reverted afterwards.
+_print_skip_backup_hatch() {
+  echo "    kubectl edit package.cozystack.io cozystack.cozystack-platform" >&2
+  echo "    spec:" >&2
+  echo "      components:" >&2
+  echo "        platform:" >&2
+  echo "          values:" >&2
+  echo "            migrations:" >&2
+  echo "              etcdAdoptSkipBackup: true" >&2
+  echo "    Flux then re-renders the platform chart and re-runs this hook, which adopts" >&2
+  echo "    every legacy etcd WITHOUT a snapshot. Set it back to false once the upgrade" >&2
+  echo "    completes, or the next etcd migration will skip its snapshot too." >&2
+}
 
 # Shared cozystack-version stamp helper. Every migration >= 42 must stamp via
 # this (labeled, no-delete-guarded) helper rather than a hand-rolled apply — the
@@ -211,30 +250,254 @@ ensure_wildcard_sans() {
   done
 }
 
+# secret_val echoes one base64 key from a Secret JSON blob, whitespace-stripped.
+# A trailing newline in the Secret data would otherwise ride into a URL and
+# break it. Stricter than the `trim` backupstrategy-controller.endpoint applies
+# (edges only): every key read through here is a host, bucket, region or bool,
+# none of which may contain interior whitespace, so stripping it all cannot
+# discard a meaningful value.
+secret_val() {
+  printf '%s' "$1" | jq -r --arg k "$2" '.data[$k] // ""' \
+    | base64 -d 2>/dev/null | tr -d '[:space:]'
+}
+
+# _cosi_bucket_claimed <bucket> returns 0 iff <bucket> is the S3 bucket some
+# BucketClaim was provisioned into, i.e. the projected credentials describe a
+# COSI bucket rather than an admin-managed external one.
+#
+# Keyed on DATA, not on names: the COSI driver assigns the bucket name and
+# publishes it as BucketClaim .status.bucketName, which is the very value the
+# projector republishes as the `bucketName` key (packages/system/bucket
+# user-credentials.yaml reads BucketInfo spec.bucketName; live-verified equal on
+# a real stand). Matching that makes the probe independent of
+# backupStorage.namespace / .bucketName, which are supported Package-CR
+# overrides this hook cannot see — a claim-name lookup would miss a renamed
+# bucket and misclassify the cluster as external.
+#
+# Data-keying also disposes of the common stale claim: one wedged Terminating
+# (the cosi bucketclaim-protection finalizer outlives an uninstalled COSI
+# controller) whose status carries some OTHER bucket simply does not match.
+#
+# Four-way, because "definitely not COSI", "could not read" and "cannot tell"
+# must never collapse into one answer: guessing "external" on an unreadable API
+# sends a COSI cluster to the v1.5.x plaintext CR endpoint, which is the very P0
+# this hook exists to avoid. Callers must fail loud on 2, and this function
+# prints the specific reason it could not answer.
+#   0 -> a LIVE claim owns the bucket: COSI-provisioned
+#   1 -> definitively unowned: admin-managed external S3
+#   2 -> undeterminable; reason already logged
+#
+# A TERMINATING claim on the MATCHING bucket is treated as ambiguous. It is
+# reachable two ways with opposite answers: an admin who moved COSI -> external
+# S3 reusing the bucket name (external; the claim is a corpse COSI is not around
+# to reap), or a still-COSI cluster whose claim is mid-recreate (COSI). Both
+# readings fail loudly-but-confusingly when wrong — a handshake error against
+# the wrong scheme — so neither buys reliability, and reading it as "external"
+# specifically resurrects the plaintext-:8333 P0.
+#
+# Refusing is a judgement call, not a proof that the two are indistinguishable:
+# comparing the projected host against the CR's would separate them today (reuse
+# -> same host; a v1.5.x mid-recreate -> ACME ingress vs the seaweedfs default).
+# But that leans on the CR being present AND still carrying the v1.5.x default —
+# precisely what this function exists not to trust — so it is a heuristic, and
+# an irreversible live-etcd adoption is the wrong place to spend one. Refuse and
+# let the operator resolve the claim (idempotent: re-run after).
+_cosi_bucket_claimed() {
+  local want="$1" crd claims verdict try
+  # `--ignore-not-found -o name` separates a genuinely absent CRD (rc=0, no
+  # output -> definitive, so it costs no retries and external clusters pay
+  # nothing) from a real read error (rc!=0 -> retry, then refuse).
+  crd=""
+  for try in 1 2 3; do
+    if crd=$(kubectl get crd bucketclaims.objectstorage.k8s.io \
+               --ignore-not-found -o name 2>/dev/null); then
+      [ -n "$crd" ] || return 1
+      break
+    fi
+    if [ "$try" = "3" ]; then
+      echo "  cannot read the BucketClaim CRD (API error): COSI presence unknown" >&2
+      return 2
+    fi
+    sleep 1
+  done
+
+  for try in 1 2 3; do
+    if claims=$(kubectl get bucketclaims.objectstorage.k8s.io -A -o json 2>/dev/null); then
+      # ONE jq process, and nothing downstream that can exit early. A
+      # `jq -r ... | grep -qxF` pipe is unusable here: grep exits on the first
+      # match and SIGPIPEs jq, and `set -o pipefail` reports the RIGHTMOST
+      # non-zero status — jq's 141 — so a MATCH is returned as a failure. It is
+      # a race on the list outgrowing one stdio write (~8KB, i.e. a few hundred
+      # claims) with only a last-line match safe, so it surfaces exactly on the
+      # big multi-tenant clusters this must not misjudge. `any` streams inside
+      # jq: immune to both list size and match position.
+      #
+      # The shape gate is deliberate: without it every unexpected document
+      # (null, items absent/null/not-a-list) silently reads as "no match" =
+      # external = the plaintext P0. No producer emits those — kubectl always
+      # renders a List with an items array — so the gate only ever fires on
+      # something we genuinely cannot interpret, and that must not be an answer.
+      verdict=$(printf '%s' "$claims" | jq -r --arg w "$want" '
+        if (.items | type) != "array" or any(.items[]; type != "object") then "malformed"
+        elif any(.items[]; ((.status?.bucketName? // "") == $w)
+                           and ((.metadata?.deletionTimestamp? // "") == "")) then "cosi"
+        elif any(.items[]; (.status?.bucketName? // "") == $w) then "terminating"
+        else "external"
+        end' 2>/dev/null) || verdict="malformed"
+      case "$verdict" in
+        cosi)     return 0 ;;
+        external) return 1 ;;
+        terminating)
+          echo "  bucket '${want}' is claimed ONLY by a TERMINATING BucketClaim: cannot tell a" >&2
+          echo "  COSI bucket mid-teardown (endpoint = the TLS S3 ingress) from an external" >&2
+          echo "  store that reuses the name (endpoint = whatever the admin configured)." >&2
+          echo "  Resolve the claim — let COSI reap it, or clear its finalizer — then re-run." >&2
+          return 2 ;;
+        *)
+          echo "  unexpected BucketClaim list shape; refusing to interpret it" >&2
+          return 2 ;;
+      esac
+    fi
+    if [ "$try" = "3" ]; then
+      echo "  cannot list BucketClaims (API error): bucket ownership unknown" >&2
+      return 2
+    fi
+    sleep 1
+  done
+}
+
 # resolve_platform_backup_args echoes the etcd-migrate --backup-s3-* flags for
 # the platform-managed safety snapshot, or returns non-zero if the target
-# cannot be resolved (no cozy-default etcd strategy, or no projected creds).
-# Read-only — safe in dry-run. The authoritative endpoint/bucket/region come
-# from the live cozy-default-etcd Strategy CR (rendered with real coordinates
-# by the backupstrategy-controller), so this never drifts from the bucket the
-# regular backups use.
+# cannot be resolved. Read-only — safe in dry-run.
+#
+# The coordinates come from the PROJECTED CREDENTIALS SECRET, not from the live
+# cozy-default-etcd Strategy CR, because this runs as a PRE-upgrade hook: every
+# chart-rendered resource on the cluster still belongs to the version we are
+# upgrading FROM, and cannot be trusted to describe a reachable target.
+#
+# On a v1.5.x cluster the live Strategy CR is wrong in one of two ways, and the
+# platform upgrade is gated behind this snapshot, so neither can self-heal
+# first (the fixed backupstrategy-controller chart only reconciles AFTER the
+# upgrade this hook blocks):
+#
+#   1. Absent. strategy-etcd-default.yaml is guarded by `if $bucketName`, whose
+#      helper `lookup`s the BucketClaim status. The BucketClaim is created by
+#      that same chart, so on first render the lookup is empty and the Strategy
+#      is silently skipped. Helm lookup only runs at install/upgrade time, so a
+#      cluster that reached 1.5.x in one hop never grows the CR on reconcile.
+#      Reachable ONLY under provisionBucket: true — the helper short-circuits to
+#      .Values.backupStorage.bucketName (non-empty) before the lookup when it is
+#      false, which is what makes the CR a sound fallback on the external path.
+#   2. Present, carrying the static default http://seaweedfs-s3...svc:8333.
+#      Cozystack ships SeaweedFS with enableSecurity=true, so :8333 is a TLS
+#      listener — plaintext against it fails the handshake and every snapshot
+#      dies. The Etcd Strategy's S3 schema has no caCert/insecureSkipVerify, so
+#      the self-signed in-cluster endpoint is unusable at ANY scheme; a trusted
+#      -cert endpoint is required.
+#
+# PLATFORM_CREDS_SECRET is produced by the projector from the COSI-provisioned
+# bucket's system credentials — bucket provisioning, not chart values — so it
+# describes the live bucket regardless of the version that rendered the chart.
+# It advertises the external S3 ingress (ACME cert) as a bare host, and that
+# ingress is always TLS, so we force https:// exactly as the 1.6 chart helper
+# backupstrategy-controller.endpoint does. We already had to read this Secret
+# for the AWS keys, so this adds no new dependency.
+#
+# The Strategy CR remains the fallback for the admin-managed external-S3 case
+# (provisionBucket: false), where .Values.backupStorage.endpoint is
+# authoritative and may legitimately be plaintext against a private object
+# store. That path is keyed off whether a BucketClaim actually claims the
+# projected bucket (_cosi_bucket_claimed), NOT off a missing projected endpoint:
+# the projector never omits the endpoint — it substitutes
+# BACKUP_STORAGE_ENDPOINT and fails ReasonSourceMalformed when both sources are
+# empty (credentials_projector.go), so a projected Secret always carries one and
+# its presence discriminates nothing.
 resolve_platform_backup_args() {
-  local cr ep bucket region fps
-  cr=$(kubectl get etcds.strategy.backups.cozystack.io "$PLATFORM_STRATEGY" -o json 2>/dev/null) || return 1
-  [ -n "$cr" ] || return 1
-  ep=$(printf '%s' "$cr"     | jq -r '.spec.template.destination.s3.endpoint // ""')
-  bucket=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.bucket // ""')
-  region=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.region // ""')
-  fps=$(printf '%s' "$cr"    | jq -r '.spec.template.destination.s3.forcePathStyle // false')
-  [ -n "$ep" ] && [ -n "$bucket" ] || return 1
+  local creds ep bucket region fps
   # The credentials Secret must already exist with BOTH AWS keys so the snapshot
   # agent can authenticate. Validate both up front: a Secret missing one key
   # would otherwise abort etcd-migrate AFTER the operator/cert mutations have
   # begun (creds staged, operator scaled to 0).
-  local creds
   creds=$(kubectl -n "$PLATFORM_CREDS_NS" get secret "$PLATFORM_CREDS_SECRET" -o json 2>/dev/null) || return 1
   printf '%s' "$creds" | jq -e '(.data.AWS_ACCESS_KEY_ID // "")     | length > 0' >/dev/null 2>&1 || return 1
   printf '%s' "$creds" | jq -e '(.data.AWS_SECRET_ACCESS_KEY // "") | length > 0' >/dev/null 2>&1 || return 1
+
+  ep=$(secret_val "$creds" endpoint)
+  bucket=$(secret_val "$creds" bucketName)
+  region=$(secret_val "$creds" region)
+  fps=$(secret_val "$creds" forcePathStyle)
+
+  # An empty bucket cannot be matched against a claim, so it is classified
+  # external and resolved wholly from the CR — what origin/main did.
+  local cosi=1
+  if [ -n "$bucket" ]; then
+    cosi=0; _cosi_bucket_claimed "$bucket" || cosi=$?
+  fi
+  if [ "$cosi" = "2" ]; then
+    echo "  ERROR: could not determine whether bucket '${bucket}' is COSI-provisioned" >&2
+    echo "  (reason above). Refusing to guess the endpoint scheme: a wrong guess snapshots" >&2
+    echo "  to an unreachable endpoint and the adoption fails anyway, so the guess buys" >&2
+    echo "  nothing. Resolve the condition above and re-run — this migration is idempotent." >&2
+    return 1
+  fi
+
+  # `[ -n "$ep" ]` guards the forcing itself, not just the classification: an
+  # empty projected endpoint must degrade to the CR fallback below, never to a
+  # scheme-only "https://" that would satisfy the non-empty check at the end and
+  # be passed to etcd-migrate as a destination.
+  if [ "$cosi" = "0" ]; then
+    echo "  bucket '${bucket}' is claimed by a BucketClaim: COSI-provisioned, forcing https" >&2
+    if [ -n "$ep" ]; then
+      # Projected (COSI) endpoint: a bare host fronted by the always-TLS S3
+      # ingress. Strip any scheme a future producer might emit, then force https.
+      ep="${ep#https://}"; ep="${ep#http://}"
+      ep="https://${ep}"
+    fi
+  else
+    # External S3: take EVERY coordinate from the Strategy CR, not just the
+    # endpoint. The CR renders .Values.backupStorage.* and points at this same
+    # cozy-backups-creds (strategy-etcd-default.yaml credentialsSecretRef), so
+    # CR coordinates + these credentials is exactly what this cluster's regular
+    # etcd BackupJobs already use — the one combination proven to work here, and
+    # the bucket an operator will look in for the snapshot. Keeping the Secret's
+    # bucket while taking the CR's endpoint would invent a pairing nothing else
+    # in the system produces: the projector copies bucketName straight from the
+    # admin-managed source Secret and never from backupStorage.bucketName, so
+    # the two can disagree outright. (region can only disagree if the source
+    # Secret overrides it; forcePathStyle is always the platform value on both
+    # sides and cannot.) If CR-bucket + these creds really did not go together,
+    # the cluster's own backups would already be failing — a pre-existing
+    # misconfiguration to fix, not to route around by snapshotting somewhere
+    # nothing else writes.
+    #
+    # Relying on the CR wholesale is safe on this path and only this path:
+    # bucketName short-circuits to .Values.backupStorage.bucketName before the
+    # BucketClaim lookup that races on the COSI path, so `if $bucketName` always
+    # passes and the CR is guaranteed present. The scheme in particular survives
+    # nowhere else — the projector strips it off the host.
+    echo "  no BucketClaim claims bucket '${bucket:-<unset>}': treating as external S3," >&2
+    echo "  taking every coordinate from the '${PLATFORM_STRATEGY}' Strategy CR verbatim" >&2
+    ep=""; bucket=""; region=""; fps=""
+  fi
+
+  # Fill from the Strategy CR: every coordinate on the external-S3 path above,
+  # and on the COSI path only what the projector dropped because its source
+  # Secret did not carry it (setOrDelete deletes an empty value rather than
+  # writing it). The COSI path keeps the projected bucket on purpose — it is the
+  # COSI-assigned name, which the CR can only reproduce via a live lookup that
+  # may not have run.
+  if [ -z "$ep" ] || [ -z "$bucket" ] || [ -z "$region" ] || [ -z "$fps" ]; then
+    local cr
+    cr=$(kubectl get etcds.strategy.backups.cozystack.io "$PLATFORM_STRATEGY" -o json 2>/dev/null) || cr=""
+    if [ -n "$cr" ]; then
+      [ -n "$ep" ]     || ep=$(printf '%s' "$cr"     | jq -r '.spec.template.destination.s3.endpoint // ""')
+      [ -n "$bucket" ] || bucket=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.bucket // ""')
+      [ -n "$region" ] || region=$(printf '%s' "$cr" | jq -r '.spec.template.destination.s3.region // ""')
+      [ -n "$fps" ]    || fps=$(printf '%s' "$cr"    | jq -r '.spec.template.destination.s3.forcePathStyle // false')
+    fi
+  fi
+  [ -n "$ep" ] && [ -n "$bucket" ] || return 1
+
   local args="--backup-s3-endpoint=${ep} --backup-s3-bucket=${bucket}"
   args="${args} --backup-s3-credentials-secret=${PLATFORM_CREDS_SECRET}"
   args="${args} --backup-s3-key=${SNAPSHOT_KEY_PREFIX}"
@@ -347,10 +610,11 @@ fi
 # ETCD_ADOPT_SKIP_BACKUP=1 escape hatch; any inbound ETCD_MIGRATE_BACKUP_ARGS is
 # overwritten here on purpose (it can never suppress the snapshot).
 if [ "$LEGACY_COUNT" -gt 0 ]; then
-  if [ "$SKIP_BACKUP" = "1" ]; then
-    echo "WARNING: ETCD_ADOPT_SKIP_BACKUP=1 — adopting live etcd WITHOUT a pre-adoption" >&2
-    echo "  safety snapshot, by explicit operator request. A botched adoption on a" >&2
-    echo "  tenant control-plane etcd is UNRECOVERABLE with no snapshot." >&2
+  if _is_true "$SKIP_BACKUP"; then
+    echo "WARNING: migrations.etcdAdoptSkipBackup is set — adopting live etcd WITHOUT a" >&2
+    echo "  pre-adoption safety snapshot, by explicit operator request. A botched adoption" >&2
+    echo "  on a tenant control-plane etcd is UNRECOVERABLE with no snapshot. Reset the" >&2
+    echo "  flag to false once this upgrade is through." >&2
     ETCD_MIGRATE_BACKUP_ARGS="--skip-backup"
   else
     echo "Resolving platform-managed S3 snapshot target ('${PLATFORM_STRATEGY}' strategy)..."
@@ -358,13 +622,16 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
       echo "  -> safety snapshot: ${ETCD_MIGRATE_BACKUP_ARGS}"
     else
       echo "ERROR: refusing to adopt live etcd without a safety snapshot." >&2
+      echo "  See the classification logged above: a bucket claimed by a BucketClaim is" >&2
+      echo "  resolved from the projected Secret, anything else from the Strategy CR." >&2
       echo "  Could not resolve the platform backup target: the '${PLATFORM_STRATEGY}'" >&2
       echo "  strategy and a projected '${PLATFORM_CREDS_SECRET}' Secret (AWS_ACCESS_KEY_ID/" >&2
       echo "  AWS_SECRET_ACCESS_KEY) in '${PLATFORM_CREDS_NS}' are required. Ensure the" >&2
       echo "  cozy-backups Bucket and the backupstrategy-controller are healthy, then re-run." >&2
       echo "  If this cluster intentionally has no backup storage (backups disabled," >&2
       echo "  external S3 without staged creds, or SeaweedFS not yet ready) and you accept" >&2
-      echo "  adopting live etcd WITHOUT a snapshot, re-run with ETCD_ADOPT_SKIP_BACKUP=1." >&2
+      echo "  adopting live etcd WITHOUT a snapshot, take the escape hatch:" >&2
+      _print_skip_backup_hatch
       exit 1
     fi
   fi
@@ -433,7 +700,7 @@ if [ "$LEGACY_COUNT" -gt 0 ]; then
   # etcd-migrate's per-namespace snapshot Job mounts PLATFORM_CREDS_SECRET there.
   # Skipped entirely when ETCD_ADOPT_SKIP_BACKUP=1 (no snapshot Job runs, so no
   # creds are needed) — adoption below still proceeds.
-  if [ "$SKIP_BACKUP" != "1" ]; then
+  if ! _is_true "$SKIP_BACKUP"; then
     echo "=== staging snapshot credentials ('${PLATFORM_CREDS_SECRET}') into adopted namespaces ==="
     while read -r ns name; do
       [ -n "$ns" ] || continue
