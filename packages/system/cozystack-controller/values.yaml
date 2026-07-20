@@ -2,3 +2,6 @@ cozystackController:
   image: ghcr.io/cozystack/cozystack/cozystack-controller:v1.5.0@sha256:d3be63579fcabfa802a61ff2f4c2f54d5d6d52c1cbcdff52a3f14d101ca85afc
   debug: false
   disableTelemetry: false
+  replicas: 1
+  # -- Optional resource requests and limits for the cozystack-controller container.
+  resources: {}

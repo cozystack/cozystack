@@ -5,7 +5,7 @@ metadata:
   labels:
     app: cozystack-controller
 spec:
-  replicas: 1
+  replicas: {{ .Values.cozystackController.replicas }}
   selector:
     matchLabels:
       app: cozystack-controller
@@ -26,4 +26,8 @@ spec:
         {{- end }}
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
+        {{- end }}
+        {{- with .Values.cozystackController.resources }}
+        resources:
+          {{- toYaml . | nindent 10 }}
         {{- end }}

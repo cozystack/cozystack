@@ -1,3 +1,5 @@
 cozystackAPI:
   image: ghcr.io/cozystack/cozystack/cozystack-api:v1.5.0@sha256:ef50b155e419cf8f0b4d57af9fa385ecbacd5c1248f13591ffcca75c2f9f2a07
   replicas: 2
+  # -- Optional resource requests and limits for the cozystack-api container.
+  resources: {}
