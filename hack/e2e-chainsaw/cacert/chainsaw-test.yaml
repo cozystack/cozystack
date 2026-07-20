@@ -1,0 +1,276 @@
+# Exercises the sentinel model against the live API server: the writer policy
+# that gates TenantProjection, and the CA-extraction controller that reconciles
+# one.
+#
+# Two things need a real cluster that unit tests cannot reach:
+#  - the ValidatingAdmissionPolicy, whose whole protection is one CEL expression
+#    the API server evaluates on admission. helm-unittest pins the expression and
+#    the bats check pins the writer literal, but only a live deny/allow probe
+#    proves the API server actually refuses a forger and admits flux.
+#  - the controller wiring end to end: a sentinel a flux identity creates, an
+#    absent source surfaced as Ready=False/SourceNotFound, and a real source
+#    lifted into a key-free projection.
+#
+# Impersonation and error-message greps cannot be expressed by Chainsaw `apply`
+# — and the writer policy denies the admin identity Chainsaw applies as, so a
+# sentinel can only be created by impersonating flux — so the cases stay scripts,
+# mirroring hack/e2e-chainsaw/gateway. Each case does its create, its assertions
+# and its cleanup inside ONE script step with a self-contained trap, which is the
+# pattern docs/agents/e2e-testing.md sanctions (no test-level EXIT trap).
+#
+# The tenant-visibility leg (a projection reaching the tenant through
+# core.cozystack.io/tenantsecrets) is NOT exercised here: it needs a full
+# application so the lineage webhook can resolve the projection to an app whose
+# spec.secrets selects it, which is the postgres app suite's job. This suite
+# covers the parts that stand alone — the policy and the controller.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: tenant-projection
+spec:
+  steps:
+  - name: policy-binding-present
+    try:
+    - assert:
+        timeout: 1m
+        resource:
+          apiVersion: admissionregistration.k8s.io/v1
+          kind: ValidatingAdmissionPolicyBinding
+          metadata:
+            name: cozystack-tenant-projection-writer-policy
+
+  - name: forge-denied-flux-allowed
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          flux="system:serviceaccount:cozy-fluxcd:flux"
+
+          cleanup() {
+            # This suite runs against the shared, pre-existing tenant-test
+            # namespace (hack/e2e-chainsaw/.chainsaw.yaml). Chainsaw reclaims only
+            # what IT applied; everything here is created by kubectl inside this
+            # script, so it must be pruned by hand. The trap is armed BEFORE the
+            # RBAC apply so a partial apply cannot leak the privileged Role. The
+            # sentinel a regression would create (vap-tp-forged) is deleted too —
+            # it must not outlive the run. Deletes are not masked with `|| true`
+            # (docs/agents/e2e-testing.md forbids it): each runs even if an earlier
+            # errors, the test's own exit status is preserved, and a genuine
+            # cleanup failure fails the step.
+            status=$?
+            rc=0
+            kubectl -n "$ns" delete tenantprojection vap-tp-forged --ignore-not-found || rc=1
+            kubectl -n "$ns" delete tenantprojection vap-tp-flux --ignore-not-found || rc=1
+            kubectl -n "$ns" delete rolebinding vap-probe-tp --ignore-not-found || rc=1
+            kubectl -n "$ns" delete role vap-probe-tp --ignore-not-found || rc=1
+            if [ "$status" -ne 0 ]; then exit "$status"; fi
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          as_tenant="kubectl --as=system:serviceaccount:${ns}:default \
+            --as-group=system:serviceaccounts \
+            --as-group=system:serviceaccounts:${ns}"
+
+          # 1. RBAC is the PRIMARY boundary: the tenant SA holds no verb on
+          #    internal.cozystack.io, so its create stops at authorization before
+          #    admission is even reached.
+          out=$($as_tenant apply -f - 2>&1 <<EOF
+          apiVersion: internal.cozystack.io/v1alpha1
+          kind: TenantProjection
+          metadata:
+            name: vap-tp-forged
+            namespace: ${ns}
+          spec:
+            projections:
+            - type: CACert
+              sourceSecretName: vap-tp-forged-src
+              sourceKey: ca.crt
+          EOF
+          ) && rc=0 || rc=$?
+          echo "rbac-deny rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -qi "forbidden"
+          echo "$out" | grep -qi "tenantprojections"
+
+          # 2. Grant the tenant SA the verb, so the next create reaches ADMISSION
+          #    (the VAP) instead of stopping at RBAC — otherwise an RBAC Forbidden
+          #    would masquerade as the policy's denial.
+          kubectl apply -f - <<EOF
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: vap-probe-tp
+            namespace: ${ns}
+          rules:
+          - apiGroups: ["internal.cozystack.io"]
+            resources: ["tenantprojections"]
+            verbs: ["create", "update", "patch", "get", "delete"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: vap-probe-tp
+            namespace: ${ns}
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: vap-probe-tp
+          subjects:
+          - kind: ServiceAccount
+            name: default
+            namespace: ${ns}
+          EOF
+
+          # 3. FORGE: the tenant SA, now RBAC-authorized, tries to declare a trust
+          #    anchor. The VAP refuses it because the writer is not flux.
+          out=$($as_tenant apply -f - 2>&1 <<EOF
+          apiVersion: internal.cozystack.io/v1alpha1
+          kind: TenantProjection
+          metadata:
+            name: vap-tp-forged
+            namespace: ${ns}
+          spec:
+            projections:
+            - type: CACert
+              sourceSecretName: vap-tp-forged-src
+              sourceKey: ca.crt
+          EOF
+          ) && rc=0 || rc=$?
+          echo "vap-deny rc=$rc out=$out"
+          [ "$rc" -ne 0 ]
+          echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+          echo "$out" | grep -q "may only be written by the flux service account"
+
+          # 4. flux IS allowed. Also the positive control — a policy that denied
+          #    everyone (a mistyped writer literal) fails HERE, not silently above.
+          kubectl --as="$flux" apply -f - <<EOF
+          apiVersion: internal.cozystack.io/v1alpha1
+          kind: TenantProjection
+          metadata:
+            name: vap-tp-flux
+            namespace: ${ns}
+          spec:
+            projections:
+            - type: CACert
+              sourceSecretName: vap-tp-flux-src
+              sourceKey: ca.crt
+          EOF
+        check:
+          ($error == null): true
+
+  - name: controller-projects-a-key-free-anchor
+    try:
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          flux="system:serviceaccount:cozy-fluxcd:flux"
+          release="cacert-e2e"
+          sentinel="${release}-ca"
+          source="${release}-ca-src"
+          proj="${release}.tenant-ca"
+          tmp="$(mktemp -d)"
+
+          cleanup() {
+            status=$?
+            rc=0
+            # Deleting the sentinel garbage-collects the projection through its
+            # owner reference; delete the projection explicitly too so a
+            # regression that mis-owns it cannot leak into the shared namespace.
+            kubectl -n "$ns" delete tenantprojection "$sentinel" --ignore-not-found || rc=1
+            kubectl -n "$ns" delete secret "$proj" --ignore-not-found || rc=1
+            kubectl -n "$ns" delete secret "$source" --ignore-not-found || rc=1
+            rm -rf "$tmp" || rc=1
+            if [ "$status" -ne 0 ]; then exit "$status"; fi
+            exit "$rc"
+          }
+          trap cleanup EXIT
+
+          # The sentinel carries the helm.toolkit.fluxcd.io/name label Flux stamps
+          # in production; the controller derives the canonical projection name
+          # from it. flux must create it — the writer policy denies everyone else.
+          kubectl --as="$flux" apply -f - <<EOF
+          apiVersion: internal.cozystack.io/v1alpha1
+          kind: TenantProjection
+          metadata:
+            name: ${sentinel}
+            namespace: ${ns}
+            labels:
+              helm.toolkit.fluxcd.io/name: ${release}
+          spec:
+            projections:
+            - type: CACert
+              sourceSecretName: ${source}
+              sourceKey: ca.crt
+          EOF
+
+          # The source does not exist yet: the sentinel's Ready condition must say
+          # so, in the open, rather than the controller retrying in silence.
+          # TODO(e2e-replace-fixed-timeouts): a script poll because the sentinel is
+          # impersonation-created, which Chainsaw's declarative assert cannot do.
+          ok=""
+          for _ in $(seq 1 30); do
+            reason=$(kubectl -n "$ns" get tenantprojection "$sentinel" \
+              -o jsonpath="{.status.conditions[?(@.type=='Ready')].reason}" 2>/dev/null || true)
+            status=$(kubectl -n "$ns" get tenantprojection "$sentinel" \
+              -o jsonpath="{.status.conditions[?(@.type=='Ready')].status}" 2>/dev/null || true)
+            if [ "$status" = "False" ] && [ "$reason" = "SourceNotFound" ]; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "$ok" ] || { echo "sentinel never reported SourceNotFound (status=$status reason=$reason)"; exit 1; }
+
+          # Now the operator mints its CA: a real certificate NEXT TO the CA
+          # private key, exactly the shape the controller exists to break apart.
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+            -keyout "$tmp/ca.key" -out "$tmp/ca.crt" -days 1 \
+            -subj "/CN=cozystack-cacert-e2e" >/dev/null 2>&1
+          kubectl -n "$ns" create secret generic "$source" \
+            --from-file=ca.crt="$tmp/ca.crt" --from-file=ca.key="$tmp/ca.key"
+
+          # The projection must appear, key-free — and this is the guard for the
+          # source WATCH, not just the projection. The source Secret carries no
+          # label, so nothing but the metadata Secret watch reacts to its creation;
+          # a sentinel change is the only other trigger and there is none here. So
+          # the 60s budget below (30x2s) is deliberately far under resyncInterval
+          # (5m): if the watch is filtered or dead (e.g. wired onto the manager's
+          # wildcard-scoped Secret cache), the projection only lands on the resync
+          # and this times out. It passes only when the dedicated metadata cache
+          # delivers the source-creation event promptly.
+          # TODO(e2e-replace-fixed-timeouts): a script poll because the sentinel is
+          # impersonation-created, which Chainsaw's declarative assert cannot do.
+          ok=""
+          for _ in $(seq 1 30); do
+            if kubectl -n "$ns" get secret "$proj" >/dev/null 2>&1; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "$ok" ] || { echo "projection $proj was never created"; exit 1; }
+
+          # It is Opaque, carries ONLY ca.crt (no ca.key), matches the source
+          # certificate, is labelled for tenant visibility, and is owned by the
+          # sentinel — the chain the lineage webhook and the GC both rely on.
+          [ "$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.type}')" = "Opaque" ]
+          [ "$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.metadata.labels.internal\.cozystack\.io/tenant-ca}')" = "true" ]
+          [ "$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.metadata.ownerReferences[0].kind}')" = "TenantProjection" ]
+          [ "$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.metadata.ownerReferences[0].name}')" = "$sentinel" ]
+          kubectl -n "$ns" get secret "$proj" -o jsonpath='{.data.ca\.crt}' | grep -q .
+          if kubectl -n "$ns" get secret "$proj" -o jsonpath='{.data.ca\.key}' | grep -q .; then
+            echo "the projection leaked ca.key — the whole point of the controller failed"
+            exit 1
+          fi
+          got=$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          [ "$got" = "$(cat "$tmp/ca.crt")" ] || { echo "projected ca.crt does not match the source"; exit 1; }
+
+          # And the sentinel now reports Ready.
+          # TODO(e2e-replace-fixed-timeouts): same reason as the polls above.
+          ok=""
+          for _ in $(seq 1 30); do
+            status=$(kubectl -n "$ns" get tenantprojection "$sentinel" \
+              -o jsonpath="{.status.conditions[?(@.type=='Ready')].status}" 2>/dev/null || true)
+            if [ "$status" = "True" ]; then ok=1; break; fi
+            sleep 2
+          done
+          [ -n "$ok" ] || { echo "sentinel never reported Ready=True (status=$status)"; exit 1; }
+        check:
+          ($error == null): true
