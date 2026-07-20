@@ -1,0 +1,77 @@
+<<<<<<< HEAD
+=======
+cert-manager:
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  webhook:
+    # Upstream defaults securePort to 10250, the port the kubelet serves on.
+    # That default is chosen for GKE private clusters, where apiservers may
+    # reach nodes only on 443 and 10250; it costs nothing there and is unsafe
+    # here. When a connection to the webhook Service resolves to a node IP
+    # rather than a Pod IP, it reaches the kubelet, which completes the TLS
+    # handshake with its node serving certificate, and the apiserver rejects
+    # every cert-manager admission call cluster-wide with "x509: certificate
+    # is valid for <node>, not cert-manager-webhook.cozy-cert-manager.svc".
+    # The certificate is valid — it is simply the wrong server's — so the
+    # error reads as a cert-manager fault and hides the misroute that caused
+    # it. Serving on a port nothing else answers on turns that same misroute
+    # into a connection refusal, which names the real problem. This does not
+    # prevent the misroute; it removes the collision that makes one
+    # catastrophic and misattributed.
+    #
+    # What has to hold for 10260 to be an improvement is that nothing answers
+    # on it in the node's network namespace, since the misroute lands on a
+    # node IP. Nothing does, in either cluster this chart is installed into.
+    # On management nodes the only host-network workload of the kind that
+    # might is local-ccm, which links none of the cloud-provider framework
+    # that binds 10258 and 10260 by default, and binds no TCP port at all.
+    # No cloud-controller-manager runs on a tenant node either: the kubevirt
+    # one does build on that framework, but it is a pod-networked Deployment
+    # in the management cluster, so whatever it binds stays in a Pod's
+    # namespace. Anything host-network added later to either cluster has to
+    # keep clear of the port.
+    #
+    # Under webhook.hostNetwork the webhook itself would join that namespace,
+    # where the clusterwide policy in packages/system/cilium-networkpolicy
+    # denies 10250 from the world but has no entry for 10260. Enabling
+    # hostNetwork means revisiting that policy.
+    securePort: 10260
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      requests:
+        cpu: 10m
+        memory: 32Mi
+  cainjector:
+    # cainjector loads all ValidatingWebhookConfigurations, APIServices and CRDs
+    # into its informer caches at startup. On a full cozystack install that
+    # working set exceeds 128Mi, so cainjector is OOMKilled during cache
+    # population and CrashLoops before it ever injects a caBundle. Because it
+    # runs as a single leader-elected replica, that stalls CA injection for the
+    # whole cluster: webhook ValidatingWebhookConfigurations keep an empty
+    # caBundle and every admission call fails with
+    # "x509: certificate signed by unknown authority" (failurePolicy: Fail).
+    # Size the limit to the controller's 512Mi and lift the request off the
+    # OOM floor so injection completes deterministically.
+    resources:
+      limits:
+        cpu: 200m
+        memory: 512Mi
+      requests:
+        cpu: 10m
+        memory: 128Mi
+  startupapicheck:
+    resources:
+      limits:
+        cpu: 100m
+        memory: 64Mi
+      requests:
+        cpu: 10m
+        memory: 16Mi
+>>>>>>> df85632 (fix(cert-manager): move the webhook off the kubelet's port)
