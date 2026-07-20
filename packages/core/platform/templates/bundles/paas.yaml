@@ -23,4 +23,5 @@
 {{include "cozystack.platform.package.default" (list "cozystack.qdrant-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.rabbitmq-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.redis-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.valkey-application" $) }}
 {{- end }}
