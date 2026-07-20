@@ -1,0 +1,241 @@
+suite: MariaDB my.cnf resource scaling
+
+# The shipped my.cnf used to hardcode sizing for a large bare-metal host —
+# a 60G buffer pool, a 4 GiB redo log, a 1 GiB MyISAM key cache and 4096
+# connections — while the chart defaults to t1.nano (250m CPU / 128Mi RAM)
+# and a 10Gi volume. Every memory allocation and thread count in the file
+# now derives from the instance's own CPU and memory limits, so a small
+# instance asks for memory it actually has and does not preallocate a redo
+# log worth 40% of its default volume.
+
+templates:
+  - templates/config.yaml
+
+tests:
+  - it: renders a single my.cnf ConfigMap
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+
+  # t1.nano — the chart default: 250m CPU, 128Mi memory, 10Gi volume.
+  - it: sizes every allocation to the instance on the default t1.nano preset
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      # 50% of the 128Mi memory limit.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_buffer_pool_size=64M$
+      # min(buffer pool, 5% of the 10Gi volume) lifted to the 96M server default.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_log_file_size=96M$
+      # memory/4 lifted to the 151 stock MariaDB default.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^max_connections=151$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^key_buffer_size=8M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^tmp_table_size=16M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^read_rnd_buffer_size=512K$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^table_open_cache=2000$
+      # 250m of CPU must not spawn 24 pool threads.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^thread_pool_size=1$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_read_io_threads=2$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_write_io_threads=2$
+
+  # The exact values the old hardcoded file shipped. None of them may come
+  # back for a nano instance, whatever the formulas are rewritten to.
+  - it: never emits the hardcoded large-host sizing on a nano instance
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - notMatchRegex:
+          path: data.config
+          pattern: innodb_buffer_pool_size=60G
+      - notMatchRegex:
+          path: data.config
+          pattern: innodb_log_file_size=4096M
+      - notMatchRegex:
+          path: data.config
+          pattern: key_buffer_size=1024M
+      - notMatchRegex:
+          path: data.config
+          pattern: max_connections=4096
+      - notMatchRegex:
+          path: data.config
+          pattern: tmp_table_size=512M
+
+  # innodb_buffer_pool_instances and innodb_thread_concurrency were removed
+  # from the server in 10.6, below the oldest version this chart ships. Both
+  # only produce a "was removed. It does nothing now" warning on every start.
+  - it: omits variables the shipped server versions have removed
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - notMatchRegex:
+          path: data.config
+          pattern: innodb_buffer_pool_instances
+      - notMatchRegex:
+          path: data.config
+          pattern: innodb_thread_concurrency
+
+  # m1.large — 4 CPU, 32Gi memory. Every cap is reached except the redo log,
+  # which the default 10Gi volume holds down to 512M.
+  - it: scales up on a large preset without exceeding the previous ceilings
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      resourcesPreset: m1.large
+    asserts:
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_buffer_pool_size=16384M$
+      # min(16Gi pool, 5% of 10Gi volume) — the volume, not the pool, is the bound.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_log_file_size=512M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^max_connections=4096$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^key_buffer_size=128M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^tmp_table_size=512M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^read_rnd_buffer_size=16384K$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^table_open_cache=40714$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^thread_pool_size=4$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_read_io_threads=4$
+
+  # An explicit resources block must win over the preset, the same way it
+  # does for the MariaDB CR's own resource stanza.
+  - it: derives sizing from an explicit resources override rather than the preset
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      resourcesPreset: t1.nano
+      resources:
+        cpu: "2"
+        memory: 4Gi
+    asserts:
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_buffer_pool_size=2048M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_log_file_size=512M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^max_connections=1024$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^key_buffer_size=128M$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^table_open_cache=16384$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^thread_pool_size=2$
+
+  # The redo log is bounded by the buffer pool and by the volume, and is
+  # never allowed past the 4096M the chart shipped before.
+  - it: caps the redo log at the previously shipped size on a large volume
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      resourcesPreset: m1.large
+      size: 500Gi
+    asserts:
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_log_file_size=4096M$
+
+  # A small volume must hold the redo log down even when memory is plentiful,
+  # so first boot never preallocates a large fraction of the data volume.
+  - it: lets a small volume bound the redo log below the buffer pool
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      resourcesPreset: m1.large
+      size: 4Gi
+    asserts:
+      # 5% of the 4Gi volume is 204M — above the 96M floor and far below the
+      # 16Gi buffer pool, so the volume fraction is the bound that lands.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_log_file_size=204M$
+
+  # The buffer pool is the one derived value with no upper bound, so an
+  # instance with at least 128Gi of memory is sized above the 60G the chart
+  # hardcoded before. That is the intent — half of a limit the instance has,
+  # rather than a number pinned to the host the old file was written for.
+  - it: sizes the buffer pool past the old hardcoded 60G on the largest presets
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    set:
+      resourcesPreset: m1.4xlarge
+    asserts:
+      # Half of 256Gi. The old file would have left this instance on 60G.
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_buffer_pool_size=131072M$
+
+  # Settings that are not a memory allocation or a thread count are left
+  # exactly as they were — they encode durability and storage behaviour the
+  # chart cannot derive from the pod's size.
+  - it: leaves behavioural settings untouched
+    release:
+      name: mariadb-test
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^sql-mode=NO_ENGINE_SUBSTITUTION$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_flush_method=O_DIRECT_NO_FSYNC$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_flush_log_at_trx_commit=2$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_io_capacity=10000$
+      - matchRegex:
+          path: data.config
+          pattern: (?m)^innodb_fast_shutdown=0$

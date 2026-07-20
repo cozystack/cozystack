@@ -1,4 +1,5 @@
 ---
+{{- $tuning := include "mariadb.tuning" $ | fromYaml }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -7,29 +8,26 @@ data:
   config: |
     [mysqld]
     sql-mode=NO_ENGINE_SUBSTITUTION
-    max_connections=4096
+    max_connections={{ $tuning.maxConnections }}
     default_authentication_plugin=mysql_native_password
     #innodb_buffer_pool_dump_at_shutdown=1
-    innodb_buffer_pool_instances=48
-    innodb_buffer_pool_size=60G
+    innodb_buffer_pool_size={{ $tuning.bufferPoolSizeMi }}M
     innodb_fast_shutdown=0
     innodb_flush_method=O_DIRECT_NO_FSYNC
     innodb_flush_log_at_trx_commit=2
     innodb_io_capacity=10000
     innodb_io_capacity_max=50000
     #innodb_log_buffer_size=128M
-    innodb_log_file_size=4096M
-    #innodb_log_files_in_group=6
-    innodb_thread_concurrency=24
+    innodb_log_file_size={{ $tuning.logFileSizeMi }}M
     join_buffer_size=2M
-    key_buffer_size=1024M
-    read_rnd_buffer_size=16M
+    key_buffer_size={{ $tuning.keyBufferSizeMi }}M
+    read_rnd_buffer_size={{ $tuning.readRndBufferKi }}K
     #sync_binlog=0
-    table_open_cache=40714
+    table_open_cache={{ $tuning.tableOpenCache }}
     table_definition_cache=4000
-    thread_pool_size=24
-    tmp_table_size=512M
+    thread_pool_size={{ $tuning.threadPoolSize }}
+    tmp_table_size={{ $tuning.tmpTableSizeMi }}M
     master_info_repository=TABLE
     relay_log_info_repository=TABLE
-    innodb_read_io_threads=12
-    innodb_write_io_threads=12
+    innodb_read_io_threads={{ $tuning.ioThreads }}
+    innodb_write_io_threads={{ $tuning.ioThreads }}
