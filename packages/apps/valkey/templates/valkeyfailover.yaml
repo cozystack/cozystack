@@ -1,0 +1,105 @@
+{{- if .Values.authEnabled }}
+  {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
+  {{- $password := randAlphaNum 32 | b64enc }}
+  {{- if $existingPassword }}
+    {{- $password = index $existingPassword.data "password" }}
+  {{- end }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-auth
+data:
+  password: {{ $password }}
+{{- end }}
+
+---
+
+apiVersion: databases.spotahome.com/v1
+kind: RedisFailover
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  sentinel:
+    replicas: 3
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
+  redis:
+    image: "{{ $.Files.Get (printf "images/valkey-%s.tag" (include "valkey.versionMap" $)) | trim }}"
+    resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
+    replicas: {{ .Values.replicas }}
+    {{- with .Values.size }}
+    storage:
+      persistentVolumeClaim:
+        metadata:
+          name: redisfailover-persistent-data
+          labels:
+            app.kubernetes.io/component: redis
+            app.kubernetes.io/instance: {{ $.Release.Name }}
+        spec:
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: {{ . }}
+          {{- with $.Values.storageClass }}
+          storageClassName: {{ . }}
+          {{- end }}
+    {{- end }}
+    exporter:
+      enabled: true
+      image: oliver006/redis_exporter:v1.55.0-alpine
+      args:
+        - --web.telemetry-path
+        - /metrics
+      env:
+        - name: REDIS_EXPORTER_LOG_FORMAT
+          value: txt
+    customConfig:
+      - tcp-keepalive 0
+      - loglevel notice
+      {{- if not .Values.size }}
+      - appendonly no
+      - save ""
+      {{- end }}
+  {{- if .Values.authEnabled }}
+  auth:
+    secretPath: {{ .Release.Name }}-auth
+  {{- end }}
+
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-valkey
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+spec:
+  minReplicas: 1
+  replicas: {{ .Values.replicas }}
+  kind: valkey
+  type: valkey
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  version: {{ $.Chart.Version }}
+---
+apiVersion: cozystack.io/v1alpha1
+kind: WorkloadMonitor
+metadata:
+  name: {{ $.Release.Name }}-sentinel
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
+spec:
+  minReplicas: 2
+  replicas: 3
+  kind: valkey
+  type: sentinel
+  selector:
+    app.kubernetes.io/component: sentinel
+    app.kubernetes.io/instance: {{ $.Release.Name }}
+  version: {{ $.Chart.Version }}
