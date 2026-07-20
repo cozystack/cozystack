@@ -41,6 +41,13 @@ cilium:
   gatewayAPI:
     enabled: true
   rollOutCiliumPods: true
+  resources:
+    limits:
+      cpu: 4000m
+      memory: 4Gi
+    requests:
+      cpu: 100m
+      memory: 512Mi
   operator:
     rollOutPods: true
     replicas: 1
