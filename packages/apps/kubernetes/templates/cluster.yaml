@@ -132,16 +132,30 @@ spec:
       {{- end }}
       {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
       {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
-      {{- /* A builtin group whose golden is absent fails loudly here rather than
-             silently importing over HTTP with no fallback. And because a CDI clone
-             target must be at least as large as its source, a worker diskSize below
-             the golden's storage would fail the clone at runtime — reject it at
-             render when the golden's size is known (lookup is empty under
-             `helm template`, so this guard is a no-op there). */}}
+      {{- /* A builtin group whose golden is absent or not yet populated fails loudly
+             here rather than degrading silently. And because a CDI clone target must
+             be at least as large as its source, a worker diskSize below the golden's
+             storage would fail the clone at runtime — reject it at render when the
+             golden's size is known (lookup is empty under `helm template`, so all
+             of these guards are no-ops there). */}}
       {{- if $useClone }}
       {{-   $goldenDV := lookup "cdi.kubevirt.io/v1beta1" "DataVolume" "cozy-public" $goldenName }}
       {{-   if not $goldenDV }}
       {{-     fail (printf "nodeGroup %q: image.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this group to image.factory." .groupName $goldenName) }}
+      {{-   end }}
+      {{- /* Gate on the golden being POPULATED, not merely present: cloning a
+             half-imported golden leaves the worker DataVolume blocked with no
+             signal, and a golden whose import failed blocks it forever. Fail
+             rather than fall back to the HTTP import — a fallback would make
+             disk-system's source depend on cluster state, so the source (and with
+             it the content-hashed KubevirtMachineTemplate name) would flip once
+             the golden went Ready and roll every worker in the group. The app
+             HelmRelease retries on failure every 17s with no remediation
+             (Strategy.Name=RetryOnFailure, see pkg/registry/apps/application), so
+             a cluster created during the import window self-heals. */}}
+      {{-   $goldenPhase := dig "status" "phase" "" $goldenDV | toString | default "<none>" }}
+      {{-   if ne $goldenPhase "Succeeded" }}
+      {{-     fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public is not ready to clone (phase %s, want Succeeded) — wait for the kubernetes-worker-image import to finish; if it never does, check the importer pod in cozy-public." .groupName $goldenName $goldenPhase) }}
       {{-   end }}
       {{-   $goldenStorage := dig "spec" "storage" "resources" "requests" "storage" "" $goldenDV }}
       {{-   if $goldenStorage }}

@@ -39,9 +39,10 @@ kubernetesProvider:
     - kind: KubevirtMachineTemplate
       apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
       metadata: {name: ignored-kmt, namespace: tenant-test}
-    # The golden for the default talos.* (present, so builtin clones succeed).
-    # storage 6Gi mirrors the catalog default, so the diskSize>=golden guard has
-    # a size to compare against.
+    # The golden for the default talos.* (present and populated, so builtin clones
+    # succeed). storage 6Gi mirrors the catalog default, so the diskSize>=golden
+    # guard has a size to compare against; phase Succeeded satisfies the readiness
+    # gate.
     - kind: DataVolume
       apiVersion: cdi.kubevirt.io/v1beta1
       metadata:
@@ -52,6 +53,21 @@ kubernetesProvider:
           resources:
             requests:
               storage: 6Gi
+      status:
+        phase: Succeeded
+    # A golden mid-import, for the readiness gate.
+    - kind: DataVolume
+      apiVersion: cdi.kubevirt.io/v1beta1
+      metadata:
+        name: talos-worker-importing-v1.0.0
+        namespace: cozy-public
+      spec:
+        storage:
+          resources:
+            requests:
+              storage: 6Gi
+      status:
+        phase: ImportInProgress
 
 tests:
   - it: image omitted imports over HTTP from the cluster talos.* factory (back-compat)
@@ -217,6 +233,29 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'diskSize 4Gi is smaller than golden image .* storage 6Gi'
+
+  # A golden that exists but is not yet populated must fail the render rather than
+  # clone (which would block the worker DataVolume with no signal) and rather than
+  # fall back to HTTP (which would flip the KMT hash once the golden went Ready and
+  # roll the group). The HelmRelease retries every 17s, so this self-heals.
+  - it: image.builtin fails the render while the golden is still importing
+    set:
+      _namespace: {etcd: true, ingress: true, host: example.com}
+      _cluster: {cluster-domain: cozy.local}
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          image:
+            builtin:
+              schematicID: importing
+              version: v1.0.0
+    asserts:
+      - failedTemplate:
+          errorPattern: 'golden DataVolume "talos-worker-importing-v1\.0\.0" in cozy-public is not ready to clone \(phase ImportInProgress, want Succeeded\)'
 
   # Regression guard for the no-worker-roll invariant: an image-omitted group must
   # render a KubevirtMachineTemplate whose content-hash name is stable. If a future
