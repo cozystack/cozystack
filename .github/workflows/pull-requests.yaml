@@ -752,9 +752,15 @@ jobs:
       # ▸ Open an SSH breakpoint to the failing sandbox so maintainers can attach,
       #   inspect Talos/Cozystack state and resume with `breakpoint resume`.
       #
-      #   Gated by the `debug` or `release` label (release PRs are bot-created,
-      #   so their presence implies maintainer authorship). authorized-users is
-      #   kept as a second defense layer at the breakpoint level.
+      #   Opens when the E2E job fails AND any of: the `debug` label, the
+      #   `release` label (release PRs are bot-created, so their presence
+      #   implies maintainer authorship), or the PR author is a maintainer
+      #   (author_association is OWNER/MEMBER/COLLABORATOR). The maintainer-
+      #   authorship path needs no label and does NOT move the jobs onto
+      #   self-hosted runners — only the `debug` label flips `runs-on`, so a
+      #   maintainer PR opens the breakpoint on the default oracle-vm runner the
+      #   job already uses and simply holds that ephemeral runner. authorized-users
+      #   is kept as a second defense layer controlling who may actually SSH in.
       #
       #   Uses cozystack/breakpoint-action (fork of namespacelabs/breakpoint-action)
       #   pinned by SHA. The fork adds: pause-idle mode (initial grace period for
@@ -772,7 +778,8 @@ jobs:
           failure() &&
           vars.BREAKPOINT_ENDPOINT != '' &&
           (contains(github.event.pull_request.labels.*.name, 'debug')
-            || contains(github.event.pull_request.labels.*.name, 'release'))
+            || contains(github.event.pull_request.labels.*.name, 'release')
+            || contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.pull_request.author_association))
         # cozystack/breakpoint-action v2-cozy.1
         # mode: pause-idle defaults: grace-period=20m, idle-timeout=10m
         uses: cozystack/breakpoint-action@a6f3a6f87be398ad63b6577351e3398e53f578e4
