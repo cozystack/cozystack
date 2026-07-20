@@ -17,7 +17,11 @@
   HelmRelease pointing at a nonexistent ExternalArtifact and retry forever
   with no diagnostic. The Capabilities gate keeps the check active in-cluster
   (the Package CRD is always installed there) while letting offline renders
-  (helm template / helm-unittest, where lookup returns nothing) pass.
+  (helm template / helm-unittest, where lookup returns nothing) pass. Note
+  the guard deliberately fails closed on a nil lookup once the API group is
+  discoverable: a client-side `helm template --validate` against a live
+  cluster would trip it, but no packaging path in this repo renders the
+  tenant chart that way — Flux renders in-cluster where lookup works.
 */}}
 {{- if .Capabilities.APIVersions.Has "cozystack.io/v1alpha1" }}
 {{- if not (lookup "cozystack.io/v1alpha1" "Package" "" "cozystack.computeplane-application") }}

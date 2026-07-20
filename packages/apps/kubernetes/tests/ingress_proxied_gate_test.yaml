@@ -15,6 +15,7 @@ release:
 set:
   _namespace:
     ingress: tenant-root
+    etcd: tenant-root
 tests:
   - it: renders nothing when the addon is disabled (default)
     asserts:
@@ -57,6 +58,24 @@ tests:
           enabled: false
           exposeMethod: Proxied
           hosts: ["app.example.com"]
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The addon HelmRelease itself gates on _namespace.etcd (the etcd-less
+  # render collapses to the awaiting-etcd beacon), so the Service must too —
+  # otherwise an etcd-less tenant with the addon pinned on (ComputePlane)
+  # gets the selector-less Service by another route.
+  - it: renders nothing on an etcd-less tenant even with the addon enabled
+    set:
+      _namespace:
+        ingress: tenant-root
+        etcd: ""
+      addons:
+        ingressNginx:
+          enabled: true
+          exposeMethod: Proxied
+          hosts: []
     asserts:
       - hasDocuments:
           count: 0

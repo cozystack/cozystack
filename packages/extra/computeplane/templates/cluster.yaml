@@ -16,9 +16,10 @@
   Kamaji therefore writes the cluster's admin kubeconfig to the Secret
   `computeplane-cluster-admin-kubeconfig` (key super-admin.svc) — the derived
   contract consumed by the HelmReleases of `placement: ComputePlane`
-  applications, and the exact name computeplane-rd withholds from
-  tenant-visible secrets. Renaming this object renames the Secret and breaks
-  both; don't.
+  applications. The tenant never sees it: tenant-visible secrets are an
+  allowlist (computeplane-rd declares include: [], which withholds
+  everything), so the withholding is rename-proof by construction. Renaming
+  this object still renames the Secret and dangles every consumer; don't.
 
   Everything security-relevant is fixed here and unreachable by the tenant:
   the tenant holds no admin kubeconfig for this cluster and the module exposes
@@ -41,12 +42,12 @@
 {{- if .Values.nodeGroups }}
 {{- $hasIngressRole := false }}
 {{- range $name, $group := .Values.nodeGroups }}
-{{- if has "ingress-nginx" (default (list) $group.roles) }}
+{{- if and (has "ingress-nginx" (default (list) $group.roles)) (gt (int (default 0 $group.maxReplicas)) 0) }}
 {{- $hasIngressRole = true }}
 {{- end }}
 {{- end }}
 {{- if not $hasIngressRole }}
-{{- fail "computeplane: at least one nodeGroup must carry roles: [ingress-nginx] — the module pins the ingress-nginx addon on, and its controller only schedules onto ingress-nginx nodes" }}
+{{- fail "computeplane: at least one nodeGroup must carry roles: [ingress-nginx] with maxReplicas >= 1 — the module pins the ingress-nginx addon on, and its controller only schedules onto ingress-nginx nodes" }}
 {{- end }}
 {{- end }}
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -55,6 +56,9 @@ metadata:
   name: computeplane-cluster
   labels:
     sharding.fluxcd.io/key: tenants
+    # No in-tree reader yet: this is the selector hook for the deferred
+    # placement: ComputePlane routing in cozystack-api (and for operators
+    # locating ComputePlane cluster releases) — do not remove as dead.
     internal.cozystack.io/computeplane: "true"
 spec:
   chartRef:
@@ -102,8 +106,9 @@ spec:
         enabled: true
         # Expose the ComputePlane ingress-nginx via the Proxied NodePort Service so a
         # ComputePlane app's per-app management Ingress can route to it without a
-        # management LoadBalancer. The Service (computeplane-ingress-nginx) is created
-        # whenever exposeMethod is Proxied, independent of any hosts list.
+        # management LoadBalancer. The Service (computeplane-cluster-ingress-nginx,
+        # named after the cluster release) is created whenever the addon is enabled
+        # with exposeMethod Proxied, independent of any hosts list.
         exposeMethod: Proxied
     {{- with .Values.nodeGroups }}
     nodeGroups: {{- toYaml . | nindent 6 }}

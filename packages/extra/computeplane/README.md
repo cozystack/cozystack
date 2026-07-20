@@ -18,13 +18,19 @@ The cluster `HelmRelease` is named `computeplane-cluster` and its release name
 is derived from it, so Kamaji writes the admin kubeconfig to the Secret
 `computeplane-cluster-admin-kubeconfig` (key `super-admin.svc`) — the derived
 contract consumed by the HelmReleases of `placement: ComputePlane`
-applications, and the exact name this module's `ApplicationDefinition`
-withholds from tenant-visible secrets.
+applications. The tenant never sees that Secret: tenant-visible secrets are an
+allowlist, and this module's `ApplicationDefinition` includes nothing, which
+withholds every Secret in the module's lineage by construction.
 
-**Prerequisite:** the tenant must have the `etcd` module enabled. The tenant
-Kubernetes machinery — including the cluster-autoscaler that brings up the
-default scale-from-zero `md0` node group — is backed by the tenant's etcd;
-without it the ComputePlane provisions no workers and gives no diagnostic.
+**Prerequisite:** an `etcd` module must be available to the tenant — its own,
+or one inherited from an ancestor tenant (the `_namespace.etcd` context
+propagates down the tenant tree, so enabling a redundant local etcd is not
+required). The tenant Kubernetes machinery — including the cluster-autoscaler
+that brings up the default scale-from-zero `md0` node group — is backed by
+that etcd; without it the wrapped chart collapses to its `awaiting-etcd`
+status beacon and the ComputePlane provisions no control plane or workers
+(the HelmReleases still report Ready over the empty shell, so check for the
+beacon ConfigMap when nothing comes up).
 
 See the full design in
 [cozystack/community design-proposals/compute-plane](https://github.com/cozystack/community/tree/main/design-proposals/compute-plane).

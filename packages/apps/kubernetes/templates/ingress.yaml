@@ -1,5 +1,8 @@
 {{- $ingress := .Values._namespace.ingress }}
-{{- if and .Values.addons.ingressNginx.enabled (eq .Values.addons.ingressNginx.exposeMethod "Proxied") }}
+{{- /* The _namespace.etcd gate mirrors the ingress-nginx addon HelmRelease:
+       on an etcd-less tenant the chart collapses to the awaiting-etcd beacon,
+       so no addon controller exists and the Service would select nothing. */}}
+{{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd (eq .Values.addons.ingressNginx.exposeMethod "Proxied") }}
 {{- if .Values.addons.ingressNginx.hosts }}
 ---
 apiVersion: networking.k8s.io/v1
