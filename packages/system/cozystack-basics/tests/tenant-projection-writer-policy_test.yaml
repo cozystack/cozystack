@@ -1,0 +1,100 @@
+suite: cozystack-tenant-projection-writer-policy VAP
+templates:
+  - templates/tenant-projection-writer-policy.yaml
+
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+
+# A live-admission e2e (a non-helm-controller writer rejected, helm-controller
+# allowed) lives in the cacert chainsaw suite. This pins the render and the match
+# logic: the policy gates the right resource, for the right operations, and pins
+# the writer identity — a wrong pin there is the failure that silently denies
+# every sentinel write, so no CA is ever published.
+
+# The template gates on the ValidatingAdmissionPolicy API (GA since Kubernetes
+# 1.30); helm-unittest's default capability set omits it, so every rendering test
+# declares it, exactly as the platform deletion-protection suite.
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+
+tests:
+  - it: renders the ValidatingAdmissionPolicy and its Binding
+    asserts:
+      - hasDocuments:
+          count: 2
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicy
+      - documentIndex: 0
+        equal:
+          path: metadata.name
+          value: cozystack-tenant-projection-writer-policy
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: ValidatingAdmissionPolicyBinding
+      - documentIndex: 1
+        equal:
+          path: spec.policyName
+          value: cozystack-tenant-projection-writer-policy
+      - documentIndex: 1
+        equal:
+          path: spec.validationActions[0]
+          value: Deny
+
+  - it: is fail-closed and gates TenantProjection CREATE and UPDATE only
+    documentIndex: 0
+    asserts:
+      - equal:
+          path: spec.failurePolicy
+          value: Fail
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].apiGroups[0]
+          value: internal.cozystack.io
+      - equal:
+          path: spec.matchConstraints.resourceRules[0].resources[0]
+          value: tenantprojections
+      - contains:
+          path: spec.matchConstraints.resourceRules[0].operations
+          content: CREATE
+      - contains:
+          path: spec.matchConstraints.resourceRules[0].operations
+          content: UPDATE
+      # DELETE is intentionally ungated — deleting a sentinel only triggers the
+      # owner-reference GC of its projection, and gating it would wedge namespace
+      # teardown. If DELETE ever appears here, the reasoning in the template must
+      # be re-read, not the assertion loosened.
+      - notContains:
+          path: spec.matchConstraints.resourceRules[0].operations
+          content: DELETE
+
+  - it: allows only the flux ServiceAccount to write a sentinel
+    documentIndex: 0
+    asserts:
+      # Pinned by EXACT STRING. This is the whole policy: the writer identity that
+      # decides who may declare a tenant trust anchor. cozystack runs all its flux
+      # controllers, helm-controller included, under the shared cozy-fluxcd:flux
+      # ServiceAccount, so that is what a rendered sentinel write comes from. This
+      # pin is the one place a change must land — assert it character-for-character
+      # so a silent edit reddens here.
+      - equal:
+          path: spec.validations[0].expression
+          value: 'request.userInfo.username == "system:serviceaccount:cozy-fluxcd:flux"'
+      - equal:
+          path: spec.validations[0].reason
+          value: Forbidden
+
+  # Unlike the core-Secret policy, matchConstraints already narrows to exactly
+  # one custom resource, so the binding needs NO objectSelector — and one would
+  # be harmful, letting an unlabelled forged sentinel slip past the binding. The
+  # failurePolicy: Fail blast radius is bounded by the resource scope alone.
+  - it: does not narrow the binding with an objectSelector
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: ValidatingAdmissionPolicyBinding
+      - notExists:
+          path: spec.matchResources

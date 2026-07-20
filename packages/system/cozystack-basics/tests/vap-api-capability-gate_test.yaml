@@ -1,6 +1,6 @@
 suite: cozystack-basics VAP policies are gated on the ValidatingAdmissionPolicy API
 templates:
-  - templates/publish-ca-cert-writer-policy.yaml
+  - templates/tenant-projection-writer-policy.yaml
   - templates/route-hostname-policy.yaml
   - templates/gateway-hostname-policy.yaml
   - templates/ingress-hostname-policy.yaml
@@ -22,7 +22,7 @@ tests:
     asserts:
       - hasDocuments:
           count: 0
-        template: templates/publish-ca-cert-writer-policy.yaml
+        template: templates/tenant-projection-writer-policy.yaml
       - hasDocuments:
           count: 0
         template: templates/route-hostname-policy.yaml
