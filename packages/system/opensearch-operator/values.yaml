@@ -8,6 +8,17 @@ opensearch-operator:
     replicaCount: 1
     # Enable cluster-wide mode to watch all namespaces
     watchNamespace: ""
+    # The operator builds in-cluster service FQDNs from DNS_BASE — the
+    # securityadmin bootstrap job (`-h <svc>.<ns>.svc.<DNS_BASE>`) and the
+    # OpenSearch Dashboards OPENSEARCH_HOSTS. The upstream chart defaults
+    # DNS_BASE to cluster.local, but Cozystack's cluster domain is
+    # cozy.local, so those names fail to resolve: the securityconfig job
+    # can never reach the cluster (no `.opendistro_security` index → nodes
+    # stay NotReady) and Dashboards crash-loops on ENOTFOUND. Align
+    # DNS_BASE with the platform's default cluster domain, matching what
+    # the opensearch app chart already uses everywhere
+    # (`.Values._cluster.cluster-domain | default "cozy.local"`).
+    dnsBase: cozy.local
   kubeRbacProxy:
     image:
       # gcr.io/kubebuilder/kube-rbac-proxy was sunset; use the original upstream
