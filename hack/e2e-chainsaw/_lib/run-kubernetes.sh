@@ -294,7 +294,14 @@ ${ouroboros_addon}
   controlPlane:
     apiServer:
       resources: {}
-      resourcesPreset: small
+      # Chart default (2 CPU / 2Gi), not a smaller override. The legacy "small"
+      # preset caps the tenant apiserver at 512Mi, and a two-node tenant cluster
+      # running the full addon set (cilium, coredns, metrics-server, csi,
+      # ingress-nginx, VPA) opens enough watches to exceed that: the apiserver
+      # is OOMKilled once the workers join, and every in-flight tenant
+      # HelmRelease that is waiting on a DaemonSet rollout burns its whole
+      # timeout while the control plane is restarting.
+      resourcesPreset: c1.medium
     controllerManager:
       resources: {}
       resourcesPreset: micro
