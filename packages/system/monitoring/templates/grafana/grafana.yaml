@@ -107,8 +107,6 @@ spec:
     security:
       admin_user: user
       admin_password: ${GF_PASSWORD}
-    plugins:
-      allow_loading_unsigned_plugins: "victoriametrics-logs-datasource"
     {{- /*
       $chartForcedOidc is prepared above at file scope — it is a non-empty
       dict when the users-map is active (skip_org_role_sync +
@@ -181,17 +179,30 @@ spec:
           containers:
             - name: grafana
               resources: {{- toYaml .Values.grafana.resources | nindent 16 }}
-              image: "{{ $.Files.Get "images/grafana.tag" | trim }}"
+              image: "{{ .Values.grafana.image }}"
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: false
               readinessProbe:
                 failureThreshold: 3
               env:
-              #- name: GF_INSTALL_PLUGINS
-              #  value: grafana-worldmap-panel,natel-discrete-panel
-              - name: GF_PATHS_PLUGINS
-                value: /var/lib/grafana-plugins
+              {{- /*
+                Plugins are installed at container startup from the official
+                Grafana catalog (https://grafana.com/grafana/plugins) instead
+                of being baked into a rebuilt Grafana image. This keeps the
+                deployment on the upstream grafana/grafana image and removes
+                the need to redistribute an AGPL-3.0 Grafana rebuild.
+                  * victoriametrics-logs-datasource — the VictoriaLogs
+                    datasource (signed, the reason the image was rebuilt);
+                  * the three panels reproduce the set previously vendored in
+                    the removed Dockerfile. Versions are pinned to releases
+                    compatible with the Grafana version above.
+                Plugins land in the default GF_PATHS_PLUGINS
+                (/var/lib/grafana/plugins), which is writable in the upstream
+                image, so no custom plugins path is needed.
+              */}}
+              - name: GF_INSTALL_PLUGINS
+                value: "victoriametrics-logs-datasource 0.29.0,natel-discrete-panel 0.1.1,grafana-worldmap-panel 1.0.6,marcusolsson-dynamictext-panel 6.2.0"
               - name: ONCALL_API_URL
                 value: http://grafana-oncall-engine:8080
               - name: GF_DATABASE_HOST
