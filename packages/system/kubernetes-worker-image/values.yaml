@@ -18,11 +18,12 @@
 ## A tenant node group opts into a clone explicitly by setting
 ## `nodeGroups.<name>.image.builtin` (optionally overriding schematicID/version) in
 ## a `Kubernetes` resource; the app then clones the golden named deterministically
-## `talos-worker-<schematicID>-<version>` from cozy-public. If the referenced
-## (schematicID, version) has no matching entry in this catalog, the tenant render
-## fails — so keep the catalog in sync with the (schematicID, version) pairs that
-## tenant node groups reference. Node groups that do not set `image.builtin` import
-## over HTTP and never touch this catalog.
+## `talos-worker-<schematicID>-<version>` from cozy-public. The tenant render fails
+## rather than degrade silently when the referenced (schematicID, version) has no
+## matching entry in this catalog, or when its golden has not finished importing
+## (phase != Succeeded) — so keep the catalog in sync with the (schematicID,
+## version) pairs that tenant node groups reference. Node groups that do not set
+## `image.builtin` import over HTTP and never touch this catalog.
 
 ## @param {string} imageFactoryURL - Default base URL of the Talos Image Factory serving the raw worker OS image (`<url>/image/<schematicID>/<version>/openstack-amd64.raw.xz`). Overridable per image. No trailing slash.
 imageFactoryURL: "https://factory.talos.dev"
