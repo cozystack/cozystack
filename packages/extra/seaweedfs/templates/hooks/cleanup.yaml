@@ -35,6 +35,29 @@ rules:
   - apiGroups: [""]
     resources: ["persistentvolumeclaims"]
     verbs: ["get", "list", "delete"]
+  {{- if not (eq .Values.topology "Client") }}
+  # The filer-metadata database. Platform migration 43/53 stamps
+  # helm.sh/resource-policy=keep on it so a <name>-system upgrade cannot prune it
+  # (that prune is a data-loss bug), but `keep` is permanent and also stops the
+  # <name>-db release's own uninstall from removing it — so deleting the app
+  # would leave the CNPG Cluster, its Postgres pods and its PVCs behind with
+  # nothing owning them. Reclaim it explicitly here instead.
+  #
+  # Gated exactly as templates/seaweedfs-db.yaml gates the <name>-db HelmRelease.
+  # The Cluster name is hardcoded `seaweedfs-db` by the db chart for every
+  # instance, so it is NOT this release's to delete unless this release owns the
+  # db: a Client instance renders no <name>-db at all and shares another app's
+  # filer, and a second Simple instance in the same namespace loses the ownership
+  # race but still installs. Ungated, deleting either would take a DIFFERENT app's
+  # database, and CNPG takes its PVC with it via ownerReferences. The Job
+  # re-checks the ownership annotation at run time; this gate only stops the
+  # permission from being granted at all where it can never be legitimate.
+  - apiGroups: ["postgresql.cnpg.io"]
+    resources: ["clusters"]
+    verbs: ["get", "delete"]
+    resourceNames:
+      - seaweedfs-db
+  {{- end }}
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "delete"]
@@ -141,6 +164,55 @@ spec:
               echo "Deleting orphaned SeaweedFS volume PVCs for {{ .Release.Name }}..."
               kubectl delete pvc -n {{ .Release.Namespace }} -l app.kubernetes.io/name=seaweedfs,app.kubernetes.io/instance={{ .Release.Name }}-system --ignore-not-found --wait=false \
                 || echo "WARNING: SeaweedFS PVC cleanup failed for {{ .Release.Name }}; orphaned PVCs may remain" >&2
+              {{- if not (eq .Values.topology "Client") }}
+              # The filer-metadata database. Platform migration 43/53 stamps
+              # helm.sh/resource-policy=keep on this Cluster so a <name>-system
+              # upgrade cannot prune it — that prune destroys the tenant's S3
+              # index — but `keep` is permanent and also survives the <name>-db
+              # release's own uninstall, so without this the Cluster, its
+              # Postgres pods and its PVCs outlive the app that owned them. The
+              # PVCs carry ownerReferences to the Cluster, so deleting it
+              # garbage-collects them; they are NOT matched by the label selector
+              # above (they are labelled cnpg.io/cluster=seaweedfs-db).
+              #
+              # The Cluster name is hardcoded `seaweedfs-db` for every instance,
+              # so confirm THIS release owns it before deleting. A Client instance
+              # renders no <name>-db and shares another app's filer; a second
+              # Simple instance in the same namespace loses Helm's ownership race
+              # but still installs. Deleting on name alone would take a different
+              # app's database.
+              echo "Deleting SeaweedFS filer-metadata database for {{ .Release.Name }}..."
+              # Reading ownership must FAIL the Job on error, not fall through. `|| true`
+              # would turn a Forbidden, a timeout or any API error into an empty owner,
+              # take the "nothing to reclaim" branch below, and let the Job complete —
+              # orphaning the keep-protected Cluster this hook exists to reclaim, with
+              # nothing else that will ever collect it. Only a genuine NotFound counts
+              # as absence; every other failure aborts so the Job retries.
+              owner_err=/tmp/seaweedfs-db-owner-err
+              if owner=$(kubectl get cluster.postgresql.cnpg.io -n {{ .Release.Namespace }} seaweedfs-db \
+                          -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>"$owner_err"); then
+                :
+              elif grep -qi 'not found' "$owner_err"; then
+                owner=""
+              else
+                cat "$owner_err" >&2
+                echo "ERROR: failed to read Cluster/seaweedfs-db ownership for {{ .Release.Name }}; refusing to assume it is absent. Failing so the Job retries." >&2
+                rm -f "$owner_err"
+                exit 1
+              fi
+              rm -f "$owner_err"
+              if [ -z "$owner" ]; then
+                echo "No Cluster/seaweedfs-db owned by a Helm release here; nothing to reclaim."
+              elif [ "$owner" != "{{ .Release.Name }}-db" ]; then
+                echo "REFUSING to delete Cluster/seaweedfs-db: owned by '$owner', not {{ .Release.Name }}-db. Another SeaweedFS app owns this database; leaving it alone." >&2
+              else
+                # A failure here must FAIL the Job: the Cluster is keep-protected, so
+                # nothing else will ever reclaim it, and hook-delete-policy would
+                # otherwise remove the only cleanup Job while the orphan remains.
+                kubectl delete cluster.postgresql.cnpg.io -n {{ .Release.Namespace }} seaweedfs-db --ignore-not-found --wait=false \
+                  || { echo "ERROR: failed to delete Cluster/seaweedfs-db for {{ .Release.Name }}; it is keep-protected and will be orphaned. Failing so the Job retries." >&2; exit 1; }
+              fi
+              {{- end }}
               echo "Deleting orphaned SeaweedFS cert/db secrets for {{ .Release.Name }}..."
               kubectl delete secret -n {{ .Release.Namespace }} {{ .Release.Name }}-s3-ingress-tls {{ $renamedFull }}-admin-cert {{ $renamedFull }}-ca-cert {{ $renamedFull }}-client-cert {{ $renamedFull }}-filer-cert {{ $renamedFull }}-master-cert {{ $renamedFull }}-volume-cert {{ $renamedFull }}-worker-cert {{ $renamedFull }}-db-secret seaweedfs-admin-cert seaweedfs-ca-cert seaweedfs-client-cert seaweedfs-filer-cert seaweedfs-master-cert seaweedfs-volume-cert seaweedfs-worker-cert seaweedfs-db-secret --ignore-not-found --wait=false \
                 || echo "WARNING: SeaweedFS secret cleanup failed for {{ .Release.Name }}; orphaned secrets may remain" >&2

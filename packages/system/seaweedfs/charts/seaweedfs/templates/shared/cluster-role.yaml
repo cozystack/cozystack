@@ -5,7 +5,7 @@
 kind: ClusterRole
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "seaweedfs.fullname" . }}-rw-cr
+  name: {{ include "seaweedfs.serviceAccountName" . }}-rw-cr
   labels:
     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
@@ -19,7 +19,7 @@ rules:
 kind: ClusterRoleBinding
 apiVersion: rbac.authorization.k8s.io/v1
 metadata:
-  name: {{ include "seaweedfs.fullname" . }}-rw-crb
+  name: {{ include "seaweedfs.serviceAccountName" . }}-rw-crb
   labels:
     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
@@ -32,5 +32,5 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: {{ include "seaweedfs.fullname" . }}-rw-cr
+  name: {{ include "seaweedfs.serviceAccountName" . }}-rw-cr
 {{- end }}

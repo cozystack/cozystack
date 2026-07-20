@@ -1,0 +1,58 @@
+suite: seaweedfs cleanup hook does not reclaim another app's database
+
+# templates/seaweedfs-db.yaml gates the <name>-db HelmRelease on
+# `topology != "Client"`: a Client instance renders NO database of its own and
+# points at another app's filer. The cleanup hook reclaims Cluster/seaweedfs-db —
+# a name the db chart hardcodes for every instance — so if it is not gated the
+# same way, deleting a Client deletes the SERVER's filer metadata, and CNPG takes
+# the PVC with it via ownerReferences. Total S3 loss for an app the operator never
+# touched.
+#
+# These fail on an ungated hook: it renders the Role granting delete on
+# clusters/seaweedfs-db and the delete command for a release that owns no database.
+
+templates:
+  - templates/hooks/cleanup.yaml
+
+release:
+  name: s3-remote
+  namespace: tenant-root
+
+tests:
+  - it: grants no cnpg RBAC to a Client instance
+    set: &client
+      topology: Client
+      filer:
+        grpcHost: seaweedfs-filer.tenant-other.svc
+      _namespace:
+        host: example.org
+        ingress: tenant-root
+      _cluster:
+        issuer-name: letsencrypt-prod
+        solver: http01
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - notContains:
+          path: rules
+          content:
+            apiGroups: ["postgresql.cnpg.io"]
+            resources: ["clusters"]
+            verbs: ["get", "delete"]
+            resourceNames:
+              - seaweedfs-db
+
+  - it: does not delete any database in a Client instance's cleanup command
+    set: *client
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'delete cluster\.postgresql\.cnpg\.io'
+      # Its own PVC/secret cleanup must still run.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kubectl delete pvc -n tenant-root'

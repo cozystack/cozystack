@@ -1,0 +1,138 @@
+suite: seaweedfs cluster-scoped RBAC names stay unique per tenant
+
+# ClusterRoles and ClusterRoleBindings are CLUSTER-scoped: exactly one object can
+# carry a given name, cluster-wide. Every SeaweedFS instance pins the same
+# `fullnameOverride: seaweedfs` (#3282 — that pin is what adopts the running
+# NAMESPACED workloads across the 4.31 rename), so `seaweedfs.fullname` is
+# identical in every tenant and must never name a cluster-scoped object.
+#
+# Upstream 4.31 switched these four names from global.serviceAccountName (which
+# Cozystack sets per namespace) to seaweedfs.fullname, which is how five tenants
+# ended up fighting over ONE ClusterRole. patches/cluster-scoped-names-per-
+# namespace.patch puts them back on the service account name, restoring the
+# pre-4.31 names byte-for-byte.
+#
+# These assertions fail on unpatched code: it renders `seaweedfs-*` for every
+# namespace, so the two namespaces below produce the SAME name instead of two.
+
+templates:
+  - charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+  - charts/seaweedfs/templates/shared/cluster-role.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-root
+
+tests:
+  - it: names the COSI ClusterRole/Binding after the per-namespace service account
+    template: charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+    set:
+      global.seaweedfs.serviceAccountName: tenant-root-seaweedfs
+    asserts:
+      # ClusterRole — pre-4.31 name, restored.
+      - equal:
+          path: metadata.name
+          value: tenant-root-seaweedfs-objectstorage-provisioner
+        documentIndex: 0
+      # ClusterRoleBinding — same name, and its roleRef must follow the rename or
+      # the binding would point at another tenant's ClusterRole.
+      - equal:
+          path: metadata.name
+          value: tenant-root-seaweedfs-objectstorage-provisioner
+        documentIndex: 1
+      - equal:
+          path: roleRef.name
+          value: tenant-root-seaweedfs-objectstorage-provisioner
+        documentIndex: 1
+      # The subject was ALREADY per-namespace (cosi-provisioner-sa-name.patch);
+      # it is what the cluster-scoped names are now aligned with.
+      - equal:
+          path: subjects[0].name
+          value: tenant-root-seaweedfs-objectstorage-provisioner
+        documentIndex: 1
+      - equal:
+          path: subjects[0].namespace
+          value: tenant-root
+        documentIndex: 1
+
+  - it: names the master-rw ClusterRole/Binding after the per-namespace service account
+    template: charts/seaweedfs/templates/shared/cluster-role.yaml
+    set:
+      global.seaweedfs.serviceAccountName: tenant-root-seaweedfs
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-root-seaweedfs-rw-cr
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: tenant-root-seaweedfs-rw-crb
+        documentIndex: 1
+      - equal:
+          path: roleRef.name
+          value: tenant-root-seaweedfs-rw-cr
+        documentIndex: 1
+      - equal:
+          path: subjects[0].name
+          value: tenant-root-seaweedfs
+        documentIndex: 1
+
+  # THE regression test. A second tenant, running an instance under a DIFFERENT
+  # name (`foo` -> release foo-system), must not collide with tenant-root above.
+  # Unpatched, both render `seaweedfs-objectstorage-provisioner` / `seaweedfs-rw-cr`
+  # — observed live as one ClusterRole annotated to a single owning tenant while
+  # four others silently lost their COSI RBAC.
+  - it: renders a different cluster-scoped name for a different tenant (collision regression)
+    template: charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+    release:
+      name: foo-system
+      namespace: tenant-named
+    set:
+      global.seaweedfs.serviceAccountName: tenant-named-seaweedfs
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-named-seaweedfs-objectstorage-provisioner
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: tenant-named-seaweedfs-objectstorage-provisioner
+        documentIndex: 1
+      - equal:
+          path: roleRef.name
+          value: tenant-named-seaweedfs-objectstorage-provisioner
+        documentIndex: 1
+
+  - it: renders a different master-rw name for a different tenant (collision regression)
+    template: charts/seaweedfs/templates/shared/cluster-role.yaml
+    release:
+      name: foo-system
+      namespace: tenant-named
+    set:
+      global.seaweedfs.serviceAccountName: tenant-named-seaweedfs
+    asserts:
+      - equal:
+          path: metadata.name
+          value: tenant-named-seaweedfs-rw-cr
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: tenant-named-seaweedfs-rw-crb
+        documentIndex: 1
+
+  # The pin must NOT leak into cluster-scoped names, and must NOT be lifted from
+  # namespaced ones. Guards the two halves against each other.
+  - it: keeps the cluster-scoped name independent of the pinned fullname
+    template: charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+    set:
+      global.seaweedfs.serviceAccountName: tenant-root-seaweedfs
+      seaweedfs.fullnameOverride: seaweedfs
+    asserts:
+      - notMatchRegex:
+          path: metadata.name
+          pattern: "^seaweedfs-"
+        documentIndex: 0
+      - notMatchRegex:
+          path: metadata.name
+          pattern: "^seaweedfs-system-"
+        documentIndex: 0

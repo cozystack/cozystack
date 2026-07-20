@@ -1,0 +1,568 @@
+suite: seaweedfs naming-migration guard (enforcing copy)
+
+# This chart is what a platform upgrade actually re-renders: the <name>-system
+# HelmRelease pulls it from a platform-managed ExternalArtifact, so bumping the
+# platform upgrades the release directly — extra/seaweedfs (which carries a
+# sibling copy of this guard for operator visibility) is NOT in that path.
+#
+# The guard decides between exactly three outcomes:
+#   legacy generation only (or nothing) -> render (adoption is correct)
+#   release-named generation only       -> refuse, class S (runbook Step 2)
+#   BOTH generations                    -> refuse, undecidable (runbook Step 1)
+#
+# It used to tell the both-generations cases apart by comparing PVC
+# creationTimestamps ("PVCs are never recreated in place, so the older generation
+# is where the data was born"). That premise is false — the runbook's own Step 2
+# re-bind DELETES each release-named claim and recreates it under the chart name
+# against the same PV — and acting on the wrong answer deletes live data. The
+# guard no longer guesses; the tests below pin that.
+#
+# The guard reads the cluster through lookup with the release namespace as its
+# canary, so classification tests register v1/Namespace + v1/PersistentVolumeClaim
+# + apps/v1/StatefulSet and include the namespace object. readyReplicas is quoted
+# ("1"/"0") because the fake client cannot deep-copy a bare Go int.
+
+templates:
+  - templates/naming-guard.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-fresh
+
+tests:
+  - it: renders for a client-side install with no cluster view (CI lint, unittest)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # NOTE: the fail-closed refusal (client-side UPGRADE with no cluster view)
+  # cannot be modelled here — helm-unittest 1.0.3 ignores release.isUpgrade, so
+  # .Release.IsUpgrade always renders false. The chart's `make test` target
+  # covers it with a real renderer (helm template --is-upgrade).
+
+  - it: refuses to render if the fullnameOverride pin is ever lifted
+    set:
+      seaweedfs:
+        fullnameOverride: something-else
+    asserts:
+      - failedTemplate:
+          errorPattern: "must pin seaweedfs.fullnameOverride=seaweedfs"
+
+  - it: renders for a net-new tenant (namespace visible, no SeaweedFS data)
+    kubernetesProvider:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+        "v1/PersistentVolumeClaim":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "persistentvolumeclaims"
+          namespaced: true
+        "apps/v1/StatefulSet":
+          gvr:
+            group: "apps"
+            version: "v1"
+            resource: "statefulsets"
+          namespaced: true
+      objects:
+        - &ns
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-fresh
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: unrelated-app-data-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-fresh
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders for a legacy-only tenant (data on the chart-named PVCs, adopt in place)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses class S — data only on release-named volumes (fresh 1.5.x install)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release.*Step 2"
+
+  - it: refuses class S for a non-default instance name (foo-system release)
+    release:
+      name: foo-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # 4.31 appends the chart name when the release name does not contain it:
+        # a fresh 1.5.x `foo` wrote to data1-foo-system-seaweedfs-volume-*.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-foo-system-seaweedfs-volume-0
+            namespace: tenant-fresh
+        # The fake client builds its list kinds from the objects present, so a
+        # suite that LISTs StatefulSets must include at least one or the lookup
+        # errors instead of returning empty.
+        - &unrelated_sts
+          kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: unrelated-app
+            namespace: tenant-fresh
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release"
+
+  # ---------------------------------------------------------------------------
+  # Both generations present => refuse. Four shapes the old timestamp classifier
+  # routed FOUR different ways; all four get the same answer now.
+  # ---------------------------------------------------------------------------
+
+  # Old code: legacy older + duplicate live -> "D-split" (Step 3). Now: refuse.
+  - it: refuses when both generations exist and the duplicate is live (was D-split)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2025-11-02T10:00:00Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T12:00:00Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  # B5 REGRESSION. Old code: legacy older + zero ready replicas -> "D-wedged",
+  # which rendered THROUGH and adopted. readyReplicas is only a snapshot: a
+  # duplicate that crashed, was scaled down, or lost readiness AFTER serving
+  # writes reads identically to one that never served. Adoption would strand
+  # whatever it wrote.
+  - it: refuses when both generations exist and the duplicate reads zero ready (was D-wedged, adopted)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2025-11-02T10:00:00Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T12:00:00Z"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  # Old code: release-named older -> "S-damaged" (Step 2a). Now: refuse.
+  - it: refuses when both generations exist and the release-named claims are older (was S-damaged)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T07:01:59Z"
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T08:28:58Z"
+        - *unrelated_sts
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  # B1 REGRESSION — the data-loss path. A tenant interrupted part-way through the
+  # runbook's Step 2 re-bind: data1-seaweedfs-volume-0 was DELETED and RECREATED
+  # against its original PV seconds ago, so it is the NEWEST claim while holding
+  # real data; data1-seaweedfs-system-volume-1 has not been re-bound yet, so it
+  # keeps the ORIGINAL timestamp and also holds real data. The old timestamp rule
+  # read "release-named older" and reported S-damaged, sending the operator to
+  # Step 2a — which deletes data1-seaweedfs-volume-*, i.e. the claim Step 2 had
+  # just re-bound, with the PV's reclaim policy already restored to Delete.
+  - it: refuses a tenant interrupted mid Step-2 re-bind rather than calling it S-damaged
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # Not yet re-bound: original claim, original timestamp, real data.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-1
+            namespace: tenant-fresh
+            creationTimestamp: "2026-06-20T07:01:59Z"
+        # Already re-bound by Step 2: brand-new claim, ORIGINAL PV, real data.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+            creationTimestamp: "2026-07-17T09:30:00Z"
+        - *unrelated_sts
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  # ---------------------------------------------------------------------------
+  # B2 REGRESSION — long instance name. seaweedfs.componentName truncates the
+  # fullname to 56 chars before appending -volume, so an instance name >= ~40
+  # chars drops `seaweedfs` off the PVC name and the name match cannot see it.
+  # The StatefulSet is label-matched and still can, which is why the generation
+  # flags OR the two signals instead of keying off the PVC evidence alone.
+  # ---------------------------------------------------------------------------
+
+  - it: refuses both-generations for a long instance name whose PVC names were truncated
+    release:
+      name: archive-of-quarterly-financial-statements-x1-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # The renamed volume PVC, truncated past the chart name: unmatchable.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-archive-of-quarterly-financial-statements-x1-system-seaw-volume-0
+            namespace: tenant-fresh
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+        # Only the label-matched StatefulSet reveals the renamed generation. Old
+        # code fell through to the D-split branch here, sending the operator to
+        # quiesce the set holding the data — the exact misclassification the
+        # parent commit exists to remove.
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: archive-of-quarterly-financial-statements-x1-system-seaw-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "1"
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  - it: refuses a truncated long instance name whose duplicate reads zero ready (rendered unguarded before)
+    release:
+      name: archive-of-quarterly-financial-statements-x1-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-archive-of-quarterly-financial-statements-x1-system-seaw-volume-0
+            namespace: tenant-fresh
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+        # Old code: no branch fired at all here — it rendered through and adopted
+        # the empty chart-named set. Blocker fully open.
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: archive-of-quarterly-financial-statements-x1-system-seaw-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  - it: refuses class S for a truncated long instance name with no legacy generation
+    release:
+      name: archive-of-quarterly-financial-statements-x1-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-archive-of-quarterly-financial-statements-x1-system-seaw-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: archive-of-quarterly-financial-statements-x1-system-seaw-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release"
+
+  # ---------------------------------------------------------------------------
+  # An instance legitimately named `seaweedfs-volume`. Its release is
+  # seaweedfs-volume-system, which CONTAINS "seaweedfs", so 4.31 names its volume
+  # workloads seaweedfs-volume-system-volume and its claims
+  # data1-seaweedfs-volume-system-volume-N. Both satisfy the chart-named prefixes
+  # ("seaweedfs-volume" / "data1-seaweedfs-volume"), so a prefix-only guard reads
+  # this tenant's LIVE release-named storage as legacy, sees no release-named
+  # generation, renders, and stands an empty cluster on data1-seaweedfs-volume-*
+  # while the real data is stranded. Reconstructing the renamed prefix and testing
+  # it FIRST is what separates them.
+  # ---------------------------------------------------------------------------
+
+  - it: refuses class S for an instance named seaweedfs-volume (release-named storage is not legacy)
+    release:
+      name: seaweedfs-volume-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-system-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release"
+
+  - it: refuses both-generations for an instance named seaweedfs-volume
+    release:
+      name: seaweedfs-volume-system
+      namespace: tenant-fresh
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # Live release-named storage...
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-system-volume-0
+            namespace: tenant-fresh
+        # ...beside a genuine chart-named duplicate.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume-system-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  # ---------------------------------------------------------------------------
+  # MultiZone (and Simple-with-pools) tenants have NO plain `volume` component —
+  # extra/seaweedfs sets volume.enabled=false and renders one component per zone
+  # key, suffix `volume-<key>`. For the supported instance (the tenant module
+  # hardcodes the name `seaweedfs`, fullname 16 chars) nothing is truncated, so
+  # the reconstructed prefix `seaweedfs-system-volume` must prefix-match every
+  # zone component. These pin that. The reconstruction does NOT cover zone
+  # components of long-named instances or ~40+ char zone keys — an accepted,
+  # documented limit (_naming.tpl, runbook Scope), deliberately not tested.
+  # ---------------------------------------------------------------------------
+
+  - it: renders for a legacy-only MultiZone tenant (zone components adopt in place)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-md-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-volume-md
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: refuses class S for a MultiZone tenant with only zone components (fresh 1.5.x)
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        # No plain `volume` component exists on a MultiZone tenant — the zone
+        # objects are the ONLY release-named evidence, so if the prefix match
+        # missed them this tenant would render and be renamed away from its data.
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-md-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume-md
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+    asserts:
+      - failedTemplate:
+          errorPattern: "keeps its data on volumes named after the Helm release"
+
+  - it: refuses both-generations for a MultiZone tenant
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-volume-md-0
+            namespace: tenant-fresh
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-seaweedfs-system-volume-md-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: seaweedfs-system-volume-md
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: seaweedfs
+          status:
+            readyReplicas: "0"
+    asserts:
+      - failedTemplate:
+          errorPattern: "has BOTH naming generations present"
+
+  - it: ignores unrelated data1-*-volume-* claims of other apps
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+        - kind: PersistentVolumeClaim
+          apiVersion: v1
+          metadata:
+            name: data1-clickhouse-volume-0
+            namespace: tenant-fresh
+        - kind: StatefulSet
+          apiVersion: apps/v1
+          metadata:
+            name: clickhouse-volume
+            namespace: tenant-fresh
+            labels:
+              app.kubernetes.io/name: clickhouse
+    asserts:
+      - hasDocuments:
+          count: 0

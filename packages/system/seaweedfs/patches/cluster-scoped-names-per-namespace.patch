@@ -1,0 +1,60 @@
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+index b5c103575..a6e5b761e 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/cosi/cosi-cluster-role.yaml
+@@ -4,7 +4,7 @@
+ kind: ClusterRole
+ apiVersion: rbac.authorization.k8s.io/v1
+ metadata:
+-  name: {{ include "seaweedfs.fullname" . }}-objectstorage-provisioner
++  name: {{ include "seaweedfs.serviceAccountName" . }}-objectstorage-provisioner
+   labels:
+     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+@@ -53,7 +53,7 @@ rules:
+ kind: ClusterRoleBinding
+ apiVersion: rbac.authorization.k8s.io/v1
+ metadata:
+-  name: {{ include "seaweedfs.fullname" . }}-objectstorage-provisioner
++  name: {{ include "seaweedfs.serviceAccountName" . }}-objectstorage-provisioner
+   labels:
+     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+@@ -65,6 +65,6 @@ subjects:
+     namespace: {{ .Release.Namespace }}
+ roleRef:
+   kind: ClusterRole
+-  name: {{ include "seaweedfs.fullname" . }}-objectstorage-provisioner
++  name: {{ include "seaweedfs.serviceAccountName" . }}-objectstorage-provisioner
+   apiGroup: rbac.authorization.k8s.io
+ {{- end }}
+diff --git a/packages/system/seaweedfs/charts/seaweedfs/templates/shared/cluster-role.yaml b/packages/system/seaweedfs/charts/seaweedfs/templates/shared/cluster-role.yaml
+index 14d09f999..e31c2d5f2 100644
+--- a/packages/system/seaweedfs/charts/seaweedfs/templates/shared/cluster-role.yaml
++++ b/packages/system/seaweedfs/charts/seaweedfs/templates/shared/cluster-role.yaml
+@@ -5,7 +5,7 @@
+ kind: ClusterRole
+ apiVersion: rbac.authorization.k8s.io/v1
+ metadata:
+-  name: {{ include "seaweedfs.fullname" . }}-rw-cr
++  name: {{ include "seaweedfs.serviceAccountName" . }}-rw-cr
+   labels:
+     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+@@ -19,7 +19,7 @@ rules:
+ kind: ClusterRoleBinding
+ apiVersion: rbac.authorization.k8s.io/v1
+ metadata:
+-  name: {{ include "seaweedfs.fullname" . }}-rw-crb
++  name: {{ include "seaweedfs.serviceAccountName" . }}-rw-crb
+   labels:
+     app.kubernetes.io/name: {{ template "seaweedfs.name" . }}
+     helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
+@@ -32,5 +32,5 @@ subjects:
+ roleRef:
+   apiGroup: rbac.authorization.k8s.io
+   kind: ClusterRole
+-  name: {{ include "seaweedfs.fullname" . }}-rw-cr
++  name: {{ include "seaweedfs.serviceAccountName" . }}-rw-cr
+ {{- end }}
+\ No newline at end of file
