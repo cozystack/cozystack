@@ -132,7 +132,7 @@ spec:
       {{- end }}
       {{- $httpURL := printf "%s/image/%s/%s/openstack-amd64.raw.xz" ($reqFactoryURL | trimSuffix "/") $reqSchematicID $reqVersion }}
       {{- $goldenName := printf "talos-worker-%s-%s" $reqSchematicID $reqVersion }}
-      {{- /* A builtin group whose golden is absent, not yet populated, or on a
+      {{- /* A builtin group whose golden is absent, failed to import, or on a
              StorageClass the worker disk cannot CSI-clone from fails loudly here
              rather than degrading silently. And because a CDI clone target must be
              at least as large as its source, a worker diskSize below the golden's
@@ -144,19 +144,21 @@ spec:
       {{-   if not $goldenDV }}
       {{-     fail (printf "nodeGroup %q: image.builtin requested golden DataVolume %q not found in cozy-public — enable the cozystack.kubernetes-worker-image catalog via bundles.enabledPackages with a matching (schematicID, version) entry, or switch this group to image.factory." .groupName $goldenName) }}
       {{-   end }}
-      {{- /* Gate on the golden being POPULATED, not merely present: cloning a
-             half-imported golden leaves the worker DataVolume blocked with no
-             signal, and a golden whose import failed blocks it forever. Fail
-             rather than fall back to the HTTP import — a fallback would make
-             disk-system's source depend on cluster state, so the source (and with
-             it the content-hashed KubevirtMachineTemplate name) would flip once
-             the golden went Ready and roll every worker in the group. The app
-             HelmRelease retries on failure every 17s with no remediation
-             (Strategy.Name=RetryOnFailure, see pkg/registry/apps/application), so
-             a cluster created during the import window self-heals. */}}
-      {{-   $goldenPhase := dig "status" "phase" "" $goldenDV | toString | default "<none>" }}
-      {{-   if ne $goldenPhase "Succeeded" }}
-      {{-     fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public is not ready to clone (phase %s, want Succeeded) — wait for the kubernetes-worker-image import to finish; if it never does, check the importer pod in cozy-public." .groupName $goldenName $goldenPhase) }}
+      {{- /* Fail only on the golden's terminal failure phase, not on "not yet
+             Succeeded". A golden mid-import is transient: CDI holds the worker
+             DataVolume until the source is populated, which is the correct
+             behaviour and recovers unattended. Hard-failing the render there would
+             abort the ENTIRE Kubernetes HelmRelease — every resource, not just this
+             disk — for every tenant pinned to that golden, blocking unrelated scale
+             and addon operations for the length of an import. Only Failed, which
+             never recovers without operator action, justifies that blast radius.
+             Falling back to the HTTP import is deliberately not an option either: it
+             would make disk-system's source depend on cluster state, so the source —
+             and with it the content-hashed KubevirtMachineTemplate name — would flip
+             once the golden went Ready and roll every worker in the group. */}}
+      {{-   $goldenPhase := dig "status" "phase" "" $goldenDV | toString }}
+      {{-   if eq $goldenPhase "Failed" }}
+      {{-     fail (printf "nodeGroup %q: golden DataVolume %q in cozy-public failed to import (phase Failed) — cloning it would block this group's workers indefinitely. Check the importer pod in cozy-public, then delete the DataVolume to retry the import." .groupName $goldenName) }}
       {{-   end }}
       {{- /* CDI takes the storage-layer CSI-clone path only when source and target
              share a StorageClass; across classes it silently falls back to a

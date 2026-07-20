@@ -7,6 +7,13 @@ apiVersion: cdi.kubevirt.io/v1beta1
 kind: DataVolume
 metadata:
   annotations:
+    # Keep the golden when its images[] entry is removed. It is a clone SOURCE for
+    # tenant worker disks, and a helm fail() on a missing golden aborts the whole
+    # Kubernetes HelmRelease of every tenant pinned to it — not just the disk — so
+    # pruning one here would strand unrelated tenant operations. Dropping an entry
+    # therefore stops managing the golden rather than deleting it; remove it by hand
+    # once no node group clones it.
+    helm.sh/resource-policy: keep
     # bind.immediate so the image is imported now (not deferred to a first
     # consumer): the DataVolume becoming ready is what the kubernetes app's
     # worker clones wait on. usePopulator matches the vm-default-images golden
