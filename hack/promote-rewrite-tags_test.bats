@@ -37,7 +37,14 @@
   # vendored upstream chart values are not stamped by the build.
   # --exclude='*.md' keeps documentation examples (which carry placeholder or
   # historical versions) out of the fixture, matching the postcondition.
-  for f in $(grep -rIl --exclude-dir=charts --exclude='*.md' 'ghcr\.io/cozystack/cozystack/' packages/); do
+  # Match 'cozystack/cozystack' WITHOUT a host prefix or trailing slash. The
+  # host is not always contiguous with the repository: keycloak-operator splits
+  # it into a sibling `registry: ghcr.io` + `repository:
+  # cozystack/cozystack/keycloak-operator`, and kubeovn puts it in
+  # `global.registry.address: ghcr.io/cozystack/cozystack` with `repository:
+  # kubeovn`. A 'ghcr\.io/cozystack/cozystack/' pattern silently skips both
+  # files, shrinking the fixture and under-testing the split shapes.
+  for f in $(grep -rIl --exclude-dir=charts --exclude='*.md' 'cozystack/cozystack' packages/); do
     mkdir -p "$tmp/$(dirname "$f")"
     cp "$f" "$tmp/$f"
   done
@@ -52,8 +59,13 @@
   #     (no digest follows), and must not — nothing ever stamps a version there
   # Stamping either would make the test demand a rewrite that would itself be a
   # bug, and both were flagged by the postcondition when this sed was looser.
-  for f in $(grep -rIl 'ghcr\.io/cozystack/cozystack/' "$tmp/packages"); do
-    sed -i -E "s|(ghcr\.io/cozystack/cozystack/[A-Za-z0-9._-]+):v[0-9]+\.[0-9]+\.[0-9]+@|\1:v${RC}@|g" "$f"
+  # Stamp both the combined form and the split form (a bare `tag:` key whose
+  # value is a version, as cilium and kubeovn write it), so the fixture
+  # exercises every shape the enumeration claims to cover rather than only the
+  # single-string one.
+  for f in $(grep -rIl 'cozystack/cozystack' "$tmp/packages"); do
+    sed -i -E "s|(cozystack/cozystack/[A-Za-z0-9._-]+):v[0-9]+\.[0-9]+\.[0-9]+@|\1:v${RC}@|g" "$f"
+    sed -i -E "s|^([[:space:]]*tag:[[:space:]]*)v[0-9]+\.[0-9]+\.[0-9]+([[:space:]]*)$|\1v${RC}\2|" "$f"
   done
 
   # Sanity: the fixture must actually contain the rc string, otherwise the
@@ -120,6 +132,13 @@
   # busybox is third-party; neither rides the cozystack version line, so a
   # promotion must not touch either. Rewriting them would be a bug introduced
   # by an over-eager fix to the one this file guards.
+  #
+  # The rc version is chosen to SHARE A PREFIX with kamaji's tag (0.19.0), so
+  # the test is not vacuous: an implementation matching loosely on the X.Y.Z
+  # part, or anchoring on anything short of the full "X.Y.Z-rc.N" string, would
+  # corrupt v0.19.0-cozystack.0 here and fail. An earlier revision used an rc
+  # version sharing no substring with either input, which made the assertion
+  # true by construction and tested nothing.
   tmp=$(mktemp -d)
   mkdir -p "$tmp/packages/system/capi/images" "$tmp/packages/apps/kubernetes/images"
   kamaji='ghcr.io/cozystack/cozystack/cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0@sha256:c'
@@ -127,13 +146,114 @@
   echo "$kamaji" > "$tmp/packages/system/capi/images/kamaji.tag"
   echo "$busybox" > "$tmp/packages/apps/kubernetes/images/busybox.tag"
 
-  hack/promote-rewrite-tags.sh 9.9.9-rc.9 9.9.9 "$tmp/packages" >/dev/null 2>&1 || {
+  hack/promote-rewrite-tags.sh 0.19.0-rc.1 0.19.0 "$tmp/packages" >/dev/null 2>&1 || {
     rm -rf "$tmp"; return 1
   }
 
   [ "$(cat "$tmp/packages/system/capi/images/kamaji.tag")" = "$kamaji" ]
   [ "$(cat "$tmp/packages/apps/kubernetes/images/busybox.tag")" = "$busybox" ]
   rm -rf "$tmp"
+
+  # Known and accepted limitation, stated here so it is a decision rather than
+  # an oversight: the rewrite is a substring replace scoped to enumerated
+  # files, so a third-party or component-versioned tag carrying the EXACT
+  # cozystack rc string would also be rewritten. No such collision exists (a
+  # component tag is X.Y.Z-cozystack.N and third-party tags are upstream's),
+  # and making the rewrite ownership-aware is not possible with a substring
+  # pass while the host may live in a sibling `registry:` key.
+}
+
+@test "a legitimate rc mention outside image position does not fail promotion" {
+  # The fail-OPEN direction. Every other postcondition test asserts it fires;
+  # this asserts it does not fire on prose, lockfiles or dependency pins that
+  # merely contain an "X.Y.Z-rc.N" string.
+  #
+  # These are real: packages/apps/kubernetes/images/kubevirt-csi-driver/go.sum
+  # pins github.com/golang/protobuf v1.4.0-rc.2, and v1.4.0-rc.2 is a cozystack
+  # rc that was actually cut — an unfiltered postcondition would have aborted
+  # that promotion on a Go checksum line. metallb_test.yaml names v1.5.0-rc.2
+  # in a comment, and the console pnpm-lock.yaml carries rolldown@1.0.0-rc.15.
+  tmp=$(mktemp -d)
+  cp -a packages "$tmp/packages"
+
+  for v in 1.4.0-rc.2 1.5.0-rc.2 1.4.0-rc.4; do
+    rc=0
+    hack/promote-rewrite-tags.sh "$v" "${v%%-*}" "$tmp/packages" >"$tmp/log" 2>&1 || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      echo "false positive: promotion of $v was aborted by the postcondition" >&2
+      cat "$tmp/log" >&2
+      rm -rf "$tmp"
+      return 1
+    fi
+  done
+  rm -rf "$tmp"
+}
+
+@test "an unreadable file fails the promotion rather than being skipped" {
+  # A read error is not "no match". Skipping it would leave a ref unrewritten
+  # while the run still reported success — the same silent-skip shape as the
+  # enumeration bug this script exists to fix.
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/packages/system/x/images"
+  echo 'ghcr.io/cozystack/cozystack/x:v9.9.9-rc.9@sha256:a' > "$tmp/packages/system/x/images/x.tag"
+  chmod 000 "$tmp/packages/system/x/images/x.tag"
+
+  rc=0
+  hack/promote-rewrite-tags.sh 9.9.9-rc.9 9.9.9 "$tmp/packages" >"$tmp/log" 2>&1 || rc=$?
+
+  # Restore the mode first so the cleanup and any harness diagnostics work.
+  chmod 644 "$tmp/packages/system/x/images/x.tag"
+  if [ "$rc" -eq 0 ]; then
+    echo "expected a non-zero exit for an unreadable file, got 0" >&2
+    rm -rf "$tmp"; return 1
+  fi
+  grep -q 'is not readable' "$tmp/log" || {
+    echo "expected the unreadable-file diagnostic; got:" >&2; cat "$tmp/log" >&2
+    rm -rf "$tmp"; return 1
+  }
+  rm -rf "$tmp"
+}
+
+@test "collect_image_refs emits every first-party ref present in the tree" {
+  # The completeness guard the collector lacked. The rewrite got "scan wider
+  # than you rewrite" via its postcondition; the retag and the mirror got a
+  # wider enumeration and nothing that would notice a NEW blind spot.
+  #
+  # Without this, a first-party ref added at an unenumerated path on a tag
+  # carrying no version string (flux-plunger and keycloak-operator are
+  # latest@-pinned today, so the profile exists) is never mirrored, and the
+  # published nightly points at the private build registry — which the
+  # contract calls the worst of the three failure modes.
+  #
+  # Compare on repo@digest so the cosmetic tag does not matter, and discover
+  # the expected set by content, independent of the enumeration under test.
+  . hack/lib/image-refs.sh
+  tmp=$(mktemp -d)
+
+  collect_image_refs packages | grep 'cozystack/cozystack' \
+    | sed -E 's|:[^/@]*@|@|' | sort -u > "$tmp/collected"
+  grep -rIoh --exclude-dir=charts --exclude='*.md' -E \
+    'ghcr\.io/cozystack/cozystack/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}' \
+    packages/ | sed -E 's|:[^/@]*@|@|' | sort -u > "$tmp/present"
+
+  missed=$(comm -13 "$tmp/collected" "$tmp/present")
+  if [ -n "$missed" ]; then
+    echo "first-party refs present in the tree but NOT collected:" >&2
+    printf '%s\n' "$missed" >&2
+    echo "Declare their file in IMAGE_REF_EXTRA_FILES in hack/lib/image-refs.sh." >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "the cozystack-packages OCI artifact is collected" {
+  # Shape 5 (platformSourceUrl/platformSourceRef). Deleting that rule left
+  # every suite green, so stable promotion could silently stop retagging the
+  # packages artifact — the one object the installer resolves to find
+  # everything else.
+  . hack/lib/image-refs.sh
+  collect_image_refs packages | grep -q 'cozystack-packages@sha256:[0-9a-f]\{64\}'
 }
 
 @test "digests are never altered by the rewrite" {

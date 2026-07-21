@@ -53,7 +53,13 @@
 # private build-registry host, since the mirror's host rewrite cannot reach
 # inside a gzip. Fixing it means decompress/rewrite/recompress with `gzip -n`
 # to stay reproducible — see docs/agents/image-refs.md.
-IMAGE_REF_EXTRA_FILES="${IMAGE_REF_EXTRA_FILES:-system/multus/templates/multus-daemonset-thick.yml}"
+# Assigned unconditionally rather than via ${VAR:-default}: this list is
+# safety-critical for the retag and the mirror, neither of which has a
+# postcondition that would notice it being wrong. An inherited environment
+# variable able to silently NARROW it is a hazard with no matching use case.
+# Word splitting is intended (the list is whitespace-separated), which also
+# means a path containing whitespace cannot be represented here.
+IMAGE_REF_EXTRA_FILES="system/multus/templates/multus-daemonset-thick.yml"
 
 # Emit every ref-bearing file under <root>, one per line.
 #

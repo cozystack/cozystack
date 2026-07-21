@@ -222,12 +222,19 @@ _make_tree() {
   grep -q 'docker://ghcr.io/cozystack/cozystack/multus-cni:0.0.0-nightly.test' "$tmp/out"
 }
 
-@test "the host rewrite covers exactly the files that were scanned" {
+@test "the host rewrite and the mirror walk the same file list" {
   # The two sets must be equal. A file rewritten but not mirrored leaves a
   # dangling ref to an image never pushed to the dest registry; a file mirrored
   # but not rewritten leaves the private host in the published tree. Both
-  # derive from image_ref_files now, so assert it reaches all three shapes —
-  # the rewrite itself only runs outside --dry-run, which needs skopeo.
+  # derive from image_ref_files now, so assert it reaches all three shapes.
+  #
+  # Scope, so the name does not overclaim: this pins WHICH FILES the rewrite
+  # visits, not that every ref inside them is successfully rewritten. The sed
+  # itself only runs outside --dry-run (it needs skopeo) and is a literal
+  # "<src>/" substring replace, so it still cannot rewrite a host split into a
+  # sibling `registry:` key (keycloak-operator) or one without a trailing slash
+  # (kubeovn's global.registry.address). That is a known gap recorded in
+  # docs/agents/image-refs.md, not something this test covers.
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
