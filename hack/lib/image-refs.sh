@@ -147,7 +147,7 @@ collect_refs_from_file() {
       # or a comment a future file may carry cannot reach the caller as a bogus
       # ref. grep's no-match exit 1 is swallowed for the same reason the yq
       # calls swallow theirs: an unmatched file is normal, not an error.
-      grep -Eo '[^[:space:]]+@sha256:[0-9a-f]{64}' "$_ir_f" 2>/dev/null || true
+      grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" "$_ir_f" 2>/dev/null || true
       ;;
   esac
   return 0
@@ -171,7 +171,7 @@ collect_image_refs() {
   # dedup absorb the overlap costs nothing.
   for _ir_f in $IMAGE_REF_EXTRA_FILES; do
     [ -f "$_ir_root/$_ir_f" ] || continue
-    grep -Eo '[^[:space:]]+@sha256:[0-9a-f]{64}' "$_ir_root/$_ir_f" 2>/dev/null || true
+    grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" "$_ir_root/$_ir_f" 2>/dev/null || true
   done
 
   return 0

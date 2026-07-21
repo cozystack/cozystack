@@ -291,10 +291,15 @@
   # version-free `latest@sha256:` tag — the exact profile this check exists for
   # — and passed the entire suite.
   #
-  # Residual limit, stated rather than implied: a host split at an arbitrary
-  # point inside `cozystack/cozystack` (say `registry: ghcr.io/cozy` +
-  # `repository: stack/cozystack/x`) still evades these. That is contrived
-  # rather than realistic, and widening further costs real precision — a bare
+  # Coverage is in fact exhaustive, not merely broad. The collector joins
+  # `registry + "/" + repository`, so a split can only fall on a path-separator
+  # boundary of the full ref, giving four possible splits — and markers 1-3
+  # cover all four. A split at any other point (say `registry: ghcr.io/cozy` +
+  # `repository: stack/cozystack/x`) does not need covering because it does not
+  # produce a first-party ref: it joins to ghcr.io/cozy/stack/cozystack/x,
+  # which every consumer's ownership filter discards anyway.
+  #
+  # Widening further would cost real precision for nothing: a bare
   # `cozystack/cozystack` marker matches 65 files and would need 23 allowlist
   # entries for Makefiles, Dockerfiles and helm-unittest fixtures.
   . hack/lib/image-refs.sh
@@ -303,8 +308,8 @@
   image_ref_files packages | sort > "$tmp/enumerated"
   grep -rIlE --exclude-dir=charts --exclude='*.md' \
     -e 'ghcr\.io/cozystack/cozystack/' \
-    -e "(repository|image):[[:space:]]*['\"]?cozystack/" \
-    -e "(registry|address):[[:space:]]*['\"]?ghcr\.io/cozystack" \
+    -e "['\"]?(repository|image)['\"]?:[[:space:]]*['\"]?cozystack/" \
+    -e "['\"]?(registry|address)['\"]?:[[:space:]]*['\"]?ghcr\.io/cozystack" \
     packages/ | sort > "$tmp/marked"
 
   # Known carriers that are deliberately NOT enumerated. Each needs a reason;
@@ -342,9 +347,23 @@ ALLOW
   D=$(printf 'a%.0s' $(seq 64))
 
   printf 'image: ghcr.io/cozystack/cozystack/one:v1@sha256:%s\n' "$D" > "$tmp/s1.yaml"
-  printf 'image:\n  repository: ghcr.io/cozystack/cozystack/two\n  tag: v1\n  digest: "sha256:%s"\n' "$D" > "$tmp/s2.yaml"
+  # Tagless: a digest-only pin is an ordinary Helm spelling. Narrowing shape 1
+  # to require a ':tag' before the digest was otherwise undetected.
+  printf 'image: ghcr.io/cozystack/cozystack/onebare@sha256:%s\n' "$D" > "$tmp/s1b.yaml"
+  # Shape 2 WITH a sibling registry: the previous fixture kept the host inside
+  # repository, so shape 2 losing its registry rejoin was invisible here and
+  # caught only by a single nightly-mirror fixture (no real package uses shape
+  # 2 with a split host, so promote-retag misses it too).
+  printf 'image:\n  registry: ghcr.io\n  repository: cozystack/cozystack/two\n  tag: v1\n  digest: "sha256:%s"\n' "$D" > "$tmp/s2.yaml"
   printf 'image:\n  registry: ghcr.io\n  repository: cozystack/cozystack/three\n  tag: "v1@sha256:%s"\n' "$D" > "$tmp/s3.yaml"
-  printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\n' "$D" > "$tmp/s4.yaml"
+  # Shape 4 carries a digest-pinned sibling OUTSIDE global.images. The rule is
+  # deliberately scoped to .global.images[] because the host is a
+  # document-level key: binding it to any map in the file would staple
+  # kubeovn's registry onto unrelated repositories and manufacture owned refs
+  # that were never built. Broadening the rule to `..` otherwise passed every
+  # suite, because asserting only that the expected ref appears cannot see an
+  # unexpected one — hence the negative assertion below.
+  printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\nunrelated:\n  image:\n    repository: someone-elses/thing\n    tag: "v1@sha256:%s"\n' "$D" "$D" > "$tmp/s4.yaml"
   printf 'x:\n  platformSourceUrl: oci://ghcr.io/cozystack/cozystack/five\n  platformSourceRef: digest=sha256:%s\n' "$D" > "$tmp/s5.yaml"
   printf 'ghcr.io/cozystack/cozystack/six:v1@sha256:%s\n' "$D" > "$tmp/s6.tag"
 
@@ -355,9 +374,10 @@ ALLOW
   # digest previously left the rewrite, retag and mirror suites entirely green.
   # The digest is the only part that decides which bytes get retagged, so it is
   # the part most worth pinning.
-  for n in one two three four five six; do
-    case "$n" in one) f=s1.yaml ;; two) f=s2.yaml ;; three) f=s3.yaml ;;
-                 four) f=s4.yaml ;; five) f=s5.yaml ;; six) f=s6.tag ;; esac
+  for n in one onebare two three four five six; do
+    case "$n" in one) f=s1.yaml ;; onebare) f=s1b.yaml ;; two) f=s2.yaml ;;
+                 three) f=s3.yaml ;; four) f=s4.yaml ;; five) f=s5.yaml ;;
+                 six) f=s6.tag ;; esac
     want="ghcr.io/cozystack/cozystack/${n}@sha256:${D}"
     # Canonicalize away the cosmetic :tag that shapes 1 and 6 carry through.
     got=$(collect_refs_from_file "$tmp/$f" | sed -E 's|:[^/@]*@|@|' | grep "cozystack/${n}@" || true)
@@ -368,6 +388,16 @@ ALLOW
       rm -rf "$tmp"; return 1
     fi
   done
+
+  # Negative: the document-level host must not be stapled onto a map outside
+  # global.images. Asserting only that the expected ref appears cannot catch
+  # over-collection, and a manufactured "owned" ref would be retagged and
+  # mirrored to a destination nothing ever built.
+  if collect_refs_from_file "$tmp/s4.yaml" | grep -q 'cozystack/someone-elses'; then
+    echo "shape 4 stapled the global registry onto a map outside global.images:" >&2
+    collect_refs_from_file "$tmp/s4.yaml" >&2
+    rm -rf "$tmp"; return 1
+  fi
   rm -rf "$tmp"
 }
 
@@ -378,8 +408,19 @@ ALLOW
   # compares filenames, and the oracle shares the same parser. Assert the ref
   # itself comes out.
   #
-  # The fixture is an unparseable Helm template carrying a single-quoted
-  # split-host ref: the shape that defeated an earlier revision of both guards.
+  # The fixture is an unparseable Helm template — the case parsing alone cannot
+  # reach — carrying a contiguous ref, single-quoted so the scrape's
+  # quote-tolerance is exercised too.
+  #
+  # Two things this test got wrong before, both of which made it pass while the
+  # thing it guards was broken. Its fixture was a SPLIT-host ref, which a
+  # textual scrape can never reconstruct: only the contiguous `tag` value is
+  # recoverable, so ref_repo() reduces it to `latest` and every consumer drops
+  # it at the ownership filter — enumerated-but-uncollected, exactly the
+  # conflation this test exists to catch. And it asserted `grep -q
+  # "@sha256:$D"`, which any token containing the digest satisfies. Gutting the
+  # scrape to emit a bare `@sha256:<digest>` with no repository left the whole
+  # suite green. Assert the exact canonical ref instead.
   . hack/lib/image-refs.sh
   tmp=$(mktemp -d)
   D=$(printf 'b%.0s' $(seq 64))
@@ -387,10 +428,7 @@ ALLOW
   {
     echo '{{- if .Values.enabled }}'
     echo 'spec:'
-    echo '  image:'
-    echo "    registry: ghcr.io/cozystack/cozystack"
-    echo "    repository: 'awkward'"
-    printf "    tag: 'latest@sha256:%s'\n" "$D"
+    printf "  image: 'ghcr.io/cozystack/cozystack/awkward:latest@sha256:%s'\n" "$D"
     echo '{{- end }}'
   } > "$tmp/system/awkward/templates/thing.yaml"
 
@@ -398,12 +436,19 @@ ALLOW
   image_ref_files "$tmp" | grep -q 'system/awkward/templates/thing.yaml' || {
     echo "declared extra was not enumerated" >&2; rm -rf "$tmp"; return 1
   }
-  if ! collect_image_refs "$tmp" | grep -q "@sha256:${D}"; then
-    echo "declared extra was enumerated but its ref was not collected:" >&2
+  if ! collect_image_refs "$tmp" | sed -E 's|:[^/@]*@|@|' \
+       | grep -qx "ghcr.io/cozystack/cozystack/awkward@sha256:${D}"; then
+    echo "declared extra was enumerated but yielded no usable ref:" >&2
     collect_image_refs "$tmp" >&2
     rm -rf "$tmp"; return 1
   fi
   rm -rf "$tmp"
+
+  # Recorded limitation, so the comment above does not overclaim: a SPLIT-host
+  # ref in an unparseable file is recoverable by neither route — parsing fails
+  # on the template, and a scrape cannot rejoin `registry` to `repository`. The
+  # file-level marker check is what covers that case, by refusing to let such a
+  # file go undeclared in the first place.
 }
 
 @test "the cozystack-packages OCI artifact is collected" {
