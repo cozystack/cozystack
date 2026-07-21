@@ -66,6 +66,10 @@ alerta:
       dashboardUrl: ""
       summaryFmt: ""
 grafana:
+  # Upstream Grafana image, pinned by digest. Plugins (VictoriaLogs datasource
+  # + panels) are installed at startup via GF_INSTALL_PLUGINS from the official
+  # Grafana catalog, so no custom rebuilt image is published anymore.
+  image: grafana/grafana:11.6.15@sha256:f739273dfed04760428fcfbfccd1752b3b7fc87ef0a3d5637e2e87cce151e1a2
   db:
     size: 10Gi
   resources:
