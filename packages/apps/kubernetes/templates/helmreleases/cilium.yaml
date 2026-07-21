@@ -17,6 +17,12 @@ cilium:
   {{- if $.Values.addons.gatewayAPI.enabled }}
   gatewayAPI:
     enabled: true
+    # Without ALPN "h2" on the TLS listener, browsers silently downgrade every
+    # Gateway request to HTTP/1.1 (they negotiate HTTP/2 only via ALPN).
+    # Frontend hop only; backends stay HTTP/1.1 unless their Service declares
+    # appProtocol kubernetes.io/h2c (GEP-1911). Per-cluster opt-out:
+    # addons.cilium.valuesOverride.cilium.gatewayAPI.enableAlpn=false.
+    enableAlpn: true
   envoy:
     enabled: true
   {{- end }}
