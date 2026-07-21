@@ -86,21 +86,11 @@ const (
 
 	// cozystackConfigNamespace / cozystackConfigName locate the cluster-wide
 	// cozystack ConfigMap the deny-set validation sources the pod/service/join
-	// CIDRs from.
+	// CIDRs from. The key names and platform-values defaults live in the shared
+	// denyset package (denyset.ConfigMapKey*/denyset.Default*), so the controller
+	// and the apiserver admission check map the ConfigMap identically (D10).
 	cozystackConfigNamespace = "cozy-system"
 	cozystackConfigName      = "cozystack"
-
-	// Platform-values defaults for the cluster networks, used when the cozystack
-	// ConfigMap is absent or a key is unset (packages/core/platform/values.yaml
-	// networking.{podCIDR,serviceCIDR,joinCIDR}).
-	defaultPodCIDR     = "10.244.0.0/16"
-	defaultServiceCIDR = "10.96.0.0/16"
-	defaultJoinCIDR    = "100.64.0.0/16"
-
-	// ConfigMap keys the cozystack ConfigMap exposes the cluster CIDRs under.
-	configKeyPodCIDR  = "ipv4-pod-cidr"
-	configKeySvcCIDR  = "ipv4-svc-cidr"
-	configKeyJoinCIDR = "ipv4-join-cidr"
 
 	// remoteCIDRsValueKey is the HelmRelease spec.values key holding the tenant's
 	// declared remote networks (the authoritative input, D7).
@@ -485,13 +475,7 @@ func (r *SiteRouterReconciler) relaxGatewayPortSecurity(ctx context.Context, ins
 	return nil
 }
 
-// updateStatus surfaces the instance's runtime state (tunnel/BGP readiness,
-// programmed routes, validation errors) through the HelmRelease Ready condition
-// and a WorkloadMonitor (D9).
-func (r *SiteRouterReconciler) updateStatus(_ context.Context, _ *instance) error {
-	// TODO(T09): reflect runtime state through Ready + WorkloadMonitor.
-	return nil
-}
+// updateStatus surfaces the instance's status. It lives in status.go (T09).
 
 // restorePortSecurity reverts the port_security relaxation on delete by removing
 // the annotation the controller added (its absence restores OVN's default
@@ -650,41 +634,22 @@ func (r *SiteRouterReconciler) reader() client.Reader {
 	return r.Client
 }
 
-// clusterNetworks resolves the deny-set's cluster networks: the pod/service/join
-// CIDRs from the cozy-system/cozystack ConfigMap, falling back to the
-// platform-values defaults when the ConfigMap or a key is absent. NodeCIDRs and
-// LBPools are left empty for now — the node subnet is not exposed as a cluster
-// fact (nodes are on the host network, and the ConfigMap has no nodeCIDR key) and
-// the LB pools are admin-provisioned out of band, so neither is cleanly
-// discoverable; the deny-set's empty-field-skipped contract makes this safe, and
-// pod/service/join + the always-reserved link-local/loopback/default-route cover
-// the cluster-traffic-blackhole cases. TODO(T07 follow-up): source NodeCIDRs from
-// Node objects and LBPools from the LB pool config/flag if a clean signal appears.
+// clusterNetworks resolves the deny-set's cluster networks from the
+// cozy-system/cozystack ConfigMap via the shared denyset mapping (which applies
+// the platform-values defaults for any absent/empty key and the all-defaults set
+// when the ConfigMap is missing). The apiserver's SiteRouter admission check
+// resolves the same networks through the same helper, so a remoteCIDR is judged
+// identically at admission and reconcile time (D10).
 func (r *SiteRouterReconciler) clusterNetworks(ctx context.Context) (denyset.ClusterNetworks, error) {
-	nets := denyset.ClusterNetworks{
-		PodCIDR:     defaultPodCIDR,
-		ServiceCIDR: defaultServiceCIDR,
-		JoinCIDR:    defaultJoinCIDR,
-	}
-
 	cm := &corev1.ConfigMap{}
 	err := r.reader().Get(ctx, types.NamespacedName{Namespace: cozystackConfigNamespace, Name: cozystackConfigName}, cm)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return nets, nil // fall back to the platform-values defaults
+			return denyset.ClusterNetworksFromConfigMap(nil), nil // all defaults
 		}
-		return nets, fmt.Errorf("get %s/%s ConfigMap: %w", cozystackConfigNamespace, cozystackConfigName, err)
+		return denyset.ClusterNetworksFromConfigMap(nil), fmt.Errorf("get %s/%s ConfigMap: %w", cozystackConfigNamespace, cozystackConfigName, err)
 	}
-	if v := cm.Data[configKeyPodCIDR]; v != "" {
-		nets.PodCIDR = v
-	}
-	if v := cm.Data[configKeySvcCIDR]; v != "" {
-		nets.ServiceCIDR = v
-	}
-	if v := cm.Data[configKeyJoinCIDR]; v != "" {
-		nets.JoinCIDR = v
-	}
-	return nets, nil
+	return denyset.ClusterNetworksFromConfigMap(cm.Data), nil
 }
 
 // stringSlice coerces a decoded spec.values field (a []interface{} of strings
