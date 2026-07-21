@@ -175,20 +175,14 @@ jobs:
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           # Rewrite the rc version substring -> stable in vendored image tags.
-          # The exact "X.Y.Z-rc.N" string only appears on cozystack-built images,
-          # so a global replace cannot touch component (e.g. cilium) tags. Escape
-          # regex metacharacters (the dots) in the rc version so sed matches the
-          # literal string, not "any character".
-          RC_ESC=$(printf '%s' "$RC_VERSION" | sed -e 's/[][\\.^$*/]/\\&/g')
-          # Scope to the files the build actually stamps the version into: the
-          # depth-2 package values.yaml (same glob nightly-mirror.sh uses) plus
-          # the kubernetes app's image .tag files, which also carry the cozystack
-          # version. A blanket `find -name values.yaml` could rewrite a deeper
-          # values.yaml the build never touched.
-          for f in packages/*/*/values.yaml packages/apps/kubernetes/images/*.tag; do
-            [ -f "$f" ] || continue
-            sed -i "s/${RC_ESC}/${STABLE_VERSION}/g" "$f"
-          done
+          # The logic lives in a script, not inline here, so that
+          # hack/promote-rewrite-tags_test.bats can round-trip it against the
+          # real tree: this step's previous inline glob covered the depth-2
+          # values.yaml plus packages/apps/kubernetes/images/*.tag alone and
+          # silently left nine other .tag files and one stamped template on the
+          # rc version, which was only observable by cutting a release.
+          # The script fails if any rc reference survives it.
+          hack/promote-rewrite-tags.sh "$RC_VERSION" "$STABLE_VERSION"
           # -B resets the local branch so a re-dispatch starts clean.
           git checkout -B "${STABLE_BRANCH}"
           git add -A
