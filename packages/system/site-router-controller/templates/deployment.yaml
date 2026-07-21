@@ -31,6 +31,14 @@ spec:
         image: "{{ .Values.siteRouterController.image }}"
         args:
         - --leader-elect
+        # Expose the controller-runtime metrics endpoint over plain HTTP on :8080
+        # so the platform VictoriaMetrics agent can scrape it via the VMPodScrape
+        # (podscrape.yaml). Mirrors the in-house controller convention
+        # (etcd-operator, kube-ovn-plunger): HTTP + --metrics-secure=false, no
+        # kube-rbac-proxy sidecar. The endpoint carries only operational gauges
+        # and counters (no secrets); it is reachable cluster-internally only.
+        - --metrics-bind-address=:8080
+        - --metrics-secure=false
         # The controller's management CIDR MUST match the site-router chart's
         # managementCIDR (which seeds the VyOS first-boot firewall). Keep the two
         # in lockstep; a mismatch locks the controller out of the router.
@@ -44,6 +52,8 @@ spec:
         - --zap-log-level=info
         {{- end }}
         ports:
+        - name: metrics
+          containerPort: 8080
         - name: health
           containerPort: 8081
         readinessProbe:

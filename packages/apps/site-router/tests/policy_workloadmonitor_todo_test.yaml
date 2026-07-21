@@ -1,12 +1,12 @@
-suite: "TODO(T08/T10) — Cilium policies + WorkloadMonitor (deferred)"
+suite: "TODO(T08) — Cilium policies (deferred)"
 
 # OUT OF SCOPE for T04 / this Phase-A gate. These templates are owned by:
 #   - T08: platform-owned Cilium policies (templates/networkpolicy.yaml)
-#   - T10: gateway WorkloadMonitor (templates/dashboard-resourcemap.yaml or
-#          templates/workloadmonitor.yaml)
 # The intended assertions are drafted below as comments so they can be lifted
-# into active suites when those tasks land. The single active test is an inert
+# into active suites when that task lands. The single active test is an inert
 # placeholder that keeps this file a valid helm-unittest suite.
+#
+# T10's gateway WorkloadMonitor is now ACTIVE — see tests/workloadmonitor_test.yaml.
 #
 # --- T08: Cilium egressDeny (link-local + management) ---
 #   templates: [templates/networkpolicy.yaml]
@@ -18,12 +18,6 @@ suite: "TODO(T08/T10) — Cilium policies + WorkloadMonitor (deferred)"
 #   - ingress admits ONLY UDP 500 + UDP 4500 from the world (tunnel responder),
 #   - and admits the controller identity on the HTTPS API port (443),
 #   - and does NOT admit 443 from tunnel/world.
-#
-# --- T10: WorkloadMonitor ---
-#   templates: [templates/dashboard-resourcemap.yaml]
-#   - a cozystack.io/v1alpha1 WorkloadMonitor renders for the instance,
-#   - spec.selector targets the gateway pod (app.kubernetes.io/instance
-#     = <release>), feeding the WorkloadsReady condition (D9).
 
 templates:
   - templates/service.yaml
