@@ -146,6 +146,17 @@
         "v1"
       ]
     },
+    "tls": {
+      "description": "HTTP-layer TLS configuration.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "enabled": {
+          "description": "Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.",
+          "type": "boolean"
+        }
+      }
+    },
     "images": {
       "description": "Container images used by the operator.",
       "type": "object",

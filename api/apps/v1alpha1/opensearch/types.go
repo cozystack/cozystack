@@ -42,6 +42,9 @@ type ConfigSpec struct {
 	// OpenSearch major version to deploy.
 	// +kubebuilder:default:="v2"
 	Version Version `json:"version"`
+	// HTTP-layer TLS configuration.
+	// +kubebuilder:default:={}
+	Tls TLS `json:"tls"`
 	// Container images used by the operator.
 	// +kubebuilder:default:={}
 	Images Images `json:"images"`
@@ -97,6 +100,11 @@ type Resources struct {
 	Cpu resource.Quantity `json:"cpu,omitempty"`
 	// Memory (RAM) available to each node.
 	Memory resource.Quantity `json:"memory,omitempty"`
+}
+
+type TLS struct {
+	// Tri-state TLS switch. When unset, TLS is enabled automatically if external is true, off otherwise. Set explicitly to true or false to override.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 type User struct {

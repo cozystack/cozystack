@@ -1,0 +1,1259 @@
+suite: opensearch TLS cert-manager chain
+
+# Covers the tri-state tls.enabled field:
+#   (a) external: false, tls.enabled unset  → TLS off, operator generates HTTP cert
+#   (b) external: true,  tls.enabled unset  → TLS auto-on via cert-manager + external SAN
+#   (c) external: true,  tls.enabled: false → TLS off, operator generates HTTP cert
+#   (d) external: false, tls.enabled: true  → TLS on via cert-manager (no external SAN)
+#
+# Design: ONE leaf Certificate per service, both under the same CA. Sharing a key
+# between the API and Dashboards would let a compromised Dashboards impersonate the
+# API endpoint, so they are issued separately, as the operator itself does.
+# Chain: selfsigned Issuer, CA Cert, CA Issuer, API leaf, and — only when Dashboards
+# is enabled, appended last so the first four indices are stable — the Dashboards leaf.
+# Transport mTLS remains operator-managed (generate: true, perNode: true) — not touched here.
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+###############################################################################
+# certmanager.yaml — case (a): external false, tls.enabled unset → no resources
+###############################################################################
+
+templates:
+  - templates/certmanager.yaml
+
+tests:
+  # The release-name bound is whatever the longest DNS label this configuration
+  # actually builds allows, and the limits differ by object kind: Service names and
+  # certificate SAN labels are bounded at 63, while Certificate/Secret/Role names are
+  # subdomains bounded at 253 and never bind. Both sides of each boundary are pinned.
+  #
+  # -dashboards-external (Service, external+dashboards) is the longest at 20 -> 43.
+  - it: rejects a name whose dashboards external Service would exceed 63
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+      tls:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 44 chars; opensearch requires <=43 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards-external" stays within the 63-char DNS label limit.'
+
+  - it: accepts the longest name that fits with external and dashboards both on
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+
+  # -dashboards (SAN label and the operator's own Service) is 11 -> 52.
+  - it: rejects a name whose dashboards SAN would exceed 63
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch requires <=52 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
+
+  - it: accepts that same name when dashboards is off and -discovery binds instead
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-discovery
+        documentIndex: 3
+
+  # The auto-on path must not lose a release to a name length either.
+  - it: still renders a long-named external release that never asked for TLS
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  # Version floor: below OpenSearch 2.0.0 the operator signs the admin certificate
+  # with the transport CA instead of http.caSecret, so securityadmin cannot verify
+  # against the cert-manager HTTP CA and the security config silently never applies.
+  # An explicit request fails; an auto-on one degrades (asserted two cases below).
+  - it: fails when chart-managed HTTP TLS is explicitly requested below 2.0.0
+    set:
+      version: v1
+      tls:
+        enabled: true
+    asserts:
+      - failedTemplate:
+          errorMessage: "opensearch 1.3.20 (version: v1) does not support chart-managed HTTP TLS: below 2.0.0 the operator signs the securityadmin admin certificate with the transport CA, which cannot verify against the cert-manager HTTP CA, so users and roles would silently never apply. Set tls.enabled: false to use operator-managed HTTP TLS, or use version v2 or later."
+
+  # A v1 + external release never asked for chart-managed TLS — the tri-state
+  # turned it on. Degrade to operator-managed HTTP TLS so such a release keeps
+  # rendering on upgrade instead of hard-failing on a flag it never set.
+  - it: degrades to operator-managed TLS when auto-on lands below 2.0.0
+    set:
+      version: v1
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: allows version v1 when chart-managed HTTP TLS is off
+    set:
+      version: v1
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: allows chart-managed HTTP TLS on v3, which is at or above 2.0.0
+    set:
+      version: v3
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  # CA publication (label-driven leg). The CA-extraction controller selects the source
+  # by these labels and projects ca.crt alone into the key-free <release>.tenant-ca
+  # Secret. The release label is required because a cert-manager-issued Secret carries
+  # no OwnerReference and no Helm metadata to attribute it by.
+  - it: labels the HTTP CA secret for publication to the tenant
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+          value: "true"
+        documentIndex: 1
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+          value: os-test
+        documentIndex: 1
+      - equal:
+          path: metadata.name
+          value: os-test-http-ca
+        documentIndex: 1
+
+  # Passing http.caSecret moves the operator onto subPath mounts, which the kubelet
+  # never refreshes, and nothing restarts the pods when the Secret changes. A leaf
+  # that outlived its mount would expire in place and take HTTPS down on a timer, so
+  # the leaf must not be short-lived, and renewBefore must not promise a rotation
+  # that cannot happen.
+  - it: gives the leaf certificate no expiry the pods cannot survive
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 87600h
+        documentIndex: 3
+      - notExists:
+          path: spec.renewBefore
+        documentIndex: 3
+
+  - it: keeps the CA and the leaf on the same lifetime
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 87600h
+        documentIndex: 1
+      - notExists:
+          path: spec.renewBefore
+        documentIndex: 1
+
+  # Both names external-svc publishes to external-dns must appear in the leaf's SAN
+  # list, or an external client reaching the LoadBalancer fails hostname verification.
+  - it: covers both external-dns hostnames with certificate SANs
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+        documentIndex: 3
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+        documentIndex: 4
+      # Neither certificate may carry the other's name — that is the whole point of
+      # issuing them separately.
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+        documentIndex: 3
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+        documentIndex: 4
+
+  # The operator reserves <release>-http-cert for the HTTP certificate it generates
+  # itself. If the chart's leaf took that name, turning TLS off would leave the
+  # cert-manager Secret behind (enableCertificateOwnerRef is false), the operator
+  # would find it already present, skip generation and mount it — while signing the
+  # admin certificate with its transport CA, silently breaking securityadmin.
+  - it: keeps the leaf secret out of the operator's reserved certificate names
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-transport-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-dashboards-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-admin-cert
+        documentIndex: 3
+      - notEqual:
+          path: spec.secretName
+          value: os-test-ca
+        documentIndex: 3
+
+  # The two labels are not interchangeable, and collapsing them leaks the CA key.
+  # publish-ca-cert marks a SOURCE for the extraction controller, which copies ca.crt
+  # alone into a separate key-free Secret. tenant-ca marks that PROJECTION, and it is
+  # what the ApplicationDefinition selects to hand to the tenant. This Secret holds
+  # the CA private key under tls.key, so it must never carry the projection's label:
+  # the ApplicationDefinition selects purely by label, so one renamed key here would
+  # make the CA private key tenant-readable with every other test still passing.
+  - it: keeps the key-bearing CA secret off the tenant-visible label
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/tenant-ca"]
+        documentIndex: 1
+
+  # Only the CA may be published. The leaf carries the HTTPS server private key, so
+  # labelling it would hand that key to the extraction controller as a CA source.
+  - it: does not label the leaf server certificate for publication
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.name
+          value: os-test-http-server
+        documentIndex: 3
+      - notExists:
+          path: spec.secretTemplate
+        documentIndex: 3
+
+  - it: "(a) renders no resources when external false and tls.enabled unset"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "(c) renders no resources when tls.enabled explicitly false even with external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: "(b) renders 4 cert-manager resources when tls auto-on via external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "(d) renders 4 cert-manager resources when tls explicitly enabled with external false"
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: "(e) renders 4 resources and external SANs when tls.enabled explicitly true and external true"
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - hasDocuments:
+          count: 4
+      - contains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+        documentIndex: 3
+
+  - it: "(e) adds a fifth resource, the dashboards certificate, when dashboards enabled"
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+      - equal:
+          path: metadata.name
+          value: os-test-dashboards-server
+        documentIndex: 4
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+        documentIndex: 4
+
+  # --- Chain structure ---
+
+  - it: first document is selfsigned Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 0
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: spec.selfSigned
+          value: {}
+      - equal:
+          path: metadata.name
+          value: os-test-http-selfsigned
+
+  - it: second document is CA Certificate with isCA true and rotationPolicy Never
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.isCA
+          value: true
+      # Mis-targeting issuerRef still issues and still goes Ready while anchoring on
+      # something other than the intended issuer, so pin the reference completely.
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+      - equal:
+          path: spec.secretName
+          value: os-test-http-ca
+      - equal:
+          path: spec.issuerRef.name
+          value: os-test-http-selfsigned
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Never
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+
+  - it: third document is CA Issuer referencing the CA secret
+    set:
+      tls:
+        enabled: true
+    documentIndex: 2
+    asserts:
+      - isKind:
+          of: Issuer
+      - equal:
+          path: metadata.name
+          value: os-test-http-ca
+      - equal:
+          path: spec.ca.secretName
+          value: os-test-http-ca
+
+  - it: fourth document is leaf Certificate referencing the CA Issuer
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: spec.secretName
+          value: os-test-http-server
+      # isCA is independent of spec.usages: cert-manager derives certSign from this
+      # field alone, so a leaf flipped to true still renders the same usages list and
+      # still passes every usages assertion — while becoming an intermediate CA whose
+      # key sits in the pod and chains to the anchor tenants are told to trust.
+      - equal:
+          path: spec.isCA
+          value: false
+      - equal:
+          path: spec.issuerRef.name
+          value: os-test-http-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+
+  # The same positive pin for the dashboards leaf, which also establishes that index 4
+  # IS that certificate — the negative guards below would otherwise pass vacuously
+  # against whatever landed there if document order ever shifted.
+  # issuerRef is the load-bearing one: pointing it at the bootstrap self-signed Issuer
+  # instead of the CA still issues, still serves HTTPS and still goes Ready, while the
+  # anchor the platform publishes silently stops verifying the dashboards endpoint.
+  - it: fifth document is the dashboards Certificate referencing the same CA Issuer
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - isKind:
+          of: Certificate
+      - equal:
+          path: metadata.name
+          value: os-test-dashboards-server
+      - equal:
+          path: spec.secretName
+          value: os-test-dashboards-server
+      - equal:
+          path: spec.issuerRef.name
+          value: os-test-http-ca
+      - equal:
+          path: spec.issuerRef.kind
+          value: Issuer
+      - equal:
+          path: spec.issuerRef.group
+          value: cert-manager.io
+      # Same reasoning as the API leaf: usages cannot catch this.
+      - equal:
+          path: spec.isCA
+          value: false
+      - equal:
+          path: spec.privateKey.algorithm
+          value: ECDSA
+      - equal:
+          path: spec.privateKey.size
+          value: 256
+      - equal:
+          path: spec.privateKey.rotationPolicy
+          value: Always
+      # Never the API leaf's Secret: two Certificates writing one Secret would race,
+      # and the CR points each service at its own name.
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-server
+
+  - it: gives the dashboards certificate the same non-expiring lifetime
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - equal:
+          path: spec.duration
+          value: 87600h
+      - notExists:
+          path: spec.renewBefore
+
+  # --- SAN coverage for HTTP services ---
+
+  # SAN PARITY WITH THE OPERATOR. Enabling chart-managed TLS replaces the certificate
+  # the operator was issuing, so every name that certificate covered has to be covered
+  # here too — otherwise an existing client silently stops verifying. The operator
+  # issues for <name>, the service name, <name>-discovery and the <name>.<ns>[.svc
+  # [.domain]] ladder, and its Dashboards certificate for the -dashboards ladder.
+  - it: leaf cert covers every DNS form the operator certificate covered
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc.cozy.local
+      - contains:
+          path: spec.dnsNames
+          content: os-test-discovery
+      # ...and none of the Dashboards names, which belong to its own certificate.
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-dashboards
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc.cozy.local
+
+  - it: "(b) leaf cert includes external HTTP DNS SAN when external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
+  - it: "(d) leaf cert does NOT include external HTTP DNS SAN when external false"
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
+  # --- SAN coverage for Dashboards services ---
+
+  # THE SAME THREE GUARDS THE API LEAF HAS. The Dashboards certificate inherits every
+  # hazard its sibling documents — a shared key across services, offering a server key
+  # to the CA-extraction controller as a CA source, and colliding with a name the
+  # operator generates into — so it has to inherit the assertions too.
+  - it: keeps the dashboards cert from carrying any API name
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notContains:
+          path: spec.dnsNames
+          content: os-test
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.tenant-test
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc.cozy.local
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-discovery
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.example.cozy.local
+
+  - it: never offers the dashboards server key as a CA source
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notExists:
+          path: spec.secretTemplate
+
+  - it: keeps the dashboards secret out of the operator's reserved names
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - notEqual:
+          path: spec.secretName
+          value: os-test-dashboards-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-http-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-transport-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-admin-cert
+      - notEqual:
+          path: spec.secretName
+          value: os-test-ca
+
+  - it: dashboards cert carries the same ECDSA-correct usages as the API leaf
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: signing
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+
+  - it: dashboards cert covers every DNS form the operator dashboards cert covered
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc.cozy.local
+
+  - it: "(b) dashboards cert includes external Dashboards DNS SAN when external true"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    documentIndex: 4
+    asserts:
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.example.cozy.local
+
+  # No key encipherment on either certificate: RFC 5480 section 3 forbids it for
+  # ECDSA keys, which do no key transport, and both keys here are ECDSA P-256.
+  - it: leaf cert includes usages server auth and signing, and no key encipherment
+    set:
+      tls:
+        enabled: true
+    documentIndex: 3
+    asserts:
+      - contains:
+          path: spec.usages
+          content: server auth
+      - contains:
+          path: spec.usages
+          content: signing
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+      - notContains:
+          path: spec.usages
+          content: cert sign
+
+  - it: CA cert carries no key encipherment either
+    set:
+      tls:
+        enabled: true
+    documentIndex: 1
+    asserts:
+      - contains:
+          path: spec.usages
+          content: signing
+      - contains:
+          path: spec.usages
+          content: cert sign
+      - notContains:
+          path: spec.usages
+          content: key encipherment
+      - lengthEqual:
+          path: spec.usages
+          count: 2
+
+  # A platform with no root host leaves the tenant host empty all the way down, which
+  # is a supported state. The certificate keeps its in-cluster names and simply omits
+  # the external ones rather than failing the release.
+  - it: omits the external SANs when the tenant host is empty
+    set:
+      tls:
+        enabled: true
+      external: true
+      _namespace: {}
+      dashboards:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 5
+      - contains:
+          path: spec.dnsNames
+          content: os-test.tenant-test.svc.cozy.local
+        documentIndex: 3
+      - notContains:
+          path: spec.dnsNames
+          content: os-test.
+        documentIndex: 3
+      # The dashboards leaf carries the same guard and must be held to it — an empty
+      # host there would emit a trailing-dot SAN on the more exposed service.
+      - contains:
+          path: spec.dnsNames
+          content: os-test-dashboards.tenant-test.svc.cozy.local
+        documentIndex: 4
+      - notContains:
+          path: spec.dnsNames
+          content: os-test-dashboards.
+        documentIndex: 4
+
+---
+---
+###############################################################################
+# opensearch.yaml — TLS state reflected in OpenSearchCluster spec
+###############################################################################
+suite: opensearch CR TLS wiring
+
+templates:
+  - templates/opensearch.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  # THE UPGRADE PATH, pinned explicitly. An existing external release on a supported
+  # version has tls unset and runs operator-managed TLS today; once this chart ships
+  # the tri-state moves it onto chart-managed TLS. That is a deliberate default, but
+  # it rolls the cluster and re-anchors it on a new CA, so it must not change by
+  # accident — hence an assertion of its own rather than incidental coverage.
+  - it: moves an existing external release onto chart-managed TLS on a supported version
+    set:
+      version: v2
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-server
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test-http-ca
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.generate
+        documentIndex: 0
+
+  # A v1 + external release never asked for chart-managed TLS — the tri-state
+  # turned it on. Below 2.0.0 that combination degrades to operator-managed HTTP
+  # TLS rather than failing, so such a release keeps working across an upgrade.
+  - it: leaves HTTP TLS operator-generated when auto-on degrades below 2.0.0
+    set:
+      version: v1
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        documentIndex: 0
+
+  # The dashboards-only path: no external access, no chart-managed TLS. The operator
+  # still creates a <release>-dashboards Service, which is a DNS-1035 label bounded at
+  # 63, so the bound applies here even though neither of the other two templates that
+  # invoke the guard renders anything in this configuration.
+  - it: applies the dashboards bound with external access and TLS both off
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      dashboards:
+        enabled: true
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 53 chars; opensearch requires <=52 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards" stays within the 63-char DNS label limit.'
+
+  - it: accepts the longest dashboards-only name with external access and TLS off
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      dashboards:
+        enabled: true
+      external: false
+      tls:
+        enabled: false
+    asserts:
+      - isKind:
+          of: OpenSearchCluster
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.enable
+          value: true
+        documentIndex: 0
+
+  # The part whose loss actually hurts: an empty tenant host must not stop the cluster
+  # itself from rendering. A hard failure here takes the OpenSearchCluster CR, the
+  # credentials Secret and the RBAC with it, so a running release goes not-Ready.
+  - it: still renders the cluster when external is on and the tenant host is empty
+    set:
+      external: true
+      _namespace: {}
+    asserts:
+      - isKind:
+          of: OpenSearchCluster
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: os-test
+        documentIndex: 0
+
+  # --- Transport TLS: always operator-managed, never touched ---
+
+  - it: transport TLS always uses operator generate regardless of tls.enabled
+    asserts:
+      - equal:
+          path: spec.security.tls.transport.generate
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.transport.perNode
+          value: true
+        documentIndex: 0
+
+  - it: transport TLS stays operator generate even when tls.enabled true
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.security.tls.transport.generate
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.transport.perNode
+          value: true
+        documentIndex: 0
+
+  # --- HTTP TLS: case (a) — operator generate when tls off by default ---
+
+  - it: "(a) HTTP uses operator generate when external false and tls.enabled unset"
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        documentIndex: 0
+
+  # --- HTTP TLS: case (b) — cert-manager secret when external true and tls.enabled unset ---
+
+  - it: "(b) HTTP uses cert-manager secret when external true and tls.enabled unset"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+    asserts:
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-server
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test-http-ca
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.generate
+        documentIndex: 0
+
+  # --- HTTP TLS: case (c) — operator generate when tls.enabled explicitly false ---
+
+  - it: "(c) HTTP uses operator generate when tls.enabled explicitly false"
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      tls:
+        enabled: false
+    asserts:
+      - equal:
+          path: spec.security.tls.http.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.secret
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.caSecret
+        documentIndex: 0
+
+  # --- HTTP TLS: case (d) — cert-manager secret when tls.enabled explicitly true ---
+
+  - it: "(d) HTTP uses cert-manager secret when tls.enabled explicitly true"
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.security.tls.http.secret.name
+          value: os-test-http-server
+        documentIndex: 0
+      - equal:
+          path: spec.security.tls.http.caSecret.name
+          value: os-test-http-ca
+        documentIndex: 0
+      - notExists:
+          path: spec.security.tls.http.generate
+        documentIndex: 0
+
+  # --- Dashboards TLS: operator generate when dashboards on, cert-manager secret when tls enabled ---
+
+  - it: dashboards uses operator generate when enabled and tls off by default
+    set:
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "c1.small"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.generate
+          value: true
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.tls.secret
+        documentIndex: 0
+
+  - it: dashboards uses cert-manager secret when enabled and tls on via external true
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "c1.small"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-dashboards-server
+        documentIndex: 0
+      # Never the API certificate: a shared key would let a compromised Dashboards
+      # impersonate the OpenSearch API endpoint.
+      - notEqual:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-http-server
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.tls.generate
+        documentIndex: 0
+
+  - it: dashboards uses cert-manager secret when tls.enabled explicitly true
+    set:
+      tls:
+        enabled: true
+      dashboards:
+        enabled: true
+        replicas: 1
+        resourcesPreset: "c1.small"
+        resources: {}
+    asserts:
+      - equal:
+          path: spec.dashboards.tls.enable
+          value: true
+        documentIndex: 0
+      - equal:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-dashboards-server
+        documentIndex: 0
+      # Never the API certificate: a shared key would let a compromised Dashboards
+      # impersonate the OpenSearch API endpoint.
+      - notEqual:
+          path: spec.dashboards.tls.secret.name
+          value: os-test-http-server
+        documentIndex: 0
+      - notExists:
+          path: spec.dashboards.tls.generate
+        documentIndex: 0
+
+---
+---
+###############################################################################
+# external-svc.yaml — required guard for _namespace.host
+###############################################################################
+suite: external service tenant-host guard
+
+templates:
+  - templates/external-svc.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+
+tests:
+  # An empty tenant host must not take the release down. The LoadBalancers still get
+  # addresses and still serve; only the external-dns hostname is withheld, because
+  # there is no name to publish. Previously this failed the whole render, which took
+  # the OpenSearchCluster CR with it on a configuration that works on main.
+  # That bound has nothing to do with TLS — the Service renders on external alone —
+  # so the guard has to fire with chart-managed TLS off too.
+  - it: applies the Service bound even when chart-managed TLS is off
+    release:
+      name: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+      tls:
+        enabled: false
+    asserts:
+      - failedTemplate:
+          errorMessage: 'Release name "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" is 44 chars; opensearch requires <=43 in this configuration so that "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-dashboards-external" stays within the 63-char DNS label limit.'
+
+  - it: still renders both Services when the tenant host is empty
+    set:
+      external: true
+      _namespace: {}
+      dashboards:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - equal:
+          path: metadata.name
+          value: os-test-external
+        documentIndex: 0
+      - notExists:
+          path: metadata.annotations
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: os-test-dashboards-external
+        documentIndex: 1
+      - notExists:
+          path: metadata.annotations
+        documentIndex: 1
+
+  # _namespace absent entirely, not merely missing its host key — the deref must not
+  # raise a nil pointer either.
+  - it: still renders both Services when _namespace is absent entirely
+    set:
+      external: true
+      dashboards:
+        enabled: true
+    asserts:
+      - hasDocuments:
+          count: 2
+      - notExists:
+          path: metadata.annotations
+        documentIndex: 0
+
+  # The external-dns hostname is built from the tenant host, not the in-cluster
+  # domain: cozy.local does not resolve outside the cluster, and the name published
+  # here has to be one the leaf certificate carries a SAN for.
+  # The operator labels Dashboards pods with opensearch.cluster.dashboards only.
+  # A selector naming opster.io/opensearch-cluster or app.kubernetes.io/* matches
+  # nothing, so the LoadBalancer comes up with no endpoints and no error — and this
+  # PR issues a certificate SAN and documents a hostname for that very Service.
+  - it: selects dashboards pods by the label the operator actually sets
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.selector["opensearch.cluster.dashboards"]
+          value: os-test
+        documentIndex: 1
+      - notExists:
+          path: spec.selector["app.kubernetes.io/component"]
+        documentIndex: 1
+      - notExists:
+          path: spec.selector["opster.io/opensearch-cluster"]
+        documentIndex: 1
+      # The API Service keeps the label the operator does set on data pods.
+      - equal:
+          path: spec.selector["opster.io/opensearch-cluster"]
+          value: os-test
+        documentIndex: 0
+
+  - it: publishes external-dns hostnames under the tenant host
+    set:
+      external: true
+      _namespace:
+        host: example.cozy.local
+      dashboards:
+        enabled: true
+    asserts:
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: os-test.example.cozy.local
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["external-dns.alpha.kubernetes.io/hostname"]
+          value: os-test-dashboards.example.cozy.local
+        documentIndex: 1
+
+---
+---
+###############################################################################
+# The cluster domain read must survive _cluster being absent
+###############################################################################
+#
+# Every other suite in this file injects _cluster, which is what the platform does
+# in production — so none of them can see what happens without it. `index` on an
+# absent map is not a miss returning nil, it is a hard render error ("index of
+# untyped nil"), and it takes the whole chart down rather than the one value it
+# was reading. The default that follows the read never gets a chance to apply.
+#
+# No suite-level `set` here on purpose: adding _cluster back is exactly the thing
+# this suite must not do.
+suite: cluster domain defaulting without _cluster
+
+templates:
+  - templates/certmanager.yaml
+
+release:
+  name: os-test
+  namespace: tenant-test
+
+tests:
+  - it: falls back to the default cluster domain when _cluster is absent
+    set:
+      tls:
+        enabled: true
+    asserts:
+      - equal:
+          path: spec.dnsNames[3]
+          value: os-test.tenant-test.svc.cozy.local
+        documentIndex: 3
