@@ -22,6 +22,9 @@ spec:
     - jsonPath: .spec.version
       name: Version
       type: string
+    - jsonPath: .status.version
+      name: Running
+      type: string
     - jsonPath: .status.conditions[?(@.type=="Ready")].status
       name: Ready
       type: string
@@ -1359,6 +1362,17 @@ spec:
                         type: string
                     type: object
                     x-kubernetes-map-type: atomic
+                  peerAutoTLS:
+                    description: |-
+                      PeerAutoTLS is operator-managed plumbing: it carries the cluster's
+                      reserved "etcd-operator.cozystack.io/peer-auto-tls" annotation down to
+                      the member so buildPod renders etcd's --peer-auto-tls (self-signed, no
+                      shared CA) instead of mounting a peer secret. INSECURE — peer is
+                      encrypted but NOT authenticated. Set only on clusters adopted from a
+                      legacy --peer-auto-tls cluster, and never together with PeerSecretRef
+                      (an explicit peer secret supersedes the annotation). Users do not set
+                      this directly; the cluster controller derives it.
+                    type: boolean
                   peerSecretRef:
                     description: |-
                       PeerSecretRef mirrors EtcdClusterTLS.Peer.SecretRef. When nil, the
@@ -1672,6 +1686,18 @@ spec:
                 description: |-
                   Selector exposes the label-selector that matches this member's Pod
                   via /scale (consumed by the PDB controller; not user-facing).
+                type: string
+              version:
+                description: |-
+                  Version is the etcd server version this member is actually running,
+                  observed at runtime from the member's own etcd endpoint via the
+                  Maintenance Status API (StatusResponse.Version) — i.e. what etcd
+                  reports, as opposed to spec.version, which is the intended/target
+                  version the operator asks for (and pins the image tag to). Empty until
+                  the member's Pod is Ready and the operator has successfully queried it.
+                  This observed value is the source of truth for detecting version drift
+                  between intent and reality (see the VersionDrifted condition); the
+                  observation is best-effort and never gates readiness.
                 type: string
             type: object
         type: object
