@@ -1,3 +1,25 @@
+{{- $tlsEnabled := (include "rabbitmq.tls.enabled" .) | eq "true" }}
+{{- $wantDisableNonTLS := dig "disableNonTLSListeners" false (.Values.tls | default dict) }}
+
+{{- /* Closing the plaintext listeners with TLS off would leave nothing listening.
+     The operator rejects this too (reconcile_tls.go), so fail here rather than
+     drop the flag and render a cluster that looks healthy with every plaintext
+     listener open. */}}
+{{- if and $wantDisableNonTLS (not $tlsEnabled) }}
+{{-   fail "tls.disableNonTLSListeners is set but TLS is off, which would leave no listener at all: set tls.enabled: true as well. The RabbitMQ operator rejects this combination too." }}
+{{- end }}
+{{- $disableNonTLS := and $tlsEnabled $wantDisableNonTLS }}
+
+{{- /* The flag forces messaging-topology-operator onto TLS, where it verifies the
+     per-release CA against x509.SystemCertPool() and fails, so User, Vhost and
+     Permission stop reconciling. The .Values check understates the breakage:
+     useTLSForConnection derives from the RabbitmqCluster, not from who created the
+     topology CR, so hand-written objects fail the same way without this refusal.
+     See README "Closing the plaintext listeners". */}}
+{{- if and $disableNonTLS (or .Values.users .Values.vhosts) }}
+{{-   fail "tls.disableNonTLSListeners cannot be combined with users or vhosts: closing the plaintext listeners stops messaging-topology-operator from reconciling User, Vhost and Permission objects, because it would have to verify the per-release CA against the system trust pool. That applies to hand-written topology objects too — the operator reads the RabbitmqCluster, not who created the CR — so moving them out of the chart does not help. Manage users and permissions with rabbitmqctl or a definitions import, or leave tls.disableNonTLSListeners unset." }}
+{{- end }}
+
 apiVersion: rabbitmq.com/v1beta1
 kind: RabbitmqCluster
 metadata:
@@ -5,6 +27,21 @@ metadata:
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
+  {{- if and $tlsEnabled (not $disableNonTLS) }}
+  {{- /* Pins messaging-topology-operator to the plaintext management port. Without
+       it, spec.tls.secretName alone flips the operator to https://…:15671, where it
+       verifies the per-release CA against x509.SystemCertPool() and every User,
+       Vhost and Permission fails with "certificate signed by unknown authority".
+       The http:// scheme makes extractURIandScheme report tlsEnabled=false, so that
+       plaintext listener is load-bearing rather than merely tolerated. Broker
+       traffic is unaffected.
+
+       Expect this key on tenant-visible objects: ReconcileAndFilterAnnotations
+       strips only kubernetes.io / k8s.io keys, so the operator copies it onto every
+       child it builds. See README "The plaintext management listener". */}}
+  annotations:
+    rabbitmq.com/operator-connection-uri: "http://{{ .Release.Name }}.{{ .Release.Namespace }}.svc.{{ include "rabbitmq.clusterDomain" . }}:15672"
+  {{- end }}
 spec:
   replicas: {{ .Values.replicas }}
   image: 'rabbitmq:{{ include "rabbitmq.versionMap" $ }}-management'
@@ -13,7 +50,30 @@ spec:
     type: LoadBalancer
   {{- end }}
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}
+  {{- if $tlsEnabled }}
+  {{- /* secretName is the whole of it: the operator's defaultTLSConf then supplies
+       ssl_options and management.ssl itself, so no additionalConfig is needed to
+       serve AMQPS or management HTTPS. That same branch writes
+       management.tcp.port=15672, which is why plaintext management stays up while
+       disableNonTLSListeners is unset. No cacertfile is set — it would only matter
+       for verifying CLIENT certificates, which this chart does not enable. */}}
+  tls:
+    secretName: {{ .Release.Name }}-tls
+    {{- if $disableNonTLS }}
+    {{- /* Writes `listeners.tcp = none` into rabbitmq.conf: broker-level, so
+         in-cluster clients lose plaintext with external ones. Does NOT cover Erlang
+         distribution (25672) or epmd (4369), which ride the headless Service. See
+         README "TLS scope". */}}
+    disableNonTLSListeners: true
+    {{- end }}
+  {{- end }}
   override:
+    {{- /* Deliberately no spec.override.service. It cannot remove a port — the
+         override is a strategic merge keyed on `port` against defaults the operator
+         regenerates each reconcile — so a TLS-only port list would be a no-op that
+         reads like a guarantee. Re-adding one is worse: on a LoadBalancer it drives
+         a NodePort reallocation loop through the operator's Service watch. See
+         README "TLS scope". */}}
     statefulSet:
       spec:
         template:

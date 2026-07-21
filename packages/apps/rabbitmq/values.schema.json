@@ -127,6 +127,21 @@
       "type": "boolean",
       "default": false
     },
+    "tls": {
+      "description": "TLS configuration. TLS is off unless `tls.enabled` is set to true.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "disableNonTLSListeners": {
+          "description": "Close the plaintext AMQP (5672) and management (15672) listeners. This is a broker-level switch: it drops in-cluster clients as well as external ones, and it cannot be combined with `users` or `vhosts`. Erlang distribution (25672) and epmd (4369) stay plaintext regardless. Defaults to false.",
+          "type": "boolean"
+        },
+        "enabled": {
+          "description": "Enable TLS for AMQPS (5671) and Management HTTPS (15671). Applies whether or not `external` is set. Defaults to false.",
+          "type": "boolean"
+        }
+      }
+    },
     "version": {
       "description": "RabbitMQ major.minor version to deploy",
       "type": "string",

@@ -1,3 +1,7 @@
+{{/*
+This Role deliberately does not branch on whether TLS is enabled: no TLS Secret is
+granted in either state, so there is nothing here for a TLS condition to gate.
+*/}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -9,6 +13,12 @@ rules:
   - secrets
   resourceNames:
   - {{ .Release.Name }}-default-user
+  {{- /* No TLS Secret is granted here, in either TLS state. Both objects carrying
+       ca.crt also carry a private key — <release>-tls the server key, <release>-ca
+       the CA key — and RBAC has no key-level filter, so granting read to deliver a
+       trust anchor would deliver the key with it. The tenant reads the key-free
+       <release>.tenant-ca projection through core.cozystack.io/tenantsecrets, which
+       cozy:tenant:use:base already grants. */}}
   {{- range $name, $u := .Values.users }}
   - {{ $.Release.Name }}-{{ kebabcase $name }}-credentials
   {{- end }}

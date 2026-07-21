@@ -1,0 +1,526 @@
+suite: RabbitMQ TLS spec wiring
+
+templates:
+  - templates/rabbitmq.yaml
+
+tests:
+  # -----------------------------------------------------------------------
+  # No TLS: spec.tls absent
+  # -----------------------------------------------------------------------
+
+  - it: does not set spec.tls when tls.enabled is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  - it: does not include management ssl config when tls.enabled is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.rabbitmq.additionalConfig
+
+  # -----------------------------------------------------------------------
+  # TLS enabled: spec.tls wired
+  # -----------------------------------------------------------------------
+
+  - it: sets spec.tls.secretName to release-tls when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.secretName
+          value: myrabbitmq-tls
+
+  - it: does not set disableNonTLSListeners when tls.enabled is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  # The operator's own defaultTLSConf supplies ssl_options.certfile/keyfile,
+  # listeners.ssl.default and management.ssl.certfile/keyfile/port once
+  # spec.tls.secretName is set, so the chart restates none of them and renders no
+  # additionalConfig at all.
+
+  - it: adds no additionalConfig, since the operator supplies the TLS config itself
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # defaultTLSConf already gives ssl_options.certfile/keyfile,
+      # listeners.ssl.default and management.ssl.certfile/keyfile/port once
+      # spec.tls.secretName is set. No cacertfile on either listener either: it
+      # would only matter for verifying CLIENT certificates, which also needs
+      # verify_peer and fail_if_no_peer_cert.
+      - notExists:
+          path: spec.rabbitmq
+
+  - it: never sets disableNonTLSListeners, so plaintext listeners survive TLS
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  # -----------------------------------------------------------------------
+  # Default: external=true, tls.enabled not set => TLS stays off.
+  #
+  # `external` publishes the broker; it does not encrypt it. Wiring
+  # spec.tls.secretName here would make the operator rewrite the `port` key of
+  # <release>-default-user from 5672 to 5671, moving every client that reads its
+  # endpoint from that binding onto TLS without anyone asking for it.
+  # -----------------------------------------------------------------------
+
+  - it: leaves TLS off when tls.enabled is unset and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls
+
+  # -----------------------------------------------------------------------
+  # Explicit tls.enabled=false with external=true is off for the same reason
+  # -----------------------------------------------------------------------
+
+  - it: disables TLS when tls.enabled is false even if external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls
+      - notExists:
+          path: spec.rabbitmq.additionalConfig
+
+  # -----------------------------------------------------------------------
+  # B1: no spec.override.service is rendered, in any combination.
+  #
+  # Not a TLS-only port list: the merge is a strategic merge patch keyed on
+  # `port`, which can add or mutate an entry but never delete one, so omitting
+  # amqp:5672 would be a no-op that reads like a guarantee to close plaintext.
+  #
+  # And not a re-added prometheus:15692 either, even though enabling TLS swaps the
+  # published metrics port to prometheus-tls:15691. Adding it back would churn:
+  # updatePorts keeps only operator-known port NAMES and carries their NodePort
+  # across, so each reconcile drops the re-added entry and the override reinstates
+  # it with nodePort unset; on a LoadBalancer the apiserver reallocates, and the
+  # write retriggers the operator's Service watch. ClusterIP escapes only because
+  # NodePorts are zeroed there. external:true is the default TLS path, so that is
+  # the configuration that would loop.
+  # -----------------------------------------------------------------------
+
+  - it: no service override is rendered when TLS is on and external is false
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service
+
+  - it: no service override is rendered when TLS and external are both on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # The LoadBalancer path specifically: a port entry here would be
+      # reallocated on every reconcile.
+      - notExists:
+          path: spec.override.service
+
+  - it: no service override is rendered when external is on but TLS is off
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.override.service
+
+  - it: the statefulSet override is still rendered, so override itself is not empty
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    values:
+      - fixtures/tls_default_values.yaml
+    set:
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - exists:
+          path: spec.override.statefulSet
+
+  # -----------------------------------------------------------------------
+  # Inter-node Erlang distribution TLS scope boundary
+  #
+  # This chart wires TLS for AMQP (5671), management HTTPS (15671), and the
+  # cert-manager chain. Inter-node Erlang distribution (port 25672) is NOT
+  # covered. The operator exposes exactly three TLS fields — secretName,
+  # caSecretName and disableNonTLSListeners — and none of them governs 25672,
+  # which the operator carries on the headless Service unconditionally. Inter-node
+  # mTLS would require caSecretName plus operator-side configuration this chart
+  # does not wire.
+  # -----------------------------------------------------------------------
+
+  - it: leaves caSecretName unset, so no inter-node mTLS is configured
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.caSecretName
+
+  # -----------------------------------------------------------------------
+  # Baseline (no TLS): RabbitmqCluster always renders
+  # -----------------------------------------------------------------------
+
+
+  # -----------------------------------------------------------------------
+  # messaging-topology-operator must keep using the plaintext management port.
+  #
+  # spec.tls.secretName makes RabbitmqCluster.TLSEnabled() true, and the topology
+  # operator then computes useTLSForConnection = TLSEnabled() && (!connectUsingHTTP
+  # || DisableNonTLSListeners()). connectUsingHTTP comes from
+  # CONNECT_USING_PLAIN_HTTP, which the cozystack Deployment does not set, so it
+  # would dial https://...:15671 and verify against x509.SystemCertPool() — which
+  # cannot contain a per-release self-signed CA. Every User, Vhost and Permission
+  # this chart renders would fail with "certificate signed by unknown authority".
+  # The annotation makes extractURIandScheme report tlsEnabled=false.
+  # -----------------------------------------------------------------------
+
+  - it: pins the operator connection to plaintext management when TLS is on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          value: "http://myrabbitmq.tenant-test.svc.cozy.local:15672"
+
+  - it: builds the operator connection URI from the cluster domain, not a literal
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      _cluster.cluster-domain: custom.example
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # Every other assertion on this annotation runs on the default domain, so a
+      # hardcoded cozy.local would satisfy them all. On a cluster that sets its
+      # own cluster-domain that URI does not resolve, and messaging-topology-
+      # operator loses the broker entirely — no User, Vhost or Permission
+      # reconciles. This is the case that tells the two apart.
+      - equal:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          value: "http://myrabbitmq.tenant-test.svc.custom.example:15672"
+
+  - it: pins the operator connection on the external path too
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: true
+      _namespace.host: example.com
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          value: "http://myrabbitmq.tenant-test.svc.cozy.local:15672"
+
+  - it: uses an http scheme, since https would fail against the system cert pool
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - matchRegex:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+          pattern: "^http://"
+
+  - it: adds no connection annotation when TLS is off
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # Without TLS the operator already uses plaintext; pinning would only
+      # hardcode a URI the operator derives correctly on its own.
+      - notExists:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+
+  # -----------------------------------------------------------------------
+  # tls.disableNonTLSListeners: opt-in, and refused where it would break.
+  #
+  # The flag writes `listeners.tcp = none` into rabbitmq.conf — broker level, so
+  # in-cluster clients lose plaintext at the same instant external ones do. It
+  # stays off unless asked for, so enabling TLS never closes a working listener.
+  #
+  # It also forces messaging-topology-operator onto TLS regardless of how that
+  # operator is configured, because its expression is
+  #   TLSEnabled() && (!connectUsingHTTP || DisableNonTLSListeners())
+  # and it then verifies against the system trust pool, which cannot hold a
+  # per-release CA. Pinning it back to plaintext is no escape — that is the port
+  # the flag closes. So the combination with users/vhosts is refused at render
+  # time instead of failing silently on the cluster.
+  # -----------------------------------------------------------------------
+
+  - it: does not set disableNonTLSListeners by default when TLS is on
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - notExists:
+          path: spec.tls.disableNonTLSListeners
+
+  - it: sets disableNonTLSListeners when explicitly opted in
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
+
+  - it: refuses the flag when TLS is explicitly off
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: false
+      external: false
+      tls.disableNonTLSListeners: true
+    asserts:
+      # Dropping the request silently would render a healthy-looking cluster with
+      # every plaintext listener open. The operator rejects this combination too,
+      # and at least leaves a TLSError event; a swallowed flag leaves nothing.
+      - failedTemplate:
+          errorPattern: "would leave no listener at all"
+
+  - it: refuses the flag when tls.enabled is left at its default
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      external: false
+      tls.disableNonTLSListeners: true
+    asserts:
+      # The likeliest way in: hardening a broker by setting only the flag and
+      # assuming it implies TLS. tls.enabled is unset here, so it resolves to
+      # false and the flag would close the only listeners there are.
+      - failedTemplate:
+          errorPattern: "would leave no listener at all"
+
+  - it: refuses the flag when tls.enabled is left at its default and external is true
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      external: true
+      _namespace.host: example.com
+      tls.disableNonTLSListeners: true
+    asserts:
+      # Same refusal on the published path: external does not supply the TLS
+      # that this flag needs, so it is still a request to close every listener.
+      - failedTemplate:
+          errorPattern: "would leave no listener at all"
+
+  - it: drops the operator connection annotation when the plaintext port is closed
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      external: false
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      # Pointing the operator at a port this flag just closed would be a
+      # connection refused dressed up as configuration.
+      - notExists:
+          path: metadata.annotations["rabbitmq.com/operator-connection-uri"]
+
+  - it: refuses the flag combined with users
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      users.alice.password: hackme
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be combined with users or vhosts"
+
+  - it: refuses the flag combined with vhosts
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      vhosts.myapp.roles.admin[0]: alice
+    asserts:
+      - failedTemplate:
+          errorPattern: "cannot be combined with users or vhosts"
+
+  - it: does not offer hand-written topology objects as the way around the refusal
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+      users.alice.password: hackme
+    asserts:
+      # The message used to say "manage users and vhosts outside the chart",
+      # which reads as "move them into hand-written CRs". That does not work:
+      # useTLSForConnection is derived from the RabbitmqCluster, not from who
+      # created the topology CR, so those objects fail the same way with no
+      # refusal to warn anyone. Pin the correction so it cannot drift back.
+      - failedTemplate:
+          errorPattern: "the operator reads the RabbitmqCluster, not who created the CR"
+      - failedTemplate:
+          errorPattern: "rabbitmqctl or a definitions import"
+
+  - it: allows the flag when the chart is asked to manage no users or vhosts
+    release:
+      name: myrabbitmq
+      namespace: tenant-test
+    set:
+      tls.enabled: true
+      tls.disableNonTLSListeners: true
+    documentSelector:
+      path: kind
+      value: RabbitmqCluster
+    asserts:
+      - equal:
+          path: spec.tls.disableNonTLSListeners
+          value: true
