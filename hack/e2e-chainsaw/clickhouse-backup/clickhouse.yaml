@@ -1,0 +1,41 @@
+# Backup-enabled ClickHouse for the clickhouse-backup-1-contracts Test.
+#
+# A single shard / single replica keeps CI cost close to the plain
+# `clickhouse` suite while still rendering the `clickhouse-backup` sidecar
+# and its `:7171` HTTP API — the chart surface the Altinity backup strategy
+# depends on and the subject of this suite.
+#
+# backup.enabled=true with placeholder S3 coordinates is deliberate: the
+# sidecar runs `clickhouse-backup server`, which starts its HTTP API without
+# validating S3 (ALLOW_EMPTY_BACKUPS=true, lazy connect — the same reason the
+# platform useSystemBucket flow marks the S3 secret keys optional so the Pod
+# starts before any bucket is projected). So the Pod becomes Ready and the
+# chart<->strategy contract is assertable with no reachable object store. The
+# real S3 backup/restore round-trip lives in clickhouse-backup-2-roundtrip,
+# which is gated out of CI.
+apiVersion: apps.cozystack.io/v1alpha1
+kind: ClickHouse
+metadata:
+  name: test-backup
+spec:
+  size: 5Gi
+  logStorageSize: 1Gi
+  shards: 1
+  replicas: 1
+  resourcesPreset: nano
+  resources: {}
+  users:
+    testuser:
+      password: xai7Wepo
+  backup:
+    enabled: true
+    useSystemBucket: false
+    s3Region: us-east-1
+    s3Bucket: s3.example.org/clickhouse-backups
+    s3AccessKey: placeholder-access-key
+    s3SecretKey: placeholder-secret-key
+  clickhouseKeeper:
+    enabled: true
+    replicas: 1
+    size: 1Gi
+    resourcesPreset: micro
