@@ -1,3 +1,4 @@
+{{- $certManagerIssued := (include "mariadb.tls.certManagerIssued" .) | eq "true" -}}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
 kind: MariaDB
@@ -113,5 +114,28 @@ spec:
 
   #secondaryService:
   #  type: LoadBalancer
+
+  {{- $tlsMap := default (dict) .Values.tls }}
+  {{- $tlsRequired := index $tlsMap "required" }}
+  # Always true, and load-bearing: the operator substitutes an enabled TLS spec
+  # only when spec.tls is absent entirely, so sending the block without this
+  # would turn TLS off.
+  tls:
+    enabled: true
+    # Emitted under either issuer: enforcement works against operator-issued
+    # certificates too, so gating it would accept required: true and silently
+    # not enforce. Defaults to false because switching it on refuses every
+    # client not yet moved to TLS — a decision to make, not something an upgrade
+    # does. Flips to true as an announced change once the trust anchor is
+    # published to tenants automatically.
+    #
+    # `kindIs "invalid"` guards against unset field; an explicit value is preserved.
+    required: {{ if kindIs "invalid" $tlsRequired }}false{{ else }}{{ $tlsRequired }}{{ end }}
+  {{- if $certManagerIssued }}
+    serverCertSecretRef:
+      name: {{ .Release.Name }}-tls
+    serverCASecretRef:
+      name: {{ .Release.Name }}-ca-tls
+  {{- end }}
 
   resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 4 }}

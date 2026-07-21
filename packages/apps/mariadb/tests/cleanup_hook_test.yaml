@@ -15,14 +15,20 @@ release:
   namespace: tenant-test
 
 tests:
-  - it: "cleanup Job deletes the operator-generated password Secrets by name"
+  # The cert-manager Secrets are deleted here too: cert-manager runs with
+  # enableCertificateOwnerRef=false, so removing the Certificates leaves the CA
+  # private key and the server private key behind in the tenant's namespace.
+  - it: "cleanup Job deletes the operator-generated and cert-manager Secrets by name"
     documentSelector:
       path: kind
       value: Job
     asserts:
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: "mariadb-test-metrics-password mariadb-test-repl-password --ignore-not-found"
+          pattern: "mariadb-test-metrics-password mariadb-test-repl-password"
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: "mariadb-test-ca-tls mariadb-test-tls --ignore-not-found"
 
   - it: "cleanup Job fails (exits non-zero) when a real delete error occurs, so orphaned resources don't pass silently"
     documentSelector:
@@ -57,7 +63,7 @@ tests:
             resources: ["persistentvolumeclaims"]
             verbs: ["get", "list", "delete"]
 
-  - it: "cleanup Role scopes secret access to the two named secrets only (least privilege)"
+  - it: "cleanup Role scopes secret access to the named secrets only (least privilege)"
     documentSelector:
       path: kind
       value: Role
@@ -70,6 +76,8 @@ tests:
             resourceNames:
               - mariadb-test-metrics-password
               - mariadb-test-repl-password
+              - mariadb-test-ca-tls
+              - mariadb-test-tls
             verbs: ["get", "delete"]
       # Lock the exact rule set (PVC rule + the single scoped secrets rule).
       # Without this, a broader unscoped `secrets` rule could be added and the

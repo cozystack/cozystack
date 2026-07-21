@@ -40,6 +40,8 @@ spec:
                 secretKeyRef:
                   name: {{ .Release.Name }}
                   key: root-password
+            - name: MYSQL_CA_SECRET
+              value: {{ .Release.Name }}-ca-bundle
             - name: MYSQL_HOST
               # replicas>1 enables replication (offload dumps to a secondary);
               # replicas=1 has no replication and only the bare service exists.
@@ -68,6 +70,9 @@ spec:
               name: tmp
             - mountPath: /.cache
               name: cache
+            - mountPath: /etc/mysql-ssl
+              name: tls-ca
+              readOnly: true
             securityContext:
               allowPrivilegeEscalation: false
               capabilities:
@@ -84,6 +89,27 @@ spec:
             emptyDir: {}
           - name: cache
             emptyDir: {}
+          # -ca-bundle is the operator-reconciled trust bundle. It carries both
+          # the old and the new CA across a rollover, whereas the leaf Secret
+          # only ever holds the CA that signed the current certificate. Mounted
+          # unconditionally: the server always serves TLS, so the backup client
+          # always has something to verify against.
+          #
+          # optional so a missing bundle fails the run instead of stopping it.
+          # The operator reconciles the bundle only after certificates settle, so
+          # there is a window on first install where it does not exist yet; a
+          # required mount would leave the pod in ContainerCreating, and with
+          # concurrencyPolicy: Forbid that one stuck pod blocks every later
+          # backup indefinitely. The script checks for the file before connecting
+          # because the client reports its absence only as "TLS/SSL error: No
+          # such file or directory", without naming what it could not read.
+          - name: tls-ca
+            secret:
+              secretName: {{ .Release.Name }}-ca-bundle
+              optional: true
+              items:
+              - key: ca.crt
+                path: ca.crt
           securityContext:
             runAsNonRoot: true
             runAsUser: 9000

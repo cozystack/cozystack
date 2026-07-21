@@ -76,6 +76,26 @@ storageClass: ""
 external: false
 
 ##
+## @section TLS parameters
+##
+
+## @enum {string} TLSIssuer
+## @value operator
+## @value cert-manager
+
+## @typedef {struct} TLS - TLS configuration.
+## @field {TLSIssuer} [issuer] - Who issues the server certificate: `operator` uses the CA mariadb-operator manages itself, `cert-manager` gives the instance its own CA and is what covers the external hostname. Named for the issuer because TLS is served under both, unlike the similarly-spelled `tls.enabled` in some other charts, which does switch TLS on and off.
+## @field {*bool} [required] - Refuse plaintext connections (sets MariaDB require_secure_transport=ON). Applies under either issuer. Opt-in: turn it on once every client connects over TLS, since it disconnects those that do not.
+
+## @param {TLS} [tls] - TLS configuration. Selects who issues the certificates and whether plaintext is refused; TLS itself is always served.
+tls:
+  issuer: operator
+
+##
+## @section Version parameters
+##
+
+##
 ## @enum {string} Version
 ## @value v11.8
 ## @value v11.4
