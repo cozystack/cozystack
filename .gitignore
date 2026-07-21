@@ -4,6 +4,26 @@ _repos
 .idea
 .vscode
 
+# Go binaries built straight into the repository root.
+#
+# `go build ./cmd/<name>` (without -o) drops the executable in the working
+# directory under the package name, so every package under cmd/ has a
+# root-level binary waiting to happen — each ~80 MB, and nothing else here
+# matched them, leaving `git add .` one keystroke from committing one.
+/api-gate
+/backup-controller
+/backupstrategy-controller
+/check-readiness
+/cozypkg
+/cozystack-api
+/cozystack-controller
+/cozystack-operator
+/flux-plunger
+/flux-shard-operator
+/kubeovn-plunger
+/lineage-controller-webhook
+/securitygroup-controller
+
 # User-specific stuff
 .idea/**/workspace.xml
 .idea/**/tasks.xml
