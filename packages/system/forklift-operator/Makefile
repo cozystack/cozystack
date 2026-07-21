@@ -3,6 +3,9 @@ export NAMESPACE=cozy-forklift
 
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 # Forklift release. Upstream tags container images as `release-2.11`,
 # not `v2.11.x`, so we use that channel here. Bump VERSION to ride
 # patch releases; bumping FORKLIFT_CHANNEL (e.g. release-2.12) is a
@@ -29,8 +32,8 @@ update:
 	sed -i 's|$${OPERATOR_IMAGE}|quay.io/kubev2v/forklift-operator:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${CONTROLLER_IMAGE}|quay.io/kubev2v/forklift-controller:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${API_IMAGE}|quay.io/kubev2v/forklift-api:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
-	sed -i 's|$${MUST_GATHER_IMAGE}|quay.io/kubev2v/forklift-must-gather:latest|g' templates/forklift-operator.yaml
-	sed -i 's|$${UI_PLUGIN_IMAGE}|quay.io/kubev2v/forklift-console-plugin:latest|g' templates/forklift-operator.yaml
+	sed -i 's|$${MUST_GATHER_IMAGE}|quay.io/kubev2v/forklift-must-gather:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
+	sed -i 's|$${UI_PLUGIN_IMAGE}|quay.io/kubev2v/forklift-console-plugin:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${CLI_DOWNLOAD_IMAGE}|quay.io/kubev2v/forklift-cli-download:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${VALIDATION_IMAGE}|quay.io/kubev2v/forklift-validation:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml
 	sed -i 's|$${VIRT_V2V_IMAGE}|quay.io/kubev2v/forklift-virt-v2v:$(FORKLIFT_CHANNEL)|g' templates/forklift-operator.yaml

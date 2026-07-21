@@ -7485,9 +7485,9 @@ spec:
         - name: API_IMAGE
           value: quay.io/kubev2v/forklift-api:release-2.11
         - name: MUST_GATHER_IMAGE
-          value: quay.io/kubev2v/forklift-must-gather:latest
+          value: quay.io/kubev2v/forklift-must-gather:release-2.11
         - name: UI_PLUGIN_IMAGE
-          value: quay.io/kubev2v/forklift-console-plugin:latest
+          value: quay.io/kubev2v/forklift-console-plugin:release-2.11
         - name: CLI_DOWNLOAD_IMAGE
           value: quay.io/kubev2v/forklift-cli-download:release-2.11
         - name: VALIDATION_IMAGE

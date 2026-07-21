@@ -1,0 +1,22 @@
+suite: forklift-operator image pinning
+release:
+  name: forklift-operator
+  namespace: cozy-forklift
+templates:
+  - templates/forklift-operator.yaml
+tests:
+  - it: pins must-gather and console-plugin to the release channel, not :latest
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: MUST_GATHER_IMAGE
+            value: quay.io/kubev2v/forklift-must-gather:release-2.11
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: UI_PLUGIN_IMAGE
+            value: quay.io/kubev2v/forklift-console-plugin:release-2.11
