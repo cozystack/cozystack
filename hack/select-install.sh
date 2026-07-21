@@ -76,6 +76,7 @@ suite_to_source() {
     kubernetes-latest|kubernetes-previous|kubernetes-oidc-system|kubernetes-oidc-customconfig)
       echo cozystack.kubernetes-application ; return ;;
     vminstance) echo cozystack.vm-instance-application ; return ;;
+    clickhouse-backup) echo cozystack.clickhouse-application ; return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
