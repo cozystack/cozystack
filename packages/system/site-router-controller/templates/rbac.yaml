@@ -27,6 +27,11 @@ rules:
 - apiGroups: [""]
   resources: ["secrets", "services"]
   verbs: ["get", "list", "watch"]
+# Read the gateway VirtualMachineInstance for NIC MAC discovery (resolving the
+# kernel device the tunnel/source-filter bind to); a single get, best-effort.
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachineinstances"]
+  verbs: ["get"]
 # Read the cozy-system/cozystack ConfigMap for the cluster network CIDRs used by
 # the remote-CIDR deny-set validation; read-only.
 - apiGroups: [""]
