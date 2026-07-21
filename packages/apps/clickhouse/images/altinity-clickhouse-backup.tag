@@ -1,1 +1,1 @@
-ghcr.io/cozystack/cozystack/altinity-clickhouse-backup:v1.5.0@sha256:4206ff2bacffa05658eca9eb7305a153d0a8f3461cbed5508de66eb06fdc4e88
+ghcr.io/cozystack/cozystack/altinity-clickhouse-backup:v1.6.0-rc.4@sha256:e890d78cd83968bdff9a36c9ca4312afc05e138af486e476da0a935f81f9b7a7
