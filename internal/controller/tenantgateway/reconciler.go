@@ -27,6 +27,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
@@ -741,6 +742,9 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // Layer 1 of the security model documented in
 // packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {
+	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
+		return nil, err
+	}
 	allowedRoutes := buildAllowedRoutes(tgw)
 	httpAllowedRoutes := buildHTTPListenerAllowedRoutes(tgw)
 	listeners := []gatewayv1.Listener{
@@ -765,7 +769,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
 	}
 	httpsAllowedRoutes := allowedRoutes.DeepCopy()
-	httpsAllowedRoutes.Kinds = port443Kinds
+	httpsAllowedRoutes.Kinds = slices.Clone(port443Kinds)
 
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
 		// Both modes serve the apex and every subdomain off a single
@@ -789,7 +793,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
 			},
 			gatewayv1.Listener{
 				Name:     "https-apex",
@@ -802,7 +806,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 						{Name: gatewayv1.ObjectName(certName)},
 					},
 				},
-				AllowedRoutes: httpsAllowedRoutes,
+				AllowedRoutes: httpsAllowedRoutes.DeepCopy(),
 			},
 		)
 		// Per-child-apex wildcard listeners — every inheriting
@@ -874,23 +878,66 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// cdi-uploadproxy) attach to these listeners by sectionName.
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
-		passthroughAllowed := *allowedRoutes
-		passthroughAllowed.Kinds = port443Kinds
+		passthroughAllowed := allowedRoutes.DeepCopy()
+		passthroughAllowed.Kinds = slices.Clone(port443Kinds)
 		listeners = append(listeners, gatewayv1.Listener{
-			Name:     gatewayv1.SectionName("tls-" + svc),
+			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
 			Port:     443,
 			Protocol: gatewayv1.TLSProtocolType,
 			Hostname: &host,
 			TLS: &gatewayv1.ListenerTLSConfig{
 				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
 			},
-			AllowedRoutes: &passthroughAllowed,
+			AllowedRoutes: passthroughAllowed,
+		})
+	}
+
+	// Layer-4 TLS-passthrough listeners. One
+	// "tls-<name>" listener per entry in Spec.TLSPassthroughListeners,
+	// on the entry's native Port, mode Passthrough, matching the
+	// entry's per-engine SNI Hostname, rendered alongside the port-443
+	// terminate listeners. Each sits alone on its own port, so — unlike
+	// the port-443 TLSPassthroughServices listeners above that must
+	// share their allowedRoutes.kinds with the terminate listeners to
+	// dodge Cilium's same-port listener collapse (cilium#45559) — these
+	// carry TLSRoute alone. One route kind on a dedicated (port, SNI)
+	// pair yields exactly one Envoy filter chain that SNI-routes to the
+	// attaching TLSRoute's backend. No engine is wired here: the
+	// TLSRoute, certificate, and CA plumbing land in later phases.
+	for _, pl := range tgw.Spec.TLSPassthroughListeners {
+		host := gatewayv1.Hostname(pl.Hostname)
+		passthroughAllowed := allowedRoutes.DeepCopy()
+		passthroughAllowed.Kinds = []gatewayv1.RouteGroupKind{
+			{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
+		}
+		listeners = append(listeners, gatewayv1.Listener{
+			Name:     gatewayv1.SectionName(passthroughListenerPrefix + pl.Name),
+			Port:     gatewayv1.PortNumber(pl.Port),
+			Protocol: gatewayv1.TLSProtocolType,
+			Hostname: &host,
+			TLS: &gatewayv1.ListenerTLSConfig{
+				Mode: ptrTLSMode(gatewayv1.TLSModePassthrough),
+			},
+			AllowedRoutes: passthroughAllowed,
 		})
 	}
 
 	className := tgw.Spec.GatewayClassName
 	if className == "" {
 		className = "cilium"
+	}
+
+	// Gateway API caps spec.listeners at 64 and rejects the object
+	// wholesale past that — every app's HTTPS listener included. No
+	// single field can prevent it, because the total is the sum of
+	// published hostnames, passthrough services and passthrough
+	// listeners, and each is bounded on its own. Catch the sum here so
+	// the tenant gets a named budget on TenantGateway status instead of
+	// an admission error on a Gateway they do not manage.
+	if len(listeners) > maxGatewayListeners {
+		return nil, fmt.Errorf(
+			"gateway would have %d listeners, over the Gateway API cap of %d: reduce published hostnames, tlsPassthroughServices, or tlsPassthroughListeners (dns01 cert mode collapses per-hostname listeners into one wildcard listener)",
+			len(listeners), maxGatewayListeners)
 	}
 
 	gw := &gatewayv1.Gateway{

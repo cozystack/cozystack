@@ -56,20 +56,68 @@ spec:
           metadata:
             type: object
           spec:
-            description: TenantGatewaySpec describes the desired state of a per-tenant
-              Gateway.
+            description: |-
+              TenantGatewaySpec describes the desired state of a per-tenant Gateway.
+
+              The tlsPassthroughListeners rules below are enforced at admission
+              rather than only in the controller because renderGateway is the first
+              thing that renders: a spec the apiserver accepts but the renderer
+              rejects aborts everything behind it — Issuer, wildcard
+              Certificate, per-listener Certificates, route status, the http→https
+              redirect. One mistyped hostname would stall certificate renewal for
+              every published app on the tenant, with nothing but Ready=False to
+              point at the field that caused it. Rejecting the write keeps the bad
+              spec out of etcd and the chain intact. The controller keeps its own
+              copy of these checks: during an upgrade the controller and the CRD
+              roll out separately, so it cannot assume the rules were applied to
+              what it reads, and it is the layer the unit tests can exercise
+              directly.
+
+              Two rules are deliberately absent. Name uniqueness is carried by the
+              listType=map/listMapKey=name markers on the field, and duplicate
+              tlsPassthroughServices entries by listType=set — both are enforced by
+              the apiserver at no CEL cost.
+
+              Hostname overlap is the one real exception: it stays controller-only.
+              Expressing it needs wildcard-aware matching across two lists, which
+              in CEL is a nested scan whose estimated cost the apiserver charges
+              against a budget these four rules already sit close under — adding it
+              is what pushed the CRD over and made it un-installable while the
+              per-request tests stayed green. TestCRDPassesInstallTimeValidation
+              keeps that honest. The consequence is accepted knowingly: an
+              overlapping hostname reaches etcd and surfaces as Ready=False rather
+              than a rejected write.
             properties:
               apex:
                 description: |-
                   Apex is the tenant's apex hostname. The Gateway listeners are
                   constrained to this apex and its subdomains.
+
+                  MaxLength is the DNS ceiling for a fully qualified name, so it
+                  rejects nothing that was ever resolvable. It is required rather
+                  than cosmetic: the tlsPassthroughListeners CEL rules concatenate
+                  this value, and without a declared bound the apiserver's
+                  install-time cost estimator assumes the maximum string size and
+                  refuses the whole CRD.
+                  The pattern matches the one on listener hostnames. Without it an
+                  apex containing an upper-case letter is accepted while every
+                  tlsPassthroughListeners entry under it becomes unsatisfiable —
+                  the hostname pattern forbids upper case, so no value can be both
+                  well-formed and within the apex, and the error names the hostname
+                  rather than the apex that caused it.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
               attachedNamespaces:
                 description: |-
                   AttachedNamespaces lists namespace names that are allowed to
                   attach HTTPRoute or TLSRoute to this tenant's Gateway. The
-                  publishing tenant namespace is implicit. Selector is by built-in
-                  kubernetes.io/metadata.name (kube-apiserver-written, unspoofable).
+                  publishing tenant namespace is implicit. The controller grants
+                  access by stamping the namespace.cozystack.io/gateway label on
+                  each listed namespace; the Gateway's HTTPS and TLS-passthrough
+                  listeners select on that label. Writing it requires patch on
+                  Namespace, which tenants do not hold. Only the port-80 listener
+                  selects on kubernetes.io/metadata.name.
                 items:
                   type: string
                 type: array
@@ -269,14 +317,127 @@ spec:
                 - letsencrypt-prod
                 - letsencrypt-stage
                 type: string
+              tlsPassthroughListeners:
+                description: |-
+                  TLSPassthroughListeners declares layer-4 TLS-passthrough
+                  listeners on the tenant Gateway. The controller renders one
+                  "tls-<name>" listener per entry — on the entry's native Port,
+                  mode Passthrough, matching the entry's per-engine SNI Hostname —
+                  alongside the layer-7 terminate listeners. This lets a database
+                  engine present its own certificate directly to clients while
+                  sharing the tenant Gateway's address. It is independent of
+                  TLSPassthroughServices, the layer-7 passthrough-on-443 form; the
+                  two do not replace each other.
+
+                  The listener is all this field creates. Nothing is routed until a
+                  TLSRoute attaches to it by sectionName "tls-<name>" and names a
+                  backend Service, and the backend must present its own certificate
+                  for the listener's Hostname — a passthrough listener never
+                  terminates TLS, so the Gateway neither holds nor issues that
+                  certificate. Declaring an entry without attaching a TLSRoute opens
+                  the port and matches the SNI but has nowhere to forward the stream.
+                  The cap bounds what THIS field contributes to the Gateway's 64
+                  listener slots; it does not by itself guarantee the total fits.
+                  The rendered count is the port-80 listener plus one per published
+                  hostname, one per tlsPassthroughServices entry, and one per entry
+                  here — so a tenant can exceed 64 with far fewer than 62 of these.
+                  The controller checks the assembled total and fails with a named
+                  budget; this cap only keeps a single field from consuming the
+                  whole allowance. It also bounds the cost estimate for the CEL
+                  rules above.
+                items:
+                  description: |-
+                    TLSPassthroughListener declares one layer-4 TLS-passthrough listener
+                    on the tenant Gateway. Unlike the layer-7 terminate listeners the
+                    controller renders for published HTTP apps, a passthrough listener
+                    does not terminate TLS: the ClientHello SNI selects the backend and
+                    the raw TLS stream is forwarded to the TLSRoute-named service, so a
+                    native database protocol that speaks its own TLS reaches clients
+                    without the Gateway ever holding the private key. Each listener owns
+                    a distinct native port and a per-engine SNI hostname.
+                  properties:
+                    hostname:
+                      description: |-
+                        Hostname is the SNI the listener matches on the incoming
+                        ClientHello. It routes the raw TLS stream by SNI, so give each
+                        engine its own per-engine subdomain (e.g.
+                        "postgres.foo.example.com") or a left-most-label wildcard (e.g.
+                        "*.db.foo.example.com"). Must be an exact RFC 1123 hostname or a
+                        wildcard hostname, and must fall within the tenant apex — equal to
+                        Apex or a subdomain of it — since every listener on the tenant
+                        Gateway is constrained to the apex.
+
+                        The pattern is copied verbatim from Gateway API's own Hostname
+                        type, so a value this field accepts is one the rendered listener
+                        accepts. Without it only length is checked at admission, and an
+                        ordinary typo — an underscore, an upper-case letter, a leading
+                        dash — passes the apex rule (a plain suffix test) and is caught
+                        only by the controller, which is far too late: renderGateway is
+                        the first reconcile step, so the object is already in etcd and
+                        the whole chain behind it aborts.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                      type: string
+                    name:
+                      description: |-
+                        Name identifies the listener within the tenant Gateway. It
+                        becomes the rendered Gateway listener name "tls-<name>" and the
+                        sectionName a TLSRoute attaches to. Must be a DNS-1123 label
+                        (lowercase alphanumerics and '-', starting and ending with an
+                        alphanumeric) and unique across the list.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                    port:
+                      description: |-
+                        Port is the TCP port the passthrough listener binds on the
+                        tenant Gateway's shared address. Set it to the engine's native
+                        port (e.g. 5432 for PostgreSQL). Must be 1..65535, unique across
+                        the list, and neither 80 nor 443 — the Gateway's own http (80)
+                        and TLS-terminate (443) listeners already own those ports.
+                      format: int32
+                      maximum: 65535
+                      minimum: 1
+                      type: integer
+                  required:
+                  - hostname
+                  - name
+                  - port
+                  type: object
+                maxItems: 62
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
               tlsPassthroughServices:
                 description: |-
                   TLSPassthroughServices names services exposed via TLS-passthrough
                   (mode: Passthrough listeners). Each service gets a dedicated
                   listener; HTTPRoutes attach to TLS-terminate listeners instead.
+
+                  The bounds exist for the CEL cost estimator, same as on Apex: the
+                  name-collision rule scans this list, and an unbounded list of
+                  unbounded strings makes the estimate exceed the per-CRD budget.
+                  The item length is a DNS-1123 label; the count leaves the
+                  listener budget room.
+                  listType=set makes the apiserver reject a repeated entry, which
+                  would otherwise render the same tls-<svc> listener twice and get
+                  the Gateway rejected wholesale. It costs nothing at install time
+                  — unlike a CEL rule, which is why it is expressed as a marker.
+                  The item pattern is a DNS-1123 label for the same reason the
+                  listener hostname carries one: the entry becomes the hostname
+                  <svc>.<apex>, so an upper-case or underscored value renders a
+                  listener hostname Gateway API refuses, taking every app's HTTPS
+                  listener down with it.
                 items:
+                  maxLength: 63
+                  pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                   type: string
+                maxItems: 64
                 type: array
+                x-kubernetes-list-type: set
               wildcardSecretRef:
                 description: |-
                   WildcardSecretRef names a pre-existing TLS Secret in the
@@ -300,6 +461,25 @@ spec:
             required:
             - apex
             type: object
+            x-kubernetes-validations:
+            - message: 'tlsPassthroughListeners: ports 80 and 443 are reserved for
+                the Gateway''s own http and TLS-terminate listeners; use the engine''s
+                native port'
+              rule: '!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l,
+                l.port != 80 && l.port != 443)'
+            - message: 'tlsPassthroughListeners: each listener must occupy a distinct
+                port'
+              rule: '!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l,
+                self.tlsPassthroughListeners.filter(o, o.port == l.port).size() ==
+                1)'
+            - message: 'tlsPassthroughListeners: hostname must equal the tenant apex
+                or be a subdomain of it'
+              rule: '!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l,
+                l.hostname == self.apex || l.hostname.endsWith(''.'' + self.apex))'
+            - message: 'tlsPassthroughListeners: name collides with a tlsPassthroughServices
+                entry; both render a tls-<name> Gateway listener'
+              rule: '!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices)
+                || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))'
           status:
             description: TenantGatewayStatus reports the observed state of the tenant's
               Gateway.
