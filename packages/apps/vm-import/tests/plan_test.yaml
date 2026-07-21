@@ -1,0 +1,61 @@
+suite: vm-import migration plan
+release:
+  name: my-import
+  namespace: tenant-vmlab
+templates:
+  - templates/plan.yaml
+tests:
+  - it: renders no Plan when vms is empty
+    set:
+      vms: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: records adoption and target-namespace annotations, targeting its own namespace
+    set:
+      vms:
+        - id: vm-100
+    asserts:
+      - isKind:
+          of: Plan
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/adoption-enabled"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/target-namespace"]
+          value: tenant-vmlab
+      - equal:
+          path: spec.targetNamespace
+          value: tenant-vmlab
+
+  - it: honors tenantNamespace in the target-namespace annotation
+    set:
+      vms:
+        - id: vm-100
+      tenantNamespace: tenant-other
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/target-namespace"]
+          value: tenant-other
+
+  - it: raw-copy mode copies straight into the tenant namespace
+    set:
+      vms:
+        - id: vm-100
+      skipGuestConversion: true
+      tenantNamespace: tenant-other
+    asserts:
+      - equal:
+          path: spec.targetNamespace
+          value: tenant-other
+
+  - it: disables adoption when enableAdoption is false
+    set:
+      vms:
+        - id: vm-100
+      enableAdoption: false
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/adoption-enabled"]
+          value: "false"

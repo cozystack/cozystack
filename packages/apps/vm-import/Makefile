@@ -1,6 +1,9 @@
 include ../../../hack/package.mk
 
-.PHONY: generate
+.PHONY: generate test
+
+test:
+	helm unittest .
 
 generate:
 	cozyvalues-gen -v values.yaml -s values.schema.json -r README.md

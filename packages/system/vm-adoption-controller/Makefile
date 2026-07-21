@@ -4,6 +4,9 @@ NAMESPACE=cozy-forklift
 include ../../../hack/common-envs.mk
 include ../../../hack/package.mk
 
+test:
+	helm unittest .
+
 image: image-vm-adoption-controller
 
 image-vm-adoption-controller:
