@@ -83,15 +83,21 @@ yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2
 # SAME FILE — reintroducing the exact silent skip this rule exists to fix, in a
 # file that merely happens to sit next to an unquoted version number. Rule 1 is
 # immune because its `select(tag == "!!str")` already precedes its test().
+#
+# `registry`, `repository` and `digest` carry the same guard against a different
+# failure: they are concatenated rather than test()ed, and yq coerces int, bool,
+# null and seq on `+`, so only a !!map aborts ("!!str () cannot be added to a
+# !!map") — and that abort takes the whole file down with it. See the fuller
+# note in hack/promote-retag.sh.
 collect_refs() {
   for f in "$TREE"/*/*/values.yaml; do
     [ -f "$f" ] || continue
     yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$f" 2>/dev/null || true
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + .digest' "$f" 2>/dev/null || true
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | select(.repository | tag == "!!str") | select(.digest | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + .digest' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
     # $reg is a yq binding, not a shell variable — see hack/promote-retag.sh.
     # shellcheck disable=SC2016
-    yq -r '(.global.registry.address // "") as $reg | select($reg != "") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
+    yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
   done
 }

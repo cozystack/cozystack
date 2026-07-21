@@ -23,7 +23,8 @@ _make_tree() {
   D="$(printf 'a%.0s' $(seq 1 64))"   # 64-hex fake digest body
   t="$1"
   mkdir -p "$t/system/foo" "$t/system/bar" "$t/system/split" "$t/system/third" \
-           "$t/system/splithost" "$t/system/digesthost" "$t/system/globalreg" "$t/core/installer"
+           "$t/system/splithost" "$t/system/digesthost" "$t/system/globalreg" \
+           "$t/system/guarded" "$t/core/installer"
   # shape 1: single string, cozystack-owned -> copied
   printf 'image: iad.ocir.io/idyksih5sir9/cozystack/foo:main@sha256:%s\n' "$D" > "$t/system/foo/values.yaml"
   # shape 2: split map, cozystack-owned -> copied
@@ -102,6 +103,24 @@ _make_tree() {
     echo '      repository: other'
     echo '      tag: v1.2.3'
   } > "$t/system/globalreg/values.yaml"
+  # A map-typed `repository` co-located with an owned ref. This is the one
+  # non-string type that actually breaks the concat rules: yq coerces int, bool,
+  # null and seq on `+`, but a !!map raises "!!str () cannot be added to a
+  # !!map", and because collect_refs swallows stderr and status that abort would
+  # take every ref in this file with it. Same per-file blast radius as the
+  # numeric-tag case above, different trigger — so `survivor` must still be
+  # mirrored.
+  {
+    echo 'broken:'
+    echo '  image:'
+    echo '    repository:'
+    echo '      nested: oops'
+    printf '    tag: main@sha256:%s\n' "$D"
+    echo 'ours:'
+    echo '  image:'
+    echo '    repository: iad.ocir.io/idyksih5sir9/cozystack/survivor'
+    printf '    tag: main@sha256:%s\n' "$D"
+  } > "$t/system/guarded/values.yaml"
   # shape 5: operator (cozystack-owned -> copied) + platformSource (cozystack-packages -> skipped)
   {
     echo 'cozystackOperator:'
@@ -145,6 +164,8 @@ _make_tree() {
   grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/globalreg@sha256:.* docker://ghcr.io/cozystack/cozystack/globalreg:0.0.0-nightly.test' "$tmp/out"
   # The digest-less sibling under global.images is not invented into a ref.
   ! grep -q '/other' "$tmp/out"
+  # An owned ref sharing a file with a map-typed `repository` survives.
+  grep -q 'docker://ghcr.io/cozystack/cozystack/survivor:0.0.0-nightly.test' "$tmp/out"
   # A floating tag is moved alongside the pinned version.
   grep -q 'docker://ghcr.io/cozystack/cozystack/foo:nightly' "$tmp/out"
 

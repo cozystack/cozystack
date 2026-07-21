@@ -91,6 +91,16 @@ yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2
 # stderr and status, that abort would silently drop every shape-3 ref in the same
 # file. `tag: 1.24` unquoted in a neighbouring third-party block is enough. Rule 1
 # is immune — its `select(tag == "!!str")` already precedes its test().
+#
+# `registry`, `repository` and `digest` are guarded the same way, but against a
+# different failure than `tag`. They are never fed to test(); they are string-
+# concatenated, and yq coerces most scalars on `+` — an int, bool, null or seq
+# flows through and merely yields a ref the ownership filter discards. Only a
+# !!map aborts, with "!!str () cannot be added to a !!map", and that abort takes
+# the whole file's expression down with it. So the guard is narrow insurance
+# against one nested-map typo in a vendored chart silently costing every
+# co-located owned ref. Being a select() rather than a test(), it drops just the
+# offending map and lets its neighbours through.
 collect_refs() {
   for f in packages/*/*/values.yaml; do
     [ -f "$f" ] || continue
@@ -99,9 +109,9 @@ collect_refs() {
     # shape 2. The `sub("^/"; "")` is what makes `registry` optional: absent, it
     # alternates to "" and leaves a leading slash on the join, which is stripped
     # back to the bare repository the rule emitted before registry was handled.
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + .digest' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | select(.repository | tag == "!!str") | select(.digest | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + .digest' "$f" 2>/dev/null || true
     # shape 3
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
     # shape 4. Scoped to global.images rather than a recursive descent: the host
     # is a document-level key, so binding it to a map found anywhere in the file
     # would attach kube-ovn's registry to unrelated repositories. Guarding on a
@@ -109,7 +119,7 @@ collect_refs() {
     # $reg is a yq binding, not a shell variable — the single quotes are
     # required, so SC2016's "expressions don't expand" is inverted here.
     # shellcheck disable=SC2016
-    yq -r '(.global.registry.address // "") as $reg | select($reg != "") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
+    yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
     # shape 5
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
   done
