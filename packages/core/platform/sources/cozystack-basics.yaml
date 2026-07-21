@@ -25,14 +25,23 @@ spec:
     #     -> the tenants schema never resolves -> KCM keeps crashing).
     #   - gateway-api-crds establishes gateways/httproutes/tlsroutes for the
     #     gateway/route host policies.
-    # Drift detection is off on operator-generated HelmReleases, so a
-    # capability gate in the templates would render the policy out at first
-    # install and never add it back; ordering via dependsOn is the reliable
-    # fix. The cozystack-engine and gateway-api-crds packages it depends on
-    # consume none of cozystack-basics' outputs and do not depend back on it,
-    # so these edges add no cycle. (Downstream packages such as backupstrategy-
-    # controller dependsOn cozystack-basics, but those do not feed engine or
-    # gateway-api-crds, so they cannot close a loop here.)
+    # Drift detection is off on operator-generated HelmReleases, so a capability
+    # gate on the MATCHED types' CRDs (tenants.apps.cozystack.io, gateways/
+    # httproutes/tlsroutes) would render the policy out at first install — those
+    # CRDs may not exist yet — and never add it back; ordering via dependsOn is
+    # the reliable fix. This does NOT conflict with the
+    # `.Capabilities.APIVersions.Has ".../ValidatingAdmissionPolicy"` guard the
+    # policy templates themselves carry: that gates on a core apiserver API GA on
+    # every supported cluster (1.30+), so it is always present on a real install
+    # and only keeps `helm template` and any pre-1.30 edge from emitting a
+    # resource the apiserver would reject — it never renders the policy out. The
+    # distinction is which API the gate names: a maybe-absent matched-type CRD
+    # needs dependsOn ordering; an always-present core API can be gated in the
+    # template safely. The cozystack-engine and gateway-api-crds packages it
+    # depends on consume none of cozystack-basics' outputs and do not depend back
+    # on it, so these edges add no cycle. (Downstream packages such as
+    # backupstrategy-controller dependsOn cozystack-basics, but those do not feed
+    # engine or gateway-api-crds, so they cannot close a loop here.)
     - cozystack.cozystack-engine
     - cozystack.gateway-api-crds
     components:
