@@ -32,6 +32,7 @@ all_apps=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.ya
 src_to_suites() {
   case "$1" in
     postgres-application) echo postgres ;;
+    clickhouse-application) echo "clickhouse clickhouse-backup" ;;
     vm-instance-application) echo vminstance ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
     external-dns) echo external-dns ;;

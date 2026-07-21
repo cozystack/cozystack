@@ -99,6 +99,20 @@
     echo "$output" | grep -q "kubernetes-oidc-customconfig"
 }
 
+@test "clickhouse-application maps to both clickhouse suites" {
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/clickhouse/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    # A ClickHouse chart-only change must select the plain clickhouse suite AND
+    # the backup contracts suite (which stands up the same chart with backup
+    # enabled) — that is the whole reason clickhouse-backup runs in CI. Match
+    # exact list tokens so "clickhouse" is not satisfied by "clickhouse-backup".
+    echo "$output" | tr ' ' '\n' | grep -xq clickhouse
+    echo "$output" | tr ' ' '\n' | grep -xq clickhouse-backup
+}
+
 @test "dashboards-only diff selects nothing (path is plural)" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT

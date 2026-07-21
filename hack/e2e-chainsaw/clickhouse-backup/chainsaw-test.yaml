@@ -1,0 +1,203 @@
+# ClickHouse Altinity backup/restore E2E. Chainsaw port of the intended
+# hack/e2e-apps/backup-clickhouse.bats (cozystack#2600), split into two Tests
+# executed in name order — the same shape as the etcd suite:
+#
+#   clickhouse-backup-1-contracts  — deploy a backup-enabled ClickHouse and
+#                                    assert the chart<->Altinity-strategy
+#                                    contract (the :7171 clickhouse-backup
+#                                    sidecar + the backup-api-auth Secret the
+#                                    strategy Pod authenticates with). Runs in
+#                                    CI; needs no reachable object store.
+#   clickhouse-backup-2-roundtrip  — the full Bucket -> BackupJob -> Backup ->
+#                                    in-place + to-copy RestoreJob round-trip,
+#                                    driving the validated example scripts
+#                                    (examples/backups/clickhouse). GATED OUT
+#                                    OF CI (opt in with
+#                                    CLICKHOUSE_E2E_S3_ROUNDTRIP=1).
+#
+# Why the split: the backup feature (Altinity strategy, backup-controller,
+# backupstrategy-controller, Velero, SeaweedFS) is present in the isp-full e2e
+# sandbox, so the wiring that breaks silently on a chart/strategy bump — the
+# sidecar container/port and the backup-api-auth Secret name — is worth
+# asserting on every PR. But the S3 round-trip itself cannot complete in the
+# kind sandbox: the in-cluster seaweedfs-s3.<ns>.svc:8333 endpoint serves HTTPS
+# with a self-signed cert, and in CI the Bucket's external endpoint is the
+# s3.example.org placeholder, which the in-Pod sidecar can neither route to nor
+# TLS-validate. Chainsaw v0.2.15 has no conditional Test-level skip, so the gate
+# is a plain in-script conditional that exits 0 in CI with the reason logged;
+# the same file runs un-gated on a real cluster with just the env var set.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clickhouse-backup-1-contracts
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: clickhouse-test-backup
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-test-backup
+      tail: 50
+  steps:
+  - name: create-clickhouse
+    try:
+    - apply:
+        file: clickhouse.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: clickhouse-test-backup
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  # The ClickHouseInstallation Pod carries the clickhouse-backup sidecar. Gate
+  # on the StatefulSet actually reporting a ready replica (not just the HR
+  # condition) before inspecting the Pod.
+  - name: wait-statefulset-ready
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: chi-clickhouse-test-backup-clickhouse-0-0
+          status:
+            readyReplicas: 1
+
+  # The chart<->strategy contract, asserted against the running Pod (not the
+  # chart templates): the cozy-default-altinity strategy Pod reaches the
+  # clickhouse-backup HTTP API on the container port named ch-backup-api
+  # (:7171). If a chart bump renames the container or moves the port, every
+  # ClickHouse BackupJob breaks silently — this catches it.
+  - name: verify-backup-sidecar
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: Pod
+          metadata:
+            labels:
+              app.kubernetes.io/instance: clickhouse-test-backup
+          status:
+            phase: Running
+          # Filter to the sidecar container, take it, project its named port:
+          # exactly one ch-backup-api port on :7171/TCP. String-literal filters
+          # (not numeric) sidestep the chainsaw v0.2.15 JMESPath number-literal
+          # bug; 7171 here is an expected value, not a filter literal.
+          (spec.containers[?name == 'clickhouse-backup'] | [0].ports[?name == 'ch-backup-api']):
+          - containerPort: 7171
+            protocol: TCP
+          # And that the sidecar actually authenticates from that Secret: the
+          # API_USERNAME/API_PASSWORD env must resolve valueFrom the
+          # backup-api-auth Secret's username/password keys. A chart change that
+          # kept both the Secret and the port but repointed or dropped these
+          # secretKeyRefs would otherwise slip through and surface only as 401s
+          # at BackupJob time — the exact silent break this suite guards.
+          (spec.containers[?name == 'clickhouse-backup'] | [0].env[?name == 'API_USERNAME']):
+          - valueFrom:
+              secretKeyRef:
+                name: clickhouse-test-backup-backup-api-auth
+                key: username
+          (spec.containers[?name == 'clickhouse-backup'] | [0].env[?name == 'API_PASSWORD']):
+          - valueFrom:
+              secretKeyRef:
+                name: clickhouse-test-backup-backup-api-auth
+                key: password
+
+  # The strategy Pod authenticates to the sidecar with the credentials in the
+  # chart-emitted <release>-backup-api-auth Secret (env API_USERNAME /
+  # API_PASSWORD on both sides). Assert it exists and carries both keys — a
+  # rename of the Secret or a dropped key surfaces only as 401s (or a Pod that
+  # never starts) at BackupJob time otherwise.
+  - name: verify-backup-api-auth-secret
+    try:
+    - assert:
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: clickhouse-test-backup-backup-api-auth
+          (data.username != null): true
+          (data.password != null): true
+---
+# Full ClickHouse Altinity round-trip: Bucket -> Altinity strategy + BackupClass
+# -> backup-enabled source ClickHouse (+ sentinel write) -> BackupJob (waits
+# Succeeded, emits a Backup) -> in-place RestoreJob -> to-copy RestoreJob into a
+# second ClickHouse. It drives examples/backups/clickhouse/run-all.sh as the
+# harness so the test and the documented flow can never drift — the same reason
+# the etcd round-trip drives examples/backups/etcd.
+#
+# GATED OUT OF CI (opt in with CLICKHOUSE_E2E_S3_ROUNDTRIP=1); see the file
+# header for why the S3 leg cannot complete in the kind sandbox.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: clickhouse-backup-2-roundtrip
+spec:
+  # The round-trip creates its resources through the example scripts, not
+  # Chainsaw `apply`, and also produces controller-owned artifacts (the Backup
+  # CR, the cluster-scoped Altinity strategy + BackupClass). Chainsaw has
+  # nothing of its own to auto-delete, so teardown is the run step's finally
+  # (cleanup.sh), which is idempotent and a no-op when the round-trip is gated
+  # out.
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  - describe:
+      apiVersion: strategy.backups.cozystack.io/v1alpha1
+      kind: Altinity
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-clickhouse-test
+      tail: 100
+  # The to-copy leg (step 07) restores into a second release; capture its Pod
+  # logs too so a failure isolated to that leg keeps its diagnostics.
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-clickhouse-restore
+      tail: 100
+  steps:
+  - name: run
+    try:
+    - script:
+        timeout: 25m
+        content: |
+          set -eu
+          if [ "${CLICKHOUSE_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
+            echo "# ClickHouse S3 backup/restore round-trip gated out of CI: no"
+            echo "# publicly-trusted S3 endpoint in kind (see comment in this"
+            echo "# file). Set CLICKHOUSE_E2E_S3_ROUNDTRIP=1 on a real cluster"
+            echo "# to run it."
+            exit 0
+          fi
+          cd ../../..
+          [ -x examples/backups/clickhouse/run-all.sh ] || { echo "clickhouse backup example scripts not found at examples/backups/clickhouse" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" examples/backups/clickhouse/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    - description: tear down the round-trip resources (idempotent; no-op when gated out)
+      script:
+        timeout: 8m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/clickhouse/cleanup.sh
