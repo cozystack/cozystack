@@ -34,6 +34,7 @@ build: build-deps
 	make -C packages/system/bucket image
 	make -C packages/system/objectstorage-controller image
 	make -C packages/system/securitygroup-controller image
+	make -C packages/system/site-router-controller image
 	make -C packages/system/grafana-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image

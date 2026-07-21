@@ -6,6 +6,15 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces", "secrets", "services"]
   verbs: ["get", "watch", "list"]
+# The SiteRouter deny-set admission reads the cluster-wide cozystack ConfigMap to
+# resolve the cluster networks a tenant's remoteCIDRs are validated against (see
+# pkg/registry/apps/application/rest_siterouter.go). Without this grant every
+# SiteRouter declaring remoteCIDRs is rejected with Forbidden. Scoped by name to
+# the single ConfigMap the admission reads (a plain get, no list/watch).
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get"]
+  resourceNames: ["cozystack"]
 # Hierarchical tenant quota admission reads the rendered ResourceQuota usage of
 # a parent tenant's pool to carve a child's allocation out of what is actually
 # left (see pkg/registry/apps/application/quota.go).
