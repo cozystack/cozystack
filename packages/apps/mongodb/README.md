@@ -24,10 +24,88 @@ Each shard is a replica set, and mongos routers handle query routing.
 
 ## Notes
 
+### TLS Mode
+
+TLS is always enabled and fully managed by the PSMDB operator via its native cert-manager integration. The operator creates the complete certificate chain:
+
+- A self-signed CA Issuer and CA Certificate
+- A CA-backed Issuer
+- A leaf TLS certificate with SANs covering the replica set service, per-pod DNS names, wildcards, and localhost
+
+The chart does **not** render cert-manager `Issuer` or `Certificate` resources. The operator manages these directly, and chart-rendered cert-manager objects would be orphaned and ignored as trust anchors.
+
+TLS mode is set to `preferTLS`, which means the MongoDB server accepts both TLS and non-TLS connections. This is also the operator's own default, so the chart states it explicitly rather than changing behaviour; `spec.secrets.ssl` is likewise set explicitly to the name the operator would default to.
+
+> **Note:** `preferTLS` accepts plaintext connections, so it authenticates the server to clients that opt in but does not enforce TLS. Moving to `requireTLS` is a breaking change for any existing plaintext client and is out of scope here. To enforce TLS at the network layer in the meantime, restrict client access via NetworkPolicy.
+>
+> The operator also defaults `tls.allowInvalidCertificates` to `true`, and this chart leaves that default in place, so the server does not reject clients presenting an invalid or mismatched certificate. Combined with `preferTLS`, the guarantee this configuration provides is that a client which opts into TLS can verify the *server*; it is not mutual authentication and it does not keep unverified clients out. Both are inherited operator defaults rather than choices made here, and tightening either is a separate breaking change.
+
+> **External hostname SANs:** When `external: true` is enabled, the chart advertises per-pod LoadBalancer hostnames to the operator via `splitHorizons`, and the operator folds those hostnames into the leaf certificate SAN list. External clients can then verify the TLS hostname, provided `<release>-rs0-<i>.<host>` resolves to the corresponding per-pod LoadBalancer — DNS is an operational prerequisite you must satisfy.
+>
+> That fold is gated on two versions, and this chart controls only one of them. It sets `crVersion: 1.22.0` itself, but the PSMDB operator must also be at 1.22.0 or newer, and the operator is a separate platform component (`packages/system/mongodb-operator`, currently 1.22.0) with its own lifecycle. On a platform carrying an older operator the gate is not met and nothing reports it: the chart still renders `splitHorizons`, the CR is still accepted, the cluster still comes up healthy, and the external hostnames simply never enter the SAN list. A client that then enables hostname verification fails the handshake. If external verification does not work, check the operator version before suspecting DNS.
+>
+> The external hostnames are derived from `_namespace.host`, which the Cozystack controller injects per tenant. Whenever it is empty, TLS stays enabled but `splitHorizons` is omitted, so the certificate does not cover external hostnames and a client connecting to the LoadBalancer with hostname verification on will fail the handshake. Nothing goes red when this happens — the render succeeds and the cluster comes up healthy.
+>
+> That empty state has two causes and only one of them heals. During the brief window before the controller populates the field (or when the chart is rendered outside Cozystack), it resolves on the next reconcile. But a tenant with no host of its own and no ancestor supplying one resolves to an empty host permanently — `packages/apps/tenant` computes it from `.Values.host` or the parent's, and leaves it empty when neither is set. On such a tenant `external: true` works for IP-based access and external TLS hostname verification is simply unavailable; set a host on the tenant (or an ancestor) if you need it. The chart does not fail the render in this case, because that would break existing hostless tenants already running `external: true`.
+
+### Retrieving the CA bundle
+
+> **Requires the CA-extraction controller.** This chart declares where its trust anchor comes from, and the platform component that publishes `<release>.tenant-ca` reads that declaration. The two ship together and cannot be separated: the declaration names a field the ApplicationDefinition CRD only gains with the controller, and without it the managed-service definition fails to reconcile rather than degrading quietly, so a cluster serving MongoDB at all has the projection available. A tenant never gets a key-free path to the CA by any other route — the operator's `<release>-ca-cert` is deliberately not granted, because it carries the CA private key.
+>
+> **Requires cert-manager.** The declared source is the `<release>-ca-cert` Secret, which the operator creates only on its cert-manager path. Without cert-manager the operator falls back to issuing certificates itself, producing no `<release>-ca-cert` at all and embedding `ca.crt` inside the leaf Secrets instead — so the declared source resolves to nothing and no trust anchor is published. Cozystack ships cert-manager as a platform component, so this affects only clusters where it has been removed.
+
+The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get tenantsecret <release>.tenant-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode
+```
+
+`<release>.tenant-ca` is the only object that hands over the CA certificate without also handing over a private key, which is why it exists. The PSMDB operator creates its own `<release>-ca-cert` Secret, but that one stores the CA **private key** alongside the certificate — read access would let the holder issue certificates for anything, so it is never granted to a tenant. The same applies to the leaf `<release>-ssl`, which holds the server private key.
+
+It is reached through `tenantsecrets` rather than by reading the Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for, whereas a direct grant on the name would convey whatever happens to occupy that name.
+
+> **Name clash worth knowing.** The shared `cozy-lib` TLS helper documents `<release>-ca-cert` as the conventional name for a **key-free** trust anchor. For MongoDB that exact name is already taken by the operator's **key-bearing** CA Secret. The same string therefore sits on opposite sides of the boundary depending on the engine — which is why this chart declares its source by name and publishes under the distinct `<release>.tenant-ca` instead of adopting the convention.
+
+> **Warning:** The CA rotates. The operator issues it with a 365-day duration and cert-manager renews it roughly 30 days before expiry, so a bundle copied once will stop verifying within a year. Re-read `<release>.tenant-ca` on a schedule (or mount it and let the kubelet refresh it) instead of baking `ca.crt` into a client image, ConfigMap, or truststore built at release time.
+
+### Verifying a connection
+
+Write the trust anchor to a file, then read the connection string out of `<release>-credentials`:
+
+```bash
+kubectl --context <ctx> --namespace <tenant> \
+  get tenantsecret <release>.tenant-ca \
+  --output jsonpath='{.data.ca\.crt}' | base64 --decode > ca.crt
+
+kubectl --context <ctx> --namespace <tenant> \
+  get secret <release>-credentials \
+  --output jsonpath='{.data.uri}' | base64 --decode
+```
+
+`mongosh` takes the bundle as a file, and the two TLS inputs are passed as flags rather than folded into the URI:
+
+```bash
+mongosh "<uri>" --tls --tlsCAFile ./ca.crt
+```
+
+Drivers take the same two inputs under their own names (`tls=true` plus a CA path). Prefer the flag form over appending `tls=true` to the connection string: the replica-set URI already carries a `?replicaSet=rs0` query and the sharded one carries none, so the correct separator differs between the two topologies.
+
+> **Omitting the TLS flags does not fail.** Because the server runs in `preferTLS`, a client that leaves them out is accepted on a plaintext connection and nothing reports the downgrade — the session simply is not encrypted. Verification is opt-in on the client side, so treat a working connection as evidence of nothing until the flags are present.
+
+Hostname verification succeeds against the in-cluster names out of the box, since the operator covers them in the leaf SANs. Verifying against an external LoadBalancer endpoint depends on the `splitHorizons` fold described above, and is unavailable in sharded mode — see below.
+
+### Sharding and TLS
+
+In-cluster `mongos` SANs are fully covered: the operator appends the `mongos` and config-replset names (short, namespace, FQDN, and wildcard forms) to every certificate, for sharded and non-sharded clusters alike.
+
+> **Warning:** External TLS hostname verification is not available when `sharding: true`. In sharded mode external access goes through the single `<release>-external` LoadBalancer fronting `mongos`, and no SAN covers that name — `splitHorizons` is replica-set scoped and is only rendered for the non-sharded topology. Clients connecting to a sharded cluster from outside must either verify against an in-cluster `mongos` name that resolves to the same endpoint, or connect without hostname verification. Combining `sharding: true` with `external: true` and full verification is unsupported.
+
 ### External Access
 
 When `external: true` is enabled:
-- **Replica Set mode**: Traffic is load-balanced across all replica set members. This works well for read operations, but write operations require connecting to the primary. MongoDB drivers handle primary discovery automatically using the replica set connection string.
+- **Replica Set mode**: The operator exposes each replica set member through its own LoadBalancer via `replsets[].expose` and rewrites the replica set configuration so drivers can discover the primary from outside the cluster. There is no single load-balanced endpoint: the driver connects to the members and routes writes to the primary itself, using the replica set connection string.
 - **Sharded mode**: Traffic is routed through mongos routers, which handle both reads and writes correctly.
 
 ### Credentials
@@ -54,9 +132,18 @@ When the MongoDB release is uninstalled, the operator finalizers reclaim release
 - `<release>-user-<username>` — per-user passwords
 - `<release>-s3-creds` — backup destination credentials (if backups are configured)
 
+**Reclaimed by ownerReference garbage collection:**
+
+- TLS secrets `<release>-ssl`, `<release>-ssl-internal`, and `<release>-ca-cert`, along with the cert-manager `Issuer` and `Certificate` objects the operator creates. The cascade works out either way on the `--enable-certificate-owner-ref` fork: with the flag the Certificate owns the Secret and the CR owns the Certificate; without it (the default Cozystack ships) the operator makes the CR the direct owner of the Secret.
+
+  > **The Secret ownerReference is applied at reconcile time, not at creation.** cert-manager creates these Secrets unowned, and the operator patches the CR reference on afterwards, in `WaitForCerts`. Two paths skip the patch: a dry-run reconcile returns before it, and a Secret already present under the same name whose `cert-manager.io/certificate-name` annotation does not match is counted toward success and returned on without being patched. So a Secret that predates the release at one of these names — from a restore-from-backup, a rename, or a manual recreate — can stay unowned and survive uninstall. The finalizer does not cover the gap: it enumerates only the users, `internal-<release>`, `internal-<release>-users`, and encryption-key Secrets, and no TLS Secret is on that list. After deleting a release, confirm `<release>-ca-cert` is gone rather than assuming it — it holds the CA private key, and an orphan of it is the one leak this chart's TLS posture exists to prevent.
+- The `<release>.tenant-ca` projection, where the CA-extraction controller is present to publish it, since it is owner-referenced to the release's HelmRelease.
+
 **Not reclaimed automatically:**
 
-- TLS secrets `<release>-ssl` and `<release>-ssl-internal` (issued by cert-manager) remain in the namespace after uninstall. Delete them manually if no longer needed.
+- `<release>-ssl-old` and `<release>-ssl-internal-old`, only if a rotation was interrupted. These are operator scratch state, not residue: the operator snapshots the previous leaf certificates under these names when it rotates the cert-manager chain, and deletes them itself in the same pass once the merged CA has landed in the live secrets. They are created with no ownerReference, so a rotation interrupted between the snapshot and the merge can leave them behind, and those stragglers do survive uninstall.
+
+  > **Do not delete these while a rotation is in flight.** The operator reads the previous CA back out of exactly these two names to build the merged trust bundle that keeps pods on old and new certificates talking to each other during the rolling restart. Removing them mid-rotation destroys the only copy of the old CA. Sweep them only if they are still present long after the cluster has settled, which indicates an interrupted rotation rather than one in progress.
 
 **Recovery from a stuck deletion:**
 
@@ -96,6 +183,18 @@ The previous namespace-shared secret `percona-server-mongodb-users` is no longer
 ```bash
 kubectl --namespace <namespace> delete secret percona-server-mongodb-users
 ```
+
+**Rolling restart on upgrade, for external replica set releases only:**
+
+A release already running with `external: true` in replica set mode gains `splitHorizons` on upgrade. The per-pod external hostnames become certificate SANs, so cert-manager reissues `<release>-ssl`; the operator hashes that Secret into a pod-template annotation, which rolls the replica set StatefulSet. The restart is ordered, and at `replicas: 3` or more the replica set stays available through it — a member at a time goes down, the majority holds, and an election moves the primary if it was the one restarted. It is still a restart of the database and worth scheduling.
+
+> **Below three replicas the upgrade is an outage, not a rolling restart.** The chart permits `replicas: 1` and `replicas: 2` (rendering `unsafeFlags.replsetSize: true` for both), and neither is excluded from the SAN change — a one-replica external release gets horizons and rolls exactly like a three-replica one. At `replicas: 1` the rollout takes the only mongod down, so the release is fully unavailable, reads included, until the new pod is ready. At `replicas: 2` the write majority is still 2, so restarting either member leaves the remaining one unable to hold a primary and writes fail for the duration; reads continue only if the client tolerates a secondary. `podDisruptionBudget` does not change this in either case — the disruption is the rollout itself, not an eviction. Schedule a window accordingly, or scale to three before upgrading.
+
+The same pass snapshots the superseded certificates as `<release>-ssl-old` and `<release>-ssl-internal-old`, then deletes them once the merged CA has landed. Because this upgrade changes only the SAN list and not the CA itself, the merge is a no-op and both snapshots are removed on the first pass — no cleanup is expected. See the lifecycle section above for the interrupted case, and do not delete them by hand while the rollout is running.
+
+Scaling an external replica set down can also produce transient reconfiguration errors during the upgrade. MongoDB requires horizons on all members or none, and a terminating pod is still a member while the chart advertises horizons only for the remaining ones. The operator retries and the condition clears once the pod is gone.
+
+Releases with `external: false`, and sharded releases in any configuration, are unaffected: neither renders `splitHorizons`, so no SAN changes and nothing restarts.
 
 > `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
