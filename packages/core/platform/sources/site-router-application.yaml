@@ -14,6 +14,10 @@ spec:
       dependsOn:
         # kube-ovn + Cilium: the router VM attaches to the tenant pod network.
         - cozystack.networking
+        # KubeVirt runs the gateway VirtualMachine (templates/vm.yaml).
+        - cozystack.kubevirt
+        # CDI provisions the boot DataVolume (templates/dv.yaml).
+        - cozystack.kubevirt-cdi
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
         # TODO(T05): add cozystack.site-router-controller once that source exists

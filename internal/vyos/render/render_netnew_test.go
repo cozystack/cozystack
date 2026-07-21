@@ -15,12 +15,13 @@ limitations under the License.
 */
 
 // These tests encode the Phase-1 net-new render requirements that do not
-// exist in the cozyportal reference (T02 Acceptance). The render logic
-// for MSS clamp, the tunnel-ingress source filter and forced UDP
-// encapsulation is implemented in Phase B — until then those three tests
-// fail on the missing operations. TestRender_NoNATOperations is a
-// standing guard: it validates the routed subset (DECISIONS.md D3) that
-// is already in place in Phase A and therefore passes.
+// exist in the upstream VyOS-router reference implementation (T02
+// Acceptance). The render logic for MSS clamp, the tunnel-ingress source
+// filter and forced UDP encapsulation is implemented in Phase B — until
+// then those three tests fail on the missing operations.
+// TestRender_NoNATOperations is a standing guard: it validates the routed
+// subset (DECISIONS.md D3) that is already in place in Phase A and
+// therefore passes.
 package render_test
 
 import (

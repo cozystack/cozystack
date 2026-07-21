@@ -89,8 +89,9 @@ the api-key Secret and the cloud-init seed never diverge on first install.
 
 {{/*
 First-boot cloud-init userdata (VyOS `vyos_config_commands`). Ported from
-cozyportal's buildCloudInitUserData: hostname, HTTPS API key, listen-address,
-and the fail-closed management firewall. Takes a dict {ctx, token} so the token
+the upstream VyOS-router reference implementation's buildCloudInitUserData:
+hostname, HTTPS API key, listen-address, and the fail-closed management
+firewall. Takes a dict {ctx, token} so the token
 is resolved once by the caller and shared with the api-key Secret.
 
 listen-address is 0.0.0.0 because the pod IP is unknown at render time; the

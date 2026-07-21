@@ -548,11 +548,11 @@ func renderBGPFirewallAccept(in Inputs) []vyos.Operation {
 // --- Net-new Phase-1 render domains -------------------------------------
 //
 // The renderers below implement Phase-1 requirements absent from the
-// cozyportal reference (T02). Each isolates the VyOS-version-specific leaf
-// path or binding in a single helper (mssClampOp; tunnelIngressPath /
-// tunnelIngressBindingOp; the force-encapsulation leaf lives in
-// renderIPSec) so the syntax can be swapped in one place once the live
-// push validates it against the shipped image.
+// upstream VyOS-router reference implementation (T02). Each isolates the
+// VyOS-version-specific leaf path or binding in a single helper (mssClampOp;
+// tunnelIngressPath / tunnelIngressBindingOp; the force-encapsulation leaf
+// lives in renderIPSec) so the syntax can be swapped in one place once the
+// live push validates it against the shipped image.
 
 // renderMSSClamp emits a TCP MSS clamp on the resolved tunnel device,
 // derived from the overlay MTU (OverlayMTU, defaulting to
