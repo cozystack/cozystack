@@ -680,11 +680,54 @@ func TestReconcile_NonOpaqueAtCanonicalNameIsCollision(t *testing.T) {
 	assertReady(t, c, metav1.ConditionFalse, reasonProjectionCollision)
 }
 
-// TestReconcile_ForgedProjectionIsHealed pins the SAFE direction of the adoption
-// gate: an Opaque Secret at the canonical name with the marker and an attacker
-// ca.crt but no owner reference is OVERWRITTEN with the genuine CA and owner, not
-// left serving a forged anchor to the tenant.
-func TestReconcile_ForgedProjectionIsHealed(t *testing.T) {
+// TestReconcile_MarkerStrippedFromOwnedProjectionIsHealed exercises the finding
+// the owner-reference adoption gate exists to close. An actor with Secret write in
+// the namespace STRIPS the controller's marker off the GENUINE projection — owner
+// reference and tenantresource verdict intact — and writes their own bytes under
+// ca.crt. Keying adoption on the strippable marker would make the controller
+// disown its own object, refuse it as a collision, and serve the forged anchor
+// forever. Keying on the owner reference heals it: the genuine CA is restored, the
+// marker is put back, and the sentinel is Ready.
+func TestReconcile_MarkerStrippedFromOwnedProjectionIsHealed(t *testing.T) {
+	const attackerCA = "-----BEGIN CERTIFICATE-----\nATTACKERATTACKERATTACKER\n-----END CERTIFICATE-----\n"
+	tampered := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testProjection,
+			Namespace: testNamespace,
+			// The marker is STRIPPED; the owner reference and the webhook's
+			// tenantresource verdict are left exactly as the genuine projection
+			// carried them.
+			Labels: map[string]string{
+				TenantCALabel:                       trueValue,
+				corev1alpha1.TenantResourceLabelKey: trueValue,
+			},
+			OwnerReferences: []metav1.OwnerReference{sentinelOwnerRef(sentinel())},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{caCertKey: []byte(attackerCA)},
+	}
+	c := newClient(t, helmRelease(), appDef(), sentinel(),
+		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
+		tampered,
+	)
+	mustReconcile(t, c)
+
+	got := mustProjection(t, c)
+	assertKeyFree(t, got, testCA) // healed to the genuine CA, not the attacker's
+	assertOwnedBySentinel(t, got)
+	if got.Labels[ManagedLabel] != trueValue {
+		t.Errorf("healing must restore the %q marker, labels=%v", ManagedLabel, got.Labels)
+	}
+	assertReady(t, c, metav1.ConditionTrue, reasonProjected)
+}
+
+// TestReconcile_ForgedMarkerWithoutOwnerRefIsCollision pins the other side of the
+// owner-reference gate: a Secret at the canonical name that carries the marker and
+// the tenant-ca label but NO owner reference back to this sentinel is a stranger,
+// not one of ours. It is refused as a collision and left untouched — never
+// overwritten, because it may hold data this controller does not own, and it
+// carries no owner chain to an application so no tenant can read it anyway.
+func TestReconcile_ForgedMarkerWithoutOwnerRefIsCollision(t *testing.T) {
 	const attackerCA = "-----BEGIN CERTIFICATE-----\nATTACKERATTACKERATTACKER\n-----END CERTIFICATE-----\n"
 	forged := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -702,8 +745,10 @@ func TestReconcile_ForgedProjectionIsHealed(t *testing.T) {
 	mustReconcile(t, c)
 
 	got := mustProjection(t, c)
-	assertKeyFree(t, got, testCA) // healed to the genuine CA, not the attacker's
-	assertOwnedBySentinel(t, got)
+	if string(got.Data[caCertKey]) != attackerCA {
+		t.Errorf("a Secret with no owner reference to the sentinel must be left untouched, got %q", got.Data[caCertKey])
+	}
+	assertReady(t, c, metav1.ConditionFalse, reasonProjectionCollision)
 }
 
 // TestReconcile_SourceAtCanonicalName_KeyBearing pins the degenerate case where
@@ -747,10 +792,11 @@ func TestReconcile_SourceAtCanonicalName_KeyFree(t *testing.T) {
 func TestReconcile_TerminatingProjection_WaitsForCollection(t *testing.T) {
 	terminating := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:       testProjection,
-			Namespace:  testNamespace,
-			Labels:     map[string]string{TenantCALabel: trueValue, ManagedLabel: trueValue},
-			Finalizers: []string{"cozystack.io/test-hold"},
+			Name:            testProjection,
+			Namespace:       testNamespace,
+			Labels:          map[string]string{TenantCALabel: trueValue, ManagedLabel: trueValue},
+			OwnerReferences: []metav1.OwnerReference{sentinelOwnerRef(sentinel())},
+			Finalizers:      []string{"cozystack.io/test-hold"},
 		},
 		Type: corev1.SecretTypeOpaque,
 		Data: map[string][]byte{caCertKey: []byte("STALE")},

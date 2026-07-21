@@ -720,34 +720,33 @@ func (r *Reconciler) upsertProjection(ctx context.Context, tp *internalv1alpha1.
 		return fmt.Errorf("get CA projection %s/%s: %w", ns, target, err)
 	}
 
-	// Adoption demands BOTH the marker label and the Opaque type, and the type is
-	// the load-bearing half.
+	// Adoption keys on the OWNER REFERENCE back to this sentinel, not on the marker
+	// label. The marker is an ordinary label any Secret writer in the namespace can
+	// forge OR STRIP, and keying adoption on it fails in the dangerous direction: an
+	// actor who strips the marker off the GENUINE projection and writes their own
+	// bytes under ca.crt would make the controller disown its own object, refuse to
+	// touch it as a "collision", and keep serving the forged anchor forever. The
+	// owner reference is the relationship this controller actually established;
+	// isOurProjection matches it by the sentinel's NAME so a delete-and-recreate of
+	// the application (same name, new UID) is still recognised as ours to re-home.
 	//
-	// ManagedLabel is only a claim: it is an ordinary label on an ordinary Secret,
-	// so anyone who can write Secrets in the namespace — the tenant — can forge
-	// it. The type is not a claim but a fact this controller controls, because
-	// every projection it creates is Opaque. So a non-Opaque Secret sitting at the
-	// canonical name did NOT come from here, whatever its labels say.
+	// Forging the owner reference does not help an attacker: it makes the object
+	// adoptable, and adoption OVERWRITES it with the genuine key-free CA and the
+	// genuine owner reference. That is the self-healing direction — the forged bytes
+	// are destroyed, not served. A Secret with NO owner reference back to this
+	// sentinel is a stranger, whatever its labels say, and is refused as a collision
+	// rather than overwritten, because it may hold live key material this controller
+	// must never destroy — and a stranger carries no owner chain to an application,
+	// so the lineage webhook cannot mark it tenantresource=true and no tenant reads
+	// it while the collision stands visible for an admin to clear.
 	//
-	// Checking it is not pedantry. Secret.type is immutable in Kubernetes
-	// (ValidateSecretUpdate rejects a change to it), and the update path below
-	// writes the type unconditionally. Adopting, say, a kubernetes.io/tls Secret
-	// would therefore make every Update fail Invalid, forever — a tenant could
-	// permanently deny their own release its trust anchor by creating one Secret
-	// with a forged label. Treat it as what it is: a collision.
-	//
-	// The converse — an Opaque Secret at the canonical name carrying the marker,
-	// which a forger could also produce — is deliberately adopted and OVERWRITTEN,
-	// not refused, and that is the SAFE direction. The projection's whole job is to
-	// be the tenant's vouched trust anchor, so if a forged copy is sitting there
-	// (marker + tenant-ca label + an attacker ca.crt), the correct response is to
-	// stamp the genuine CA and the genuine owner reference over it — which the
-	// update path does. Requiring a non-forgeable owner reference here instead, as
-	// a stricter-looking gate, would invert that: the forged copy would be treated
-	// as a stranger, left untouched, and keep being served to the tenant. Nothing
-	// legitimate carries this controller-internal marker on an object it did not
-	// create, so overwriting it destroys no real data — it heals a forgery.
-	if !isOurProjection(existing) {
+	// The Opaque type stays as a cheap sanity guard inside isOurProjection — every
+	// projection this controller creates is Opaque — but it is no longer
+	// load-bearing. The update path below is a read-modify-write that never writes
+	// Type, so adopting a non-Opaque Secret could not self-DoS on Secret.type's
+	// immutability; the guard just declines to treat an object of the wrong shape as
+	// one of ours.
+	if !isOurProjection(existing, tp) {
 		// A Secret of this name exists that the controller did not create.
 		// Overwriting it could destroy live key material, so refuse and surface
 		// the refusal on the colliding object itself.
@@ -770,6 +769,7 @@ func (r *Reconciler) upsertProjection(ctx context.Context, tp *internalv1alpha1.
 	selectorsChanged := existing.Annotations[SelectorsDigestAnnotation] != digest
 	if maps.EqualFunc(existing.Data, desired, bytes.Equal) &&
 		existing.Labels[TenantCALabel] == trueValue &&
+		existing.Labels[ManagedLabel] == trueValue &&
 		existing.Annotations[SourceRefAnnotation] == ref &&
 		!selectorsChanged &&
 		ownedSolelyBy(existing.OwnerReferences, owner) {
@@ -857,16 +857,43 @@ func (r *Reconciler) upsertProjection(ctx context.Context, tp *internalv1alpha1.
 }
 
 // isOurProjection reports whether the Secret at the canonical name is one this
-// controller created.
+// controller created — and so is safe to adopt and overwrite with the genuine
+// trust anchor.
 //
-// It demands BOTH the marker label and the Opaque type, and the TYPE is the
-// load-bearing half. ManagedLabel is only a claim: an ordinary label on an
-// ordinary Secret, forgeable by anyone with namespace Secret write. The type is
-// not a claim but a fact this controller controls, because every projection it
-// creates is Opaque — so a non-Opaque Secret at the canonical name did NOT come
-// from here, whatever its labels say.
-func isOurProjection(s *corev1.Secret) bool {
-	return s.Labels[ManagedLabel] == trueValue && s.Type == corev1.SecretTypeOpaque
+// The signal is the OWNER REFERENCE back to a TenantProjection of this sentinel's
+// name, not the ManagedLabel marker. The marker is an ordinary label any Secret
+// writer in the namespace can forge or STRIP, so keying adoption on it fails in
+// the dangerous direction: stripping it off the genuine projection would make the
+// controller disown its own object and keep serving whatever bytes the same actor
+// wrote. The owner reference is the relationship this controller actually
+// established; an actor can forge one, but forging it only causes an
+// adopt-and-overwrite with the genuine key-free CA — the self-healing direction —
+// so it grants nothing.
+//
+// The reference is matched by NAME rather than by exact UID on purpose: a
+// delete-and-recreate of the application leaves the projection owner-referenced to
+// the PREVIOUS sentinel incarnation (same name, new UID) until the garbage
+// collector catches up, and that stale projection is ours to re-home, not a
+// stranger to refuse. Owner references are namespaced and a TenantProjection name
+// is unique in its namespace, so a name match is an identity match.
+//
+// The Opaque type stays as a cheap sanity guard — every projection this controller
+// creates is Opaque — but it is no longer load-bearing: the update path is a
+// read-modify-write that never writes Type, so it could not self-DoS on an adopted
+// non-Opaque Secret even without this check.
+func isOurProjection(s *corev1.Secret, tp *internalv1alpha1.TenantProjection) bool {
+	if s.Type != corev1.SecretTypeOpaque {
+		return false
+	}
+	for i := range s.OwnerReferences {
+		ref := &s.OwnerReferences[i]
+		if ref.Kind == "TenantProjection" &&
+			ref.APIVersion == internalv1alpha1.GroupVersion.String() &&
+			ref.Name == tp.Name {
+			return true
+		}
+	}
+	return false
 }
 
 // selectorsDigest digests the ApplicationDefinition's spec.secrets — the
