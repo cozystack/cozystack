@@ -131,7 +131,12 @@ func main() {
 	}
 
 	if err := (&siterouter.SiteRouterReconciler{
-		Client:              mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// APIReader is the uncached reader for the cluster cozystack ConfigMap and
+		// the tenant Namespace, which are intentionally not cached (CacheByObject
+		// scopes the manager's informers to SiteRouter HelmReleases and gateway
+		// pods only).
+		APIReader:           mgr.GetAPIReader(),
 		Scheme:              mgr.GetScheme(),
 		Recorder:            mgr.GetEventRecorderFor("site-router-controller"),
 		ManagementCIDR:      managementCIDR,

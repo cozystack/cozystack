@@ -29,10 +29,13 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -46,6 +49,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+
+	"github.com/cozystack/cozystack/internal/siterouter/denyset"
 )
 
 const (
@@ -75,6 +80,28 @@ const (
 	// restores the gateway pod's port security and removes the namespace routes
 	// in that order; see reconcileDelete.
 	finalizer = "apps.cozystack.io/site-router-mediation"
+
+	// cozystackConfigNamespace / cozystackConfigName locate the cluster-wide
+	// cozystack ConfigMap the deny-set validation sources the pod/service/join
+	// CIDRs from.
+	cozystackConfigNamespace = "cozy-system"
+	cozystackConfigName      = "cozystack"
+
+	// Platform-values defaults for the cluster networks, used when the cozystack
+	// ConfigMap is absent or a key is unset (packages/core/platform/values.yaml
+	// networking.{podCIDR,serviceCIDR,joinCIDR}).
+	defaultPodCIDR     = "10.244.0.0/16"
+	defaultServiceCIDR = "10.96.0.0/16"
+	defaultJoinCIDR    = "100.64.0.0/16"
+
+	// ConfigMap keys the cozystack ConfigMap exposes the cluster CIDRs under.
+	configKeyPodCIDR  = "ipv4-pod-cidr"
+	configKeySvcCIDR  = "ipv4-svc-cidr"
+	configKeyJoinCIDR = "ipv4-join-cidr"
+
+	// remoteCIDRsValueKey is the HelmRelease spec.values key holding the tenant's
+	// declared remote networks (the authoritative input, D7).
+	remoteCIDRsValueKey = "remoteCIDRs"
 )
 
 // CacheByObject bounds the manager's informers. The controller only ever acts
@@ -114,6 +141,13 @@ type SiteRouterReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
+
+	// APIReader is an uncached reader (mgr.GetAPIReader) used to read the
+	// cluster-wide cozystack ConfigMap and the tenant Namespace without spinning
+	// up cluster-scoped informers for ConfigMaps/Namespaces (those types are
+	// deliberately absent from CacheByObject). When nil the cached Client is used
+	// — the path unit tests take, where the fake client serves every read.
+	APIReader client.Reader
 
 	// ManagementCIDR is the source CIDR allowed to reach the VyOS management API
 	// (SSH 22 / HTTPS 443). It MUST agree with the chart's managementCIDR value
@@ -258,6 +292,17 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 		return ctrl.Result{}, nil
 	}
 
+	// Decode the tenant inputs so cleanup knows which route entries this instance
+	// programmed (removeNamespaceRoutes withdraws only its own dst entries). A
+	// malformed spec.values must not wedge deletion: log and proceed with empty
+	// inputs (the annotation stays untouched, the finalizer still releases).
+	values, err := decodeValues(inst.hr)
+	if err != nil {
+		log.FromContext(ctx).Error(err, "ignoring malformed HelmRelease spec.values during cleanup")
+		values = map[string]interface{}{}
+	}
+	inst.values = values
+
 	// Best-effort discovery so T07's cleanup has the gateway pod if it still
 	// exists; a missing pod is fine (the VM may already be gone).
 	pod, err := r.discoverGatewayPod(ctx, inst)
@@ -290,17 +335,72 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 
 // validateRemoteCIDRs rejects an instance whose tunnel remoteCIDRs overlap the
 // cluster pod/service/join/node/link-local/LB-pool networks (the deny-set). The
-// deny-set check is a pure helper shared with the admission plugin (D9/D10).
-func (r *SiteRouterReconciler) validateRemoteCIDRs(_ context.Context, _ *instance) error {
-	// TODO(T07): implement deny-set validation against cluster networks.
-	return nil
+// deny-set check is a pure helper shared with the admission plugin (D9/D10). A
+// violation returns a reconcileError carrying reason denyset.ReasonInvalidRemoteCIDR
+// and a message naming every offender and its colliding network, so T09/status
+// surfaces it machine-readably and the route is never programmed (this runs
+// before programNamespaceRoutes in the pipeline).
+func (r *SiteRouterReconciler) validateRemoteCIDRs(ctx context.Context, inst *instance) error {
+	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
+	if len(cidrs) == 0 {
+		return nil
+	}
+	clusters, err := r.clusterNetworks(ctx)
+	if err != nil {
+		return err
+	}
+	rejections := denyset.Validate(cidrs, clusters)
+	if len(rejections) == 0 {
+		return nil
+	}
+	msgs := make([]string, 0, len(rejections))
+	for _, rej := range rejections {
+		msgs = append(msgs, rej.Message())
+	}
+	return &reconcileError{reason: denyset.ReasonInvalidRemoteCIDR, message: strings.Join(msgs, "; ")}
 }
 
 // programNamespaceRoutes writes the ovn.kubernetes.io/routes annotation on the
 // tenant namespace (the kube-ovn webhook propagates it to pods on create) so the
-// return path to remoteCIDRs points at the gateway.
-func (r *SiteRouterReconciler) programNamespaceRoutes(_ context.Context, _ *instance) error {
-	// TODO(T07): server-side apply the routes annotation on the namespace.
+// return path to remoteCIDRs points at the gateway. It merges this instance's
+// entries (keyed by dst) into whatever the namespace already carries — a
+// co-tenant site-router's routes are preserved — and applies only the annotation
+// via server-side apply under a distinct FieldOwner, so it never clobbers other
+// writers of the namespace's annotations (the package_reconciler idiom). It is a
+// no-op until the gateway pod has a routable IP (the pod watch re-triggers the
+// reconcile when the IP appears).
+func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst *instance) error {
+	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
+	if len(cidrs) == 0 {
+		return nil
+	}
+	if inst.gatewayPod == nil || inst.gatewayPod.Status.PodIP == "" {
+		// No next hop yet; the pod watch re-triggers once the IP is assigned.
+		return nil
+	}
+
+	ns := &corev1.Namespace{}
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: inst.namespace}, ns); err != nil {
+		return fmt.Errorf("get namespace %s: %w", inst.namespace, err)
+	}
+	merged, err := mergeRoutes(ns.Annotations[routesAnnotation], inst.gatewayPod.Status.PodIP, cidrs)
+	if err != nil {
+		return fmt.Errorf("merge routes for namespace %s: %w", inst.namespace, err)
+	}
+	if ns.Annotations[routesAnnotation] == merged {
+		return nil // already programmed; nothing to apply
+	}
+
+	apply := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        inst.namespace,
+			Annotations: map[string]string{routesAnnotation: merged},
+		},
+	}
+	apply.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Namespace"))
+	if err := r.Patch(ctx, apply, client.Apply, client.FieldOwner(routesFieldOwner), client.ForceOwnership); err != nil {
+		return fmt.Errorf("apply routes annotation on namespace %s: %w", inst.namespace, err)
+	}
 	return nil
 }
 
@@ -321,10 +421,43 @@ func (r *SiteRouterReconciler) confirmSourceFilterActive(_ context.Context, _ *i
 }
 
 // relaxGatewayPortSecurity patches ovn.kubernetes.io/port_security=false on the
-// gateway pod only, gated on confirmSourceFilterActive having passed, so the
-// router can forward traffic whose source IP is not its own.
-func (r *SiteRouterReconciler) relaxGatewayPortSecurity(_ context.Context, _ *instance) error {
-	// TODO(T07): Ready-gated port_security relaxation on the gateway pod.
+// gateway virt-launcher pod only, with a single-key merge patch so no other pod
+// and no other annotation is touched. OVN otherwise drops the guest's routed,
+// non-pod-IP source addresses; kube-ovn v1.15.10 cannot scope a CIDR in
+// allowed-address-pairs, so Phase 1 relaxes fully and relies on the guest
+// tunnel-ingress source filter (T08) as the compensating control — which is why
+// this runs only AFTER confirmSourceFilterActive in the reconcile pipeline (D8:
+// never relax before the guard is up). The finalizer restores it on delete.
+//
+// port_security timing (D8, validated empirically in T13): the kube-ovn mutating
+// webhook only inherits namespace annotations onto pods at CREATE
+// (packages/system/kubeovn-webhook admission.go: it no-ops for non-Create), so
+// this patches the annotation directly on the live gateway pod. Whether kube-ovn
+// v1.15.10 reconciles the logical-switch-port port_security field from an
+// annotation flip on an already-wired port — rather than only at port creation —
+// is not certain from the in-repo sources. If T13 shows the live toggle does not
+// take effect, the fallback is to bake ovn.kubernetes.io/port_security: "false"
+// onto the VM's pod template in the chart (applied at virt-launcher creation)
+// while this controller keeps the Ready gate and the finalizer restore. The
+// controller does NOT trigger a pod roll in Phase 1 — that decision waits on the
+// T13 finding.
+func (r *SiteRouterReconciler) relaxGatewayPortSecurity(ctx context.Context, inst *instance) error {
+	if inst.gatewayPod == nil {
+		// No gateway pod yet; the pod watch re-triggers once it is scheduled.
+		return nil
+	}
+	pod := inst.gatewayPod
+	if pod.Annotations[portSecurityAnnotation] == portSecurityRelaxed {
+		return nil // already relaxed
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[portSecurityAnnotation] = portSecurityRelaxed
+	if err := r.Patch(ctx, pod, patch); err != nil {
+		return fmt.Errorf("relax port_security on gateway pod %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
 	return nil
 }
 
@@ -336,15 +469,68 @@ func (r *SiteRouterReconciler) updateStatus(_ context.Context, _ *instance) erro
 	return nil
 }
 
-// restorePortSecurity reverts the port_security relaxation on delete.
-func (r *SiteRouterReconciler) restorePortSecurity(_ context.Context, _ *instance) error {
-	// TODO(T07): restore ovn.kubernetes.io/port_security on the gateway pod.
+// restorePortSecurity reverts the port_security relaxation on delete by removing
+// the annotation the controller added (its absence restores OVN's default
+// enforcing behaviour), with a single-key merge patch on the gateway pod only. A
+// missing pod or an absent annotation is a clean no-op — the state is already
+// restored. Errors are returned, never masked: leaving a stuck restore to drop
+// the finalizer would strand a relaxed port.
+func (r *SiteRouterReconciler) restorePortSecurity(ctx context.Context, inst *instance) error {
+	if inst.gatewayPod == nil {
+		return nil
+	}
+	pod := inst.gatewayPod
+	if _, set := pod.Annotations[portSecurityAnnotation]; !set {
+		return nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	delete(pod.Annotations, portSecurityAnnotation)
+	if err := r.Patch(ctx, pod, patch); err != nil {
+		return fmt.Errorf("restore port_security on gateway pod %s/%s: %w", pod.Namespace, pod.Name, err)
+	}
 	return nil
 }
 
-// removeNamespaceRoutes withdraws the routes annotation on delete.
-func (r *SiteRouterReconciler) removeNamespaceRoutes(_ context.Context, _ *instance) error {
-	// TODO(T07): remove the ovn.kubernetes.io/routes annotation.
+// removeNamespaceRoutes withdraws this instance's route entries from the tenant
+// namespace annotation on delete, keyed by dst, leaving any co-tenant
+// site-router's entries intact. When the last entry is removed the annotation
+// key is dropped entirely. The withdrawal uses a single-key merge patch (the
+// namespace's other annotations are untouched); a missing namespace or absent
+// annotation is a clean no-op. Errors are returned, never masked with "|| true".
+func (r *SiteRouterReconciler) removeNamespaceRoutes(ctx context.Context, inst *instance) error {
+	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
+	if len(cidrs) == 0 {
+		return nil
+	}
+
+	ns := &corev1.Namespace{}
+	if err := r.reader().Get(ctx, types.NamespacedName{Name: inst.namespace}, ns); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // namespace already gone; nothing to reclaim
+		}
+		return fmt.Errorf("get namespace %s: %w", inst.namespace, err)
+	}
+	current := ns.Annotations[routesAnnotation]
+	if current == "" {
+		return nil
+	}
+	reduced, err := removeRoutes(current, cidrs)
+	if err != nil {
+		return fmt.Errorf("remove routes for namespace %s: %w", inst.namespace, err)
+	}
+	if reduced == current {
+		return nil // none of our entries were present
+	}
+
+	patch := client.MergeFrom(ns.DeepCopy())
+	if reduced == emptyRoutes {
+		delete(ns.Annotations, routesAnnotation)
+	} else {
+		ns.Annotations[routesAnnotation] = reduced
+	}
+	if err := r.Patch(ctx, ns, patch); err != nil {
+		return fmt.Errorf("withdraw routes annotation on namespace %s: %w", inst.namespace, err)
+	}
 	return nil
 }
 
@@ -387,6 +573,87 @@ func decodeValues(hr *helmv2.HelmRelease) (map[string]interface{}, error) {
 		return nil, fmt.Errorf("decode HelmRelease spec.values: %w", err)
 	}
 	return v, nil
+}
+
+// --- Mediation helpers ----------------------------------------------------
+
+// reconcileError carries a machine-readable reason alongside the human message
+// so a reason set deep in a step (e.g. denyset.ReasonInvalidRemoteCIDR) survives
+// up to Reconcile's return and, in T09, onto the instance's Ready condition. It
+// satisfies error; T09 type-asserts it to read Reason().
+type reconcileError struct {
+	reason  string
+	message string
+}
+
+func (e *reconcileError) Error() string { return e.reason + ": " + e.message }
+
+// Reason exposes the machine-readable reason for T09/status.
+func (e *reconcileError) Reason() string { return e.reason }
+
+// reader returns the uncached APIReader when one is wired (production), else the
+// cached Client (unit tests, where the fake client serves every read). It is
+// used for the cluster ConfigMap and tenant Namespace reads, which are
+// deliberately not cached (see CacheByObject).
+func (r *SiteRouterReconciler) reader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
+}
+
+// clusterNetworks resolves the deny-set's cluster networks: the pod/service/join
+// CIDRs from the cozy-system/cozystack ConfigMap, falling back to the
+// platform-values defaults when the ConfigMap or a key is absent. NodeCIDRs and
+// LBPools are left empty for now — the node subnet is not exposed as a cluster
+// fact (nodes are on the host network, and the ConfigMap has no nodeCIDR key) and
+// the LB pools are admin-provisioned out of band, so neither is cleanly
+// discoverable; the deny-set's empty-field-skipped contract makes this safe, and
+// pod/service/join + the always-reserved link-local/loopback/default-route cover
+// the cluster-traffic-blackhole cases. TODO(T07 follow-up): source NodeCIDRs from
+// Node objects and LBPools from the LB pool config/flag if a clean signal appears.
+func (r *SiteRouterReconciler) clusterNetworks(ctx context.Context) (denyset.ClusterNetworks, error) {
+	nets := denyset.ClusterNetworks{
+		PodCIDR:     defaultPodCIDR,
+		ServiceCIDR: defaultServiceCIDR,
+		JoinCIDR:    defaultJoinCIDR,
+	}
+
+	cm := &corev1.ConfigMap{}
+	err := r.reader().Get(ctx, types.NamespacedName{Namespace: cozystackConfigNamespace, Name: cozystackConfigName}, cm)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nets, nil // fall back to the platform-values defaults
+		}
+		return nets, fmt.Errorf("get %s/%s ConfigMap: %w", cozystackConfigNamespace, cozystackConfigName, err)
+	}
+	if v := cm.Data[configKeyPodCIDR]; v != "" {
+		nets.PodCIDR = v
+	}
+	if v := cm.Data[configKeySvcCIDR]; v != "" {
+		nets.ServiceCIDR = v
+	}
+	if v := cm.Data[configKeyJoinCIDR]; v != "" {
+		nets.JoinCIDR = v
+	}
+	return nets, nil
+}
+
+// stringSlice coerces a decoded spec.values field (a []interface{} of strings
+// from JSON) into []string, dropping any non-string element. A nil or non-slice
+// value yields nil.
+func stringSlice(v interface{}) []string {
+	raw, ok := v.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(raw))
+	for _, e := range raw {
+		if s, ok := e.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
 
 // instanceName derives the bare instance name from the HelmRelease name by
