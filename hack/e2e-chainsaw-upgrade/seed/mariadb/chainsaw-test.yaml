@@ -1,0 +1,75 @@
+# Upgrade lane — Phase 2 (seed): MariaDB + canary data.
+#
+# Reuses the app suite's MariaDB manifest verbatim (DRY). The canary lives in
+# the manifest's `testdb`, written as `testuser` (password from the same
+# manifest) over 127.0.0.1 from inside the primary pod — TCP so the user@%%
+# grant matches. skipDelete keeps it for verify/mariadb.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-seed-mariadb
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mariadb-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=mariadb-test
+      tail: 50
+  # Canary writes go to the mariadb-test-primary Service (the writable primary)
+  # via the `mariadb` client (MariaDB 11 dropped the `mysql` binary). Verified on
+  # dev10: connecting to 127.0.0.1 fails (server does not bind loopback) and its
+  # retry OOM-kills the nano server container; the primary Service is clean.
+  steps:
+  - name: create-mariadb
+    try:
+    - apply:
+        file: ../../../e2e-chainsaw/mariadb/mariadb.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mariadb-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-statefulset-ready
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: mariadb-test
+          status:
+            readyReplicas: 2
+
+  - name: seed-canary
+    try:
+    - script:
+        timeout: 2m
+        # Exec from mariadb-test-0 (always present) but connect to the
+        # mariadb-test-primary Service, so writes reach the actual primary
+        # regardless of which pod holds that role.
+        content: |
+          set -eu
+          kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- env MYSQL_PWD=xai7Wepo \
+            mariadb -h mariadb-test-primary -u testuser testdb -e "
+              CREATE TABLE IF NOT EXISTS upgrade_canary (id INT AUTO_INCREMENT PRIMARY KEY, data VARCHAR(64));
+              TRUNCATE upgrade_canary;
+              INSERT INTO upgrade_canary (data) VALUES ('pre-upgrade-1'), ('pre-upgrade-2'), ('pre-upgrade-3');"
+          count=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- env MYSQL_PWD=xai7Wepo \
+            mariadb -h mariadb-test-primary -u testuser -N -B testdb -e "SELECT count(*) FROM upgrade_canary;")
+          echo "mariadb canary rows seeded: $count"
+          [ "$count" = "3" ] || { echo "FAIL: expected 3 seeded rows, got '$count'" >&2; exit 1; }
+        check:
+          ($error == null): true

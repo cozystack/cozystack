@@ -1,0 +1,32 @@
+name: "E2E sandbox prepare"
+description: >-
+  Copy the workspace into /tmp and provision the Talos e2e sandbox (make
+  prepare-env with the sanctioned 3x infra retry — the one retry justified by
+  docs/agents/e2e-testing.md #1). Shared by the e2e and upgrade-e2e jobs. The
+  caller must set SANDBOX_NAME first (a one-liner kept in the job, not here,
+  because a `>> $GITHUB_ENV` write inside a composite action trips zizmor's
+  github-env audit).
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare workspace
+      shell: bash
+      run: |
+        rm -rf "/tmp/$SANDBOX_NAME"
+        cp -r "${{ github.workspace }}" "/tmp/$SANDBOX_NAME"
+
+    - name: Prepare environment
+      shell: bash
+      run: |
+        cd "/tmp/$SANDBOX_NAME"
+        attempt=0
+        until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+          attempt=$((attempt + 1))
+          if [ $attempt -ge 3 ]; then
+            echo "Attempt $attempt failed, exiting..."
+            exit 1
+          fi
+          echo "Attempt $attempt failed, retrying..."
+        done
+        echo "Prepare environment completed after $((attempt + 1)) attempts"

@@ -1,0 +1,63 @@
+# Upgrade lane — Phase 4 (verify): platform health after the upgrade.
+#
+# The authoritative post-upgrade gate. All checks live in one script step so the
+# shared install/upgrade gate (hack/e2e-wait-hr-ready.sh) can be reused verbatim
+# (DRY) from the repo root.
+#
+# FATAL checks:
+#   - every HelmRelease Ready (the authoritative platform-health signal)
+#   - the aggregated cozystack apiservices Available
+#   - no NEW unbound PersistentVolume vs the pre-upgrade baseline (PV names are
+#     stable, so this diff is robust — a newly-unbound PV is a real regression)
+# NON-FATAL (warning) check:
+#   - new CrashLoopBackOff pods vs baseline. Pod names churn across an upgrade
+#     (new ReplicaSets/pods), so a name-diff is a heuristic and would false-
+#     positive as fatal; the all-HRs-Ready gate above is the real health signal,
+#     so this is reported for triage only.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-verify-platform
+spec:
+  catch:
+  - events: {}
+  steps:
+  - name: platform-healthy
+    try:
+    - script:
+        timeout: 20m
+        content: |
+          set -eu
+          cd ../../../..   # repo root: hack/e2e-chainsaw-upgrade/verify/platform -> ../../../..
+
+          echo "=== gate: every HelmRelease Ready ==="
+          hack/e2e-wait-hr-ready.sh 10m
+
+          echo "=== gate: cozystack aggregated apiservices Available ==="
+          kubectl wait --for=condition=Available \
+            apiservices/v1alpha1.apps.cozystack.io \
+            apiservices/v1alpha1.core.cozystack.io --timeout=3m
+
+          dir=/workspace/_out/upgrade-baseline
+          echo "=== gate: no new unbound PersistentVolumes vs baseline ==="
+          kubectl get pv --no-headers 2>/dev/null | awk '$5 != "Bound" {print $1}' | sort > /tmp/post-unbound-pv.txt
+          new_pv=$(comm -13 "$dir/unbound-pv.txt" /tmp/post-unbound-pv.txt || true)
+          if [ -n "$new_pv" ]; then
+            echo "FAIL: PersistentVolumes newly unbound after upgrade:" >&2
+            echo "$new_pv" >&2
+            kubectl get pv 2>&1 | awk 'NR==1 || $5 != "Bound"' >&2 || true
+            exit 1
+          fi
+          echo "no new unbound PVs"
+
+          echo "=== warning-only: new CrashLoopBackOff pods vs baseline ==="
+          kubectl get pods -A --no-headers 2>/dev/null | awk '/CrashLoopBackOff/ {print $1"/"$2}' | sort > /tmp/post-crashloop.txt
+          new_cl=$(comm -13 "$dir/crashloop.txt" /tmp/post-crashloop.txt || true)
+          if [ -n "$new_cl" ]; then
+            echo "::warning::pods in CrashLoopBackOff after upgrade not present in baseline (name churn expected; triage only):" >&2
+            echo "$new_cl" >&2
+          else
+            echo "no new CrashLoopBackOff pods"
+          fi
+        check:
+          ($error == null): true

@@ -191,19 +191,11 @@ EOF
 
   # Fail the test if any HelmRelease is not Ready. Wait again on a fresh
   # listing so HelmReleases created after the snapshot above are gated too;
-  # the window absorbs momentary Unknown flaps from drift reconciles.
-  if ! kubectl wait hr --all -A --timeout=15m --for=condition=ready; then
-    kubectl get hr -A || true
-    # kubectl's STATUS column truncates long messages; dump the full Ready
-    # condition per non-ready HR so the real error (e.g. a rejected CRD) is
-    # visible in the test output instead of only inside the cozyreport.
-    kubectl get hr -A --no-headers | awk '$4 != "True"' | while read -r ns name _; do
-      echo "--- Non-ready HelmRelease: $ns/$name" >&2
-      kubectl get hr -n "$ns" "$name" -o jsonpath='{range .status.conditions[*]}{.type}={.status} reason={.reason}: {.message}{"\n"}{end}' >&2 || true
-    done
-    echo "Some HelmReleases failed to reconcile" >&2
-    exit 1
-  fi
+  # the window absorbs momentary Unknown flaps from drift reconciles. The gate
+  # (re-list + full per-non-Ready-HR message dump + fail-fast) lives in a shared
+  # script so the upgrade lane (hack/e2e-upgrade-*.bats) reuses the exact same
+  # teeth — see docs/agents/e2e-testing.md #5.
+  hack/e2e-wait-hr-ready.sh 15m
 }
 
 @test "Wait for Cluster‑API provider deployments" {

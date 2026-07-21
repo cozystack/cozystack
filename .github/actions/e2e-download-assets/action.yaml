@@ -1,0 +1,52 @@
+name: "E2E asset download"
+description: >-
+  Fetch the Talos disk (+ pr.patch) this e2e run needs. Regular PR: pull the
+  talos-image and pr-patch artifacts built earlier in the run and apply the
+  patch. Release PR: download the nocloud disk from the draft release. Shared by
+  the e2e and upgrade-e2e jobs so the asset paths live in one place.
+
+inputs:
+  app-token:
+    description: "GitHub App token, used only on the release-PR path to fetch the draft-release asset."
+    required: false
+    default: ""
+  disk-id:
+    description: "Release asset id of nocloud-amd64.raw.xz (release PR path; from the resolve_assets job)."
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    # ▸ Regular PR path — artifacts from build-talos + finalize in this run.
+    - name: Download Talos image (regular PR)
+      if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: talos-image
+        path: _out/assets
+
+    - name: Download PR patch (regular PR)
+      if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+      with:
+        name: pr-patch
+        path: _out/assets
+
+    - name: Apply patch (regular PR)
+      if: "!contains(github.event.pull_request.labels.*.name, 'release')"
+      shell: bash
+      run: git apply _out/assets/pr.patch
+
+    # ▸ Release PR path — the draft-release disk for the promoted version.
+    - name: Download assets from draft release (release PR)
+      if: contains(github.event.pull_request.labels.*.name, 'release')
+      shell: bash
+      env:
+        APP_TOKEN: ${{ inputs.app-token }}
+        DISK_ID: ${{ inputs.disk-id }}
+      run: |
+        mkdir -p _out/assets
+        curl -sSL -H "Authorization: token ${APP_TOKEN}" -H "Accept: application/octet-stream" \
+          -o _out/assets/nocloud-amd64.raw.xz \
+          "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/assets/${DISK_ID}"

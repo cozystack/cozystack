@@ -1,0 +1,34 @@
+# Upgrade lane — Phase 2 (seed): record the PRE-upgrade baseline.
+#
+# Named zz-baseline so it sorts LAST in the seed phase (Chainsaw runs suites in
+# path order) — it must snapshot steady state AFTER the workload seeds above are
+# up, so their pods/PVs are part of the baseline and are not later mistaken for
+# upgrade-introduced regressions.
+#
+# Writes two snapshots the verify/platform suite diffs against:
+#   crashloop.txt  — CrashLoopBackOff pods (namespace/name)  [secondary signal;
+#                    pod names churn across the upgrade, so this is a heuristic —
+#                    the authoritative health gate is all-HRs-Ready in verify]
+#   unbound-pv.txt — PVs not in phase Bound (stable names; robust diff)
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-seed-baseline
+spec:
+  steps:
+  - name: record-baseline
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          dir=/workspace/_out/upgrade-baseline
+          mkdir -p "$dir"
+          kubectl get pods -A --no-headers 2>/dev/null \
+            | awk '/CrashLoopBackOff/ {print $1"/"$2}' | sort > "$dir/crashloop.txt" || true
+          kubectl get pv --no-headers 2>/dev/null \
+            | awk '$5 != "Bound" {print $1}' | sort > "$dir/unbound-pv.txt" || true
+          echo "=== pre-upgrade CrashLoopBackOff pods ==="; cat "$dir/crashloop.txt"
+          echo "=== pre-upgrade unbound PVs ==="; cat "$dir/unbound-pv.txt"
+        check:
+          ($error == null): true

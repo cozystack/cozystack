@@ -1,0 +1,60 @@
+# Upgrade lane — Phase 4 (verify): Redis survived with the SAME volumes.
+#
+# Confirms the failover topology is healthy and — the key data-continuity signal
+# — that both PVCs are still backed by the exact PVs recorded pre-upgrade
+# (redis-pv.txt), so no volume was silently reprovisioned during the upgrade.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-verify-redis
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: redis-test
+  steps:
+  - name: topology-and-storage-healthy
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-redis-test
+          status:
+            readyReplicas: 2
+
+  - name: same-volumes-bound
+    try:
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          before=/workspace/_out/upgrade-baseline/redis-pv.txt
+          [ -f "$before" ] || { echo "missing baseline redis-pv.txt (seed did not run?)" >&2; exit 1; }
+          after=$(kubectl -n "$NAMESPACE" get pvc \
+            redisfailover-persistent-data-rfr-redis-test-0 \
+            redisfailover-persistent-data-rfr-redis-test-1 \
+            -o jsonpath='{range .items[*]}{.metadata.name}={.spec.volumeName}{"\n"}{end}' | sort)
+          echo "=== before ==="; cat "$before"
+          echo "=== after  ==="; printf '%s\n' "$after"
+          if [ "$(cat "$before")" != "$after" ]; then
+            echo "FAIL: Redis PVC->PV bindings changed across the upgrade" >&2
+            exit 1
+          fi
+          echo "Redis volumes preserved across upgrade"
+        check:
+          ($error == null): true
