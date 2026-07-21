@@ -820,7 +820,7 @@ func TestReconcile_BlockOwnerDeletionDriftIsNormalized(t *testing.T) {
 	mustReconcile(t, c)
 
 	proj := mustProjection(t, c)
-	proj.OwnerReferences[0].BlockOwnerDeletion = ptr.To(true)
+	proj.OwnerReferences[0].BlockOwnerDeletion = new(true)
 	if err := c.Update(context.TODO(), proj); err != nil {
 		t.Fatalf("set BlockOwnerDeletion drift: %v", err)
 	}
@@ -846,7 +846,7 @@ func TestReconcile_RecreatedRelease_RehomesProjection(t *testing.T) {
 				Kind:       "TenantProjection",
 				Name:       testSentinel,
 				UID:        types.UID("dead0000-0000-0000-0000-000000000000"), // previous incarnation
-				Controller: ptr.To(true),
+				Controller: new(true),
 			}},
 		},
 		Type: corev1.SecretTypeOpaque,

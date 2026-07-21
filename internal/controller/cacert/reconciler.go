@@ -1196,10 +1196,10 @@ func sentinelOwnerRef(tp *internalv1alpha1.TenantProjection) metav1.OwnerReferen
 		Name:       tp.Name,
 		UID:        tp.UID,
 		// The projection has exactly one manager, this controller.
-		Controller: ptr.To(true),
+		Controller: new(true),
 		// BlockOwnerDeletion stays false: the trust anchor must never hold up the
 		// teardown of the application it belongs to.
-		BlockOwnerDeletion: ptr.To(false),
+		BlockOwnerDeletion: new(false),
 	}
 }
 
