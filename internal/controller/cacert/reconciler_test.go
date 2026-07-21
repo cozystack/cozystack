@@ -928,6 +928,51 @@ func TestProjectionsForSourceSecret(t *testing.T) {
 	}
 }
 
+// TestProjectionsForOwnedProjection pins the second watch mapping: an in-place
+// tamper of the canonical "<release>.tenant-ca" Secret resolves to the sentinel
+// that owns it, so the owner-reference adoption gate heals it at once rather than
+// on the five-minute resync. The projection's own name matches no sentinel's
+// sourceSecretName, so the source-index mapping returns zero for it — which is
+// exactly why this second, owner-reference mapping is needed.
+func TestProjectionsForOwnedProjection(t *testing.T) {
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme(t)).
+		WithIndex(&internalv1alpha1.TenantProjection{}, sourceSecretNameField, indexBySourceSecretName).
+		WithObjects(sentinel()).
+		Build()
+	r := newReconciler(c, record.NewFakeRecorder(1))
+
+	// The projection Secret, as the controller writes it: named "<release>.tenant-ca"
+	// and owner-referenced to the sentinel.
+	projMeta := &metav1.PartialObjectMetadata{}
+	projMeta.SetGroupVersionKind(secretGVK)
+	projMeta.SetNamespace(testNamespace)
+	projMeta.SetName(testProjection)
+	projMeta.SetOwnerReferences([]metav1.OwnerReference{sentinelOwnerRef(sentinel())})
+
+	// The owner-reference mapping resolves the owning sentinel from the projection.
+	got := r.projectionsForOwnedProjection(context.TODO(), projMeta)
+	if len(got) != 1 || got[0].Name != testSentinel || got[0].Namespace != testNamespace {
+		t.Errorf("a projection must map to its owning sentinel, got %+v", got)
+	}
+
+	// The source-index mapping, by contrast, returns nothing for the projection's
+	// own name: it is no sentinel's sourceSecretName. This is the gap the
+	// owner-reference mapping fills.
+	if got := r.projectionsForSourceSecret(context.TODO(), projMeta); len(got) != 0 {
+		t.Errorf("the projection name matches no source, so the source mapping must return nothing, got %+v", got)
+	}
+
+	// A Secret with no TenantProjection owner reference maps to no sentinel.
+	plain := &metav1.PartialObjectMetadata{}
+	plain.SetGroupVersionKind(secretGVK)
+	plain.SetNamespace(testNamespace)
+	plain.SetName(testProjection)
+	if got := r.projectionsForOwnedProjection(context.TODO(), plain); len(got) != 0 {
+		t.Errorf("a Secret owned by no sentinel must map to nothing, got %+v", got)
+	}
+}
+
 // --- Pure write-path guards (unchanged functions) ---
 
 func TestContainsPrivateKey(t *testing.T) {

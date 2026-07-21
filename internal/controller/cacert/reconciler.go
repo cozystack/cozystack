@@ -1170,6 +1170,18 @@ func secretMeta() *metav1.PartialObjectMetadata {
 // change to the selectors that decide tenant visibility takes effect without
 // waiting for the resync.
 //
+// The SAME metadata Secret cache also feeds a second mapping: the projection this
+// controller writes is itself a Secret, and an in-place rewrite of its ca.crt (a
+// tamper the owner-reference adoption gate then heals) must wake the reconciler at
+// once, not five minutes later on the resync. The projection's name is
+// "<release>.tenant-ca", which matches no sentinel's sourceSecretName, so the
+// source index never enqueues it; projectionsForOwnedProjection resolves the
+// owning sentinel from the projection's controller owner reference instead.
+// Owns(&corev1.Secret{}) would be the obvious wiring and is a TRAP here: it
+// registers against the MANAGER's cache, whose Secret informer is label-scoped to
+// the WildcardSecret replicas (below), so a projection — which carries no wildcard
+// label — is never delivered and the watch silently never fires.
+//
 // The Secret watch runs on secretMetaCache, a DEDICATED cache, NOT the manager's.
 // It cannot use the manager's cache, and the reason is a controller-runtime trap
 // rather than a preference: that cache scopes its v1/Secret informer to the
@@ -1192,6 +1204,9 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, secretMetaCache cache.Ca
 		For(&internalv1alpha1.TenantProjection{}).
 		WatchesRawSource(crsource.Kind(secretMetaCache, secretMeta(),
 			handler.TypedEnqueueRequestsFromMapFunc(r.projectionsForSourceSecret),
+		)).
+		WatchesRawSource(crsource.Kind(secretMetaCache, secretMeta(),
+			handler.TypedEnqueueRequestsFromMapFunc(r.projectionsForOwnedProjection),
 		)).
 		Watches(&cozyv1alpha1.ApplicationDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.projectionsForApplicationDefinition),
@@ -1237,6 +1252,26 @@ func (r *Reconciler) projectionsForSourceSecret(ctx context.Context, obj *metav1
 		out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{
 			Namespace: list.Items[i].Namespace, Name: list.Items[i].Name,
 		}})
+	}
+	return out
+}
+
+// projectionsForOwnedProjection maps a Secret back to the sentinel that owns it as
+// its published projection, so an in-place tamper of the canonical
+// "<release>.tenant-ca" Secret's data is corrected at once rather than waiting for
+// the slow resync. The projection's own name matches no sentinel's
+// sourceSecretName, so projectionsForSourceSecret never enqueues it; the controller
+// owner reference the projection carries is what identifies its sentinel. The
+// reference lives in the object metadata, so the metadata stub the dedicated cache
+// delivers is enough and no key material is read.
+func (r *Reconciler) projectionsForOwnedProjection(_ context.Context, obj *metav1.PartialObjectMetadata) []reconcile.Request {
+	var out []reconcile.Request
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.Kind == "TenantProjection" && ref.APIVersion == internalv1alpha1.GroupVersion.String() {
+			out = append(out, reconcile.Request{NamespacedName: types.NamespacedName{
+				Namespace: obj.GetNamespace(), Name: ref.Name,
+			}})
+		}
 	}
 	return out
 }
