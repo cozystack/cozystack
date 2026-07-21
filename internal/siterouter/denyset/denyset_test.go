@@ -233,3 +233,40 @@ func TestValidate_ReportsEveryOffender(t *testing.T) {
 		t.Errorf("172.31.0.0/16 is disjoint and must not be rejected")
 	}
 }
+
+// TestClusterNetworksFromConfigMap covers the shared ConfigMap→ClusterNetworks
+// mapping both the controller and the apiserver admission check rely on: a nil
+// map (absent ConfigMap) yields the platform defaults, present keys override, and
+// an empty-string value falls back to the default rather than blanking the field.
+func TestClusterNetworksFromConfigMap(t *testing.T) {
+	t.Run("nil map yields defaults", func(t *testing.T) {
+		got := ClusterNetworksFromConfigMap(nil)
+		if got.PodCIDR != DefaultPodCIDR || got.ServiceCIDR != DefaultServiceCIDR || got.JoinCIDR != DefaultJoinCIDR {
+			t.Fatalf("nil map must yield the platform defaults, got %+v", got)
+		}
+	})
+
+	t.Run("present keys override defaults", func(t *testing.T) {
+		got := ClusterNetworksFromConfigMap(map[string]string{
+			ConfigMapKeyPodCIDR:     "192.168.0.0/16",
+			ConfigMapKeyServiceCIDR: "172.16.0.0/12",
+			ConfigMapKeyJoinCIDR:    "100.65.0.0/16",
+		})
+		if got.PodCIDR != "192.168.0.0/16" {
+			t.Errorf("PodCIDR = %q, want the ConfigMap value 192.168.0.0/16", got.PodCIDR)
+		}
+		if got.ServiceCIDR != "172.16.0.0/12" {
+			t.Errorf("ServiceCIDR = %q, want the ConfigMap value 172.16.0.0/12", got.ServiceCIDR)
+		}
+		if got.JoinCIDR != "100.65.0.0/16" {
+			t.Errorf("JoinCIDR = %q, want the ConfigMap value 100.65.0.0/16", got.JoinCIDR)
+		}
+	})
+
+	t.Run("empty value falls back to default", func(t *testing.T) {
+		got := ClusterNetworksFromConfigMap(map[string]string{ConfigMapKeyPodCIDR: ""})
+		if got.PodCIDR != DefaultPodCIDR {
+			t.Errorf("empty pod-cidr must fall back to %q, got %q", DefaultPodCIDR, got.PodCIDR)
+		}
+	})
+}

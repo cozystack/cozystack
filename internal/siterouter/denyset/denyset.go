@@ -57,6 +57,54 @@ const (
 	loopbackCIDR  = "127.0.0.0/8"
 )
 
+// ConfigMap keys the cluster-wide cozy-system/cozystack ConfigMap exposes the
+// cluster CIDRs under. Both callers (the site-router controller and the
+// SiteRouter admission check) read the same keys, so they live here — the single
+// source of truth for the ConfigMap→ClusterNetworks mapping (D10).
+const (
+	ConfigMapKeyPodCIDR     = "ipv4-pod-cidr"
+	ConfigMapKeyServiceCIDR = "ipv4-svc-cidr"
+	ConfigMapKeyJoinCIDR    = "ipv4-join-cidr"
+)
+
+// Platform-values defaults for the cluster networks
+// (packages/core/platform/values.yaml networking.{podCIDR,serviceCIDR,joinCIDR}),
+// used when the cozystack ConfigMap is absent or a key is unset so validation
+// fails safe rather than skipping a network it could not discover.
+const (
+	DefaultPodCIDR     = "10.244.0.0/16"
+	DefaultServiceCIDR = "10.96.0.0/16"
+	DefaultJoinCIDR    = "100.64.0.0/16"
+)
+
+// ClusterNetworksFromConfigMap maps the raw data of the cozy-system/cozystack
+// ConfigMap into ClusterNetworks, applying the platform-values defaults for any
+// key that is absent or empty. Passing a nil map (the ConfigMap does not exist)
+// yields the all-defaults set. NodeCIDRs and LBPools are left empty: the node
+// subnet is not exposed as a cluster fact (nodes are on the host network and the
+// ConfigMap has no nodeCIDR key) and LB pools are admin-provisioned out of band,
+// so neither is cleanly discoverable; the empty-field-skipped contract makes that
+// safe, and pod/service/join plus the always-reserved networks cover the
+// cluster-traffic-blackhole cases. It is pure and stdlib-only so both the
+// controller and the apiserver admission check share one mapping.
+func ClusterNetworksFromConfigMap(data map[string]string) ClusterNetworks {
+	nets := ClusterNetworks{
+		PodCIDR:     DefaultPodCIDR,
+		ServiceCIDR: DefaultServiceCIDR,
+		JoinCIDR:    DefaultJoinCIDR,
+	}
+	if v := data[ConfigMapKeyPodCIDR]; v != "" {
+		nets.PodCIDR = v
+	}
+	if v := data[ConfigMapKeyServiceCIDR]; v != "" {
+		nets.ServiceCIDR = v
+	}
+	if v := data[ConfigMapKeyJoinCIDR]; v != "" {
+		nets.JoinCIDR = v
+	}
+	return nets
+}
+
 // ClusterNetworks are the cluster-owned networks a tenant's remoteCIDRs must be
 // disjoint from. PodCIDR/ServiceCIDR/JoinCIDR come from the cozy-system/cozystack
 // ConfigMap (ipv4-pod-cidr / ipv4-svc-cidr / ipv4-join-cidr) with the
