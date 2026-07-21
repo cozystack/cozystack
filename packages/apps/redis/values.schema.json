@@ -136,6 +136,26 @@
         "v7"
       ]
     },
+    "tls": {
+      "description": "TLS configuration. TLS is opt-in and is not inferred from `external`.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "authClients": {
+          "description": "Maps to the Redis `tls-auth-clients` directive. Defaults to `no` — the server certificate is presented but client certificates are not validated.",
+          "type": "string",
+          "enum": [
+            "no",
+            "optional",
+            "yes"
+          ]
+        },
+        "enabled": {
+          "description": "Enable TLS for Redis and Sentinel connections. Disabled unless set. Enabling it moves Redis and Sentinel to a TLS-only listener, so existing plaintext clients must be migrated at the same time. Encryption is provided by the redis-operator fork that mounts the certificate Secret into both Redis and Sentinel pods at `/tls`.",
+          "type": "boolean"
+        }
+      }
+    },
     "authEnabled": {
       "description": "Enable password generation.",
       "type": "boolean",

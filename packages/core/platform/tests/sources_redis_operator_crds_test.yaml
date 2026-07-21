@@ -1,0 +1,21 @@
+suite: redis-operator applies CRD updates on upgrade
+# The RedisFailover CRD gained spec.tls when the operator moved to the cozystack
+# fork. Helm never upgrades CRDs shipped in crds/, so the PackageSource must opt
+# into CreateReplace; without it the operator binary upgrades while the live CRD
+# stays behind and the apiserver strips spec.tls from every RedisFailover the
+# redis chart renders, leaving TLS silently off. Pin the policy so an upgrade
+# cannot silently regress.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: redis-operator PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.redis-operator
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace

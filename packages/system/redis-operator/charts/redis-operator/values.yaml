@@ -9,6 +9,15 @@ image:
   tag: v1.3.0
   cli_args: ""
 
+# Extra environment variables passed to the operator container.
+# Set KUBE_FEATURE_WatchListClient=false on Kubernetes < 1.36 where the
+# server-side WatchList feature does not deliver BOOKMARK events on the
+# initial events stream — without this the operator hangs forever on
+# "Waiting for caches to sync".
+env:
+  - name: KUBE_FEATURE_WatchListClient
+    value: "false"
+
 imageCredentials:
   create: false
   registry: url.private.registry
