@@ -138,6 +138,22 @@ func TestValidate(t *testing.T) {
 			wantNetwork: NetworkMalformed,
 		},
 		{
+			// IPv6 parses fine but Overlaps is false across families, so without
+			// an explicit family check it would slip past every cluster network.
+			name:        "IPv6 remoteCIDR rejected as unsupported",
+			remoteCIDR:  "fd00::/8",
+			clusters:    defaultClusters(),
+			wantReject:  true,
+			wantNetwork: NetworkUnsupported,
+		},
+		{
+			name:        "IPv4-mapped IPv6 rejected as unsupported",
+			remoteCIDR:  "::ffff:10.244.0.0/104",
+			clusters:    defaultClusters(),
+			wantReject:  true,
+			wantNetwork: NetworkUnsupported,
+		},
+		{
 			// A cluster network the caller could not discover is simply not
 			// enforced: with no node/LB info an otherwise-node-overlapping CIDR
 			// passes. This documents the "empty field skipped" contract.

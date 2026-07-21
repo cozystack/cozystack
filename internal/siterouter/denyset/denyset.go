@@ -39,6 +39,13 @@ const (
 	NetworkLoopback     = "loopback"
 	NetworkDefaultRoute = "default-route"
 	NetworkMalformed    = "malformed"
+	// NetworkUnsupported labels a remoteCIDR whose address family is not IPv4.
+	// Phase-1 routing and the cluster CIDR keys (ipv4-*) are IPv4-only, and
+	// netip.Prefix.Overlaps reports false across families, so an IPv6 (or
+	// IPv4-mapped-IPv6) remoteCIDR would silently pass every overlap check and
+	// be programmed as a route that can never match cluster traffic. Reject it
+	// outright instead.
+	NetworkUnsupported = "unsupported-address-family"
 )
 
 // Always-reserved networks enforced unconditionally, independent of the
@@ -93,6 +100,9 @@ func (r Rejection) Message() string {
 	if r.Network == NetworkMalformed {
 		return fmt.Sprintf("remoteCIDR %q is not a valid CIDR", r.RemoteCIDR)
 	}
+	if r.Network == NetworkUnsupported {
+		return fmt.Sprintf("remoteCIDR %q uses an unsupported address family; only IPv4 is supported", r.RemoteCIDR)
+	}
 	return fmt.Sprintf("remoteCIDR %q overlaps the cluster %s network %s", r.RemoteCIDR, r.Network, r.Collides)
 }
 
@@ -120,6 +130,15 @@ func Validate(remoteCIDRs []string, clusters ClusterNetworks) []Rejection {
 			continue
 		}
 		p = p.Masked()
+
+		// IPv4-only (Phase 1). netip.Prefix.Overlaps is false across address
+		// families, so a non-IPv4 prefix would pass every cluster-network check
+		// silently; reject it before any overlap test rather than program a route
+		// that can never match cluster traffic.
+		if !p.Addr().Is4() {
+			rejections = append(rejections, Rejection{RemoteCIDR: raw, Network: NetworkUnsupported})
+			continue
+		}
 
 		// A default route (or any /0) blackholes all cluster traffic. Report it
 		// as such rather than as an overlap with whichever cluster network is
