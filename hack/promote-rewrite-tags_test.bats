@@ -174,9 +174,13 @@
   # that promotion on a Go checksum line. metallb_test.yaml names v1.5.0-rc.2
   # in a comment, and the console pnpm-lock.yaml carries rolldown@1.0.0-rc.15.
   tmp=$(mktemp -d)
-  cp -a packages "$tmp/packages"
 
+  # A fresh copy per version. Reusing one tree would run iterations 2 and 3
+  # against a tree the previous rewrite already mutated, so each would be
+  # testing a slightly different input than the one it names.
   for v in 1.4.0-rc.2 1.5.0-rc.2 1.4.0-rc.4; do
+    rm -rf "$tmp/packages"
+    cp -a packages "$tmp/packages"
     rc=0
     hack/promote-rewrite-tags.sh "$v" "${v%%-*}" "$tmp/packages" >"$tmp/log" 2>&1 || rc=$?
     if [ "$rc" -ne 0 ]; then
@@ -232,12 +236,11 @@
   # below, so DELETING a shape still fails something even though both sides of
   # this comparison would move together.
   #
-  # Deleting, precisely — not narrowing. The per-shape test matches on the
-  # repository substring, so a shape that loses its `registry` rejoin (the very
-  # regression shape 3 was added for) still satisfies it. Those are caught by
-  # promote-retag_test.bats and nightly-mirror_test.bats instead, which assert
-  # concrete named packages. Three independent suites is real defence, but this
-  # comparison contributes nothing to it.
+  # Deleting a shape, and also narrowing one: the per-shape test asserts the
+  # exact canonical repo@digest, so a shape that loses its `registry` rejoin
+  # (the very regression shape 3 was added for) fails there too. What this
+  # comparison itself contributes is only file coverage — for shape behaviour
+  # it is inert, since both sides share the parser.
   #
   # An earlier revision derived the expected set from a grep for a CONTIGUOUS
   # 'ghcr.io/cozystack/cozystack/...@sha256:' string. That was blind to every
