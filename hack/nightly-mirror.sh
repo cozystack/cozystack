@@ -48,16 +48,56 @@ command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1;
 yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
-# Collect "repo@sha256:..." refs from every package values.yaml, across the three
-# shapes the build writes (identical to hack/promote-retag.sh):
+# Collect "repo@sha256:..." refs from every package values.yaml, across the
+# shapes present in the tree today (identical to hack/promote-retag.sh — see the
+# longer note there on why this list is empirical rather than a closed set):
 #   1. single string  <repo>:<tag>@sha256:<digest>
-#   2. split map       {repository, tag, digest}
-#   3. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=...}
+#   2. split map       {[registry,] repository, tag, digest}
+#   3. split map       {[registry,] repository, tag: <tag>@sha256:<digest>}
+#   4. chart-global    global.registry.address + global.images.<n>.{repository, tag}
+#   5. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=...}
+#
+# Shapes 2/3's optional `registry` sibling and the whole of shape 4 cover the
+# refs whose host sits outside `repository`. Rejoining it matters twice over
+# here: a host-less ref is dropped by the SRC_REGISTRY filter below, AND the
+# closing host rewrite is a literal "$SRC_REGISTRY/" substring replace, which a
+# split-out host does not match — so such a ref would be neither mirrored nor
+# rewritten, leaving the published tree pointing at the private CI registry
+# rather than at a merely-dangling GHCR ref.
+#
+# Shape 3 is what most package Makefiles actually write: they set `.image.tag` to
+# "$(IMAGE_TAG)@$(digest)" in one yq call rather than maintaining a separate
+# `digest` key. It is NOT covered by shape 2 (no `digest` key) and only partially
+# matches shape 1 — rule 1 grabs the bare tag value "<tag>@sha256:<digest>", which
+# carries no repository, so ref_repo() reduces it to "<tag>" and the SRC_REGISTRY
+# case below drops it. The image is then never copied, while the host rewrite at
+# the end of this script still rewrites its repository to DST_REGISTRY, leaving a
+# dangling reference to an image that was never pushed there. Shape 3 must be
+# matched explicitly for those images to be mirrored at all.
+#
+# The `tag == "!!str"` guard on shape 3 is load-bearing, not defensive noise:
+# yq's test() aborts the whole expression with "cannot match with !!int, can only
+# match strings" on a non-string tag, and `tag: 1.24` is ordinary YAML a
+# third-party chart may well carry unquoted. Because the invocation swallows both
+# stderr and status, that abort would silently discard every shape-3 ref in the
+# SAME FILE — reintroducing the exact silent skip this rule exists to fix, in a
+# file that merely happens to sit next to an unquoted version number. Rule 1 is
+# immune because its `select(tag == "!!str")` already precedes its test().
+#
+# `registry`, `repository` and `digest` carry the same guard against a different
+# failure: they are concatenated rather than test()ed, and yq coerces int, bool,
+# null and seq on `+`, so only a !!map aborts ("!!str () cannot be added to a
+# !!map") — and that abort takes the whole file down with it. See the fuller
+# note in hack/promote-retag.sh.
 collect_refs() {
   for f in "$TREE"/*/*/values.yaml; do
     [ -f "$f" ] || continue
     yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$f" 2>/dev/null || true
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | .repository + "@" + .digest' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | select(.repository | tag == "!!str") | select(.digest | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + .digest' "$f" 2>/dev/null || true
+    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
+    # $reg is a yq binding, not a shell variable — see hack/promote-retag.sh.
+    # shellcheck disable=SC2016
+    yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
   done
 }
