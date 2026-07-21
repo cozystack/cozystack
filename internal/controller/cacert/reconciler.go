@@ -318,6 +318,7 @@ const (
 	reasonNoRelease             = "NoRelease"
 	reasonUnsupportedProjection = "UnsupportedProjectionType"
 	reasonMultipleCACert        = "MultipleCACertProjections"
+	reasonReleaseContested      = "ReleaseContested"
 )
 
 // privateKeyHeader matches a PEM private-key header of any flavour (PKCS#1,
@@ -454,6 +455,38 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, nil
 	}
 
+	if caCertEntries == 0 {
+		// No CACert entry declares the trust anchor any more — a chart that gated its
+		// CACert entry (say on tls.enabled) while still rendering the sentinel lands
+		// here. Withdraw a projection a previous declaration published: garbage
+		// collection only fires when the whole sentinel is pruned, so a sentinel that
+		// keeps existing with its CACert entry removed would otherwise serve a stale
+		// anchor forever. Only a projection this sentinel owns is deleted; a foreign
+		// Secret, or another sentinel's projection at the name, is left untouched.
+		if err := r.withdrawProjection(ctx, tp, target); err != nil {
+			return ctrl.Result{}, err
+		}
+	} else {
+		// Exactly one CACert entry. Refuse if another sentinel in this namespace
+		// declares one for the same release: both resolve to the single canonical
+		// name, so publishing from either would silently pick an arbitrary winner and
+		// let the two flap ownership of one projection, while deleting either would
+		// garbage-collect an anchor the other still declares. Refuse both — neither
+		// writes — until the declaration lives on exactly one sentinel. This mirrors
+		// the more-than-one-CACert-entry refusal above, one level up.
+		other, err := r.anotherSentinelForRelease(ctx, tp, release)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if other != "" {
+			if err := r.setReady(ctx, tp, notReady(reasonReleaseContested,
+				fmt.Sprintf("another TenantProjection %q in this namespace declares a CACert projection for release %q; both resolve to the canonical name %q, so neither is published — declare the trust anchor from exactly one sentinel", other, release, target))); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+	}
+
 	// The sentinel's Ready condition aggregates its projections: True only when
 	// every declared projection is published, otherwise the first failure.
 	ready := metav1.Condition{
@@ -552,6 +585,58 @@ func (r *Reconciler) reconcileCACert(ctx context.Context, tp *internalv1alpha1.T
 		Reason:  reasonProjected,
 		Message: fmt.Sprintf("published the trust anchor to %q", target),
 	}, nil
+}
+
+// withdrawProjection deletes the canonical trust-anchor Secret when the sentinel
+// no longer declares one, but ONLY when it still carries this sentinel's owner
+// reference. Deleting the whole sentinel is handled by garbage collection through
+// that reference; this covers the narrower case of a sentinel that keeps existing
+// with its CACert declaration removed, which GC never sees. A foreign Secret at the
+// name, or a projection another sentinel owns, is never deleted — the owner-
+// reference check is what keeps the withdrawal from destroying data that is not
+// this sentinel's to withdraw.
+func (r *Reconciler) withdrawProjection(ctx context.Context, tp *internalv1alpha1.TenantProjection, target string) error {
+	existing := &corev1.Secret{}
+	if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: tp.Namespace, Name: target}, existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get CA projection %s/%s: %w", tp.Namespace, target, err)
+	}
+	if !hasOwner(existing.OwnerReferences, sentinelOwnerRef(tp)) {
+		return nil
+	}
+	if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("withdraw CA projection %s/%s: %w", tp.Namespace, target, err)
+	}
+	return nil
+}
+
+// anotherSentinelForRelease returns the name of a DIFFERENT sentinel in the same
+// namespace that carries the same release label and also declares a CACert
+// projection, or "" when this sentinel is the only one for the release. Two such
+// sentinels resolve to the same canonical projection name, so the reconcile refuses
+// to publish from either; see the caller.
+func (r *Reconciler) anotherSentinelForRelease(ctx context.Context, tp *internalv1alpha1.TenantProjection, release string) (string, error) {
+	list := &internalv1alpha1.TenantProjectionList{}
+	if err := r.List(ctx, list, client.InNamespace(tp.Namespace)); err != nil {
+		return "", fmt.Errorf("list TenantProjections in %s: %w", tp.Namespace, err)
+	}
+	for i := range list.Items {
+		other := &list.Items[i]
+		if other.Name == tp.Name || other.DeletionTimestamp != nil {
+			continue
+		}
+		if other.Labels[helmNameLabel] != release {
+			continue
+		}
+		for j := range other.Spec.Projections {
+			if other.Spec.Projections[j].Type == internalv1alpha1.ProjectionTypeCACert {
+				return other.Name, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 // reconcileSourceAtCanonicalName handles the degenerate case where the source

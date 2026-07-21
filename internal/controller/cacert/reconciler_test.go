@@ -505,6 +505,73 @@ func TestReconcile_MultipleCACertEntries_Rejected(t *testing.T) {
 	assertReady(t, c, metav1.ConditionFalse, reasonMultipleCACert)
 }
 
+// TestReconcile_EntryRemoved_WithdrawsProjection exercises the withdrawal path: a
+// sentinel that stops declaring a CACert projection must have the anchor it
+// published removed. Garbage collection only fires when the whole sentinel is
+// pruned, so without an explicit delete a sentinel that keeps existing with its
+// CACert entry gated off (e.g. on tls.enabled) would serve a stale trust anchor
+// forever.
+func TestReconcile_EntryRemoved_WithdrawsProjection(t *testing.T) {
+	c := newClient(t, helmRelease(), appDef(), sentinel(),
+		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
+	)
+	mustReconcile(t, c)
+	if _, ok := getSecret(t, c, testProjection); !ok {
+		t.Fatalf("the projection must exist while the CACert entry is declared")
+	}
+
+	// Drop the CACert entry through the internal type. The CRD's MinItems=1 forbids
+	// an empty projections list at the API server, but a chart that gates the entry
+	// — or a future non-CACert entry replacing it — leaves the sentinel with zero
+	// CACert projections while the old anchor still stands.
+	tp := &internalv1alpha1.TenantProjection{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Namespace: testNamespace, Name: testSentinel}, tp); err != nil {
+		t.Fatalf("get sentinel: %v", err)
+	}
+	tp.Spec.Projections = nil
+	if err := c.Update(context.TODO(), tp); err != nil {
+		t.Fatalf("drop the CACert entry: %v", err)
+	}
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, testProjection); ok {
+		t.Errorf("withdrawing the last CACert entry must delete the projection it published")
+	}
+}
+
+// TestReconcile_TwoSentinelsForOneRelease_Refused pins the two-sentinel guard: two
+// sentinels in one namespace carrying the same release label both resolve to the
+// single canonical name. Without the guard, whichever reconciles first publishes an
+// arbitrary CA (a silent winner) and the two flap ownership of one projection. Both
+// must refuse instead, so nothing is published until the declaration lives on
+// exactly one sentinel.
+func TestReconcile_TwoSentinelsForOneRelease_Refused(t *testing.T) {
+	second := &internalv1alpha1.TenantProjection{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testSentinel + "-dup",
+			Namespace: testNamespace,
+			UID:       types.UID("77777777-8888-9999-aaaa-bbbbbbbbbbbb"),
+			Labels:    map[string]string{helmNameLabel: testRelease},
+		},
+		Spec: internalv1alpha1.TenantProjectionSpec{
+			Projections: []internalv1alpha1.TenantProjectionEntry{{
+				Type:             internalv1alpha1.ProjectionTypeCACert,
+				SourceSecretName: testOperatorCA,
+				SourceKey:        caCertKey,
+			}},
+		},
+	}
+	c := newClient(t, helmRelease(), appDef(), sentinel(), second,
+		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
+	)
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, testProjection); ok {
+		t.Errorf("two sentinels contesting one release must publish nothing, not an arbitrary winner")
+	}
+	assertReady(t, c, metav1.ConditionFalse, reasonReleaseContested)
+}
+
 // --- Reconcile: the write-path guards, exercised through a real source ---
 
 // TestReconcile_RefusesPrivateKeyUnderLiftedKey pins the reason the controller

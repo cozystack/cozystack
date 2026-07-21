@@ -51,10 +51,11 @@ rules:
 #    terminates TLS; tenant ingress controllers / Gateways still read only the
 #    replica in their own namespace.
 #  - CACertReconciler projects an application's CA certificate into the key-free
-#    "<release>.tenant-ca" Secret of the same namespace. It only ever creates or
-#    updates that projection; the projection is garbage-collected through its
-#    owner reference to the TenantProjection sentinel when the application (and so
-#    the sentinel) is deleted, so this reconciler itself never deletes a Secret.
+#    "<release>.tenant-ca" Secret of the same namespace. It creates and updates
+#    that projection, and deletes it to WITHDRAW a retired declaration — but only
+#    a projection it owns by owner reference, never a foreign Secret. Deleting the
+#    whole sentinel is handled instead by garbage collection, through the
+#    projection's owner reference to the TenantProjection.
 #
 # The read verbs (get/list/watch) are listed explicitly so the rule fully
 # describes both reconcilers' Secret access on its own and keeps working if the
@@ -82,8 +83,10 @@ rules:
 # compromise of every Secret in the cluster — including the CA private keys the
 # CA-extraction controller exists to keep away from tenants. The controller's own
 # code is what confines it: the CA reconciler lifts exactly one whitelisted key,
-# re-guards the bytes on every write, and never deletes a projection at all —
-# garbage collection removes it through the sentinel owner reference. That is a
+# re-guards the bytes on every write, and deletes only a projection it owns by
+# owner reference — to withdraw a retired declaration — never a foreign Secret;
+# garbage collection removes the projection through the sentinel owner reference
+# when the sentinel itself goes. That is a
 # code-level confinement of an RBAC-level power, which is
 # strictly weaker than not holding the power — the honest reading is that the
 # guard is the boundary, and the RBAC is not.
