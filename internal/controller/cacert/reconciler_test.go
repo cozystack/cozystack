@@ -564,12 +564,65 @@ func TestReconcile_TwoSentinelsForOneRelease_Refused(t *testing.T) {
 	c := newClient(t, helmRelease(), appDef(), sentinel(), second,
 		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
 	)
-	mustReconcile(t, c)
+	_, res, err := reconcileSentinel(t, c)
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
 
 	if _, ok := getSecret(t, c, testProjection); ok {
 		t.Errorf("two sentinels contesting one release must publish nothing, not an arbitrary winner")
 	}
 	assertReady(t, c, metav1.ConditionFalse, reasonReleaseContested)
+	// The contest is cleared by deleting the sibling, which nothing else enqueues
+	// this sentinel for, so it must requeue itself or the anchor stays withheld
+	// until the far-off global resync.
+	if res.RequeueAfter == 0 {
+		t.Errorf("a contested sentinel must requeue itself; nothing else wakes it when the sibling is removed")
+	}
+}
+
+// TestReconcile_ContestResolved_Republishes pins the recovery half of the
+// two-sentinel guard: once the operator removes the duplicate, the surviving
+// sentinel must publish its anchor. Nothing enqueues this sentinel when a sibling
+// is deleted, so the recovery rides the RequeueAfter the contested reconcile
+// returns — without it the anchor stays withheld until the global resync.
+func TestReconcile_ContestResolved_Republishes(t *testing.T) {
+	second := &internalv1alpha1.TenantProjection{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testSentinel + "-dup",
+			Namespace: testNamespace,
+			UID:       types.UID("77777777-8888-9999-aaaa-bbbbbbbbbbbb"),
+			Labels:    map[string]string{helmNameLabel: testRelease},
+		},
+		Spec: internalv1alpha1.TenantProjectionSpec{
+			Projections: []internalv1alpha1.TenantProjectionEntry{{
+				Type:             internalv1alpha1.ProjectionTypeCACert,
+				SourceSecretName: testOperatorCA,
+				SourceKey:        caCertKey,
+			}},
+		},
+	}
+	c := newClient(t, helmRelease(), appDef(), sentinel(), second,
+		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
+	)
+	_, res, err := reconcileSentinel(t, c)
+	if err != nil {
+		t.Fatalf("reconcile while contested: %v", err)
+	}
+	assertReady(t, c, metav1.ConditionFalse, reasonReleaseContested)
+	if res.RequeueAfter == 0 {
+		t.Fatalf("the contested reconcile must schedule its own recovery requeue")
+	}
+
+	// The operator removes the duplicate. The scheduled requeue is the only thing
+	// that brings this sentinel back — no sibling-delete watch exists.
+	if err := c.Delete(context.TODO(), second); err != nil {
+		t.Fatalf("remove the duplicate sentinel: %v", err)
+	}
+	mustReconcile(t, c)
+
+	assertKeyFree(t, mustProjection(t, c), testCA)
+	assertReady(t, c, metav1.ConditionTrue, reasonProjected)
 }
 
 // --- Reconcile: the write-path guards, exercised through a real source ---

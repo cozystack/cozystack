@@ -469,21 +469,32 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	} else {
 		// Exactly one CACert entry. Refuse if another sentinel in this namespace
 		// declares one for the same release: both resolve to the single canonical
-		// name, so publishing from either would silently pick an arbitrary winner and
-		// let the two flap ownership of one projection, while deleting either would
-		// garbage-collect an anchor the other still declares. Refuse both — neither
-		// writes — until the declaration lives on exactly one sentinel. This mirrors
-		// the more-than-one-CACert-entry refusal above, one level up.
+		// name, so publishing a NEW anchor from either would silently pick an
+		// arbitrary winner and let the two flap ownership of one projection, while
+		// deleting either would garbage-collect an anchor the other still declares.
+		// Neither writes a fresh projection until the declaration lives on exactly
+		// one sentinel — a projection an earlier, uncontested reconcile already
+		// published is left in place, not deleted, because withdrawing an anchor is
+		// worse than leaving a stale one visible next to the contest condition. This
+		// mirrors the more-than-one-CACert-entry refusal above, one level up.
+		//
+		// Requeue on the resync interval, unlike the other refusals. NoRelease and
+		// MultipleCACert self-heal because the fix edits THIS sentinel, which the
+		// For() watch delivers; a contest is cleared by deleting the SIBLING
+		// sentinel, and nothing enqueues this one when a sibling changes. Without the
+		// requeue the surviving sentinel would not publish until the informer's
+		// global resync (hours), so the anchor could stay withheld long after the
+		// operator removed the duplicate.
 		other, err := r.anotherSentinelForRelease(ctx, tp, release)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
 		if other != "" {
 			if err := r.setReady(ctx, tp, notReady(reasonReleaseContested,
-				fmt.Sprintf("another TenantProjection %q in this namespace declares a CACert projection for release %q; both resolve to the canonical name %q, so neither is published — declare the trust anchor from exactly one sentinel", other, release, target))); err != nil {
+				fmt.Sprintf("another TenantProjection %q in this namespace declares a CACert projection for release %q; both resolve to the canonical name %q, so no new anchor is published — declare the trust anchor from exactly one sentinel", other, release, target))); err != nil {
 				return ctrl.Result{}, err
 			}
-			return ctrl.Result{}, nil
+			return ctrl.Result{RequeueAfter: resyncInterval}, nil
 		}
 	}
 
