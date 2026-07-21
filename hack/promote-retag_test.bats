@@ -59,6 +59,18 @@
     grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
   done
 
+  # Images whose host is NOT inside `repository` must be selected too. Both are
+  # built and pushed to $REGISTRY by cozystack, both carry the digest in `tag`,
+  # and both were dropped by the ownership filter for looking host-less — so
+  # neither has ever received a 1.x release tag (on GHCR keycloak-operator has
+  # only `latest`, and kubeovn's newest cozystack-versioned tag predates 1.0).
+  # keycloak-operator splits the host into a sibling `registry` key; kubeovn
+  # keeps it in the document-level global.registry.address, written by the
+  # cozystack/kubeovn-chart wrapper's own `make image`.
+  for owned in keycloak-operator kubeovn; do
+    grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
+  done
+
   # Every docker:// ref in the copy plan is under the cozystack registry — no
   # third-party repos and no malformed arg-string refs leak through.
   bad=$(grep -oE 'docker://[^ ]+' "$tmp/out" | sed 's|docker://||' \

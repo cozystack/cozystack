@@ -22,7 +22,8 @@
 _make_tree() {
   D="$(printf 'a%.0s' $(seq 1 64))"   # 64-hex fake digest body
   t="$1"
-  mkdir -p "$t/system/foo" "$t/system/bar" "$t/system/split" "$t/system/third" "$t/core/installer"
+  mkdir -p "$t/system/foo" "$t/system/bar" "$t/system/split" "$t/system/third" \
+           "$t/system/splithost" "$t/system/digesthost" "$t/system/globalreg" "$t/core/installer"
   # shape 1: single string, cozystack-owned -> copied
   printf 'image: iad.ocir.io/idyksih5sir9/cozystack/foo:main@sha256:%s\n' "$D" > "$t/system/foo/values.yaml"
   # shape 2: split map, cozystack-owned -> copied
@@ -62,7 +63,46 @@ _make_tree() {
     echo '    repository: iad.ocir.io/idyksih5sir9/cozystack/numeric'
     printf '    tag: main@sha256:%s\n' "$D"
   } > "$t/system/third/values.yaml"
-  # shape 4: operator (cozystack-owned -> copied) + platformSource (cozystack-packages -> skipped)
+  # shapes 2 and 3 with the host split into a sibling `registry` key instead of
+  # living inside `repository` — the layout keycloak-operator ships. Rejoining
+  # the two is what keeps the ref recognisable: emitting the bare `repository`
+  # yields a host-less ref that the SRC_REGISTRY filter discards as third-party,
+  # the same silent drop shape 3 exists to fix. Worse here than in promote-retag,
+  # because the closing host rewrite matches the literal "$SRC_REGISTRY/" string
+  # and a split-out host does not contain it: the ref would be neither copied nor
+  # rewritten, publishing a tree that points at the private CI registry.
+  {
+    echo 'image:'
+    echo '  registry: iad.ocir.io'
+    echo '  repository: idyksih5sir9/cozystack/splithost'
+    printf '  tag: main@sha256:%s\n' "$D"
+  } > "$t/system/splithost/values.yaml"
+  {
+    echo 'image:'
+    echo '  registry: iad.ocir.io'
+    echo '  repository: idyksih5sir9/cozystack/digesthost'
+    echo '  tag: main'
+    printf '  digest: sha256:%s\n' "$D"
+  } > "$t/system/digesthost/values.yaml"
+  # shape 4: the host is a document-level key (global.registry.address) and the
+  # image map carries only a bare repository — kube-ovn's wrapper chart, whose
+  # own `make image` in cozystack/kubeovn-chart writes exactly this layout. The
+  # co-located `other` block is a chart-level image with no digest: it must not
+  # be emitted at all, proving the rule filters within global.images rather than
+  # blanket-prefixing every entry with the registry address.
+  {
+    echo 'global:'
+    echo '  registry:'
+    echo '    address: iad.ocir.io/idyksih5sir9/cozystack'
+    echo '  images:'
+    echo '    globalreg:'
+    echo '      repository: globalreg'
+    printf '      tag: v1.2.3@sha256:%s\n' "$D"
+    echo '    other:'
+    echo '      repository: other'
+    echo '      tag: v1.2.3'
+  } > "$t/system/globalreg/values.yaml"
+  # shape 5: operator (cozystack-owned -> copied) + platformSource (cozystack-packages -> skipped)
   {
     echo 'cozystackOperator:'
     printf '  image: iad.ocir.io/idyksih5sir9/cozystack/cozystack-operator:main@sha256:%s\n' "$D"
@@ -96,6 +136,15 @@ _make_tree() {
   grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/split@sha256:.* docker://ghcr.io/cozystack/cozystack/split:0.0.0-nightly.test' "$tmp/out"
   # A shape-3 ref sharing a file with a non-string tag survives — see _make_tree.
   grep -q 'docker://ghcr.io/cozystack/cozystack/numeric:0.0.0-nightly.test' "$tmp/out"
+  # Split-out host (`registry` sibling / global.registry.address). Assert the
+  # full source ref for the same reason shape 3 does: a rule that dropped the
+  # host would plan a copy from a host-less repository, which is filtered out
+  # rather than reported, so checking only the destination proves nothing.
+  grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/splithost@sha256:.* docker://ghcr.io/cozystack/cozystack/splithost:0.0.0-nightly.test' "$tmp/out"
+  grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/digesthost@sha256:.* docker://ghcr.io/cozystack/cozystack/digesthost:0.0.0-nightly.test' "$tmp/out"
+  grep -q 'docker://iad.ocir.io/idyksih5sir9/cozystack/globalreg@sha256:.* docker://ghcr.io/cozystack/cozystack/globalreg:0.0.0-nightly.test' "$tmp/out"
+  # The digest-less sibling under global.images is not invented into a ref.
+  ! grep -q '/other' "$tmp/out"
   # A floating tag is moved alongside the pinned version.
   grep -q 'docker://ghcr.io/cozystack/cozystack/foo:nightly' "$tmp/out"
 
