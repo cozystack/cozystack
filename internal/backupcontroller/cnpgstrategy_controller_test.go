@@ -3,12 +3,14 @@ package backupcontroller
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1347,6 +1349,237 @@ func TestCNPGClusterFullyGone(t *testing.T) {
 	})
 }
 
+func TestLogIndicatesRecoveryTargetUnreachable(t *testing.T) {
+	cases := []struct {
+		name string
+		log  string
+		want bool
+	}{
+		{
+			name: "empty log",
+			log:  "",
+			want: false,
+		},
+		{
+			name: "healthy replay progress",
+			log:  "LOG: restored log file \"000000010000000000000005\" from archive\nLOG: consistent recovery state reached",
+			want: false,
+		},
+		{
+			name: "transient recovery-pod crash (API unreachable) does not match",
+			log:  `{"level":"error","msg":"while building the manager","error":"failed to get server groups: Get \"https://10.96.0.1:443/api\": dial tcp 10.96.0.1:443: i/o timeout"}`,
+			want: false,
+		},
+		{
+			name: "target unreachable FATAL matches",
+			log:  "LOG:  redo done at 0/50000A8\nFATAL:  recovery ended before configured recovery target was reached\nLOG:  startup process exited with exit code 1",
+			want: true,
+		},
+		{
+			name: "target unreachable FATAL embedded in JSON log line matches",
+			log:  `{"level":"info","record":{"error_severity":"FATAL","message":"recovery ended before configured recovery target was reached"}}`,
+			want: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := logIndicatesRecoveryTargetUnreachable(tc.log); got != tc.want {
+				t.Fatalf("logIndicatesRecoveryTargetUnreachable(%q) = %v, want %v", tc.log, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoveryUnreachableFromLogs: any recovery log carrying the unreachable-
+// target FATAL classifies the (already deadline-expired) restore as
+// target-unreachable; logs without it do not.
+func TestRecoveryUnreachableFromLogs(t *testing.T) {
+	fatal := "LOG: redo done\nFATAL:  " + cnpgRecoveryTargetUnreachableLog
+	healthy := "LOG: restored log file from archive\nLOG: consistent recovery state reached"
+	cases := []struct {
+		name string
+		logs []string
+		want bool
+	}{
+		{"no logs", nil, false},
+		{"only healthy/progress logs", []string{healthy, healthy}, false},
+		{"a FATAL among others", []string{healthy, fatal}, true},
+		{"all FATAL", []string{fatal, fatal}, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := recoveryUnreachableFromLogs(tc.logs); got != tc.want {
+				t.Fatalf("recoveryUnreachableFromLogs = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRecoveryPodsToInspect pins the filter/order/cap contract of the pod
+// selection the fail-fast guard relies on: only full-recovery pods, newest
+// first, capped at cnpgRecoveryMaxInspectPods. A regression here (wrong sort
+// direction, off-by-one cap, broken container filter) would silently degrade
+// the fail-fast back into a 30-minute deadline hang.
+func TestRecoveryPodsToInspect(t *testing.T) {
+	recoveryPod := func(name string, ageSeconds int64) corev1.Pod {
+		return corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				CreationTimestamp: metav1.NewTime(time.Unix(ageSeconds, 0)),
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: cnpgRecoveryContainerName}}},
+		}
+	}
+
+	t.Run("no pods -> empty", func(t *testing.T) {
+		if got := recoveryPodsToInspect(nil); len(got) != 0 {
+			t.Fatalf("expected empty, got %d", len(got))
+		}
+	})
+
+	t.Run("skips non-recovery pods (no full-recovery container)", func(t *testing.T) {
+		pods := []corev1.Pod{
+			recoveryPod("rec-1", 100),
+			{
+				ObjectMeta: metav1.ObjectMeta{Name: "primary-newest", CreationTimestamp: metav1.NewTime(time.Unix(999, 0))},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres"}}},
+			},
+		}
+		got := recoveryPodsToInspect(pods)
+		if len(got) != 1 || got[0].Name != "rec-1" {
+			t.Fatalf("expected only the full-recovery pod, got %v", names(got))
+		}
+	})
+
+	t.Run("newest-first order and cap at cnpgRecoveryMaxInspectPods", func(t *testing.T) {
+		// Seed two more recovery pods than the cap, out of order, plus a
+		// non-recovery pod that is the newest of all (must be excluded). The
+		// result must be exactly the cap-many newest recovery pods, newest-first.
+		n := cnpgRecoveryMaxInspectPods + 2
+		var pods []corev1.Pod
+		for i := 0; i < n; i++ {
+			// age i*100 so higher i == newer.
+			pods = append(pods, recoveryPod(fmt.Sprintf("rec-%d", i), int64(i*100)))
+		}
+		pods = append(pods, corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "primary", CreationTimestamp: metav1.NewTime(time.Unix(9_999_999, 0))},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "postgres"}}},
+		})
+		got := recoveryPodsToInspect(pods)
+		want := make([]string, 0, cnpgRecoveryMaxInspectPods)
+		for i := 0; i < cnpgRecoveryMaxInspectPods; i++ {
+			want = append(want, fmt.Sprintf("rec-%d", n-1-i)) // newest-first
+		}
+		if gotNames := names(got); !equalStrings(gotNames, want) {
+			t.Fatalf("expected %v, got %v", want, gotNames)
+		}
+	})
+}
+
+func names(pods []*corev1.Pod) []string {
+	out := make([]string, len(pods))
+	for i, p := range pods {
+		out[i] = p.Name
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// recoveryTargetUnreachable is nil-safe when no Clientset is wired, so the
+// deadline stays the backstop instead of the driver panicking.
+func TestRecoveryTargetUnreachable_NilClientsetReportsFalse(t *testing.T) {
+	r := &RestoreJobReconciler{Client: newCNPGStrategyTestClient(t)}
+	unreachable, pod, forbidden, err := r.recoveryTargetUnreachable(context.Background(), "tenant", "postgres-app")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if unreachable || pod != "" || forbidden {
+		t.Fatalf("expected (false, \"\", false) with no Clientset, got (%v, %q, %v)", unreachable, pod, forbidden)
+	}
+}
+
+// TestRecoveryTargetUnreachable_ClassifiesFromLogs drives the log-based
+// classification through an injected reader (the fake Clientset's GetLogs
+// can't return specific content or a Forbidden), covering the three outcomes
+// the deadline path branches on: the unreachable-target FATAL is present
+// (-> unreachable, newest pod), it is absent (-> not unreachable), and the log
+// read is Forbidden (-> forbidden flagged so the caller surfaces the missing
+// pods/log RBAC instead of failing silently-generic).
+func TestRecoveryTargetUnreachable_ClassifiesFromLogs(t *testing.T) {
+	const (
+		ns      = "tenant"
+		cluster = "postgres-app"
+	)
+	recPod := func(name string, ageSeconds int64) client.Object {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:         ns,
+				Name:              name,
+				Labels:            map[string]string{cnpgClusterLabel: cluster},
+				CreationTimestamp: metav1.NewTime(time.Unix(ageSeconds, 0)),
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: cnpgRecoveryContainerName}}},
+		}
+	}
+	seed := func() []client.Object { return []client.Object{recPod("rec-old", 100), recPod("rec-new", 200)} }
+	fatalLog := "LOG:  redo done\nFATAL:  " + cnpgRecoveryTargetUnreachableLog
+
+	t.Run("FATAL present -> unreachable, reports newest pod", func(t *testing.T) {
+		r := &RestoreJobReconciler{
+			Client:     newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) { return fatalLog, nil },
+		}
+		un, pod, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !un || forb || pod != "rec-new" {
+			t.Fatalf("got unreachable=%v pod=%q forbidden=%v, want (true, rec-new, false)", un, pod, forb)
+		}
+	})
+
+	t.Run("no FATAL -> not unreachable", func(t *testing.T) {
+		r := &RestoreJobReconciler{
+			Client:     newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) { return "LOG: consistent recovery state reached", nil },
+		}
+		un, _, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if un || forb {
+			t.Fatalf("got unreachable=%v forbidden=%v, want (false, false)", un, forb)
+		}
+	})
+
+	t.Run("Forbidden log read -> forbidden flagged, not unreachable", func(t *testing.T) {
+		r := &RestoreJobReconciler{
+			Client: newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) {
+				return "", apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "rec-new", fmt.Errorf("pods/log grant missing"))
+			},
+		}
+		un, _, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if un || !forb {
+			t.Fatalf("got unreachable=%v forbidden=%v, want (false, true)", un, forb)
+		}
+	})
+}
+
 // testCNPGScheme returns a runtime.Scheme that knows the unstructured
 // HelmRelease GVK used by the dynamic-client tests above.
 func testCNPGScheme(t *testing.T) *runtime.Scheme {
@@ -1874,6 +2107,93 @@ func TestReconcileCNPGRestore_RepeatInPlacePurgesStaleRecoveryCluster(t *testing
 			t.Fatalf("freshly-recovered Cluster must not be marked for deletion")
 		}
 	})
+}
+
+// TestReconcileCNPGRestore_HealthyClusterSucceeds drives the reconcile to its
+// success branch: with the target already purged (TargetPurged=True) and the
+// recovery Cluster reporting healthy, the RestoreJob must reach phase
+// Succeeded with Ready=True AND the new RecoveryConverged=True condition.
+func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	startedAt := metav1.NewTime(time.Now())
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	// Healthy recovery Cluster created after StartedAt (this restore's own).
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec:       backupsv1alpha1.RestoreJobSpec{BackupRef: corev1.LocalObjectReference{Name: "bk"}},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			// Purge already done for this restore, so reconcile skips straight
+			// to the wait-for-healthy / success path.
+			Conditions: []metav1.Condition{{
+				Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged",
+				LastTransitionTime: startedAt, Message: "purged",
+			}},
+		},
+	}
+
+	c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, newPostgresApp(appName, ns), healthyCluster)
+	r := &RestoreJobReconciler{Client: c, Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t))}
+
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+		t.Fatalf("get seeded RestoreJob: %v", err)
+	}
+	if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("reconcileCNPGRestore: %v", err)
+	}
+
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+		t.Fatalf("get RestoreJob after reconcile: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Fatalf("expected phase Succeeded, got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+	}
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("expected Ready=True, got %+v", c)
+	}
+	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("expected RecoveryConverged=True, got %+v", c)
+	}
 }
 
 // newCNPGStrategyTestClient returns a fake client.Client wired up with

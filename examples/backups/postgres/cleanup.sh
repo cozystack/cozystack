@@ -20,12 +20,14 @@ for app in "$PG_SRC_NAME" "$PG_TARGET_NAME"; do
     fi
 done
 
-log_substep "Deleting RestoreJob..."
-kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io "$RESTOREJOB_TOCOPY_NAME" --ignore-not-found
+log_substep "Deleting RestoreJobs..."
+kubectl -n "$NAMESPACE" delete restorejob.backups.cozystack.io \
+    "$RESTOREJOB_TOCOPY_NAME" "$RESTOREJOB_PITR_NAME" "$RESTOREJOB_UNREACHABLE_NAME" --ignore-not-found
 
 log_substep "Deleting Plan + BackupJob + derived Backup artefacts..."
 kubectl -n "$NAMESPACE" delete plan.backups.cozystack.io "$PLAN_NAME" --ignore-not-found
-kubectl -n "$NAMESPACE" delete backupjob.backups.cozystack.io "$BACKUPJOB_NAME" --ignore-not-found
+kubectl -n "$NAMESPACE" delete backupjob.backups.cozystack.io \
+    "$BACKUPJOB_NAME" "$BACKUPJOB_POSTMARKER_NAME" --ignore-not-found
 # Only the Backups of THIS demo's apps — never `--all`: on a shared cluster the
 # namespace can hold Backup artefacts of other applications and flows.
 for b in $(kubectl -n "$NAMESPACE" get backups.backups.cozystack.io \

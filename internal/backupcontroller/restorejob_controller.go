@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -34,8 +35,18 @@ type RestoreJobReconciler struct {
 	client.Client
 	dynamic.Interface
 	meta.RESTMapper
-	Scheme            *runtime.Scheme
-	Recorder          record.EventRecorder
+	Scheme    *runtime.Scheme
+	Recorder  record.EventRecorder
+	// Clientset reads Pod logs (the controller-runtime cache client cannot);
+	// the CNPG restore driver uses it to read a bootstrap-recovery pod's log
+	// and tell an unreachable point-in-time target apart from a transient
+	// recovery-pod failure. Wired in SetupWithManager; nil-safe at call sites.
+	Clientset kubernetes.Interface
+	// readPodLog is the seam the CNPG restore driver reads a recovery pod's log
+	// through. Defaults to readPodContainerLog (which uses Clientset); tests
+	// inject a stub so the log-classification path - including the Forbidden
+	// (missing pods/log RBAC) branch - is unit-testable without a live cluster.
+	readPodLog        func(ctx context.Context, namespace, podName, container string) (string, error)
 	CredentialsConfig BackupCredentialsConfig
 }
 
@@ -165,6 +176,9 @@ func (r *RestoreJobReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Interface, err = dynamic.NewForConfig(cfg); err != nil {
 		return err
 	}
+	if r.Clientset, err = kubernetes.NewForConfig(cfg); err != nil {
+		return err
+	}
 	var h *http.Client
 	if h, err = rest.HTTPClientFor(cfg); err != nil {
 		return err
@@ -212,6 +226,14 @@ func (r *RestoreJobReconciler) handleProjectionError(ctx context.Context, rj *ba
 // fresh budget is what users expect after correcting the cause of the
 // previous failure.
 func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, message string) (ctrl.Result, error) {
+	return r.markRestoreJobFailedReason(ctx, restoreJob, "RestoreFailed", message)
+}
+
+// markRestoreJobFailedReason is markRestoreJobFailed with a caller-chosen
+// Ready-condition Reason so a driver can distinguish failure classes a tenant
+// acts on differently (e.g. RecoveryTargetUnreachable, which points at the
+// recoverable window rather than at the controller).
+func (r *RestoreJobReconciler) markRestoreJobFailedReason(ctx context.Context, restoreJob *backupsv1alpha1.RestoreJob, reason, message string) (ctrl.Result, error) {
 	logger := getLogger(ctx)
 	now := metav1.Now()
 	restoreJob.Status.CompletedAt = &now
@@ -226,7 +248,7 @@ func (r *RestoreJobReconciler) markRestoreJobFailed(ctx context.Context, restore
 	meta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
 		Status:  metav1.ConditionFalse,
-		Reason:  "RestoreFailed",
+		Reason:  reason,
 		Message: message,
 	})
 

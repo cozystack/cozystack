@@ -26,6 +26,14 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "list", "watch"]
+# Pods/log: the CNPG RestoreJob driver reads a bootstrap-recovery pod's log to
+# tell an unreachable point-in-time target (recoveryTime past the last archived
+# WAL) apart from a transient recovery-pod crash, and fail the RestoreJob fast.
+# pods/log is a distinct RBAC subresource from pods; without this the GetLogs
+# call is 403-Forbidden and the fail-fast silently degrades to a deadline hang.
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
 # ConfigMaps: controller-runtime cache requires cluster-scoped list/watch;
 # create/update/delete is scoped to cozy-velero via a Role shipped by the
 # velero chart (packages/system/velero/templates/backupstrategy-controller-rbac.yaml)

@@ -5,6 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"sort"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -75,6 +78,15 @@ const (
 	// with "WAL not found" and the source data is gone with the PVC.
 	restoreCondWALArchiveReady = "WALArchiveReady"
 
+	// Condition Type recorded on a RestoreJob when the chart-rendered
+	// recovery Cluster keeps failing to converge - i.e. its bootstrap-
+	// recovery pods exit non-zero and CNPG recreates them in a loop. Set to
+	// False with reason RecoveryTargetUnreachable when a recoveryTime is in
+	// play (the usual cause: a point-in-time target past the latest archived
+	// WAL) or RecoveryFailed otherwise. Lets a tenant see *why* the restore
+	// is failing before the full restore deadline elapses.
+	restoreCondRecoveryConverged = "RecoveryConverged"
+
 	// Default deadline on the time a RestoreJob can spend waiting for the
 	// target Cluster to reach a healthy state. Tenants override this via
 	// RestoreJob.spec.options.restoreTimeoutSeconds when the source DB is
@@ -96,6 +108,39 @@ const (
 	// the user instead of burning the whole 30-minute restore budget on
 	// a problem that won't self-resolve.
 	cnpgWALArchiveDeadline = 3 * time.Minute
+
+	// Both constants below couple to CNPG/PostgreSQL internals. Verified
+	// against CNPG 1.28.1 + barman-cloud plugin (postgresql:18.1) on the dev7
+	// test cluster. The negative e2e in examples/backups/postgres/run-all.sh
+	// (step 46: a recoveryTime past the archive must fail with reason
+	// RecoveryTargetUnreachable) is what catches a drift in either string on
+	// a future CNPG/PostgreSQL bump - if it regresses, this fail-fast silently
+	// degrades back to hanging until the restore deadline.
+
+	// Container name of a CNPG bootstrap-recovery pod (<cluster>-<n>-full-recovery).
+	// The driver reads this container's log to classify a stuck recovery.
+	cnpgRecoveryContainerName = "full-recovery"
+
+	// cnpgRecoveryTargetUnreachableLog is the PostgreSQL FATAL a recovery
+	// instance logs when it replays every available WAL without reaching the
+	// configured recovery target and then gives up - the definitive signal
+	// that a point-in-time recoveryTime is past the latest archived WAL.
+	// Matching this exact string (rather than counting failed pods) is what
+	// keeps the fail-fast from misfiring on transient recovery-pod crashes
+	// (node blips, brief API-server unreachability) that CNPG recovers from:
+	// those never emit this message, and the recovery goes on to converge.
+	cnpgRecoveryTargetUnreachableLog = "recovery ended before configured recovery target was reached"
+
+	// Number of tail lines of the recovery container log the driver scans for
+	// the unreachable-target signature. The message is emitted once near the
+	// end of the replay, so a small tail is enough and keeps the read cheap.
+	cnpgRecoveryLogTailLines = 200
+
+	// Max bootstrap-recovery pods whose log the driver reads when classifying a
+	// deadline-expired restore. Bounds the log reads even if many failed
+	// attempts have piled up; the newest few are enough since every attempt
+	// against an unreachable target reproduces the same FATAL.
+	cnpgRecoveryMaxInspectPods = 5
 
 	// Cap on the wall-clock time a BackupJob can spend observing a
 	// cnpg.io/Backup stuck in phase=failed before the driver gives up and
@@ -865,28 +910,87 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
 
+	// The restore deadline is the sole authority for "this restore is stuck".
+	// A recovery that CAN converge does so well within the deadline and reaches
+	// the healthy check below; only a genuinely wedged restore (most often a
+	// recoveryTime past the latest archived WAL) burns the whole window. We do
+	// NOT try to fail earlier off the recovery pod's FATAL: a valid near-now
+	// target hits the same "recovery ended before ... target ... reached" FATAL
+	// transiently - and repeatedly, for many attempts, on a slow archiver -
+	// before it converges, so any earlier trip wrongly rejects a recoverable
+	// restore (observed twice in CI). Instead we use that FATAL only to explain
+	// the failure precisely once the deadline has already elapsed. Tenants who
+	// want a fast rejection set a short spec.options.restoreTimeoutSeconds.
 	deadline := options.effectiveRestoreDeadline()
 	if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
-		return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
+		classificationForbidden := false
+		if options.RecoveryTime != "" {
+			unreachable, pod, forbidden, uerr := r.recoveryTargetUnreachable(ctx, target.Namespace, clusterName)
+			if uerr != nil {
+				return ctrl.Result{}, uerr
+			}
+			classificationForbidden = forbidden
+			if unreachable {
+				msg := fmt.Sprintf(
+					"point-in-time recovery target %s is past the latest WAL archived to object storage: over the %s restore window recovery kept replaying all available WAL without reaching it and PostgreSQL gave up (%q; most recent recovery pod: %s). "+
+						"Pick a recoveryTime inside the recoverable window - see the PITR docs on discovering the earliest/latest restorable time.",
+					options.RecoveryTime, deadline, cnpgRecoveryTargetUnreachableLog, pod)
+				apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+					Type:    restoreCondRecoveryConverged,
+					Status:  metav1.ConditionFalse,
+					Reason:  "RecoveryTargetUnreachable",
+					Message: msg,
+				})
+				return r.markRestoreJobFailedReason(ctx, restoreJob, "RecoveryTargetUnreachable", msg)
+			}
+		}
+		msg := fmt.Sprintf(
 			"RestoreJob exceeded %s deadline before target Cluster reached a healthy state (override via spec.options.restoreTimeoutSeconds)",
-			deadline))
+			deadline)
+		if options.RecoveryTime != "" {
+			msg += fmt.Sprintf("; spec.options.recoveryTime %s may be past the recoverable window, or the source may be large enough to need a longer restoreTimeoutSeconds", options.RecoveryTime)
+		}
+		if classificationForbidden {
+			// The RecoveryTargetUnreachable classification needs to read the
+			// recovery pod's log; the controller was denied that (missing
+			// pods/log RBAC grant), so it could not tell an unreachable target
+			// apart from a slow one. Make the misconfiguration visible rather
+			// than hiding it behind a bare generic timeout.
+			msg += ". NOTE: could not read recovery pod logs to classify this failure - the controller's pods/log RBAC grant appears to be missing, so a RecoveryTargetUnreachable diagnosis was unavailable"
+			r.Recorder.Eventf(restoreJob, corev1.EventTypeWarning, "RecoveryClassificationForbidden",
+				"cannot read recovery pod logs (pods/log RBAC grant missing); unable to diagnose whether recoveryTime %s is past the recoverable window", options.RecoveryTime)
+		}
+		return r.markRestoreJobFailed(ctx, restoreJob, msg)
 	}
 
 	if !hasRecovery {
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
 
+	// Recovery converged wins: mark success as soon as the Cluster is healthy,
+	// regardless of how many bootstrap-recovery pods crashed and were retried
+	// on the way (a slow archiver makes several transient failures normal).
 	healthy, err := r.cnpgClusterHealthy(ctx, target.Namespace, clusterName)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
 	if !healthy {
+		// Still recovering. Keep waiting; the deadline above is the backstop.
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
 
 	now := metav1.Now()
 	restoreJob.Status.CompletedAt = &now
 	restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+	// Set RecoveryConverged=True for symmetry with the False the unreachable-
+	// target path records, so .status.conditions tells the whole story rather
+	// than only ever showing the condition on failure.
+	apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+		Type:    restoreCondRecoveryConverged,
+		Status:  metav1.ConditionTrue,
+		Reason:  "RecoveryConverged",
+		Message: fmt.Sprintf("target cnpg.io Cluster %s/%s reached a healthy state", target.Namespace, clusterName),
+	})
 	apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
 		Type:    "Ready",
 		Status:  metav1.ConditionTrue,
@@ -1253,6 +1357,137 @@ func (r *RestoreJobReconciler) cnpgClusterHealthy(ctx context.Context, namespace
 		return false, err
 	}
 	return cluster.Status.Phase == cnpgClusterHealthyPhase, nil
+}
+
+// logIndicatesRecoveryTargetUnreachable reports whether a recovery container
+// log contains the PostgreSQL FATAL that a recovery instance emits when it
+// exhausts the WAL archive before reaching the configured recovery target.
+// Pure string match so it is unit-testable without a live cluster.
+func logIndicatesRecoveryTargetUnreachable(recoveryLog string) bool {
+	return strings.Contains(recoveryLog, cnpgRecoveryTargetUnreachableLog)
+}
+
+// recoveryUnreachableFromLogs reports whether any recovery-pod log carries the
+// unreachable-target FATAL. It is consulted only once the restore deadline has
+// elapsed (see reconcileCNPGRestore), so a single match is enough: recovery has
+// already had the whole window to converge, and this only classifies *why* it
+// did not. Pure so the decision is unit-testable without a live cluster.
+func recoveryUnreachableFromLogs(logs []string) bool {
+	for _, l := range logs {
+		if logIndicatesRecoveryTargetUnreachable(l) {
+			return true
+		}
+	}
+	return false
+}
+
+// recoveryTargetUnreachable inspects the target Cluster's bootstrap-recovery
+// pods and reports whether recovery has definitively failed because the
+// point-in-time target is past the last archived WAL. It reads the recovery
+// container's log and matches the PostgreSQL "recovery ended before ..."
+// FATAL - a signal unique to an unreachable target, so a transient recovery-
+// pod crash (which never emits it) does NOT trip the guard and the recovery
+// is left to converge or hit the restore deadline. Returns the inspected pod
+// name for the operator-facing message. Nil-safe: with no Clientset wired it
+// reports false so the deadline remains the backstop.
+//
+// Every recovery attempt for an unreachable target reproduces the same FATAL,
+// so scanning the most recent pods (running or Failed, newest first) reliably
+// catches it across reconciles without depending on any single pod surviving.
+func (r *RestoreJobReconciler) recoveryTargetUnreachable(ctx context.Context, namespace, clusterName string) (unreachable bool, pod string, forbidden bool, err error) {
+	readLog := r.readPodLog
+	if readLog == nil {
+		readLog = r.readPodContainerLog
+	}
+	// No way to read logs (no Clientset wired and no injected reader): report
+	// not-unreachable so the deadline stays the backstop.
+	if r.Clientset == nil && r.readPodLog == nil {
+		return false, "", false, nil
+	}
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList,
+		client.InNamespace(namespace),
+		client.MatchingLabels{cnpgClusterLabel: clusterName},
+	); err != nil {
+		return false, "", false, fmt.Errorf("list pods for cluster %s/%s: %w", namespace, clusterName, err)
+	}
+	logger := getLogger(ctx)
+	logs := make([]string, 0, cnpgRecoveryMaxInspectPods)
+	fatalPod := "" // newest FATAL-ing pod (pods are inspected newest-first)
+	forbiddenSeen := false
+	for _, p := range recoveryPodsToInspect(podList.Items) {
+		recoveryLog, readErr := readLog(ctx, p.Namespace, p.Name, cnpgRecoveryContainerName)
+		if readErr != nil {
+			// A log read can fail transiently (pod being GC'd, apiserver
+			// blip); don't fail the RestoreJob on it - skip this pod. But a
+			// Forbidden is NOT transient: it means the controller lacks the
+			// pods/log RBAC grant, which disables the RecoveryTargetUnreachable
+			// classification. Flag it so the caller can surface it (Warning
+			// Event + message) instead of failing with a bare generic reason.
+			if apierrors.IsForbidden(readErr) {
+				forbiddenSeen = true
+				logger.Info("cannot read recovery pod log to classify a stuck point-in-time restore - the pods/log RBAC grant is missing, so the RecoveryTargetUnreachable classification is unavailable and this restore falls back to the restore deadline",
+					"pod", p.Name, "error", readErr)
+			} else {
+				logger.Debug("skipping recovery pod log read", "pod", p.Name, "error", readErr)
+			}
+			continue
+		}
+		logs = append(logs, recoveryLog)
+		if fatalPod == "" && logIndicatesRecoveryTargetUnreachable(recoveryLog) {
+			fatalPod = p.Name
+		}
+	}
+	return recoveryUnreachableFromLogs(logs), fatalPod, forbiddenSeen, nil
+}
+
+// recoveryPodsToInspect narrows a Cluster's pod list to the bootstrap-recovery
+// pods worth reading a log from: it keeps only pods carrying the full-recovery
+// container, orders them newest-first (the current/most-recent recovery
+// attempt is the most likely to hold a fresh, complete replay log), and caps
+// the result at cnpgRecoveryMaxInspectPods to bound the per-reconcile log
+// reads. Pure and deterministic so the filter/order/cap contract - the part
+// that would silently regress the fail-fast into a deadline hang if it drifted
+// - is unit-testable without a live cluster.
+func recoveryPodsToInspect(pods []corev1.Pod) []*corev1.Pod {
+	out := make([]*corev1.Pod, 0, len(pods))
+	for i := range pods {
+		p := &pods[i]
+		for _, c := range p.Spec.Containers {
+			if c.Name == cnpgRecoveryContainerName {
+				out = append(out, p)
+				break
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CreationTimestamp.After(out[j].CreationTimestamp.Time)
+	})
+	if len(out) > cnpgRecoveryMaxInspectPods {
+		out = out[:cnpgRecoveryMaxInspectPods]
+	}
+	return out
+}
+
+// readPodContainerLog returns the tail of a pod container's log via the
+// clientset (the controller-runtime cache client cannot read the log
+// subresource).
+func (r *RestoreJobReconciler) readPodContainerLog(ctx context.Context, namespace, podName, container string) (string, error) {
+	tail := int64(cnpgRecoveryLogTailLines)
+	req := r.Clientset.CoreV1().Pods(namespace).GetLogs(podName, &corev1.PodLogOptions{
+		Container: container,
+		TailLines: &tail,
+	})
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer stream.Close()
+	data, err := io.ReadAll(stream)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 // recoveryBootstrapClusterState fetches the live cnpg.io Cluster and reports

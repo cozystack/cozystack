@@ -14,6 +14,7 @@ The numbered manifests are the documented flow; a human can read and apply them 
 - `25-backupjob-adhoc.yaml` — an ad-hoc `BackupJob`.
 - `30-postgres-target.yaml` + `40-restorejob-to-copy.yaml` — restore into a fresh copy, leaving the source running.
 - `35-restorejob-in-place.yaml` — the destructive in-place restore variant.
+- `45-restorejob-pitr.yaml` — point-in-time recovery: restore into the copy as of a specific `spec.options.recoveryTime` (RFC3339).
 
 ## Placeholders and derived Secrets
 
@@ -30,7 +31,7 @@ NAMESPACE=tenant-root examples/backups/postgres/run-all.sh
 NAMESPACE=tenant-root examples/backups/postgres/cleanup.sh
 ```
 
-`run-all.sh` writes a sentinel row into the source, waits for the `BackupJob` to reach `Succeeded`, restores to a copy, and asserts the sentinel round-tripped through S3 into the restored copy. Set `SKIP_RESTORE=1` to stop after a successful backup.
+`run-all.sh` writes a sentinel row into the source, waits for the `BackupJob` to reach `Succeeded`, restores to a copy, and asserts the sentinel round-tripped through S3 into the restored copy. It then runs a **point-in-time recovery**: it writes a `before` marker, captures the server timestamp, writes an `after` marker, and restores the copy to that timestamp (`45-restorejob-pitr.yaml`), asserting the `before` row survived and the `after` row did not. Finally it submits a RestoreJob with a `recoveryTime` an hour in the future and asserts it **fails fast** with `status.phase: Failed` and reason `RecoveryTargetUnreachable` (rather than hanging to the restore deadline). Set `SKIP_RESTORE=1` to stop after a successful backup, or `SKIP_PITR=1` to stop after the latest-point restore.
 
 ## Automated e2e
 

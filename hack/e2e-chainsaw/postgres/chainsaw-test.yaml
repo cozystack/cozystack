@@ -127,14 +127,18 @@ spec:
 # The Postgres CR itself was applied by chainsaw and is deleted (and waited
 # on) automatically during cleanup — no explicit teardown step needed.
 ---
-# Full barman-cloud backup -> to-copy RestoreJob round-trip, driving the
-# validated example scripts (examples/backups/postgres) as the harness so the
-# test and the documented flow can never drift. run-all.sh runs Bucket ->
-# source Postgres + sentinel row -> CNPG strategy + BackupClass -> ad-hoc
-# BackupJob (waits Succeeded) -> empty target Postgres + to-copy RestoreJob
-# (waits Succeeded) and asserts the sentinel round-tripped through S3 into the
-# restored copy — the in-cluster witness that a barman-cloud plugin backup is
-# both taken and restorable end to end.
+# Full barman-cloud backup -> restore round-trips, driving the validated
+# example scripts (examples/backups/postgres) as the harness so the test and
+# the documented flow can never drift. run-all.sh runs Bucket -> source
+# Postgres + sentinel row -> CNPG strategy + BackupClass -> ad-hoc BackupJob
+# (waits Succeeded) -> empty target Postgres + to-copy RestoreJob (waits
+# Succeeded, asserts the sentinel round-tripped through S3) -> a point-in-time
+# restore between two marker writes (step 45, asserts the pre-marker survived
+# and the post-marker did not) -> a negative unreachable-target restore
+# (step 46, asserts it fails fast with reason RecoveryTargetUnreachable rather
+# than hanging to the deadline). The in-cluster witness that a barman-cloud
+# plugin backup is taken, restorable, point-in-time-recoverable, and that a
+# bad target is rejected quickly.
 #
 # Runs in tenant-root, not the default tenant-test: the S3 client here is the
 # barman-cloud sidecar INSIDE the Postgres Pod, and the e2e tenant is created
@@ -181,13 +185,19 @@ spec:
   steps:
   - name: run
     try:
-    # The 25m budget is the whole documented flow: bucket provisioning, a
+    # The 40m budget is the whole documented flow: bucket provisioning, a
     # 2-replica source Postgres, the plugin base backup to S3, an empty target
-    # app, and the purge + re-bootstrap restore (convention 6: justified
-    # in-line). run-all.sh fails fast on terminal BackupJob/RestoreJob phases
-    # and stalled HelmReleases rather than polling out the budget.
+    # app, and THREE sequential purge + re-bootstrap restores against it - the
+    # latest-point to-copy restore, the point-in-time restore (step 45), and
+    # the negative unreachable-target restore (step 46, which sets a short
+    # restoreTimeoutSeconds and must fail at that deadline with reason
+    # RecoveryTargetUnreachable) (convention 6: justified in-line). The old 25m
+    # budget predated the PITR phases; three restores plus the negative phase
+    # need the larger window. run-all.sh fails fast on terminal
+    # BackupJob/RestoreJob phases and stalled HelmReleases rather than polling
+    # out the budget.
     - script:
-        timeout: 25m
+        timeout: 40m
         content: |
           set -eu
           cd ../../..

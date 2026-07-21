@@ -1,0 +1,34 @@
+# Point-in-time recovery (PITR) to a copy.
+#
+# Restores the source's Barman archive into pg-target as of a specific instant
+# via spec.options.recoveryTime (RFC3339). The chart maps it onto CNPG's
+# bootstrap.recovery.recoveryTarget.targetTime: PostgreSQL restores the newest
+# base backup taken at/before that instant and replays archived WAL up to it,
+# so the copy reflects the database exactly as of recoveryTime - later writes
+# are absent.
+#
+# recoveryTime MUST fall inside the recoverable window: at/after the base
+# backup's completion and at/before the latest WAL shipped to object storage.
+# A target past the latest archived WAL cannot converge - the RestoreJob fails
+# with condition Ready=False/RecoveryTargetUnreachable instead of hanging. See
+# docs/operations/backup-classes.md ("Point-in-time recovery") for how to
+# discover the earliest/latest restorable time.
+#
+# run-all.sh substitutes REPLACE_WITH_RECOVERY_TIME with a timestamp it captures
+# between two marker writes, then asserts the pre-marker row is present and the
+# post-marker row is absent. Editing by hand, replace it with an RFC3339
+# timestamp inside your window, e.g. "2026-05-01T12:00:00Z".
+---
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: pg-src-to-pg-target-pitr
+spec:
+  backupRef:
+    name: pg-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: pg-target
+  options:
+    recoveryTime: "REPLACE_WITH_RECOVERY_TIME"

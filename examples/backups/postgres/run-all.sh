@@ -19,13 +19,20 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
+# Recovery target for the PITR phase; captured between two marker writes far
+# below. Defaulted here so subst() can reference it under `set -u` before the
+# PITR phase sets it (the placeholder only appears in 45-restorejob-pitr.yaml).
+RECOVERY_TIME="${RECOVERY_TIME:-}"
+
 # Substitute the manifest placeholders. $BUCKET / $S3_HOST are resolved from the
-# Bucket below; $PG_PASSWORD is the app user's password.
+# Bucket below; $PG_PASSWORD is the app user's password; $RECOVERY_TIME is the
+# PITR target (empty for every manifest except 45-restorejob-pitr.yaml).
 subst() {
     sed \
         -e "s|REPLACE_WITH_COSI_BUCKET_NAME|${BUCKET}|g" \
         -e "s|REPLACE_WITH_S3_ENDPOINT|${S3_HOST}|g" \
         -e "s|REPLACE_WITH_PASSWORD|${PG_PASSWORD}|g" \
+        -e "s|REPLACE_WITH_RECOVERY_TIME|${RECOVERY_TIME}|g" \
         "$SCRIPT_DIR/$1"
 }
 
@@ -172,3 +179,132 @@ if [[ "$GOT" != "$SENTINEL_TOKEN" ]]; then
     exit 1
 fi
 log_success "Round-trip verified: '${PG_TARGET_NAME}' restored sentinel '${GOT}' from S3."
+
+if [[ "${SKIP_PITR:-0}" == "1" ]]; then
+    log_warning "SKIP_PITR=1: stopping after the latest-point restore."
+    exit 0
+fi
+
+print_header "Step 45: point-in-time recovery (restore as of a timestamp between two writes)"
+# The base backup (pg-src-adhoc) predates the two markers below; pg-src has
+# archived WAL continuously since install, so a PITR to a time BETWEEN the
+# markers must replay the 'before' write and stop short of the 'after' write.
+log_substep "Writing the 'before' marker into the source..."
+psql_exec "$PG_SRC_CLUSTER" demo "
+    CREATE TABLE IF NOT EXISTS pitr_marker (id int PRIMARY KEY, label text);
+    INSERT INTO pitr_marker (id, label) VALUES (1, 'before')
+      ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label;"
+
+# Capture the recovery target from the SERVER clock, right after 'before'
+# committed. WAL record timestamps (which recovery_target_time compares
+# against) come from the server, so the client clock must not be trusted.
+# Sub-second (.US) precision is REQUIRED: whole-second to_char floors, and the
+# 'before' write and this capture can land in the same wall-clock second, so a
+# truncated target would sort *before* the 'before' commit and drop it.
+RECOVERY_TIME=$(psql_exec "$PG_SRC_CLUSTER" demo \
+    "SELECT replace(to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS.US'), ' ', 'T') || 'Z';" \
+    | tr -d '[:space:]')
+[[ -n "$RECOVERY_TIME" ]] || { log_error "failed to capture recovery target time"; exit 1; }
+log_success "Recovery target: ${RECOVERY_TIME}"
+
+# Open a clear gap so the 'after' commit timestamp is strictly past the target,
+# then close the WAL segment holding both markers.
+sleep 5
+log_substep "Writing the 'after' marker (must NOT survive the PITR)..."
+psql_exec "$PG_SRC_CLUSTER" demo "
+    INSERT INTO pitr_marker (id, label) VALUES (2, 'after')
+      ON CONFLICT (id) DO UPDATE SET label = EXCLUDED.label;
+    CHECKPOINT;
+    SELECT pg_switch_wal();"
+
+# Gate the restore on the WAL covering the target actually being in object
+# storage, deterministically. A fixed sleep races the barman-cloud archiver
+# (a slow CI cluster was seen to lag minutes, which then tripped the restore's
+# unreachable-target fail-fast on a target that WAS recoverable). A completed
+# CNPG BackupJob guarantees WAL up to its stop point - past 'after', hence past
+# the target - is archived (the same invariant the restore driver's WAL-archive
+# gate keys off), and WAL is archived in order, so the whole chain up to the
+# target is present. The point-in-time restore below still recovers from the
+# ORIGINAL base backup (pg-src-adhoc); this one only advances the archive.
+print_header "Step 45: complete a post-marker backup so the target's WAL is archived"
+kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: backups.cozystack.io/v1alpha1
+kind: BackupJob
+metadata:
+  name: ${BACKUPJOB_POSTMARKER_NAME}
+spec:
+  applicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: ${PG_SRC_NAME}
+  backupClassName: ${BACKUPCLASS_NAME}
+EOF
+wait_for_field backupjobs.backups.cozystack.io "$BACKUPJOB_POSTMARKER_NAME" \
+    '{.status.phase}' Succeeded "$NAMESPACE" 1200 Failed
+
+print_header "Step 45: restore '${PG_TARGET_NAME}' to ${RECOVERY_TIME} and wait for Succeeded"
+subst 45-restorejob-pitr.yaml | kubectl -n "$NAMESPACE" apply -f -
+wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_PITR_NAME" \
+    '{.status.phase}' Succeeded "$NAMESPACE" 1200 Failed
+wait_for_field clusters.postgresql.cnpg.io "$PG_TARGET_CLUSTER" \
+    '{.status.phase}' 'Cluster in healthy state' "$NAMESPACE" 600
+
+print_header "Step 45 verify: the copy stopped at the recovery target"
+BEFORE=$(psql_exec "$PG_TARGET_CLUSTER" demo \
+    "SELECT label FROM pitr_marker WHERE id = 1;" | tr -d '[:space:]')
+AFTER_COUNT=$(psql_exec "$PG_TARGET_CLUSTER" demo \
+    "SELECT count(*) FROM pitr_marker WHERE id = 2;" | tr -d '[:space:]')
+if [[ "$BEFORE" != "before" ]]; then
+    log_error "PITR lost pre-target data: pitr_marker id=1 is '${BEFORE}', expected 'before'"
+    exit 1
+fi
+if [[ "$AFTER_COUNT" != "0" ]]; then
+    log_error "PITR kept post-target data: pitr_marker id=2 present (count=${AFTER_COUNT}), expected absent"
+    exit 1
+fi
+log_success "PITR verified: '${PG_TARGET_NAME}' recovered to ${RECOVERY_TIME} (pre-target row present, post-target row absent)."
+
+print_header "Step 46: a recoveryTime past the archive fails with a clear reason"
+# Negative case: a recoveryTime an hour ahead of the latest archived WAL can
+# never be reached, so recovery keeps replaying all available WAL, never hits
+# the target, and PostgreSQL gives up. The restore deadline is what fails such
+# a wedged restore (an unreachable target is indistinguishable from a merely
+# slow one until the window elapses), so this job sets a short
+# restoreTimeoutSeconds; at the deadline the driver classifies the failure from
+# the recovery pod's log and must report reason RecoveryTargetUnreachable (not
+# a generic RestoreFailed). Asserting the *reason* proves the classification.
+UNREACHABLE_TIME=$(psql_exec "$PG_SRC_CLUSTER" demo \
+    "SELECT replace(to_char((now() + interval '1 hour') AT TIME ZONE 'UTC', 'YYYY-MM-DD HH24:MI:SS'), ' ', 'T') || 'Z';" \
+    | tr -d '[:space:]')
+[[ -n "$UNREACHABLE_TIME" ]] || { log_error "failed to capture unreachable target time"; exit 1; }
+log_success "Unreachable target: ${UNREACHABLE_TIME}"
+kubectl -n "$NAMESPACE" apply -f - <<EOF
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: ${RESTOREJOB_UNREACHABLE_NAME}
+spec:
+  backupRef:
+    name: pg-src-adhoc
+  targetApplicationRef:
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: ${PG_TARGET_NAME}
+  options:
+    recoveryTime: "${UNREACHABLE_TIME}"
+    # Short deadline so the unreachable target is rejected in minutes; long
+    # enough for a couple of recovery attempts to log the FATAL the driver
+    # classifies on. A reachable target would converge well inside this.
+    restoreTimeoutSeconds: 300
+EOF
+# Expect a terminal Failed (fail fast on an unexpected Succeeded); the wait
+# comfortably exceeds the 300s restoreTimeoutSeconds set above.
+wait_for_field restorejobs.backups.cozystack.io "$RESTOREJOB_UNREACHABLE_NAME" \
+    '{.status.phase}' Failed "$NAMESPACE" 900 Succeeded
+REASON=$(kubectl -n "$NAMESPACE" get restorejob.backups.cozystack.io "$RESTOREJOB_UNREACHABLE_NAME" \
+    -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}')
+if [[ "$REASON" != "RecoveryTargetUnreachable" ]]; then
+    log_error "expected reason RecoveryTargetUnreachable, got '${REASON}' (a generic RestoreFailed means the driver did not classify the unreachable-target FATAL)"
+    exit 1
+fi
+log_success "Verified: recoveryTime ${UNREACHABLE_TIME} past the archive -> RestoreJob Failed with reason RecoveryTargetUnreachable."

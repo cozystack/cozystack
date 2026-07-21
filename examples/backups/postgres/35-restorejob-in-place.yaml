@@ -2,7 +2,12 @@
 # back into pg-src. WARNING: deletes the live cnpg.io Cluster and its PVCs
 # before re-bootstrapping from S3 - any data not yet streamed to WAL is lost.
 #
-# Optional: spec.options.recoveryTime (RFC3339) for point-in-time recovery.
+# Optional: spec.options.recoveryTime (RFC3339) turns this into a point-in-time
+# recovery, same as the to-copy variant in 45-restorejob-pitr.yaml (which the
+# e2e drives with a real, in-window timestamp). Uncomment and set a timestamp
+# inside your recoverable window - see 45-restorejob-pitr.yaml and
+# docs/operations/backup-classes.md ("Point-in-time recovery") for how to find
+# the earliest/latest restorable time.
 ---
 apiVersion: backups.cozystack.io/v1alpha1
 kind: RestoreJob
