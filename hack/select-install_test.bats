@@ -46,6 +46,15 @@
     echo "$output" | grep -wq cozystack.kubernetes-application
 }
 
+@test "cacert suite maps back to the cozystack-basics source" {
+    # The reverse companion (select-e2e.sh) selects cacert for a cozystack-basics
+    # change; this pins the forward side, so that run actually installs the package
+    # shipping the tenant-projection writer policy the suite proves.
+    output=$(hack/select-install.sh "cacert")
+    echo "$output" | grep -wq cozystack.cozystack-basics
+    echo "$output" | grep -wq cozystack.cozystack-engine
+}
+
 @test "multiple suites union their closures" {
     output=$(hack/select-install.sh "postgres kafka")
     echo "$output" | grep -wq cozystack.postgres-application
