@@ -5,4 +5,6 @@
 {{include "cozystack.platform.package.default" (list "cozystack.http-cache-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.tcp-balancer-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vpn-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.site-router-application" $) }}
+{{include "cozystack.platform.package.default" (list "cozystack.site-router-controller" $) }}
 {{- end }}

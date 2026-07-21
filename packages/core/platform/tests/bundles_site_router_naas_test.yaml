@@ -1,0 +1,71 @@
+suite: site-router installed by the naas bundle
+templates:
+  - templates/bundles/naas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The site-router feature is only useful once its app catalog registration
+  # AND its mediation controller are installed. Both must ride the naas bundle
+  # (the NaaS analog of vpn-application); if either regresses to being defined
+  # as a PackageSource but never instantiated by a bundle, the feature silently
+  # does not install. Guard both.
+  - it: emits the site-router application and controller Packages when naas is enabled
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+          any: true
+
+  - it: emits neither site-router Package when naas is disabled
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+        not: true
+
+  - it: honours the disabledPackages opt-out for the site-router packages
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: true
+        disabledPackages:
+          - cozystack.site-router-application
+          - cozystack.site-router-controller
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+        not: true
