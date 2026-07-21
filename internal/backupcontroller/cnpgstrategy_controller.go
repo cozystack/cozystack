@@ -32,9 +32,15 @@ const (
 	cnpgFieldManager = "cozystack-cnpg-backup-driver"
 
 	cnpgClusterLabel        = "cnpg.io/cluster"
-	cnpgBackupMethodBarman  = "barmanObjectStore"
 	cnpgBackupPhaseComplete = "completed"
 	cnpgBackupPhaseFailed   = "failed"
+
+	// barmanObjectNameParam / barmanServerNameParam are the barman-cloud plugin
+	// parameter keys on a Cluster's spec.plugins entry. barmanObjectName points
+	// at the ObjectStore CR; serverName is the per-server folder under
+	// destinationPath (the plugin forbids serverName inside the ObjectStore).
+	barmanObjectNameParam = "barmanObjectName"
+	barmanServerNameParam = "serverName"
 
 	postgresAppKind   = "Postgres"
 	postgresAppPrefix = "postgres-"
@@ -78,9 +84,9 @@ const (
 	// Wall-clock cap on how long the WALArchiveReady gate can stay False
 	// before the RestoreJob is marked Failed. The gate fires before the
 	// destructive purge to confirm the backup's endWal is in object
-	// storage; if the source's lastArchivedWAL never advances, archive_-
-	// command on the source is broken (no barmanObjectStore on the
-	// Cluster, S3 outage, bad credentials, etc.) - waiting longer won't
+	// storage; if the source's lastArchivedWAL never advances, WAL
+	// archiving on the source is broken (no barman-cloud plugin wired on
+	// the Cluster, S3 outage, bad credentials, etc.) - waiting longer won't
 	// fix it. This is independent of cnpgDefaultRestoreDeadline because
 	// archive lag and recovery time scale with completely different
 	// inputs: the gate clears in seconds for any healthy cluster
@@ -203,7 +209,8 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 		serverName = clusterName
 	}
 
-	if err := r.applyClusterBarmanObjectStore(ctx, j.Namespace, clusterName, rendered, serverName); err != nil {
+	effectiveServerName, err := r.applyClusterPluginBackup(ctx, j.Namespace, clusterName, rendered, serverName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// HelmRelease has not yet rendered the Cluster (fresh app, or
 			// the operator restart wiped its informer cache). Surface the
@@ -221,7 +228,12 @@ func (r *BackupJobReconciler) reconcileCNPG(ctx context.Context, j *backupsv1alp
 			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 		}
-		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to apply barmanObjectStore to Cluster: %v", err))
+		return r.markBackupJobFailed(ctx, j, fmt.Sprintf("failed to attach barman-cloud plugin to Cluster: %v", err))
+	}
+	if effectiveServerName != serverName {
+		logger.Info("preserving the live Cluster's barman serverName over the strategy template's",
+			"cluster", clusterName, "live", effectiveServerName, "strategy", serverName)
+		serverName = effectiveServerName
 	}
 
 	cnpgBackup, err := r.ensureCNPGBackup(ctx, j, clusterName)
@@ -372,27 +384,88 @@ func cnpgClusterFreshlyRecovered(hasRecovery bool, clusterCreatedAt, restoreStar
 	return clusterCreatedAt.After(restoreStartedAt.Time)
 }
 
-// applyClusterBarmanObjectStore SSA-patches the live CNPG Cluster's
-// spec.backup from the templated strategy. The driver owns the fields via
-// its own field manager so the chart - which only emits spec.backup when
-// backup.enabled=true - does not contend.
+// applyClusterPluginBackup wires the templated strategy onto the live CNPG
+// Cluster through the barman-cloud plugin: it SSA-applies an ObjectStore CR
+// carrying the S3/barman configuration and SSA-patches the Cluster's
+// spec.plugins to reference it. This replaces the deprecated native
+// spec.backup.barmanObjectStore path (removed from the `standard` image
+// variant in CNPG 1.29). The driver owns both objects via its own field
+// manager so the chart - which only emits them for the non-platform flow -
+// does not contend.
 //
 // Returns an apierrors.IsNotFound error when the Cluster has not yet been
-// rendered by the HelmRelease. The SSA path on its own would fail with a
+// rendered by the HelmRelease. The Cluster SSA on its own would fail with a
 // hard validation error (CNPG's Cluster CRD has many required fields the
 // driver does not set), so we surface the precondition explicitly and let
 // the caller treat it as a retryable wait.
-func (r *BackupJobReconciler) applyClusterBarmanObjectStore(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) error {
+// applyClusterPluginBackup returns the serverName the Cluster effectively
+// archives under. A live Cluster that already has the barman-cloud plugin
+// attached (chart-rendered, or a previous BackupJob) keeps its current
+// serverName even when the strategy template names a different one: the
+// serverName is the S3 path prefix of the WAL archive, and flipping it
+// mid-stream splits the archive across two prefixes — WALs around the flip
+// land under the old prefix while the base backup indexes under the new one,
+// and the eventual restore fails with "WAL not found".
+func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, namespace, clusterName string, t *strategyv1alpha1.CNPGTemplate, serverName string) (string, error) {
 	existing := &cnpgtypes.Cluster{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: clusterName}, existing); err != nil {
-		return err
+		return "", err
 	}
+	if live := currentBarmanServerName(existing); live != "" {
+		serverName = live
+	}
+
+	// The ObjectStore is named after the Cluster (distinct kind, same
+	// namespace). serverName is deliberately left off the ObjectStore
+	// configuration - the plugin forbids it there and takes it from the
+	// Cluster plugin parameter instead - so backups keep landing under the
+	// same s3://.../<serverName>/ path the native barmanObjectStore used.
+	objStoreName := clusterName
+	objStore := newObjectStorePatch(namespace, objStoreName)
+	// Own the ObjectStore by the live Cluster so Kubernetes garbage-collects it
+	// when the Cluster is deleted (tenant app teardown, or the RestoreJob purge).
+	// The platform flow does not chart-render this ObjectStore, so without an
+	// owner reference it would otherwise be orphaned in the tenant namespace.
+	// Owner and owned are in the same namespace, as GC requires.
+	controller := true
+	objStore.OwnerReferences = []metav1.OwnerReference{{
+		APIVersion: cnpgtypes.GroupVersion.String(),
+		Kind:       "Cluster",
+		Name:       existing.Name,
+		UID:        existing.UID,
+		Controller: &controller,
+	}}
+	objStore.Spec = cnpgtypes.ObjectStoreSpec{
+		Configuration:   *buildBarmanObjectStore(t.BarmanObjectStore, ""),
+		RetentionPolicy: t.BarmanObjectStore.RetentionPolicy,
+	}
+	if err := r.Patch(ctx, objStore, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
+		return "", fmt.Errorf("apply ObjectStore %s/%s: %w", namespace, objStoreName, err)
+	}
+
 	patch := newCNPGClusterPatch(namespace, clusterName)
-	patch.Spec.Backup = &cnpgtypes.BackupConfiguration{
-		BarmanObjectStore: buildBarmanObjectStore(t.BarmanObjectStore, serverName),
-		RetentionPolicy:   t.BarmanObjectStore.RetentionPolicy,
+	patch.Spec.Plugins = []cnpgtypes.PluginConfiguration{buildBarmanPlugin(objStoreName, serverName)}
+	if err := r.Patch(ctx, patch, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
+		return "", err
 	}
-	return r.Patch(ctx, patch, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership)
+	return serverName, nil
+}
+
+// currentBarmanServerName returns the serverName the Cluster's barman-cloud
+// plugin currently archives under: the explicit plugin parameter when set, the
+// Cluster's own name when the plugin is attached without one (the plugin's
+// documented default), and "" when the plugin is not attached at all.
+func currentBarmanServerName(c *cnpgtypes.Cluster) string {
+	for _, p := range c.Spec.Plugins {
+		if p.Name != cnpgtypes.PluginName {
+			continue
+		}
+		if name := p.Parameters[barmanServerNameParam]; name != "" {
+			return name
+		}
+		return c.Name
+	}
+	return ""
 }
 
 // ensureCNPGBackup creates a one-shot postgresql.cnpg.io/Backup CR labelled
@@ -418,8 +491,9 @@ func (r *BackupJobReconciler) ensureCNPGBackup(ctx context.Context, j *backupsv1
 			},
 		},
 		Spec: cnpgtypes.BackupSpec{
-			Method:  cnpgBackupMethodBarman,
-			Cluster: cnpgtypes.ClusterReference{Name: clusterName},
+			Method:              cnpgtypes.BackupMethodPlugin,
+			Cluster:             cnpgtypes.ClusterReference{Name: clusterName},
+			PluginConfiguration: &cnpgtypes.BackupPluginConfiguration{Name: cnpgtypes.PluginName},
 		},
 	}
 
@@ -685,7 +759,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		// bootstrap.initdb -> bootstrap.recovery swap with "Only one
 		// bootstrap". helm-controller then drops into an UpgradeFailed /
 		// RollbackFailed loop whose rollbacks strip the SSA-applied
-		// spec.backup.barmanObjectStore - which stops archive_command
+		// spec.plugins (and its ObjectStore) - which stops WAL archiving
 		// and pins lastArchivedWAL at "" forever. By gating before the
 		// patch, the HelmRelease stays untouched while we wait, the
 		// source primary keeps archiving, and the chart's failure-loop
@@ -717,7 +791,7 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 				time.Since(cond.LastTransitionTime.Time) > walDeadline {
 				return r.markRestoreJobFailed(ctx, restoreJob, fmt.Sprintf(
 					"WAL archive did not catch up to the backup endWal within %s: %s "+
-						"(check that the source cnpg.io/Cluster has spec.backup.barmanObjectStore set and archive_command is shipping WALs to object storage; override via spec.options.walArchiveTimeoutSeconds)",
+						"(check that the source cnpg.io/Cluster has the barman-cloud plugin wired - spec.plugins referencing an ObjectStore - and is shipping WALs to object storage; override via spec.options.walArchiveTimeoutSeconds)",
 					walDeadline, walMessage))
 			}
 			return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
@@ -863,11 +937,13 @@ func (r *RestoreJobReconciler) resolveCNPGRestoreTarget(restoreJob *backupsv1alp
 // patchPostgresAppForRestore writes the restore-related fields into the
 // target Postgres app instance spec. The chart already exposes these knobs;
 // once the HelmRelease re-renders, the cnpg.io Cluster picks up
-// bootstrap.recovery and externalClusters[].barmanObjectStore.
+// bootstrap.recovery and externalClusters[].plugin referencing the
+// chart-rendered recovery ObjectStore.
 //
 // Credentials are forwarded as a Secret reference (spec.backup.s3CredentialsSecret),
 // not as cleartext keys. The controller never reads the Secret itself; the
-// chart wires the named Secret straight into barmanObjectStore.s3Credentials.
+// chart wires the named Secret into the recovery ObjectStore's
+// spec.configuration.s3Credentials.
 // This keeps S3 access keys out of the Postgres CR .spec, etcd, audit logs,
 // and any tenant-readable copies.
 //
@@ -930,10 +1006,11 @@ func buildPostgresAppRestorePatch(
 			SecretAccessKeyKey: credsRef.SecretAccessKeyKey,
 		}
 	}
-	// endpointCA flows into both the chart's spec.backup.barmanObjectStore
-	// and externalClusters[].barmanObjectStore. The recovery path
-	// specifically needs it - without a trusted CA the cnpg-instance-manager
-	// panics in InitInfo.loadBackup when it can't verify the seaweedfs cert.
+	// endpointCA flows into both the chart's backup ObjectStore
+	// (spec.configuration.endpointCA) and the recovery ObjectStore referenced
+	// from externalClusters[].plugin. The recovery path specifically needs it -
+	// without a trusted CA the cnpg-instance-manager panics in
+	// InitInfo.loadBackup when it can't verify the seaweedfs cert.
 	patched.Spec.Backup.EndpointCA = postgresapp.EndpointCA{}
 	if caRef != nil && caRef.SecretRef.Name != "" {
 		patched.Spec.Backup.EndpointCA = postgresapp.EndpointCA{
@@ -1286,8 +1363,39 @@ func newCNPGClusterPatch(namespace, name string) *cnpgtypes.Cluster {
 	}
 }
 
+// newObjectStorePatch returns an empty typed ObjectStore addressed by
+// (namespace, name), TypeMeta set so the SSA Apply path can identify the kind.
+func newObjectStorePatch(namespace, name string) *cnpgtypes.ObjectStore {
+	return &cnpgtypes.ObjectStore{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: cnpgtypes.BarmanGroupVersion.String(),
+			Kind:       "ObjectStore",
+		},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
+	}
+}
+
+// buildBarmanPlugin returns the Cluster spec.plugins entry that routes
+// backup/WAL/recovery through the barman-cloud plugin, referencing the named
+// ObjectStore and (optionally) the per-server folder.
+func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfiguration {
+	isWALArchiver := true
+	params := map[string]string{barmanObjectNameParam: objectStoreName}
+	if serverName != "" {
+		params[barmanServerNameParam] = serverName
+	}
+	return cnpgtypes.PluginConfiguration{
+		Name:          cnpgtypes.PluginName,
+		IsWALArchiver: &isWALArchiver,
+		Parameters:    params,
+	}
+}
+
 // buildBarmanObjectStore translates the typed strategy template into the
-// shape postgresql.cnpg.io expects for spec.backup.barmanObjectStore.
+// barman configuration shape shared by the deprecated
+// spec.backup.barmanObjectStore and the plugin's ObjectStore.spec.configuration.
+// Pass serverName="" when building an ObjectStore (the plugin forbids
+// serverName there and takes it from the Cluster plugin parameter).
 func buildBarmanObjectStore(t strategyv1alpha1.BarmanObjectStoreTemplate, serverName string) *cnpgtypes.BarmanObjectStoreConfiguration {
 	out := &cnpgtypes.BarmanObjectStoreConfiguration{
 		DestinationPath: t.DestinationPath,

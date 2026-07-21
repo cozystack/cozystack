@@ -91,6 +91,18 @@ while IFS= read -r file; do
       selected_apps="$selected_apps $app"
       trigger_any=1
       continue ;;
+    examples/backups/*/*)
+      # The etcd and postgres backup round-trip tests execute the example
+      # scripts under examples/backups/<app>/ as their harness, so an edit
+      # there must run that app's suite. A dir with no matching suite is a
+      # docs-only demo and stays ignored (adding it to selected_apps would
+      # empty the final intersection and trip the full-suite safety net).
+      app=$(echo "$file" | sed -nE 's,^examples/backups/([^/]+)/.*,\1,p')
+      if echo "$all_apps" | grep -Fxq "$app"; then
+        selected_apps="$selected_apps $app"
+        trigger_any=1
+      fi
+      continue ;;
   esac
 
   # 3. Full-suite trigger

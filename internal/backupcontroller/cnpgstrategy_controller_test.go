@@ -953,13 +953,12 @@ func TestCreateCNPGBackupArtifact_AlreadyExistsReturnsExisting(t *testing.T) {
 	}
 }
 
-// TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster locks in the
-// precondition added for the smaller blocker on applyClusterBarmanObjectStore:
-// when the live cnpg.io Cluster has not yet been rendered by the chart, the
-// driver must surface NotFound (so the caller can retry-with-backoff)
-// instead of issuing a doomed SSA Apply that would be rejected by the API
-// server for missing required Cluster fields.
-func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
+// TestApplyClusterPluginBackup_NotFoundOnMissingCluster locks in the
+// precondition on applyClusterPluginBackup: when the live cnpg.io Cluster has
+// not yet been rendered by the chart, the driver must surface NotFound (so the
+// caller can retry-with-backoff) instead of issuing a doomed SSA Apply that
+// would be rejected by the API server for missing required Cluster fields.
+func TestApplyClusterPluginBackup_NotFoundOnMissingCluster(t *testing.T) {
 	c := newCNPGStrategyTestClient(t)
 	r := &BackupJobReconciler{Client: c}
 	tmpl := &strategyv1alpha1.CNPGTemplate{
@@ -968,7 +967,7 @@ func TestApplyClusterBarmanObjectStore_NotFoundOnMissingCluster(t *testing.T) {
 		},
 	}
 
-	err := r.applyClusterBarmanObjectStore(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
+	_, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-missing", tmpl, "postgres-missing")
 	if err == nil {
 		t.Fatalf("expected NotFound error, got nil")
 	}
@@ -1359,12 +1358,87 @@ func testCNPGScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-// TestApplyClusterBarmanObjectStore_PatchesExistingCluster confirms the
-// precondition does not regress the happy path: when the Cluster exists
-// the driver still SSA-patches spec.backup.barmanObjectStore.
-func TestApplyClusterBarmanObjectStore_PatchesExistingCluster(t *testing.T) {
+// TestApplyClusterPluginBackup_PatchesExistingCluster confirms the happy path:
+// when the Cluster exists the driver SSA-applies an ObjectStore CR carrying the
+// The serverName is the S3 WAL-archive path prefix; changing it on a live
+// Cluster splits the archive across two prefixes and breaks the eventual
+// restore with "WAL not found". A Cluster that already has the barman-cloud
+// plugin attached must therefore keep its effective serverName — the explicit
+// parameter when present, its own name (the plugin's default) when the plugin
+// is attached without one — and only a Cluster with no plugin at all takes the
+// strategy template's value.
+func TestApplyClusterPluginBackup_PreservesLiveServerName(t *testing.T) {
+	explicit := true
+	cases := []struct {
+		name       string
+		plugins    []cnpgtypes.PluginConfiguration
+		wantServer string
+	}{
+		{
+			name: "explicit live serverName wins over the strategy's",
+			plugins: []cnpgtypes.PluginConfiguration{{
+				Name:          cnpgtypes.PluginName,
+				IsWALArchiver: &explicit,
+				Parameters:    map[string]string{barmanObjectNameParam: "postgres-app", barmanServerNameParam: "postgres-app"},
+			}},
+			wantServer: "postgres-app",
+		},
+		{
+			name: "plugin attached without serverName defaults to the cluster name",
+			plugins: []cnpgtypes.PluginConfiguration{{
+				Name:          cnpgtypes.PluginName,
+				IsWALArchiver: &explicit,
+				Parameters:    map[string]string{barmanObjectNameParam: "postgres-app"},
+			}},
+			wantServer: "postgres-app",
+		},
+		{
+			name:       "no plugin attached: the strategy's serverName applies",
+			plugins:    nil,
+			wantServer: "strategy-name",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &cnpgtypes.Cluster{
+				ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "cluster-uid-123"},
+			}
+			cluster.Spec.Plugins = tc.plugins
+			c := newCNPGStrategyTestClient(t, cluster)
+			r := &BackupJobReconciler{Client: c}
+			tmpl := &strategyv1alpha1.CNPGTemplate{
+				BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/x/"},
+			}
+
+			got, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "strategy-name")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.wantServer {
+				t.Fatalf("effective serverName = %q, want %q", got, tc.wantServer)
+			}
+
+			patched := &cnpgtypes.Cluster{}
+			if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "postgres-app"}, patched); err != nil {
+				t.Fatalf("get Cluster after apply: %v", err)
+			}
+			if len(patched.Spec.Plugins) != 1 {
+				t.Fatalf("expected exactly one plugin entry, got %+v", patched.Spec.Plugins)
+			}
+			if s := patched.Spec.Plugins[0].Parameters[barmanServerNameParam]; s != tc.wantServer {
+				t.Fatalf("patched plugin serverName = %q, want %q", s, tc.wantServer)
+			}
+		})
+	}
+}
+
+// barman configuration and SSA-patches the Cluster's spec.plugins to reference
+// it via the barman-cloud plugin (the plugin replaces the deprecated native
+// spec.backup.barmanObjectStore). serverName must land on the Cluster plugin
+// parameter, never inside the ObjectStore configuration (the plugin forbids it).
+func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	cluster := &cnpgtypes.Cluster{
-		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "postgres-app", UID: "cluster-uid-123"},
 	}
 	c := newCNPGStrategyTestClient(t, cluster)
 	r := &BackupJobReconciler{Client: c}
@@ -1375,22 +1449,83 @@ func TestApplyClusterBarmanObjectStore_PatchesExistingCluster(t *testing.T) {
 		},
 	}
 
-	if err := r.applyClusterBarmanObjectStore(context.Background(), "tenant", "postgres-app", tmpl, "postgres-app"); err != nil {
+	if _, err := r.applyClusterPluginBackup(context.Background(), "tenant", "postgres-app", tmpl, "tenant-app"); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// The ObjectStore CR carries destinationPath + retentionPolicy and no serverName.
+	store := &cnpgtypes.ObjectStore{}
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: "tenant", Name: "postgres-app"}, store); err != nil {
+		t.Fatalf("get ObjectStore after apply: %v", err)
+	}
+	if store.Spec.Configuration.DestinationPath != "s3://bucket/x/" {
+		t.Errorf("ObjectStore destinationPath: got %q", store.Spec.Configuration.DestinationPath)
+	}
+	if store.Spec.RetentionPolicy != "30d" {
+		t.Errorf("ObjectStore retentionPolicy: got %q", store.Spec.RetentionPolicy)
+	}
+	// The ObjectStore must be owner-referenced to the Cluster so Kubernetes GC
+	// removes it when the Cluster is deleted (no orphan in the platform flow,
+	// where the chart does not render this ObjectStore).
+	if len(store.OwnerReferences) != 1 {
+		t.Fatalf("expected exactly one ownerReference on the ObjectStore, got %+v", store.OwnerReferences)
+	}
+	own := store.OwnerReferences[0]
+	if own.Kind != "Cluster" || own.Name != "postgres-app" || own.UID != "cluster-uid-123" {
+		t.Errorf("ObjectStore ownerReference: got kind=%q name=%q uid=%q, want Cluster/postgres-app/cluster-uid-123", own.Kind, own.Name, own.UID)
+	}
+	if store.Spec.Configuration.ServerName != "" {
+		t.Errorf("ObjectStore configuration must not carry serverName (plugin forbids it); got %q", store.Spec.Configuration.ServerName)
+	}
+
+	// The Cluster references the ObjectStore through spec.plugins, with
+	// serverName on the plugin parameter and isWALArchiver=true.
 	got := &cnpgtypes.Cluster{}
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(cluster), got); err != nil {
 		t.Fatalf("get cluster after patch: %v", err)
 	}
-	if got.Spec.Backup == nil || got.Spec.Backup.BarmanObjectStore == nil {
-		t.Fatalf("expected spec.backup.barmanObjectStore to be set, got %+v", got.Spec.Backup)
+	if len(got.Spec.Plugins) != 1 {
+		t.Fatalf("expected exactly one plugin entry, got %+v", got.Spec.Plugins)
 	}
-	if got.Spec.Backup.BarmanObjectStore.DestinationPath != "s3://bucket/x/" {
-		t.Errorf("destinationPath: got %q", got.Spec.Backup.BarmanObjectStore.DestinationPath)
+	p := got.Spec.Plugins[0]
+	if p.Name != cnpgtypes.PluginName {
+		t.Errorf("plugin name: got %q, want %q", p.Name, cnpgtypes.PluginName)
 	}
-	if got.Spec.Backup.RetentionPolicy != "30d" {
-		t.Errorf("retentionPolicy: got %q", got.Spec.Backup.RetentionPolicy)
+	if p.IsWALArchiver == nil || !*p.IsWALArchiver {
+		t.Errorf("expected isWALArchiver=true, got %v", p.IsWALArchiver)
+	}
+	if got := p.Parameters[barmanObjectNameParam]; got != "postgres-app" {
+		t.Errorf("plugin barmanObjectName: got %q, want %q", got, "postgres-app")
+	}
+	if got := p.Parameters[barmanServerNameParam]; got != "tenant-app" {
+		t.Errorf("plugin serverName: got %q, want %q", got, "tenant-app")
+	}
+}
+
+// TestEnsureCNPGBackup_UsesPluginMethod locks in that driver-initiated backups
+// go through the barman-cloud plugin. spec.method / spec.pluginConfiguration is
+// the single field that routes the run: if it regressed to the default
+// (barmanObjectStore) method, CNPG would run the legacy method against a Cluster
+// that no longer has one and every platform backup would fail.
+func TestEnsureCNPGBackup_UsesPluginMethod(t *testing.T) {
+	j := &backupsv1alpha1.BackupJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "tenant", Name: "bj"},
+	}
+	c := newCNPGStrategyTestClient(t, j)
+	r := &BackupJobReconciler{Client: c}
+
+	bk, err := r.ensureCNPGBackup(context.Background(), j, "postgres-app")
+	if err != nil {
+		t.Fatalf("ensureCNPGBackup: %v", err)
+	}
+	if bk.Spec.Method != cnpgtypes.BackupMethodPlugin {
+		t.Errorf("Backup spec.method: got %q, want %q", bk.Spec.Method, cnpgtypes.BackupMethodPlugin)
+	}
+	if bk.Spec.PluginConfiguration == nil || bk.Spec.PluginConfiguration.Name != cnpgtypes.PluginName {
+		t.Errorf("Backup spec.pluginConfiguration: got %+v, want name=%q", bk.Spec.PluginConfiguration, cnpgtypes.PluginName)
+	}
+	if bk.Spec.Cluster.Name != "postgres-app" {
+		t.Errorf("Backup spec.cluster.name: got %q, want postgres-app", bk.Spec.Cluster.Name)
 	}
 }
 

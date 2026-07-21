@@ -70,7 +70,7 @@ type Backup struct {
 	// Enable regular backups.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// DEPRECATED. Pre-existing Secret with the CA bundle Barman should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery in the legacy chart-managed flow.
+	// DEPRECATED. Pre-existing Secret with the CA bundle the barman-cloud plugin should trust when reaching a self-signed S3 endpoint. Used for both backup and bootstrap recovery in the legacy chart-managed flow.
 	// +kubebuilder:default:={}
 	EndpointCA EndpointCA `json:"endpointCA,omitempty"`
 	// DEPRECATED. See `destinationPath`.
@@ -88,10 +88,10 @@ type Backup struct {
 	// DEPRECATED. See `s3AccessKey`.
 	// +kubebuilder:default:=""
 	S3SecretKey string `json:"s3SecretKey,omitempty"`
-	// Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.backup.barmanObjectStore` is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `barmanObjectStore` and the CNPG driver SSA-patches it onto the live Cluster at first BackupJob time.
+	// Legacy. Cron schedule (CNPG 6-field format) for the chart-emitted ScheduledBackup. Empty means no chart-managed schedule, which is the recommended setup when a `BackupClass` from `backups.cozystack.io` already drives backup orchestration. In the legacy chart-managed flow `spec.plugins` plus the barman-cloud ObjectStore is rendered when `backup.enabled=true` AND `useSystemBucket=false` AND `destinationPath` is non-empty AND inline-or-external creds are supplied; in the platform `useSystemBucket=true` flow the chart skips emitting `spec.plugins` and the CNPG driver SSA-applies the ObjectStore and patches `spec.plugins` onto the live Cluster at first BackupJob time.
 	// +kubebuilder:default:=""
 	Schedule string `json:"schedule,omitempty"`
-	// Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.backup.barmanObjectStore` is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-patches the live Cluster with destinationPath/endpointURL/credentials when the first BackupJob runs. Consequence: `archive_command` is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
+	// Opt-in: when true, the chart-emitted `<release>-s3-creds` Secret is skipped AND `spec.plugins` (plus the barman-cloud ObjectStore) is left UNSET in the chart-rendered Cluster — the cozy-default BackupClass driver SSA-applies an ObjectStore (carrying destinationPath/endpointURL/credentials) and patches `spec.plugins` on the live Cluster when the first BackupJob runs. Consequence: plugin WAL archiving is NOT active until that first BackupJob fires; WAL accumulates on the PVC in the meantime, so fire an ad-hoc BackupJob immediately after enabling the flag on existing releases. Use together with the platform `cozy-default` BackupClass — tenants do not need to fill `s3AccessKey`/`s3SecretKey` or `destinationPath`/`endpointURL`. The destination path automatically scopes to `s3://cozy-backups/<namespace>/<release>/`.
 	// +kubebuilder:default:=false
 	UseSystemBucket bool `json:"useSystemBucket,omitempty"`
 }
@@ -106,7 +106,7 @@ type Bootstrap struct {
 	// Timestamp (RFC3339) for point-in-time recovery; empty means latest.
 	// +kubebuilder:default:=""
 	RecoveryTime string `json:"recoveryTime,omitempty"`
-	// Barman server name (S3 path prefix) used by the original cluster when writing backups. Set this only when the original cluster had an explicit barmanObjectStore.serverName that differed from its Kubernetes resource name.
+	// Server name (S3 path prefix) used by the original cluster when writing backups; passed to the barman-cloud plugin via `externalClusters[].plugin.parameters.serverName`. Defaults to `bootstrap.oldName`. Set this only when the original cluster wrote backups under an explicit server name that differed from its Kubernetes resource name.
 	// +kubebuilder:default:=""
 	ServerName string `json:"serverName,omitempty"`
 }
@@ -129,7 +129,7 @@ type EndpointCA struct {
 	// Key within the Secret containing the CA bundle. Defaults to `ca.crt`.
 	// +kubebuilder:default:=""
 	Key string `json:"key,omitempty"`
-	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (Barman uses the system trust store).
+	// Name of the Secret in the application namespace. Empty means no endpointCA is emitted (the plugin uses the system trust store).
 	// +kubebuilder:default:=""
 	Name string `json:"name,omitempty"`
 }

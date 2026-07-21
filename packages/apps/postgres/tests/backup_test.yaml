@@ -73,6 +73,14 @@ tests:
       - equal:
           path: spec.cluster.name
           value: pg-test
+      # The ScheduledBackup must delegate to the barman-cloud plugin, not the
+      # deprecated native barmanObjectStore method (removed in CNPG 1.29).
+      - equal:
+          path: spec.method
+          value: plugin
+      - equal:
+          path: spec.pluginConfiguration.name
+          value: barman-cloud.cloudnative-pg.io
 
   - it: default values produce no ScheduledBackup
     # Defends the new default - users who deploy with no overrides do not
