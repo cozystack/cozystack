@@ -80,6 +80,14 @@ func (f *fakeVyOS) Retrieve(_ context.Context, _ []string) (json.RawMessage, err
 	return f.retrieveResult, f.retrieveErr
 }
 
+// setRetrieve swaps the canned /retrieve result mid-test, standing in for the
+// guest source filter coming up, being wiped, or recovering between polls.
+func (f *fakeVyOS) setRetrieve(raw json.RawMessage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.retrieveResult = raw
+}
+
 // Configures reports the number of Configure batches applied so far.
 func (f *fakeVyOS) Configures() int {
 	f.mu.Lock()
@@ -372,6 +380,55 @@ func TestReconcile_ReadyGatedOnSourceFilter(t *testing.T) {
 			t.Errorf("port security should be relaxed once the guest source filter is confirmed active")
 		}
 	})
+}
+
+// TestReconcile_ReenforcesPortSecurityWhenSourceFilterDropsAfterRelax encodes the
+// R2 fix (maintaining, not just establishing, the D8 invariant). Steady state:
+// the config is pushed, the source filter is confirmed, port security is relaxed.
+// Then the guest wipes the managed config so the filter drops: the next reconcile
+// must re-enforce port_security (the compensating guard is down) AND invalidate
+// the cached hash so the following reconcile re-pushes and re-stamps the filter,
+// after which the port is relaxed again.
+func TestReconcile_ReenforcesPortSecurityWhenSourceFilterDropsAfterRelax(t *testing.T) {
+	podName := "virt-launcher-" + releasePrefix + "demo-abcde"
+	filterUp := json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`)
+	fakeV := &fakeVyOS{retrieveResult: filterUp}
+	r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
+
+	// 1) Steady state: push once, confirm filter, relax the port.
+	reconcileInstance(t, r, "demo")
+	if fakeV.Configures() != 1 {
+		t.Fatalf("expected exactly 1 Configure on first reconcile, got %d", fakeV.Configures())
+	}
+	if !gatewayPortSecurityRelaxed(t, r, podName) {
+		t.Fatalf("expected port_security relaxed once the source filter is confirmed")
+	}
+
+	// 2) The guest wipes the managed config: the source filter drops.
+	fakeV.setRetrieve(json.RawMessage(`null`))
+	res := reconcileInstance(t, r, "demo")
+	if gatewayPortSecurityRelaxed(t, r, podName) {
+		t.Errorf("port_security must be re-enforced while the source filter is down (D8)")
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected a requeue while the source filter is down, got none")
+	}
+	// The push is skipped on this reconcile (hash still cached at step start); the
+	// re-enforcement is what matters here.
+	if fakeV.Configures() != 1 {
+		t.Errorf("no re-push expected on the drop-detection reconcile itself, got %d", fakeV.Configures())
+	}
+
+	// 3) The filter recovers once re-stamped; the invalidated hash forces a
+	// re-push and the port is relaxed again.
+	fakeV.setRetrieve(filterUp)
+	reconcileInstance(t, r, "demo")
+	if fakeV.Configures() != 2 {
+		t.Errorf("expected the invalidated hash to force exactly one re-push after the drop, got %d Configure calls", fakeV.Configures())
+	}
+	if !gatewayPortSecurityRelaxed(t, r, podName) {
+		t.Errorf("expected port_security relaxed again once the filter is re-stamped")
+	}
 }
 
 // TestReconcile_MACDiscoveryBindsToDiscoveredDevice encodes T06 "MAC ↔ device

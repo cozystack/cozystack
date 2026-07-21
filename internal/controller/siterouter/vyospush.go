@@ -282,32 +282,64 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 // remoteCIDRs is dropped by the router first (D8). It reads the rule set back over
 // the management API; a null/empty subtree means the filter has not committed yet
 // and the reconcile requeues (port security stays enforcing).
+//
+// TODO(T08): the tunnel-ingress filter is bound to pod-NIC inbound, which also
+// catches cluster-source egress; it must instead match IPsec-decrypted ingress.
+// Redesign + live-validate is owned by T08/T13; this only confirms the current
+// binding is present.
+//
+// The D8 invariant must be MAINTAINED, not merely established once: if the filter
+// is found absent AFTER it was already up (a guest-side wipe/drift), the port must
+// not be left relaxed while the guard is down, and the managed config must be
+// re-stamped. sourceFilterDown handles both before requeueing.
 func (r *SiteRouterReconciler) confirmSourceFilterActive(ctx context.Context, inst *instance) error {
 	if inst.vc == nil {
 		// Reached only if the push step did not build a client — treat as a wait.
-		return &reconcileError{
-			reason:       reasonSourceFilterPending,
-			message:      "gateway management client not initialised",
-			requeueAfter: runtimePollInterval,
-		}
+		return r.sourceFilterDown(ctx, inst, "gateway management client not initialised")
 	}
 
 	raw, err := inst.vc.Retrieve(ctx, tunnelIngressRulesetPath())
 	if err != nil {
-		return &reconcileError{
-			reason:       reasonSourceFilterPending,
-			message:      "querying the guest tunnel-ingress source filter failed: " + truncErr(err),
-			requeueAfter: runtimePollInterval,
-		}
+		return r.sourceFilterDown(ctx, inst, "querying the guest tunnel-ingress source filter failed: "+truncErr(err))
 	}
 	if !ruleSetPresent(raw) {
-		return &reconcileError{
-			reason:       reasonSourceFilterPending,
-			message:      "guest tunnel-ingress source filter not active yet",
-			requeueAfter: runtimePollInterval,
-		}
+		return r.sourceFilterDown(ctx, inst, "guest tunnel-ingress source filter not active yet")
 	}
 	return nil
+}
+
+// sourceFilterDown maintains the D8 invariant while the guest tunnel-ingress
+// source filter is not confirmed active. It (1) re-enforces port_security if a
+// prior cycle relaxed it — the compensating guard is down, so the port must not
+// stay open — and (2) invalidates the cached config hash when a prior push had
+// recorded one, so the next reconcile re-pushes and re-stamps the managed
+// subtrees (restoring the guest-side source filter after a wipe and re-stamping
+// the management firewall). It then returns the SourceFilterPending requeue.
+//
+// A failed re-enforcement is returned as a hard error rather than masked by the
+// soft requeue: leaving the port relaxed while reporting only "pending" would
+// silently violate D8.
+func (r *SiteRouterReconciler) sourceFilterDown(ctx context.Context, inst *instance, msg string) error {
+	if inst.gatewayPod != nil && inst.gatewayPod.Annotations[portSecurityAnnotation] == portSecurityRelaxed {
+		if err := r.restorePortSecurity(ctx, inst); err != nil {
+			return err
+		}
+		log.FromContext(ctx).Info("re-enforced gateway port_security: tunnel-ingress source filter is down",
+			"instance", inst.name, "namespace", inst.namespace)
+	}
+
+	key := client.ObjectKeyFromObject(inst.hr)
+	if r.lastAppliedHash(key) != "" {
+		// Force a re-push on the next reconcile so the managed subtrees are
+		// re-stamped and the source filter is re-established.
+		r.forgetAppliedHash(key)
+	}
+
+	return &reconcileError{
+		reason:       reasonSourceFilterPending,
+		message:      msg,
+		requeueAfter: runtimePollInterval,
+	}
 }
 
 // ruleSetPresent reports whether a /retrieve response carries a live rule set: a
