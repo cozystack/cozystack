@@ -1,0 +1,29 @@
+{{- /*
+  CDI DataVolume for the router boot disk. Default: clone the cozystack-owned
+  VyOS golden image PVC (cozy-public/vm-default-images-<image.name>), matching
+  the vm-disk PVC-clone pattern. Override: import over HTTP from image.url when
+  image.enabled is true (used when no golden image is committed). storageClass
+  is pinned to `replicated` (DRBD/LINSTOR) so the boot disk stays migratable.
+*/ -}}
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: {{ .Release.Name }}-boot
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  contentType: kubevirt
+  source:
+    {{- if .Values.image.enabled }}
+    http:
+      url: {{ required "image.url is required when image.enabled is true" .Values.image.url }}
+    {{- else }}
+    pvc:
+      name: vm-default-images-{{ required "image.name is required" .Values.image.name }}
+      namespace: cozy-public
+    {{- end }}
+  storage:
+    resources:
+      requests:
+        storage: 10Gi
+    storageClassName: replicated

@@ -158,6 +158,47 @@
           "x-kubernetes-int-or-string": true
         }
       }
+    },
+    "image": {
+      "description": "Boot-disk image source for the router VM.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "name"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Import the boot disk over HTTP from `url` instead of cloning the golden-image PVC.",
+          "type": "boolean",
+          "default": false
+        },
+        "name": {
+          "description": "Golden image name in cozy-public. Cloned as the boot disk from PVC vm-default-images-\u003cname\u003e unless `enabled` is true.",
+          "type": "string",
+          "default": "vyos-router"
+        },
+        "url": {
+          "description": "HTTP(S) URL of a VyOS qcow2/raw disk image. Used only when `enabled` is true.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    },
+    "managementCIDR": {
+      "description": "Source CIDR allowed to reach the VyOS management API (SSH 22, HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16) and must be kept consistent. An empty value requires `allowOpenManagement=true` (fail-closed).",
+      "type": "string",
+      "default": "10.244.0.0/16"
+    },
+    "allowOpenManagement": {
+      "description": "Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.",
+      "type": "boolean",
+      "default": false
+    },
+    "cloudInitSeed": {
+      "description": "Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.",
+      "type": "string",
+      "default": ""
     }
   }
 }

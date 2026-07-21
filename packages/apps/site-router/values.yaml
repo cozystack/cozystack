@@ -64,3 +64,27 @@ bgp:
 resources:
   cpu: "2"
   memory: 2Gi
+
+##
+## @section Image and low-level materialization
+##
+
+## @typedef {struct} Image - Boot-disk image source for the router VM.
+## @field {string} name - Golden image name in cozy-public. Cloned as the boot disk from PVC vm-default-images-<name> unless `enabled` is true.
+## @field {bool} enabled - Import the boot disk over HTTP from `url` instead of cloning the golden-image PVC.
+## @field {string} [url] - HTTP(S) URL of a VyOS qcow2/raw disk image. Used only when `enabled` is true.
+
+## @param {Image} image - Boot-disk image source for the router VM.
+image:
+  name: vyos-router
+  enabled: false
+  url: ""
+
+## @param {string} managementCIDR - Source CIDR allowed to reach the VyOS management API (SSH 22, HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16) and must be kept consistent. An empty value requires `allowOpenManagement=true` (fail-closed).
+managementCIDR: 10.244.0.0/16
+
+## @param {bool} allowOpenManagement - Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.
+allowOpenManagement: false
+
+## @param {string} [cloudInitSeed] - Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.
+cloudInitSeed: ""

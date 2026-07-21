@@ -35,6 +35,18 @@ type ConfigSpec struct {
 	// Explicit CPU and memory sizing for the router VM.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
+	// Boot-disk image source for the router VM.
+	// +kubebuilder:default:={}
+	Image Image `json:"image"`
+	// Source CIDR allowed to reach the VyOS management API (SSH 22, HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16) and must be kept consistent. An empty value requires `allowOpenManagement=true` (fail-closed).
+	// +kubebuilder:default:="10.244.0.0/16"
+	ManagementCIDR string `json:"managementCIDR"`
+	// Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.
+	// +kubebuilder:default:=false
+	AllowOpenManagement bool `json:"allowOpenManagement"`
+	// Opaque seed mixed into the VM firmware UUID. Change it to force a first-boot cloud-init re-run; clear it to preserve an existing VM's UUID across re-renders.
+	// +kubebuilder:default:=""
+	CloudInitSeed string `json:"cloudInitSeed,omitempty"`
 }
 
 type BGP struct {
@@ -52,6 +64,18 @@ type BGPNeighbor struct {
 	Address string `json:"address"`
 	// Remote autonomous system number of the neighbor.
 	RemoteASN int `json:"remoteASN"`
+}
+
+type Image struct {
+	// Import the boot disk over HTTP from `url` instead of cloning the golden-image PVC.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Golden image name in cozy-public. Cloned as the boot disk from PVC vm-default-images-<name> unless `enabled` is true.
+	// +kubebuilder:default:="vyos-router"
+	Name string `json:"name"`
+	// HTTP(S) URL of a VyOS qcow2/raw disk image. Used only when `enabled` is true.
+	// +kubebuilder:default:=""
+	Url string `json:"url,omitempty"`
 }
 
 type Peer struct {
