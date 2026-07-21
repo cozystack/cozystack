@@ -17,6 +17,8 @@ spec:
         - cozystack.kubevirt-cdi
         - cozystack.forklift
         - cozystack.vm-adoption-controller
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
