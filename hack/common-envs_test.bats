@@ -23,7 +23,9 @@
 @test "cozystack-controller exports one OCI archive and never pushes under OCI_EXPORT_DIR" {
   out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)
   # Exactly one per-image OCI archive export for the single built image.
-  n=$(echo "$out" | grep -c -- '--output type=oci,dest=' || true)
+  # `grep -o | wc -l` counts OCCURRENCES: the macro expands onto a single line,
+  # so `grep -c` would count that one line and report 1 however many flags survive.
+  n=$(echo "$out" | grep -o -- '--output type=oci,dest=' | wc -l)
   [ "$n" -eq 1 ]
   echo "$out" | grep -q -- '--output type=oci,dest=/tmp/ocitest/cozystack-controller.oci.tar'
   # A plain image-tags package routes every tag through the macro, so under
@@ -34,13 +36,13 @@
 @test "capi-providers-cpprovider exports one OCI archive with a single tag under OCI_EXPORT_DIR" {
   out=$(make -n -C packages/system/capi-providers-cpprovider image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)
   # Exactly one per-image OCI archive export.
-  n=$(echo "$out" | grep -c -- '--output type=oci,dest=' || true)
+  n=$(echo "$out" | grep -o -- '--output type=oci,dest=' | wc -l)
   [ "$n" -eq 1 ]
   echo "$out" | grep -q -- '--output type=oci,dest=/tmp/ocitest/cluster-api-control-plane-provider-kamaji.oci.tar'
   # The two-tag regression: under `--output type=oci` both --tag refs land in
   # index.json → two manifests → `skopeo copy oci-archive:…` fails with "more
   # than one image in oci". Exactly one --tag must survive under export.
-  tags=$(echo "$out" | grep -c -- '--tag' || true)
+  tags=$(echo "$out" | grep -o -- '--tag' | wc -l)
   [ "$tags" -eq 1 ]
   if echo "$out" | grep -q 'docker://'; then echo "FAIL: capi-providers-cpprovider must not push under OCI_EXPORT_DIR"; false; fi
 }
@@ -67,7 +69,7 @@
   # image-tags package: only the pr IMAGE_TAG survives — a versioned + :latest
   # multi-tag OCI archive holds >1 manifest and `skopeo copy oci-archive:` refuses it.
   out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
-  tags=$(echo "$out" | grep -c -- '--tag' || true)
+  tags=$(echo "$out" | grep -o -- '--tag' | wc -l)
   [ "$tags" -eq 1 ]
   if echo "$out" | grep -q -- ':latest'; then echo "FAIL: image-tags emits :latest under OCI_EXPORT_DIR"; false; fi
   # talos: its versioned/floating skopeo copies are additionally gated on an
