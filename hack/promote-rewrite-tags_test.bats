@@ -308,8 +308,8 @@
   image_ref_files packages | sort > "$tmp/enumerated"
   grep -rIlE --exclude-dir=charts --exclude='*.md' \
     -e 'ghcr\.io/cozystack/cozystack/' \
-    -e "['\"]?(repository|image)['\"]?:[[:space:]]*['\"]?cozystack/" \
-    -e "['\"]?(registry|address)['\"]?:[[:space:]]*['\"]?ghcr\.io/cozystack" \
+    -e "['\"]?(repository|image)['\"]?[[:space:]]*:[[:space:]]*['\"]?cozystack/" \
+    -e "['\"]?(registry|address)['\"]?[[:space:]]*:[[:space:]]*['\"]?ghcr\.io/cozystack" \
     packages/ | sort > "$tmp/marked"
 
   # Known carriers that are deliberately NOT enumerated. Each needs a reason;
@@ -363,7 +363,12 @@ ALLOW
   # that were never built. Broadening the rule to `..` otherwise passed every
   # suite, because asserting only that the expected ref appears cannot see an
   # unexpected one — hence the negative assertion below.
-  printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\nunrelated:\n  image:\n    repository: someone-elses/thing\n    tag: "v1@sha256:%s"\n' "$D" "$D" > "$tmp/s4.yaml"
+  # Two digest-pinned decoys, deliberately at different depths: one INSIDE
+  # `global` but outside `global.images`, one outside `global` entirely.
+  # Narrowing the negative to the outer decoy alone is not enough — mutating
+  # the rule to `.global | ..` (rather than a document-wide `..`) then still
+  # passes, while happily stapling the registry onto the inner map.
+  printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\n  sidecar:\n    repository: someone-elses/inner\n    tag: "v1@sha256:%s"\nunrelated:\n  image:\n    repository: someone-elses/thing\n    tag: "v1@sha256:%s"\n' "$D" "$D" "$D" > "$tmp/s4.yaml"
   printf 'x:\n  platformSourceUrl: oci://ghcr.io/cozystack/cozystack/five\n  platformSourceRef: digest=sha256:%s\n' "$D" > "$tmp/s5.yaml"
   printf 'ghcr.io/cozystack/cozystack/six:v1@sha256:%s\n' "$D" > "$tmp/s6.tag"
 
