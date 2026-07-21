@@ -1,0 +1,38 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.cozyplane-apiserver
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+  # The aggregated API server for sdn.cozystack.io (VPC tenancy, policy). It is a
+  # separate component on purpose: the CNI installs before everything (including
+  # cert-manager), while this needs cert-manager Certificates, the etcd-operator
+  # and — since its etcd is PVC-backed — storage.
+  #
+  # It is the ONLY server of the group: the tenant kinds have no CRDs. Until this
+  # component lands, sdn.cozystack.io simply is not served, and the default
+  # network keeps working regardless (the CNI's own CRDs are the separate LOCAL
+  # group, local.sdn.cozystack.io — underlay IPAM, which must come up beneath
+  # cert-manager, etcd and this server, all of which run as pods).
+  - name: default
+    dependsOn:
+    - cozystack.cert-manager
+    - cozystack.etcd-operator
+    # Its etcd is PVC-backed now (the aggregated API's objects are cluster
+    # state; a memory-backed etcd loses every VPC, Port and policy on a
+    # full-cluster restart — which is what a node reboot is), so the storage
+    # layer must exist first. No cycle: linstor depends on the CNI, not on this.
+    - cozystack.linstor
+    components:
+    - name: cozyplane-apiserver
+      path: system/cozyplane-apiserver
+      install:
+        privileged: true
+        namespace: cozy-cozyplane
+        releaseName: cozyplane-apiserver

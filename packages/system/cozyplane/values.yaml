@@ -1,0 +1,98 @@
+# Container image for all cozyplane components (agent, CNI plugin, controller).
+# Digest-pinned (no floating tag); update on each published build.
+image: ghcr.io/lllamnyp/cozyplane@sha256:894516653b8580c9d5fd9c2e0d6aa1e5661e867878b27dacfc3cf3331e57d2f8
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# Pod MTU (underlay MTU minus Geneve overhead, ~50 bytes).
+mtu: 1450
+
+# Geneve UDP destination port. Override (e.g. 6082) only to coexist with another
+# overlay still holding 6081 on the node.
+genevePort: 6081
+
+# CNI conflist filename written to /etc/cni/net.d. Lower names sort first; use a
+# low prefix (e.g. "00-cozyplane.conflist") to win over a co-installed CNI such
+# as Cilium (which ships 05-cilium.conflist).
+cniConfName: "10-cozyplane.conflist"
+
+# Kube-apiserver endpoint the hostNetwork agent/responder dial. Empty = the
+# in-cluster kubernetes.default ClusterIP (10.96.0.1) — correct once a service
+# proxy serves it. When cozyplane is the CNI AND there is no kube-proxy, that
+# ClusterIP is unserved until cozyplane-kpr (which needs the agent) is up, a
+# bootstrap cycle — so point the agent at a real endpoint (Talos: KubePrism
+# localhost:7445).
+kubeApiServer:
+  host: ""
+  port: ""
+
+# The cluster DNS domain (kubelet's clusterDomain) — the zone the split-horizon
+# resolver answers authoritatively for VPC pods. Empty (the default)
+# autodetects it from the resolver's own kubelet-written search path (the
+# DaemonSet runs ClusterFirstWithHostNet, so the cluster domain is present
+# despite hostNetwork); set explicitly only to override.
+clusterDomain: ""
+
+# Cluster networking facts for pod egress to the outside world. Not reliably
+# discoverable in-cluster, so declared here.
+egress:
+  # The cluster pod supernet(s), comma-separated for dual-stack (e.g.
+  # "10.244.0.0/16,fd00:10:244::/56"). Enables the cluster-egress masquerade
+  # (pods get an off-cluster return path) and is denied to VPC tenants at
+  # their gateways. Empty disables both.
+  clusterCIDR: "10.244.0.0/16"
+  # Masquerade implementation: "bpf" (eBPF SNAT at the uplink, no netfilter,
+  # both families), "iptables" (legacy kernel rule, v4 only), or "off".
+  masquerade: "bpf"
+  # The Service CIDR, denied to VPC tenants at their gateways.
+  serviceCIDR: "10.96.0.0/16"
+  # Cluster DNS ClusterIP; the one cluster-internal door a VPC gateway opens
+  # (:53 only), so tenant pods resolve with a stock resolv.conf.
+  clusterDNS: "10.96.0.10"
+  # Additional cluster-internal networks VPC tenants must not reach through
+  # their gateways (e.g. the node/management network).
+  internalCIDRs: []
+
+agent:
+  priorityClassName: system-node-critical
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      # 256Mi was marginal: the eBPF maps are charged to the agent's memory cgroup
+      # and most preallocate at load (~100MB+ before a packet moves). The agent was
+      # OOM-killed at startup with 28MB anon RSS — see docs/internals.md §6a.
+      memory: 512Mi
+
+controller:
+  replicas: 1
+  priorityClassName: system-cluster-critical
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      memory: 128Mi
+
+# The export ValidatingAdmissionPolicy that gates VPCBinding creation on the
+# 'export' verb of the referenced VPC. Requires Kubernetes >= 1.30. Disable only
+# if your cluster predates VAP (then VPCBinding/VPCPeering creation is governed
+# by plain create RBAC alone, with no export/peer verb check). Only relevant in
+# CRD mode: the aggregated apiserver enforces both verbs in its strategies.
+exportPolicy:
+  enabled: true
+
+# CRDs for the LOCAL group (local.sdn.cozystack.io): underlay IPAM (FabricIP).
+# This is the layer beneath everything — it must work before cert-manager,
+# before etcd, and before cozyplane's own aggregated apiserver, all of which run
+# as default-network pods.
+#
+# The tenant kinds (VPC, Port, SecurityGroup, HostFirewall, ...) are NOT CRDs.
+# They are served only by chart/cozyplane-apiserver: a group served by both a
+# CRD and an APIService makes the kube-apiserver's OpenAPI merge collide, and
+# `kubectl apply` then fails for every object in the group (docs/api-groups.md).
+#
+# Disable only if you install these CRDs out-of-band.
+crds:
+  enabled: true

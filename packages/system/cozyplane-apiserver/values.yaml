@@ -1,0 +1,57 @@
+# Container image (shared with the cozyplane chart — the apiserver binary lives
+# in the same image). Digest-pinned (no floating tag); update on each published
+# build.
+image: ghcr.io/lllamnyp/cozyplane@sha256:894516653b8580c9d5fd9c2e0d6aa1e5661e867878b27dacfc3cf3331e57d2f8
+imagePullPolicy: IfNotPresent
+imagePullSecrets: []
+
+replicas: 1
+resources:
+  requests:
+    cpu: 50m
+    memory: 128Mi
+  limits:
+    memory: 256Mi
+
+etcd:
+  # Operator-managed etcd (the aenix-io etcd-operator; Cozystack ships it):
+  # replicated, PVC-backed, TLS end to end. The production path — without it
+  # the built-in single-pod etcd below is used, and with its default
+  # emptyDir storage a single pod reschedule erases every sdn.cozystack.io
+  # object in the cluster.
+  operator:
+    enabled: true
+    replicas: 3
+    size: 4Gi
+    # etcd version the operator runs (required by the EtcdCluster schema).
+    version: "3.6.11"
+    # persistent: PVC-backed (durable) vs tmpfs. The aggregated API's objects
+    # are cluster state; a memory-backed etcd loses all of them on a
+    # full-cluster restart, which is what a node reboot is. Requires a storage
+    # layer, so the component must be sequenced after it.
+    persistent: true
+    # StorageClass for the members' PVCs ("" = cluster default). Replicated, so
+    # a member's data survives losing the node it was scheduled on.
+    storageClass: "replicated"
+  # Built-in single-pod etcd (dev/evaluation only).
+  image: registry.k8s.io/etcd:3.5.16-0
+  # Storage for the built-in etcd. The default is ephemeral (emptyDir); use a
+  # persistentVolumeClaim volume source to survive a pod restart.
+  # Storage for the built-in single-pod etcd. Default is a PVC — the aggregated
+  # API's objects (VPCs, Ports, policies) are cluster state, and an emptyDir
+  # loses them on a pod move. Set `emptyDir: {}` explicitly for a throwaway
+  # cluster with no storage class.
+  storage:
+    persistentVolumeClaim:
+      claimName: cozyplane-etcd-data
+  # The PVC the chart creates when storage above references it.
+  persistence:
+    enabled: true
+    storageClassName: ""   # "" = the cluster default
+    size: 2Gi
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 256Mi

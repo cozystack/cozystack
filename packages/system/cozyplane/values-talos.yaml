@@ -1,0 +1,20 @@
+# Talos overlay for the cozyplane networking variant (cozyplane + cozyplane-kpr,
+# no Cilium, no kube-proxy).
+#
+# cozyplane is the sole CNI; its conflist sorts first (00-) so kubelet uses it as
+# the primary CNI over any co-installed one.
+cniConfName: "00-cozyplane.conflist"
+
+# Talos runs KubePrism (a node-local apiserver load balancer) on localhost:7445.
+# The hostNetwork agent/responder dial it, so they reach the apiserver during
+# bootstrap without kube-proxy and before cozyplane-kpr serves the ClusterIP.
+kubeApiServer:
+  host: "localhost"
+  port: "7445"
+
+# The aggregated API server is NOT part of this package: cozyplane installs
+# FIRST (it is the CNI), before cert-manager, and the apiserver needs
+# cert-manager Certificates. It ships as the separate cozyplane-apiserver
+# package (dependsOn cert-manager + etcd-operator); until it installs, the
+# sdn.cozystack.io group is served by this package's bootstrap CRDs, and its
+# APIService takes the group over atomically when it lands.

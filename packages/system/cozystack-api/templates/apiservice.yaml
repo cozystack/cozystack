@@ -27,7 +27,13 @@ spec:
     name: cozystack-api
     namespace: cozy-system
   version: v1alpha1
+{{- if .Values.cozystackAPI.serveSDN }}
 ---
+# The sdn.cozystack.io group (SecurityGroup projected over CiliumNetworkPolicy).
+# Disabled in the cozyplane networking variant: cozyplane owns sdn.cozystack.io
+# (VPC/Port/SecurityGroup/… as CRDs), so cozystack-api must NOT aggregate the
+# group there — an explicit APIService here would hijack it from cozyplane's CRDs
+# and break every non-SecurityGroup kind. See the platform bundle (system.yaml).
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
@@ -42,3 +48,4 @@ spec:
     name: cozystack-api
     namespace: cozy-system
   version: v1alpha1
+{{- end }}

@@ -22,7 +22,14 @@
   "cgroup" (dict "autoMount" (dict "enabled" false))) -}}
 {{- $_ := set $networkingComponents "cilium" (dict "values" $ciliumValues) -}}
 {{- end -}}
-{{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
+{{- /* Networking variant selector. Defaults to kubeovn-cilium (backward compatible);
+       cozyplane swaps kube-ovn AND Cilium for the cozyplane eBPF CNI +
+       cozyplane-kpr (socket-LB kube-proxy replacement) — no Cilium, no kube-proxy. */ -}}
+{{- $networkingVariant := .Values.bundles.system.networkingVariant | default "kubeovn-cilium" -}}
+{{- if not (or (eq $networkingVariant "kubeovn-cilium") (eq $networkingVariant "cozyplane")) -}}
+{{- fail (printf "bundles.system.networkingVariant must be \"kubeovn-cilium\" or \"cozyplane\", got %q" $networkingVariant) -}}
+{{- end -}}
+{{include "cozystack.platform.package" (list "cozystack.networking" $networkingVariant $ $networkingComponents) }}
 {{include "cozystack.platform.system.common-packages" $ }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
@@ -106,6 +113,19 @@
 {{- $apiValues := dict "cozystackAPI" (dict "nodeSelector" $genericNodeSelector) -}}
 {{- $_ := set $cozystackEngineComponents "cozystack-api" (dict "values" $apiValues) -}}
 {{- end -}}
+{{- /* cozyplane owns the sdn.cozystack.io group — served ONLY by the
+       cozyplane-apiserver aggregated server; it has no CRDs (a group served by
+       both a CRD and an APIService makes the kube-apiserver's OpenAPI merge
+       collide on duplicated paths, and the group's schema then never serves).
+       So cozystack-api must not aggregate it: a second APIService for the group
+       would hijack it and every non-SecurityGroup kind (VPC, Port, …) 404s. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" -}}
+{{- $apiValues := index $cozystackEngineComponents "cozystack-api" | default (dict "values" (dict)) -}}
+{{- $apiInner := index $apiValues "values" | default (dict) -}}
+{{- $_ := set $apiInner "cozystackAPI" (dict "serveSDN" false) -}}
+{{- $_ := set $apiValues "values" $apiInner -}}
+{{- $_ := set $cozystackEngineComponents "cozystack-api" $apiValues -}}
+{{- end -}}
 {{- if .Values.authentication.oidc.enabled }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-engine" "oidc" $ $cozystackEngineComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.keycloak" $) }}
@@ -116,6 +136,22 @@
 
 # Common Packages
 {{include "cozystack.platform.package.default" (list "cozystack.gateway-api-crds" $) }}
+{{- /* The cozyplane variant runs no Cilium, but many stock components (linstor,
+       tenant, monitoring-agents, fluxcd-operator, ...) embed CiliumNetworkPolicy /
+       CiliumClusterwideNetworkPolicy objects and fail to install without the CRDs.
+       Ship them inert so those manifests apply (cozyplane doesn't enforce them yet
+       — host-firewall / default-network NetworkPolicy is a follow-up). On the
+       Cilium variants the cilium chart provides the CRDs, so skip it there. */ -}}
+{{- if eq (.Values.bundles.system.networkingVariant | default "kubeovn-cilium") "cozyplane" }}
+{{include "cozystack.platform.package.default" (list "cozystack.cozyplane-cilium-crds" $) }}
+{{- /* The aggregated sdn.cozystack.io apiserver: a separate component precisely
+       so the CNI slot stays cert-manager-free — this one dependsOn cert-manager,
+       etcd-operator and (for its PVC-backed etcd) storage. There is no takeover:
+       the tenant kinds have no CRDs at all. The CNI package ships only the LOCAL
+       group's CRDs (local.sdn.cozystack.io — underlay IPAM, which must work
+       before cert-manager, etcd and this server, all of which are pods). */ -}}
+{{include "cozystack.platform.package.default" (list "cozystack.cozyplane-apiserver" $) }}
+{{- end }}
 {{include "cozystack.platform.package.default" (list "cozystack.cert-manager" $) }}
 {{- /* Disable hazard guard. The vendored cozy-ouroboros chart (0.8.0)
        ships a pre-delete Helm hook that sed-strips the BEGIN/END

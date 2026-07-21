@@ -1,0 +1,142 @@
+{{- /* Operator-managed etcd for the aggregated apiserver (etcd-operator.cozystack.io
+       v1alpha2). MEMORY-BACKED: no PVC, no storageClass — so the aggregated API's
+       etcd comes up without a storage layer and does not create the
+       CNI -> apiserver -> etcd -> storage -> CNI bootstrap cycle. The CNI installs
+       first; a persistent (storageClassName) mode is a follow-up once storage is
+       sequenced after the CNI. Data is not durable across a full-cluster restart.
+       TLS uses the operator's cert-manager integration: the operator emits the
+       server / operator-client / peer Certificates itself; we only supply the CA
+       issuers and the apiserver's own client cert. Requires cert-manager. The
+       self-signed root issuer comes from templates/apiserver.yaml. */ -}}
+{{- if .Values.etcd.operator.enabled }}
+{{- $ns := .Release.Namespace -}}
+{{- $replicas := int .Values.etcd.operator.replicas -}}
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-peer-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  usages: ["signing", "key encipherment", "cert sign"]
+  commonName: cozyplane-etcd-peer-ca
+  duration: 87600h
+  secretName: cozyplane-etcd-peer-ca-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-apiserver-selfsign
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-ca
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  isCA: true
+  usages: ["signing", "key encipherment", "cert sign"]
+  commonName: cozyplane-etcd-ca
+  duration: 87600h
+  secretName: cozyplane-etcd-ca-tls
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-apiserver-selfsign
+    kind: Issuer
+    group: cert-manager.io
+---
+# Peer CA issuer — the operator's peer certManager signs the peer cert with it.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozyplane-etcd-peer-issuer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: cozyplane-etcd-peer-ca-tls
+---
+# Client-plane CA issuer — signs the operator-emitted server + operator-client
+# certs AND (below) the apiserver's own client cert, so a single ca.crt trusts
+# every party on etcd's client surface (--client-cert-auth).
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: cozyplane-etcd-issuer
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  ca:
+    secretName: cozyplane-etcd-ca-tls
+---
+# The apiserver's client identity (a SEPARATE client from the operator's). Signed
+# by the same client CA as the etcd server, so the server trusts it. Its Secret
+# also carries ca.crt (the etcd server CA) for the apiserver's --etcd-cafile.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: cozyplane-etcd-client
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  commonName: root
+  secretName: cozyplane-etcd-client-tls
+  usages: ["client auth", "signing", "key encipherment"]
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: cozyplane-etcd-issuer
+    kind: Issuer
+    group: cert-manager.io
+---
+apiVersion: etcd-operator.cozystack.io/v1alpha2
+kind: EtcdCluster
+metadata:
+  name: cozyplane-etcd
+  namespace: {{ $ns }}
+  labels:
+    {{- include "cozyplane-apiserver.labels" . | nindent 4 }}
+spec:
+  version: {{ .Values.etcd.operator.version | quote }}
+  replicas: {{ $replicas }}
+  storage:
+    {{- if .Values.etcd.operator.persistent }}
+    # PVC-backed: the aggregated API's objects (VPCs, Ports, policies) are
+    # cluster state. A memory-backed etcd loses every one of them on a
+    # full-cluster restart — which is exactly what a node reboot is.
+    medium: ""
+    {{- with .Values.etcd.operator.storageClass }}
+    storageClassName: {{ . | quote }}
+    {{- end }}
+    {{- else }}
+    # tmpfs: no storage layer needed, but NOT durable across a full-cluster
+    # restart. `medium` is immutable post-create; size is the tmpfs cap.
+    medium: Memory
+    {{- end }}
+    size: {{ .Values.etcd.operator.size }}
+  options:
+    autoCompactionMode: periodic
+    autoCompactionRetention: "5m"
+    snapshotCount: 10000
+  tls:
+    client:
+      certManager:
+        serverIssuerRef: { name: cozyplane-etcd-issuer, kind: Issuer }
+        operatorClientIssuerRef: { name: cozyplane-etcd-issuer, kind: Issuer }
+    peer:
+      certManager:
+        issuerRef: { name: cozyplane-etcd-peer-issuer, kind: Issuer }
+{{- end }}

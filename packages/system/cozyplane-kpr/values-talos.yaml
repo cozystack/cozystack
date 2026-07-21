@@ -1,0 +1,5 @@
+# Talos: reach the apiserver through KubePrism (the node-local load balancer
+# Talos runs on localhost:7445), exactly as the Cilium KPR variant did
+# (k8sServiceHost: localhost / k8sServicePort: 7445). A hostNetwork pod hits it
+# on localhost, so it works before any ClusterIP proxy exists.
+apiServerURL: "https://localhost:7445"
