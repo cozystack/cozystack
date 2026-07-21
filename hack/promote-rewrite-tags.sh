@@ -54,15 +54,21 @@ RC_ESC=$(printf '%s' "$RC_VERSION" | sed -e 's/\./\\./g')
 files_list=$(mktemp)
 image_ref_files "$ROOT" > "$files_list"
 
+# Failures are recorded and acted on after the loop rather than exiting inside
+# it: the loop reads from $files_list, so removing that file in the same
+# construct is both a shellcheck SC2094 hit and needless subtlety (the open
+# descriptor would survive the unlink, but nobody should have to know that).
 rewritten=0
+failed_file=""
+failed_why=""
 while IFS= read -r f; do
   # An unreadable file is NOT "a file with no match". Treating the two alike is
   # how a ref goes unrewritten while the run still reports success — the same
   # silent-skip shape as the enumeration bug this script exists to fix. Fail.
   if [ ! -r "$f" ]; then
-    echo "::error::${f} is not readable; refusing to promote a tree that cannot be fully scanned" >&2
-    rm -f "$files_list"
-    exit 1
+    failed_file="$f"
+    failed_why="is not readable; refusing to promote a tree that cannot be fully scanned"
+    break
   fi
   if grep -q "$RC_ESC" "$f"; then
     sed -i "s/${RC_ESC}/${STABLE_VERSION}/g" "$f"
@@ -73,13 +79,18 @@ while IFS= read -r f; do
     # an ordinary outcome.
     grep_rc=$?
     if [ "$grep_rc" -gt 1 ]; then
-      echo "::error::failed to scan ${f} (grep exit ${grep_rc})" >&2
-      rm -f "$files_list"
-      exit 1
+      failed_file="$f"
+      failed_why="could not be scanned (grep exit ${grep_rc})"
+      break
     fi
   fi
 done < "$files_list"
 rm -f "$files_list"
+
+if [ -n "$failed_file" ]; then
+  echo "::error::${failed_file} ${failed_why}" >&2
+  exit 1
+fi
 
 # Postcondition: scan WIDER than the rewrite. The rewrite is deliberately
 # narrow — a blind walk of every file under $ROOT would rewrite vendored chart

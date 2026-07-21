@@ -123,11 +123,46 @@ image_ref_files() {
 # coerces most scalars on `+`, so only a !!map aborts ("!!str () cannot be
 # added to a !!map") and takes the whole file's expression with it. Being a
 # select() rather than a test(), the guard drops just the offending map.
+# Emit every ref found in ONE file. Split out from collect_image_refs so a test
+# can apply the same shape knowledge to an independently discovered file list:
+# what drifted historically was which FILES each consumer looked at, not how a
+# ref is spelled inside one, so an oracle wants to vary the former and hold the
+# latter. Shape coverage is pinned separately by per-shape tests, which is why
+# sharing this half does not weaken the suite.
+#
+# YAML is parsed; anything else is scraped textually. A .tag file has no YAML
+# structure to speak of, and a declared extra file may be a manifest whose ref
+# yq would find anyway — running both on it would merely duplicate, and the
+# callers dedup.
+collect_refs_from_file() {
+  _ir_f="${1:?collect_refs_from_file: <file> required}"
+  [ -f "$_ir_f" ] || return 0
+
+  case "$_ir_f" in
+    *.yaml|*.yml)
+      _collect_yaml_shapes "$_ir_f"
+      ;;
+    *)
+      # Select on the digest rather than emitting whole lines so a blank line
+      # or a comment a future file may carry cannot reach the caller as a bogus
+      # ref. grep's no-match exit 1 is swallowed for the same reason the yq
+      # calls swallow theirs: an unmatched file is normal, not an error.
+      grep -Eo '[^[:space:]]+@sha256:[0-9a-f]{64}' "$_ir_f" 2>/dev/null || true
+      ;;
+  esac
+  return 0
+}
+
 collect_image_refs() {
   _ir_root="${1:?collect_image_refs: <root> required}"
+  image_ref_files "$_ir_root" | while IFS= read -r _ir_each; do
+    collect_refs_from_file "$_ir_each"
+  done
+  return 0
+}
 
-  for _ir_f in "$_ir_root"/*/*/values.yaml; do
-    [ -f "$_ir_f" ] || continue
+_collect_yaml_shapes() {
+    _ir_f="$1"
     # shape 1
     yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$_ir_f" 2>/dev/null || true
     # shape 2. The sub("^/"; "") is what makes `registry` optional: absent, it
@@ -145,26 +180,5 @@ collect_image_refs() {
     yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$_ir_f" 2>/dev/null || true
     # shape 5
     yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$_ir_f" 2>/dev/null || true
-  done
-
-  # Storage shape 2: a .tag file holds one ref as plain text. Select on the
-  # digest rather than emitting the whole file so a blank line or a comment a
-  # future file may carry cannot reach the caller as a bogus ref. grep's
-  # no-match exit 1 is swallowed for the same reason the yq calls swallow
-  # theirs: an unmatched file is normal, not an error.
-  for _ir_f in "$_ir_root"/*/*/images/*.tag; do
-    [ -f "$_ir_f" ] || continue
-    grep -Eo '[^[:space:]]+@sha256:[0-9a-f]{64}' "$_ir_f" 2>/dev/null || true
-  done
-
-  # Storage shape 3: declared files that embed a ref in surrounding text. The
-  # same digest-anchored extraction applies — in a k8s manifest it lifts the
-  # ref out of an `image: <ref>` line. Any third-party ref it also picks up is
-  # discarded by the caller's ownership filter, exactly as for the other shapes.
-  for _ir_f in $IMAGE_REF_EXTRA_FILES; do
-    [ -f "$_ir_root/$_ir_f" ] || continue
-    grep -Eo '[^[:space:]]+@sha256:[0-9a-f]{64}' "$_ir_root/$_ir_f" 2>/dev/null || true
-  done
-
-  return 0
+    return 0
 }

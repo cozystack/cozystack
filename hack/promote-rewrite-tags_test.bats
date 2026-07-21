@@ -225,16 +225,33 @@
   # published nightly points at the private build registry — which the
   # contract calls the worst of the three failure modes.
   #
-  # Compare on repo@digest so the cosmetic tag does not matter, and discover
-  # the expected set by content, independent of the enumeration under test.
+  # The oracle applies the SAME shape knowledge (collect_refs_from_file) to an
+  # INDEPENDENTLY discovered file list. That is the right axis: what drifted
+  # historically is which files each consumer visits, not how a ref is spelled
+  # inside one. Shape coverage is pinned separately by the per-shape test
+  # below, so deleting a shape still fails something even though both sides of
+  # this comparison would move together.
+  #
+  # An earlier revision derived the expected set from a grep for a CONTIGUOUS
+  # 'ghcr.io/cozystack/cozystack/...@sha256:' string. That was blind to every
+  # split-host shape — cilium, keycloak-operator, kubeovn, the OCI artifact and
+  # seven others, 12 of 43 first-party refs — including keycloak-operator,
+  # which this test's own rationale names as the motivating profile.
   . hack/lib/image-refs.sh
   tmp=$(mktemp -d)
 
-  collect_image_refs packages | grep 'cozystack/cozystack' \
-    | sed -E 's|:[^/@]*@|@|' | sort -u > "$tmp/collected"
-  grep -rIoh --exclude-dir=charts --exclude='*.md' -E \
-    'ghcr\.io/cozystack/cozystack/[A-Za-z0-9._/-]+(:[A-Za-z0-9._-]+)?@sha256:[0-9a-f]{64}' \
-    packages/ | sed -E 's|:[^/@]*@|@|' | sort -u > "$tmp/present"
+  canon() { sed -E 's|^[^ ]*=||; s|:[^/@]*@|@|' | grep '^ghcr\.io/cozystack/cozystack/' | sort -u; }
+
+  collect_image_refs packages | canon > "$tmp/collected"
+  # Pre-filter to files that mention the registry at all before parsing them.
+  # Parsing every YAML under packages/ costs ~30s; this is the same file set
+  # for the purpose of finding FIRST-PARTY refs (canon discards everything
+  # else anyway) and runs in about a second. The marker covers the split forms
+  # too, so keycloak-operator and kubeovn are not filtered out.
+  grep -rIlE --exclude-dir=charts --exclude='*.md' \
+    -e 'cozystack/cozystack' packages/ \
+    | grep -E '\.(yaml|yml|tag)$' \
+    | while IFS= read -r f; do collect_refs_from_file "$f"; done | canon > "$tmp/present"
 
   missed=$(comm -13 "$tmp/collected" "$tmp/present")
   if [ -n "$missed" ]; then
@@ -244,6 +261,78 @@
     rm -rf "$tmp"
     return 1
   fi
+  rm -rf "$tmp"
+}
+
+@test "every file carrying a first-party ref marker is enumerated or allowlisted" {
+  # File-level backstop for the class no YAML oracle can reach: a ref inside a
+  # file yq cannot parse. Helm templates are full of {{ }} and fail to parse
+  # entirely, so a first-party ref planted in one is invisible to the
+  # shape-based completeness check above — that is exactly how a reviewer's
+  # split-host fixture survived every test.
+  #
+  # Markers cover both the contiguous host and the two split forms, so
+  # keycloak-operator (sibling `registry:`) and kubeovn
+  # (`global.registry.address`) are seen.
+  . hack/lib/image-refs.sh
+  tmp=$(mktemp -d)
+
+  image_ref_files packages | sort > "$tmp/enumerated"
+  grep -rIlE --exclude-dir=charts --exclude='*.md' \
+    -e 'ghcr\.io/cozystack/cozystack/' \
+    -e 'repository:[[:space:]]*"?cozystack/cozystack/' \
+    -e 'address:[[:space:]]*"?ghcr\.io/cozystack/cozystack' \
+    packages/ | sort > "$tmp/marked"
+
+  # Known carriers that are deliberately NOT enumerated. Each needs a reason;
+  # this list is the place a new exception has to be argued for, rather than
+  # discovered during a release.
+  #   - talos-csr-signer/Dockerfile: a ':<chart-version>' placeholder in build
+  #     instructions, not a runtime ref — nothing stamps a version there.
+  #   - capi-providers-cpprovider/files/control-plane-components.yaml: the
+  #     documented gzip gap. The chart ships files/components.gz built from it,
+  #     so rewriting only this copy would diverge the two. kamaji is
+  #     component-versioned, so no tag rewrite is owed.
+  cat > "$tmp/allow" <<'ALLOW'
+packages/apps/kubernetes/images/talos-csr-signer/Dockerfile
+packages/system/capi-providers-cpprovider/files/control-plane-components.yaml
+ALLOW
+  sort -o "$tmp/allow" "$tmp/allow"
+
+  unexplained=$(comm -13 "$tmp/enumerated" "$tmp/marked" | comm -13 "$tmp/allow" -)
+  if [ -n "$unexplained" ]; then
+    echo "files carry a first-party image ref but are neither enumerated nor allowlisted:" >&2
+    printf '%s\n' "$unexplained" >&2
+    echo "Declare each in IMAGE_REF_EXTRA_FILES (hack/lib/image-refs.sh), or add it to the" >&2
+    echo "allowlist in this test WITH A REASON if it is not a runtime image ref." >&2
+    rm -rf "$tmp"
+    return 1
+  fi
+  rm -rf "$tmp"
+}
+
+@test "collect_refs_from_file understands every YAML shape" {
+  # Pins shape coverage directly, so deleting a shape fails here even though
+  # the completeness oracle above shares this code and would move with it.
+  . hack/lib/image-refs.sh
+  tmp=$(mktemp -d)
+  D=$(printf 'a%.0s' $(seq 64))
+
+  printf 'image: ghcr.io/cozystack/cozystack/one:v1@sha256:%s\n' "$D" > "$tmp/s1.yaml"
+  printf 'image:\n  repository: ghcr.io/cozystack/cozystack/two\n  tag: v1\n  digest: "sha256:%s"\n' "$D" > "$tmp/s2.yaml"
+  printf 'image:\n  registry: ghcr.io\n  repository: cozystack/cozystack/three\n  tag: "v1@sha256:%s"\n' "$D" > "$tmp/s3.yaml"
+  printf 'global:\n  registry:\n    address: ghcr.io/cozystack/cozystack\n  images:\n    - repository: four\n      tag: "v1@sha256:%s"\n' "$D" > "$tmp/s4.yaml"
+  printf 'x:\n  platformSourceUrl: oci://ghcr.io/cozystack/cozystack/five\n  platformSourceRef: digest=sha256:%s\n' "$D" > "$tmp/s5.yaml"
+  printf 'ghcr.io/cozystack/cozystack/six:v1@sha256:%s\n' "$D" > "$tmp/s6.tag"
+
+  for n in one two three four five six; do
+    case "$n" in one) f=s1.yaml ;; two) f=s2.yaml ;; three) f=s3.yaml ;;
+                 four) f=s4.yaml ;; five) f=s5.yaml ;; six) f=s6.tag ;; esac
+    if ! collect_refs_from_file "$tmp/$f" | grep -q "cozystack/$n"; then
+      echo "shape for '$n' ($f) was not collected" >&2
+      rm -rf "$tmp"; return 1
+    fi
+  done
   rm -rf "$tmp"
 }
 
@@ -292,6 +381,35 @@
   fi
   grep -q 'still carry the rc version' "$tmp/log" || {
     echo "expected the postcondition's message; got:" >&2; cat "$tmp/log" >&2
+    rm -rf "$tmp"; return 1
+  }
+  rm -rf "$tmp"
+}
+
+@test "postcondition fires on a split tag/digest ref, not just an @sha256 one" {
+  # Covers the postcondition's key-position branch specifically. Replacing the
+  # whole pattern with the naive "${RC}@sha256:" — the narrowing that was
+  # explicitly rejected because cilium keeps `tag:` and `digest:` under
+  # separate keys — previously left every test green, so the branch that makes
+  # the split shape visible was asserted by nothing.
+  tmp=$(mktemp -d)
+  mkdir -p "$tmp/packages/system/surprise/files"
+  {
+    echo 'image:'
+    echo '  repository: ghcr.io/cozystack/cozystack/surprise'
+    echo '  tag: v9.9.9-rc.9'
+    printf '  digest: "sha256:%s"\n' "$(printf 'a%.0s' $(seq 64))"
+  } > "$tmp/packages/system/surprise/files/x.yaml"
+
+  rc=0
+  hack/promote-rewrite-tags.sh 9.9.9-rc.9 9.9.9 "$tmp/packages" >"$tmp/log" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    echo "expected a non-zero exit for a split tag/digest ref at an unenumerated path, got 0" >&2
+    cat "$tmp/log" >&2
+    rm -rf "$tmp"; return 1
+  fi
+  grep -q 'still carry the rc version' "$tmp/log" || {
+    echo "expected the postcondition diagnostic; got:" >&2; cat "$tmp/log" >&2
     rm -rf "$tmp"; return 1
   }
   rm -rf "$tmp"
