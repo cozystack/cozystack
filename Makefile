@@ -14,7 +14,6 @@ build: build-deps
 	make -C packages/apps/mariadb image
 	make -C packages/apps/clickhouse image
 	make -C packages/apps/kubernetes image
-	make -C packages/apps/valkey image
 	make -C packages/system/monitoring image
 	make -C packages/system/cozystack-api image
 	make -C packages/system/cozystack-controller image

@@ -4,11 +4,11 @@ Valkey is a highly versatile and blazing-fast in-memory data store and cache tha
 
 ## Deployment Details
 
-Service runs Valkey on the Spotahome Redis Operator for efficient management and orchestration of Valkey clusters — Valkey is protocol- and command-compatible with Redis, so it is deployed as a drop-in engine. 
+Service runs Valkey on the freshworks-oss redis-operator, which manages Sentinel-based HA and selects the Valkey engine natively via `spec.engine: Valkey` — so the official `valkey/valkey` image is used directly, with no Redis-compatibility shim.
 
 - Docs: https://valkey.io/docs/
 - Valkey: https://github.com/valkey-io/valkey
-- Operator: https://github.com/spotahome/redis-operator
+- Operator: https://github.com/freshworks-oss/redis-operator
 
 > `storageClass` is annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
 
