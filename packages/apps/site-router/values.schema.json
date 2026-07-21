@@ -130,18 +130,9 @@
       ],
       "properties": {
         "cpu": {
-          "description": "CPU cores allocated to the router VM.",
-          "default": 2,
-          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "string"
-            }
-          ],
-          "x-kubernetes-int-or-string": true
+          "description": "CPU topology cores allocated to the router VM. Whole cores only; a fractional quantity (e.g. \"1500m\", \"0.5\") is rejected at admission rather than silently truncated to zero.",
+          "type": "integer",
+          "default": 2
         },
         "memory": {
           "description": "Memory (RAM) allocated to the router VM.",

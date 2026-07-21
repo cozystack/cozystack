@@ -22,7 +22,7 @@ release:
 set:
   _cluster: {}
   resources:
-    cpu: "4"
+    cpu: 4
     memory: 4Gi
   cloudInitSeed: alpha
 
@@ -84,6 +84,18 @@ tests:
       - equal:
           path: spec.template.spec.domain.memory.guest
           value: 4Gi
+
+  # resources.cpu is an integer count of topology cores (values.schema.json
+  # "type": integer). A fractional quantity like "1500m"/"0.5" — schema-valid
+  # under the old {quantity} type — used to coerce to `cores: 0` via `| int64`
+  # and silently under-provision the router. It is now rejected at schema
+  # validation instead of ever rendering a zero-core VM.
+  - it: rejects a fractional CPU quantity instead of rendering cores 0
+    set:
+      resources.cpu: "1500m"
+    asserts:
+      - failedTemplate:
+          errorPattern: "resources.cpu"
 
   - it: attaches the boot DataVolume and the cloud-init NoCloud disk
     documentSelector:

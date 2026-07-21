@@ -106,6 +106,7 @@ reachable with allowOpenManagement=true) no firewall is stamped.
 {{- $lines = append $lines (printf "  - set service https api keys id site-router-controller key '%s'" $token) -}}
 {{- $lines = append $lines "  - set service https listen-address 0.0.0.0" -}}
 {{- if $ctx.Values.managementCIDR -}}
+{{/* TODO(T06): VyOS 1.4 'firewall input' syntax — validate/port to 1.5-rolling 'firewall ipv4 input filter' against the live image before the golden-image entry is uncommented; a silent first-boot firewall failure with listen-address 0.0.0.0 would leave the API exposed. */}}
 {{- $lines = append $lines "  - set firewall input rule 5 action accept" -}}
 {{- $lines = append $lines "  - set firewall input rule 5 state established 'enable'" -}}
 {{- $lines = append $lines "  - set firewall input rule 5 state related 'enable'" -}}

@@ -57,12 +57,12 @@ bgp:
 ##
 
 ## @typedef {struct} Resources - Explicit CPU and memory allocated to the router VM.
-## @field {quantity} cpu - CPU cores allocated to the router VM.
+## @field {int} cpu - CPU topology cores allocated to the router VM. Whole cores only; a fractional quantity (e.g. "1500m", "0.5") is rejected at admission rather than silently truncated to zero.
 ## @field {quantity} memory - Memory (RAM) allocated to the router VM.
 
 ## @param {Resources} resources - Explicit CPU and memory sizing for the router VM.
 resources:
-  cpu: "2"
+  cpu: 2
   memory: 2Gi
 
 ##

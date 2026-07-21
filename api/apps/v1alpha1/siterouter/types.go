@@ -95,9 +95,9 @@ type PeerAuth struct {
 }
 
 type Resources struct {
-	// CPU cores allocated to the router VM.
+	// CPU topology cores allocated to the router VM. Whole cores only; a fractional quantity (e.g. "1500m", "0.5") is rejected at admission rather than silently truncated to zero.
 	// +kubebuilder:default:=2
-	Cpu resource.Quantity `json:"cpu"`
+	Cpu int `json:"cpu"`
 	// Memory (RAM) allocated to the router VM.
 	// +kubebuilder:default:="2Gi"
 	Memory resource.Quantity `json:"memory"`
