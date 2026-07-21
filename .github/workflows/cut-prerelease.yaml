@@ -12,6 +12,13 @@ name: Cut Pre-release Tag
 # pre-release (vX.Y.0-rc.N), or `release-X.Y` for a patch line (vX.Y.Z-rc.N).
 # The workflow tags that branch's HEAD.
 #
+# Cutting the first vX.Y.0-rc.N ALSO freezes the line: it creates `release-X.Y`
+# at the tagged commit, and every later cut for that line must come from the
+# branch (a dispatch from `main` is refused). That is what stops features
+# merged after the rc from silently shipping in the release — before this, rc.2
+# was cut from main's tip and picked up everything that had landed meanwhile.
+# `main` stays open for the next minor; fixes reach the release by cherry-pick.
+#
 # Why a workflow instead of a manual `git push`:
 #   1. The tag is pushed with the CI app token. A tag pushed with the default
 #      GITHUB_TOKEN would NOT trigger tags.yaml (GitHub suppresses workflow
@@ -78,6 +85,7 @@ jobs:
             core.setOutput('tag', tag);
             core.setOutput('line', `${m[1]}.${m[2]}`);   // 1.6
             core.setOutput('patch', m[3]);                // 0
+            core.setOutput('kind', m[4]);                 // rc
 
       # Refuse to cut from anything but main or the *matching* release-X.Y line.
       # The pushed tag's base_ref (= the dispatch branch) must be one tags.yaml
@@ -163,6 +171,35 @@ jobs:
           fetch-depth: 1
           token: ${{ steps.app-token.outputs.token }}
 
+      # Enforce the freeze. Once release-X.Y exists, that line's content is
+      # closed and lives only on the branch. A vX.Y.* pre-release dispatched
+      # from 'main' after the freeze would tag main's tip, picking up every
+      # feature merged since — exactly what the release branch exists to
+      # prevent. Applies to alpha/beta too: after the freeze the whole line
+      # comes off the branch, whatever the pre-release kind.
+      #
+      # Runs BEFORE the tag push so a mistaken dispatch fails without burning
+      # the write-once tag name.
+      - name: Refuse to cut a frozen line from main
+        if: github.ref_name == 'main'
+        env:
+          LINE: ${{ steps.parse.outputs.line }}
+        run: |
+          # Distinguish "absent" (--exit-code exits 2) from a transport/auth
+          # failure, mirroring the write-once query below: an infra blip must
+          # not read as "not frozen, go ahead".
+          set +e
+          git ls-remote --exit-code --heads origin "refs/heads/release-$LINE" >/dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::release-$LINE already exists — the $LINE line is frozen. Cut v$LINE.* from 'release-$LINE' (cherry-pick fixes there first); 'main' is open for the next minor."
+            exit 1
+          elif [ "$rc" -ne 2 ]; then
+            echo "::error::Could not query origin for release-$LINE (git ls-remote exit $rc) — refusing to proceed."
+            exit 1
+          fi
+
       - name: Cut and push the pre-release tag
         env:
           TAG: ${{ steps.parse.outputs.tag }}
@@ -220,3 +257,40 @@ jobs:
           git push origin "HEAD:refs/tags/$TAG"
           echo "Pushed $TAG at $local_head from '$REF_NAME'."
           echo "tags.yaml will now build, e2e, and draft the pre-release."
+
+      # Freeze the line. An rc is the feature-freeze signal, so the first
+      # vX.Y.0-rc.N branches release-X.Y at the tagged commit. From here the
+      # release's content is closed: fixes reach it only by cherry-pick or
+      # backport onto the branch, while 'main' moves on to the next minor.
+      # promote-rc.yaml then targets its promote PR at release-X.Y (it already
+      # prefers that branch when it exists), so the stable release is cut from
+      # the frozen tree rather than from whatever main has accumulated.
+      #
+      # Gated to -rc: alpha/beta are pre-freeze validation builds cut from an
+      # open main, and freezing on them would force every later change onto
+      # cherry-picks far too early.
+      #
+      # Gated to patch 0: a patch-line rc (vX.Y.Z-rc.N, Z>0) is cut from
+      # release-X.Y, which by definition already exists.
+      #
+      # Create-only, never force-moved — a later rc.N finds the branch and
+      # no-ops. Moving it would silently re-open the freeze and drag in
+      # whatever the new tip contains, defeating the whole mechanism.
+      - name: Freeze the line (create release-X.Y)
+        if: steps.parse.outputs.kind == 'rc' && steps.parse.outputs.patch == '0'
+        env:
+          LINE: ${{ steps.parse.outputs.line }}
+          TAG: ${{ steps.parse.outputs.tag }}
+        run: |
+          BRANCH="release-$LINE"
+          EXISTING="$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)"
+          if [ -n "$EXISTING" ]; then
+            echo "✅ $BRANCH already exists at $EXISTING; leaving it untouched."
+            exit 0
+          fi
+          # HEAD is the commit just tagged: the stale-tip guard above proved it
+          # still equals the remote branch tip, so branch and tag agree.
+          git push origin "HEAD:refs/heads/$BRANCH"
+          echo "🔒 Froze the $LINE line: created $BRANCH at $(git rev-parse HEAD) ($TAG)."
+          echo "   'main' is now open for the next minor."
+          echo "   Fixes for $LINE must be cherry-picked onto $BRANCH."
