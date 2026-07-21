@@ -100,10 +100,14 @@ prevlog_cap() {
     '' | *[!0-9]*) _pc_max=12 ;;
   esac
   # A zero cap emits nothing; the caller still reports the full overflow count,
-  # so the drop stays visible. (GNU head treats -n 0 as an empty result; BSD
-  # head rejects it outright, which lands in the same place here -- no rows
-  # through -- but is why this is not described as a portable no-op.)
-  head -n "$_pc_max"
+  # so the drop stays visible. Handle it explicitly rather than via `head -n 0`:
+  # GNU head treats that as an empty result, but BSD/macOS head rejects it
+  # ("illegal line count -- 0"), which would abort a local run.
+  if [ "$_pc_max" -eq 0 ]; then
+    cat >/dev/null
+  else
+    head -n "$_pc_max"
+  fi
 }
 
 # prevlog_logfile_name: build the per-container artifact filename for a row's
