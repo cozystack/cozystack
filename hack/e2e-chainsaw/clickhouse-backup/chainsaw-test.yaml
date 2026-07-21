@@ -101,8 +101,9 @@ spec:
 
   # The strategy Pod authenticates to the sidecar with the credentials in the
   # chart-emitted <release>-backup-api-auth Secret (env API_USERNAME /
-  # API_PASSWORD on both sides). Assert it exists and is populated — a rename
-  # or an empty password surfaces only as 401s at BackupJob time otherwise.
+  # API_PASSWORD on both sides). Assert it exists and carries both keys — a
+  # rename of the Secret or a dropped key surfaces only as 401s (or a Pod that
+  # never starts) at BackupJob time otherwise.
   - name: verify-backup-api-auth-secret
     try:
     - assert:
@@ -151,6 +152,11 @@ spec:
       kind: Altinity
   - podLogs:
       selector: app.kubernetes.io/instance=clickhouse-clickhouse-test
+      tail: 100
+  # The to-copy leg (step 07) restores into a second release; capture its Pod
+  # logs too so a failure isolated to that leg keeps its diagnostics.
+  - podLogs:
+      selector: app.kubernetes.io/instance=clickhouse-clickhouse-restore
       tail: 100
   steps:
   - name: run
