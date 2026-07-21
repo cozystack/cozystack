@@ -317,8 +317,8 @@ func TestReconcile_DegradedOnConfigureError(t *testing.T) {
 // included) must not leak either secret into the tenant-readable ConfigureFailed
 // Event — they are replaced with a placeholder.
 func TestReconcile_ConfigureErrorRedactsSecrets(t *testing.T) {
-	const psk = "shared-secret"    // matches readyObjects' pskSecret
-	const token = "api-token-xyz"  // matches readyObjects' apiKeySecret
+	const psk = "shared-secret"   // matches readyObjects' pskSecret
+	const token = "api-token-xyz" // matches readyObjects' apiKeySecret
 	fakeV := &fakeVyOS{configureErr: errors.New(
 		"vyos error: Configuration error near 'set vpn ipsec site-to-site peer 203.0.113.10 " +
 			"authentication pre-shared-secret " + psk + "' with key " + token)}
@@ -492,15 +492,17 @@ func TestReconcile_MACDiscoveryBindsToDiscoveredDevice(t *testing.T) {
 	if !opsHave(ops, "firewall/options/interface/eth1/adjust-mss", "") {
 		t.Errorf("expected MSS clamp bound to the discovered device eth1, ops: %+v", ops)
 	}
-	if !opsHave(ops, "interfaces/ethernet/eth1/firewall/in/name", render.TunnelIngressRuleSet) {
-		t.Errorf("expected tunnel-ingress filter bound to the discovered device eth1, ops: %+v", ops)
+	if !opsHave(ops, "firewall/forward/rule/20/jump-target", render.TunnelIngressRuleSet) {
+		t.Errorf("expected tunnel-ingress source filter reached via the forward ipsec-match jump, ops: %+v", ops)
 	}
 }
 
 // TestReconcile_MACDiscoveryFallsBackPositional encodes T12 "MAC→device
 // discovery fallback": with no VMI to join (discovery incomplete), the tunnel
 // device falls back to the positional eth0 so the render still binds the MSS
-// clamp and source filter to a real device.
+// clamp to a real device (eth0). The tunnel-ingress source filter is now
+// device-independent (a `firewall forward` ipsec-match jump), so its assertion
+// checks the jump, not a per-device binding.
 func TestReconcile_MACDiscoveryFallsBackPositional(t *testing.T) {
 	fakeV := &fakeVyOS{
 		retrieveResult:  json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`),
@@ -515,8 +517,8 @@ func TestReconcile_MACDiscoveryFallsBackPositional(t *testing.T) {
 	if !opsHave(ops, "firewall/options/interface/eth0/adjust-mss", "") {
 		t.Errorf("expected MSS clamp to fall back to positional eth0, ops: %+v", ops)
 	}
-	if !opsHave(ops, "interfaces/ethernet/eth0/firewall/in/name", render.TunnelIngressRuleSet) {
-		t.Errorf("expected tunnel-ingress filter to fall back to positional eth0, ops: %+v", ops)
+	if !opsHave(ops, "firewall/forward/rule/20/jump-target", render.TunnelIngressRuleSet) {
+		t.Errorf("expected tunnel-ingress source filter reached via the forward ipsec-match jump, ops: %+v", ops)
 	}
 }
 

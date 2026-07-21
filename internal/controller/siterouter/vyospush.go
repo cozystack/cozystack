@@ -288,10 +288,16 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 // the management API; a null/empty subtree means the filter has not committed yet
 // and the reconcile requeues (port security stays enforcing).
 //
-// TODO(T08): the tunnel-ingress filter is bound to pod-NIC inbound, which also
-// catches cluster-source egress; it must instead match IPsec-decrypted ingress.
-// Redesign + live-validate is owned by T08/T13; this only confirms the current
-// binding is present.
+// Post-M2 redesign (T08) the source filter is applied via a `firewall forward`
+// ipsec-match jump (render.renderForwardFilter), NOT the old pod-NIC-inbound
+// binding, so it no longer catches locally-originated cluster→remote egress.
+// This confirm reads back the named rule set (TUNNEL-INGRESS), whose path is
+// unchanged; the forward jump is re-stamped in the same push, so a present
+// named set is a sufficient proxy that the guard is live.
+// TODO(T13): the VyOS 1.5 forward-filter + ipsec-match syntax is provisional
+// (see render.forwardFilterPath) and is live-validated by the T13 negative
+// suite, which must also prove a valid-source / world-destination packet is
+// dropped (see the destination-constraint TODO on render.renderTunnelIngressFilter).
 //
 // The D8 invariant must be MAINTAINED, not merely established once: if the filter
 // is found absent AFTER it was already up (a guest-side wipe/drift), the port must
