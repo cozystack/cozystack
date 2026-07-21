@@ -158,6 +158,22 @@ collect_image_refs() {
   image_ref_files "$_ir_root" | while IFS= read -r _ir_each; do
     collect_refs_from_file "$_ir_each"
   done
+
+  # Declared extras additionally get the textual scrape, even though most are
+  # YAML and were already parsed above. Parsing ALONE would narrow what this
+  # shape means: an extra is a manifest vendored verbatim from upstream, so it
+  # can carry a ref inside a block scalar (a ConfigMap embedding a whole
+  # deployment, say), where yq returns the enclosing block rather than the ref
+  # and the caller's ownership filter then discards it — and it can stop
+  # parsing entirely when `make update` pulls a version yq chokes on, yielding
+  # nothing at all. Both are silent skips, which is the failure mode this
+  # library exists to remove. Running both and letting the callers' existing
+  # dedup absorb the overlap costs nothing.
+  for _ir_f in $IMAGE_REF_EXTRA_FILES; do
+    [ -f "$_ir_root/$_ir_f" ] || continue
+    grep -Eo '[^[:space:]]+@sha256:[0-9a-f]{64}' "$_ir_root/$_ir_f" 2>/dev/null || true
+  done
+
   return 0
 }
 

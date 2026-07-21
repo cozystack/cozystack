@@ -229,8 +229,15 @@
   # INDEPENDENTLY discovered file list. That is the right axis: what drifted
   # historically is which files each consumer visits, not how a ref is spelled
   # inside one. Shape coverage is pinned separately by the per-shape test
-  # below, so deleting a shape still fails something even though both sides of
+  # below, so DELETING a shape still fails something even though both sides of
   # this comparison would move together.
+  #
+  # Deleting, precisely — not narrowing. The per-shape test matches on the
+  # repository substring, so a shape that loses its `registry` rejoin (the very
+  # regression shape 3 was added for) still satisfies it. Those are caught by
+  # promote-retag_test.bats and nightly-mirror_test.bats instead, which assert
+  # concrete named packages. Three independent suites is real defence, but this
+  # comparison contributes nothing to it.
   #
   # An earlier revision derived the expected set from a grep for a CONTIGUOUS
   # 'ghcr.io/cozystack/cozystack/...@sha256:' string. That was blind to every
@@ -271,17 +278,33 @@
   # shape-based completeness check above — that is exactly how a reviewer's
   # split-host fixture survived every test.
   #
-  # Markers cover both the contiguous host and the two split forms, so
-  # keycloak-operator (sibling `registry:`) and kubeovn
-  # (`global.registry.address`) are seen.
+  # The markers are keyed to the JOIN SEMANTICS _collect_yaml_shapes
+  # implements, not to the exact spellings that happen to be in the tree today.
+  # An earlier revision keyed them to the latter and was evaded three ways, each
+  # a shape the collector fully supports: `registry: ghcr.io/cozystack/cozystack`
+  # + `repository: <name>` (kubeovn's layout under the key name keycloak-operator
+  # and ingress-nginx use — marker 1 needed a trailing slash a complete-value
+  # host does not have), `registry: ghcr.io/cozystack` + `repository:
+  # cozystack/<name>` (a host+org split, live precedent at
+  # packages/system/fluxcd/values.yaml), and a single-quoted `repository:`
+  # (the old marker admitted only double quotes). All three carried a
+  # version-free `latest@sha256:` tag — the exact profile this check exists for
+  # — and passed the entire suite.
+  #
+  # Residual limit, stated rather than implied: a host split at an arbitrary
+  # point inside `cozystack/cozystack` (say `registry: ghcr.io/cozy` +
+  # `repository: stack/cozystack/x`) still evades these. That is contrived
+  # rather than realistic, and widening further costs real precision — a bare
+  # `cozystack/cozystack` marker matches 65 files and would need 23 allowlist
+  # entries for Makefiles, Dockerfiles and helm-unittest fixtures.
   . hack/lib/image-refs.sh
   tmp=$(mktemp -d)
 
   image_ref_files packages | sort > "$tmp/enumerated"
   grep -rIlE --exclude-dir=charts --exclude='*.md' \
     -e 'ghcr\.io/cozystack/cozystack/' \
-    -e 'repository:[[:space:]]*"?cozystack/cozystack/' \
-    -e 'address:[[:space:]]*"?ghcr\.io/cozystack/cozystack' \
+    -e "(repository|image):[[:space:]]*['\"]?cozystack/" \
+    -e "(registry|address):[[:space:]]*['\"]?ghcr\.io/cozystack" \
     packages/ | sort > "$tmp/marked"
 
   # Known carriers that are deliberately NOT enumerated. Each needs a reason;
@@ -325,14 +348,61 @@ ALLOW
   printf 'x:\n  platformSourceUrl: oci://ghcr.io/cozystack/cozystack/five\n  platformSourceRef: digest=sha256:%s\n' "$D" > "$tmp/s5.yaml"
   printf 'ghcr.io/cozystack/cozystack/six:v1@sha256:%s\n' "$D" > "$tmp/s6.tag"
 
+  # Assert the EXACT canonical repo@digest, not a repository substring. A
+  # substring match leaves the digest untested, and since the completeness
+  # oracle shares this code, both sides of that comparison move together when
+  # the digest handling breaks: corrupting the last hex digit of every emitted
+  # digest previously left the rewrite, retag and mirror suites entirely green.
+  # The digest is the only part that decides which bytes get retagged, so it is
+  # the part most worth pinning.
   for n in one two three four five six; do
     case "$n" in one) f=s1.yaml ;; two) f=s2.yaml ;; three) f=s3.yaml ;;
                  four) f=s4.yaml ;; five) f=s5.yaml ;; six) f=s6.tag ;; esac
-    if ! collect_refs_from_file "$tmp/$f" | grep -q "cozystack/$n"; then
-      echo "shape for '$n' ($f) was not collected" >&2
+    want="ghcr.io/cozystack/cozystack/${n}@sha256:${D}"
+    # Canonicalize away the cosmetic :tag that shapes 1 and 6 carry through.
+    got=$(collect_refs_from_file "$tmp/$f" | sed -E 's|:[^/@]*@|@|' | grep "cozystack/${n}@" || true)
+    if [ "$got" != "$want" ]; then
+      echo "shape for '$n' ($f):" >&2
+      echo "  want: $want" >&2
+      echo "  got:  ${got:-<nothing>}" >&2
       rm -rf "$tmp"; return 1
     fi
   done
+  rm -rf "$tmp"
+}
+
+@test "a declared extra file actually yields its ref, not just its filename" {
+  # image_ref_files listing a path proves only that the path is visited.
+  # Declaring an extra whose ref the parser cannot reach leaves it enumerated
+  # but uncollected, and both completeness checks pass — the marker check
+  # compares filenames, and the oracle shares the same parser. Assert the ref
+  # itself comes out.
+  #
+  # The fixture is an unparseable Helm template carrying a single-quoted
+  # split-host ref: the shape that defeated an earlier revision of both guards.
+  . hack/lib/image-refs.sh
+  tmp=$(mktemp -d)
+  D=$(printf 'b%.0s' $(seq 64))
+  mkdir -p "$tmp/system/awkward/templates"
+  {
+    echo '{{- if .Values.enabled }}'
+    echo 'spec:'
+    echo '  image:'
+    echo "    registry: ghcr.io/cozystack/cozystack"
+    echo "    repository: 'awkward'"
+    printf "    tag: 'latest@sha256:%s'\n" "$D"
+    echo '{{- end }}'
+  } > "$tmp/system/awkward/templates/thing.yaml"
+
+  IMAGE_REF_EXTRA_FILES="system/awkward/templates/thing.yaml"
+  image_ref_files "$tmp" | grep -q 'system/awkward/templates/thing.yaml' || {
+    echo "declared extra was not enumerated" >&2; rm -rf "$tmp"; return 1
+  }
+  if ! collect_image_refs "$tmp" | grep -q "@sha256:${D}"; then
+    echo "declared extra was enumerated but its ref was not collected:" >&2
+    collect_image_refs "$tmp" >&2
+    rm -rf "$tmp"; return 1
+  fi
   rm -rf "$tmp"
 }
 
