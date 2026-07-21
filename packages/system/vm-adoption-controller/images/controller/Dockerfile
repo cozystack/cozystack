@@ -1,4 +1,4 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /workspace
 
@@ -9,8 +9,12 @@ RUN go mod download
 # Copy source
 COPY main.go .
 
-# Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -a -o controller main.go
+# Build for the target platform (TARGETOS/TARGETARCH are provided by buildx)
+ARG TARGETOS
+ARG TARGETARCH
+ENV GOOS=$TARGETOS
+ENV GOARCH=$TARGETARCH
+RUN CGO_ENABLED=0 go build -a -o controller main.go
 
 # Final image
 FROM gcr.io/distroless/static:nonroot
