@@ -1,0 +1,19 @@
+suite: cozystack-tenant-projection-writer-policy is gated on the ValidatingAdmissionPolicy API
+templates:
+  - templates/tenant-projection-writer-policy.yaml
+release:
+  name: cozystack-basics
+  namespace: cozy-system
+# The writer policy gates on the ValidatingAdmissionPolicy API, so it must render
+# nothing where that API is absent rather than emit an unusable resource.
+# helm-unittest's per-test capabilities merge rather than replace the suite's, so
+# the absent case is a separate suite pinned at suite level (mirrors the platform
+# notes gate suite); the rendering assertions live in
+# tenant-projection-writer-policy_test.yaml, which declares the API.
+capabilities:
+  apiVersions: []
+tests:
+  - it: the writer policy does not render when the API is unavailable
+    asserts:
+      - hasDocuments:
+          count: 0
