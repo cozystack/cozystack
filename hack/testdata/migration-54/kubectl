@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fake kubectl for the migration-52 unit test (hack/migration-52-adopt-values.bats).
+# Fake kubectl for the migration-54 unit test (hack/migration-54-adopt-values.bats).
 # Mocks only the cluster boundary. Env:
 #   FAKE_HR_LIST  path to the `get helmrelease -o json` list fixture
 #   FAKE_CHILD_HR path to write the child HelmRelease that `apply -f -` receives

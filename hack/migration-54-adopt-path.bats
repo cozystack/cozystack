@@ -1,8 +1,8 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for the ADOPTION path of platform migration 52.
+# Unit tests for the ADOPTION path of platform migration 54.
 #
-# migration-52-adopt-values.bats pins the jq value-mapping; this file pins the
+# migration-54-adopt-values.bats pins the jq value-mapping; this file pins the
 # adopt_one branch that mutates ownership of running worker objects (annotate
 # helm.sh/resource-policy=keep + meta.helm.sh/release-name). The fake kubectl
 # serves worker objects via FAKE_OBJS ("<res> <name> <release-name>" lines) and
@@ -12,11 +12,11 @@
 #
 # cozytest.sh awk parser: @test blocks only, a bare `}` at column 0 ends a test,
 # no run/$status/setup/teardown. Assertions are direct shell tests.
-# Run with: hack/cozytest.sh hack/migration-52-adopt-path.bats
+# Run with: hack/cozytest.sh hack/migration-54-adopt-path.bats
 # -----------------------------------------------------------------------------
 
-FAKEBIN="$PWD/hack/testdata/migration-52"
-MIG="$PWD/packages/core/platform/images/migrations/migrations/52"
+FAKEBIN="$PWD/hack/testdata/migration-54"
+MIG="$PWD/packages/core/platform/images/migrations/migrations/54"
 
 prep() {
   chmod +x "$FAKEBIN/kubectl"

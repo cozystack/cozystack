@@ -1,6 +1,6 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
-# Unit tests for platform migration 52 (adopt pre-split worker pools into
+# Unit tests for platform migration 54 (adopt pre-split worker pools into
 # per-pool kubernetes-nodes HelmReleases).
 #
 # These pin the value-mapping contract that guarantees "byte-identical child
@@ -28,11 +28,11 @@
 # own line; there is no bats `run`/`$status`/`setup`/`teardown`. Assertions are
 # direct shell tests that exit non-zero on failure.
 #
-# Run with: hack/cozytest.sh hack/migration-52-adopt-values.bats
+# Run with: hack/cozytest.sh hack/migration-54-adopt-values.bats
 # -----------------------------------------------------------------------------
 
-FAKEBIN="$PWD/hack/testdata/migration-52"
-MIG="$PWD/packages/core/platform/images/migrations/migrations/52"
+FAKEBIN="$PWD/hack/testdata/migration-54"
+MIG="$PWD/packages/core/platform/images/migrations/migrations/54"
 
 # prep resets PATH/env to a clean scenario: one tenant Kubernetes HR (test3)
 # with a single pool md0 and NON-default talos/version/images so the assertions
