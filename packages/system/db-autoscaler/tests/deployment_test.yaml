@@ -19,6 +19,21 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].volumeMounts[0].mountPath
           value: /tmp/k8s-webhook-server/serving-certs
+      # Regression guards for live-cluster spike findings: the webhook cert must
+      # be group-readable (0440) with a matching fsGroup, or the nonroot process
+      # cannot read tls.crt and the webhook server fails to start.
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.volumes[0].secret.defaultMode
+          value: 288 # 0440 octal
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
 
   - it: validating webhook guards the backing HelmRelease on UPDATE and fails open
     templates:

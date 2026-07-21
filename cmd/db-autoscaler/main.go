@@ -150,7 +150,7 @@ func main() {
 	}
 
 	if enableWebhook {
-		webhookServer.Register(validateReplicasPath, &admission.Webhook{
+		mgr.GetWebhookServer().Register(validateReplicasPath, &admission.Webhook{
 			Handler: &dbautoscaler.ReplicasOwnershipValidator{
 				AllowedUsers:     []string{operatorUsername, appsAPIUsername},
 				MarkerAnnotation: dbautoscaler.ProjectedMarkerAnnotation,

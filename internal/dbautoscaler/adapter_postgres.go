@@ -56,34 +56,51 @@ func (PostgresAdapter) Scalable(appValues map[string]any) (bool, string) {
 	return true, ""
 }
 
+// roleJoin returns a `* on(namespace,pod) group_left() kube_pod_labels{...}`
+// suffix that restricts a per-pod CNPG metric to this application's pods with
+// the given CNPG instance role. CNPG's own metrics carry no role or application
+// label, so the pod role and lineage come from kube-state-metrics' kube_pod_labels
+// (verified against a live cozystack cluster). The namespace matcher is mandatory
+// for tenant isolation.
+func roleJoin(app types.NamespacedName, role string) string {
+	return fmt.Sprintf(
+		` * on(namespace,pod) group_left() kube_pod_labels{namespace=%q,`+
+			`label_apps_cozystack_io_application_name=%q,`+
+			`label_apps_cozystack_io_application_kind="Postgres",`+
+			`label_cnpg_io_instance_role=%q}`,
+		app.Namespace, app.Name, role)
+}
+
 func (PostgresAdapter) DriverQuery(app types.NamespacedName, metric autoscalingv1alpha1.MetricType) string {
-	// Read-serving pods are the CNPG standbys: cnpg.io/instanceRole="replica".
-	replicaSelector := fmt.Sprintf(`namespace=%q,cnpg_io_cluster=%q,cnpg_io_instanceRole="replica"`, app.Namespace, app.Name)
 	switch metric {
 	case autoscalingv1alpha1.MetricReadConnections:
-		return fmt.Sprintf(`sum(cnpg_backends_total{%s})`, replicaSelector)
+		// Active client backends on the read-serving (replica) pods.
+		return fmt.Sprintf(
+			`sum(cnpg_backends_total{namespace=%q,state="active"}%s)`,
+			app.Namespace, roleJoin(app, "replica"))
 	case autoscalingv1alpha1.MetricReadCPUUtilization:
-		// CPU utilisation as a percentage of the pod's CPU request, summed over
-		// the read-serving pods.
-		podSelector := fmt.Sprintf(`namespace=%q,pod=~"%s-[0-9]+"`, app.Namespace, app.Name)
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s,container="postgres"}[5m])) * 100`, podSelector)
+		// CPU usage of the read-serving pods, in millicores summed over replicas.
+		return fmt.Sprintf(
+			`sum(rate(container_cpu_usage_seconds_total{namespace=%q,container="postgres"}[5m])%s) * 1000`,
+			app.Namespace, roleJoin(app, "replica"))
 	default:
 		return ""
 	}
 }
 
 func (PostgresAdapter) ReplicationLagQuery(app types.NamespacedName) string {
-	// cnpg_pg_replication_lag is exported in seconds and already scraped into
-	// VictoriaMetrics for cozystack's CNPG dashboards/alerts.
-	return fmt.Sprintf(`max(cnpg_pg_replication_lag{namespace=%q,cnpg_io_cluster=%q})`, app.Namespace, app.Name)
+	// cnpg_pg_replication_lag (seconds), restricted to the replica pods.
+	return fmt.Sprintf(
+		`max(cnpg_pg_replication_lag{namespace=%q}%s)`,
+		app.Namespace, roleJoin(app, "replica"))
 }
 
 func (PostgresAdapter) WriteActivityQuery(app types.NamespacedName) string {
-	// Non-zero while the primary's WAL is advancing (write-activity gating for the
-	// lag brake): rate of the current WAL LSN on the primary.
+	// Non-zero while the primary is shipping WAL to standbys (write-activity gate
+	// for the lag brake): rate of bytes sent from the primary.
 	return fmt.Sprintf(
-		`sum(rate(cnpg_pg_replication_in_recovery{namespace=%q,cnpg_io_cluster=%q}[5m]))`,
-		app.Namespace, app.Name)
+		`sum(rate(cnpg_pg_stat_replication_sent_diff_bytes{namespace=%q}[5m])%s)`,
+		app.Namespace, roleJoin(app, "primary"))
 }
 
 var _ TopologyAdapter = PostgresAdapter{}

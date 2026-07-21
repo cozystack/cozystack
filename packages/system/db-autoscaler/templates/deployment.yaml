@@ -15,6 +15,11 @@ spec:
         app: db-autoscaler
     spec:
       serviceAccountName: db-autoscaler
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
       tolerations:
       - key: "node-role.kubernetes.io/control-plane"
         operator: "Exists"
@@ -41,6 +46,11 @@ spec:
       containers:
       - name: db-autoscaler
         image: "{{ .Values.dbAutoscaler.image }}"
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
         args:
         - --leader-elect
         - --operator-username=system:serviceaccount:{{ .Release.Namespace }}:db-autoscaler
@@ -85,4 +95,4 @@ spec:
       - name: webhook-certs
         secret:
           secretName: db-autoscaler-cert
-          defaultMode: 0400
+          defaultMode: 0440
