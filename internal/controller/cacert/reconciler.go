@@ -199,7 +199,7 @@ const (
 	// projection, for traceability: `kubectl describe` shows which Secret fed
 	// the trust anchor. It is part of the drift check so a source change
 	// rewrites it, but nothing reads it to make a decision.
-	SourceRefAnnotation = "internal.cozystack.io/publish-ca-cert-source"
+	SourceRefAnnotation = "internal.cozystack.io/ca-cert-source"
 
 	// SelectorsDigestAnnotation records a digest of the ApplicationDefinition's
 	// spec.secrets at the projection's last write. It exists to force a
@@ -237,7 +237,7 @@ const (
 	// resourceVersion, which would be the cruder signal: resourceVersion moves on
 	// ANY edit to the definition, so every unrelated field change would rewrite
 	// every projection of that kind for no gain.
-	SelectorsDigestAnnotation = "internal.cozystack.io/publish-ca-cert-selectors"
+	SelectorsDigestAnnotation = "internal.cozystack.io/ca-cert-selectors"
 
 	// managedByCozystackLabel is stamped by the lineage admission webhook. The
 	// reconciler never writes it; it only takes care not to strip it.
@@ -726,7 +726,18 @@ func sortedKeys(m map[string][]byte) []string {
 
 // applicationDefinition returns the ApplicationDefinition for an application
 // kind, or nil when none is registered.
+//
+// The list is walked in the API server's unspecified order, so the match is
+// gated on the group as well as the kind: every ApplicationDefinition describes a
+// kind in appsGroup, and the release's own group label must be that group, so
+// requiring it keeps a release stamped with an unexpected group from resolving a
+// same-kind definition by accident. ApplicationDefinition carries no group field
+// of its own — the group is invariant across all of them — so the check is
+// against the constant.
 func (r *Reconciler) applicationDefinition(ctx context.Context, app application) (*cozyv1alpha1.ApplicationDefinition, error) {
+	if app.Group != appsGroup {
+		return nil, nil
+	}
 	list := &cozyv1alpha1.ApplicationDefinitionList{}
 	if err := r.List(ctx, list); err != nil {
 		return nil, fmt.Errorf("list ApplicationDefinitions: %w", err)
