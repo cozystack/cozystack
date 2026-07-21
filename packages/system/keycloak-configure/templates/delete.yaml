@@ -39,7 +39,7 @@ spec:
                   done
                 done
 
-                kubectl patch hr keycloak-configure -n cozy-system --type=merge -p '{"metadata":{"finalizers":[]}}'
+                kubectl patch hr {{ .Release.Name }} -n {{ .Release.Namespace }} --type=merge -p '{"metadata":{"finalizers":[]}}'
 
 
 ---
