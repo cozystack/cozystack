@@ -8,16 +8,16 @@ It is the implementation of the [Database Horizontal Autoscaler design proposal]
 
 Horizontal autoscaling applies to primary-replica engines (read replicas are scaled; the primary is never touched):
 
-| Kind | Topology | Notes |
+| Kind | Topology | Status (validated on a live cozystack cluster) |
 |---|---|---|
-| `Postgres` | CloudNativePG, 1 primary + standbys | Validated end-to-end on a live cluster. Quorum floor = `quorum.maxSyncReplicas + 1`. |
-| `MariaDB` | mariadb-operator async replication | Read replicas exist when `replicas > 1`; no sync-replica quorum (floor = 1). |
-| `Redis` | spotahome RedisFailover (Sentinel) | 1 master + read-serving slaves; role label `redisfailovers-role`. |
-| `MongoDB` | Percona replica set (`rs0`) | Scalable only when `sharding: false`; a sharded cluster reports `ScalingActive=False`. Requires the Percona PMM / mongodb_exporter to be enabled (off by default) — without metrics the loop fail-safe freezes rather than scaling blind. |
+| `Postgres` | CloudNativePG, 1 primary + standbys | **Full scale up/down validated.** Quorum floor = `quorum.maxSyncReplicas + 1`; PromQL joins CNPG metrics against `kube_pod_labels` on `label_cnpg_io_instance_role`. |
+| `Redis` | spotahome RedisFailover (Sentinel) | **Full scale up/down validated.** 1 master + read-serving slaves; PromQL selects slaves via `label_redisfailovers_role="slave"`; `redis_exporter` sidecar. No sync-replica quorum (floor = 1). |
+| `MariaDB` | mariadb-operator async replication | Metric read + patch + ownership validated; PromQL scopes by the `<release>-metrics` exporter job and selects replicas by the `target`s exposing `mysql_slave_status_*`. **Caveat:** the cozystack mariadb chart does not currently set `replication.replica.bootstrapFrom`, so the operator rejects on-the-fly scale-out (`MariaDBScaleOutError`); the autoscaler patches correctly but the engine cannot add a replica until the chart supports scale-out — the StuckScaling guardrail then rolls back. |
+| `MongoDB` | Percona replica set (`rs0`) | `Scalable=true` for replica-set / `ScalingActive=False` for `sharding: true` validated. **Caveat:** cozystack ships the Percona PMM / mongodb_exporter **disabled**, so no MongoDB metrics are scraped; the loop correctly fail-safe freezes (`AbleToScale=False(MetricUnavailable)`) rather than scaling blind. Enable the exporter to use MongoDB autoscaling. |
 
 Engines that require data rebalancing — `ClickHouse`, `Kafka`, and sharded `MongoDB` — are intentionally **not** scalable and report `ScalingActive=False` with a reason.
 
-The `Postgres` adapter's PromQL is calibrated against a live cluster; the `mariadb`/`redis`/`mongodb` expressions are namespace-scoped best-effort and are calibrated on real workloads in follow-ups (the design's Open questions). All queries constrain to the tenant namespace — a tenant can never read another tenant's series.
+All queries constrain to the tenant namespace — a tenant can never read another tenant's series. The `postgres`, `redis` and `mariadb` expressions are calibrated against real metrics on a live cluster; `mongodb`'s are best-effort pending the exporter being enabled.
 
 ## How it works
 
