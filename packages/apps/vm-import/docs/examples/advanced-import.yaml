@@ -25,7 +25,7 @@ metadata:
   namespace: production
 spec:
   # VMware source
-  sourceUrl: "https://prod-vcenter.company.com/sdk"
+  sourceUrl: "https://prod-vcenter.example.com/sdk"
   sourceSecretName: "prod-vcenter-creds"
 
   # VMs to import with custom names

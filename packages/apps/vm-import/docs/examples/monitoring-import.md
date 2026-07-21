@@ -182,7 +182,7 @@ virtctl console nginx-frontend-01 -n production
 kubectl get vm nginx-frontend-01 -n production -o jsonpath='{.status.interfaces}'
 
 # Test connectivity from VM
-virtctl ssh nginx-frontend-01 -n production -- ping -c 3 8.8.8.8
+virtctl ssh nginx-frontend-01 -n production -- ping -c 3 example.com
 ```
 
 ### Verify storage
