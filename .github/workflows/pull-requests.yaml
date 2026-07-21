@@ -305,7 +305,7 @@ jobs:
     # in-build-job tests gave, without re-coupling the cheap parallel builds.
     needs: ["plan", "checks", "build", "build-talos"]
     if: |
-      always()
+      !cancelled()
       && needs.plan.outputs.code == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
       && needs.checks.result == 'success'
@@ -533,7 +533,7 @@ jobs:
       packages: read
       checks: write
     needs: ["finalize", "build-talos", "resolve_assets"]
-    if: ${{ always() && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success') }}
+    if: ${{ !cancelled() && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success') }}
 
     steps:
       - name: Generate GitHub App token
