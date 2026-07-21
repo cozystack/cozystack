@@ -166,6 +166,14 @@ type SiteRouterReconciler struct {
 	// safe because leader election gives a single writer; see the config-hash
 	// cache note in vyospush.go for the restart trade-off.
 	appliedHashes map[types.NamespacedName]string
+
+	// metricsMu guards lastMetricSnapshot.
+	metricsMu sync.Mutex
+	// lastMetricSnapshot caches, per instance HelmRelease, the tunnel/BGP metric
+	// values last written to the Prometheus vecs, so updateMetrics only touches
+	// them when the observed state changes (the bump-on-change discipline; see
+	// metrics.go). In-memory for the same single-writer reason as appliedHashes.
+	lastMetricSnapshot map[types.NamespacedName]metricSnapshot
 }
 
 // instance is the resolved reconcile context threaded through the step methods.
@@ -298,6 +306,7 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		logger.Error(err, "VyOS runtime poll failed; keeping previous observations",
 			"instance", inst.name, "namespace", inst.namespace)
 	}
+	r.updateMetrics(inst) // T10: refresh tunnel/BGP gauges from the latest observations (bump-on-change)
 	if err := r.updateStatus(ctx, inst); err != nil { // T09: status surface
 		return r.classify(ctx, err)
 	}
@@ -343,8 +352,10 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 		return ctrl.Result{}, err
 	}
 
-	// Drop the cached config hash so a later instance reusing this key re-applies.
+	// Drop the cached config hash so a later instance reusing this key re-applies,
+	// and retire this instance's metric series so a deleted SiteRouter leaves none.
 	r.forgetAppliedHash(client.ObjectKeyFromObject(inst.hr))
+	r.forgetMetrics(inst)
 
 	if err := r.removeFinalizer(ctx, inst.hr); err != nil {
 		return ctrl.Result{}, err

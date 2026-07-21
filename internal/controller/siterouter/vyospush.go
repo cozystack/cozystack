@@ -264,6 +264,7 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 		// so a tenant-readable surface never leaks the secret. The pushed op batch
 		// itself is never included (only the client's error string is).
 		msg := redactSecrets("VyOS Configure failed: "+truncErr(err), psk, token)
+		r.recordConfigApplyError(inst) // T10: advance site_router_config_apply_errors_total
 		if r.Recorder != nil {
 			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonConfigureFailed, msg)
 		}
