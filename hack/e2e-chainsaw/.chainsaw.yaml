@@ -56,8 +56,11 @@ spec:
   # bought its speed by collecting nothing at all — and it is bounded: both legs
   # only approach their ceilings on a genuinely degraded cluster, a systemic
   # failure usually reds the install gate and skips the E2E step entirely, and
-  # the report-upload steps are `if: always()` so a job timeout still yields the
-  # artifact. If this ever does start truncating runs, bound the number of
+  # the report-upload steps are `if: always()`. That last point does NOT extend
+  # to a job timeout: a 180-minute cap ends the job `cancelled`, and the ~4m48s
+  # grace window is consumed by the earlier `Collect report` step, so both
+  # cozyreport.tgz and the job log are lost (measured on runs 29557003429 and
+  # 29568562337). If this ever does start truncating runs, bound the number of
   # snapshotted tests rather than shrinking these timeouts back to a size that
   # guarantees a kill.
   error:
