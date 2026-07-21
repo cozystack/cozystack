@@ -159,6 +159,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -174,10 +175,13 @@ import (
 	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	crsource "sigs.k8s.io/controller-runtime/pkg/source"
 
@@ -1351,6 +1355,7 @@ func (r *Reconciler) SetupWithManager(mgr ctrl.Manager, secretMetaCache cache.Ca
 		)).
 		Watches(&cozyv1alpha1.ApplicationDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.projectionsForApplicationDefinition),
+			builder.WithPredicates(applicationDefinitionPredicate),
 		).
 		Complete(r)
 }
@@ -1420,9 +1425,11 @@ func (r *Reconciler) projectionsForOwnedProjection(_ context.Context, obj *metav
 // projectionsForApplicationDefinition maps an ApplicationDefinition change to
 // every sentinel, so a change to the spec.secrets selectors that decide tenant
 // visibility recomputes the selectors digest and re-admits a changed verdict at
-// once. The digest drift check keeps this from writing when nothing changed, so
-// re-reconciling every sentinel on a rare definition edit costs at most one
-// no-op pass each.
+// once. It fans out unconditionally by design — a definition serves every release
+// of its kind, and this controller has no cheap index from a definition back to
+// only the sentinels of that kind. applicationDefinitionPredicate is what keeps
+// the fan-out rare: it gates the watch so only a change that can move the digest
+// reaches this mapping at all.
 func (r *Reconciler) projectionsForApplicationDefinition(ctx context.Context, _ client.Object) []reconcile.Request {
 	list := &internalv1alpha1.TenantProjectionList{}
 	if err := r.List(ctx, list); err != nil {
@@ -1436,4 +1443,33 @@ func (r *Reconciler) projectionsForApplicationDefinition(ctx context.Context, _ 
 		}})
 	}
 	return out
+}
+
+// applicationDefinitionPredicate gates the ApplicationDefinition watch so the
+// unconditional fan-out above fires only when it can matter. Without it, Flux's
+// periodic no-op re-apply of every *-rd definition would enqueue every sentinel in
+// the cluster on each pass; the digest drift check then suppresses the write, but
+// not the load — each such reconcile still issues several uncached reads.
+//
+// Create, delete and generic events keep the default pass-through: a definition
+// appearing or disappearing can change a verdict. An UPDATE is delivered only when
+// spec.secrets changed — the exact field selectorsDigest digests, so a change that
+// cannot move the digest cannot pass this gate, and the two cannot drift apart.
+var applicationDefinitionPredicate = predicate.Funcs{
+	UpdateFunc: applicationDefinitionSecretsChanged,
+}
+
+// applicationDefinitionSecretsChanged reports whether an ApplicationDefinition
+// UPDATE touched spec.secrets. A non-ApplicationDefinition event falls through as
+// delivered rather than being silently dropped.
+func applicationDefinitionSecretsChanged(e event.UpdateEvent) bool {
+	oldDef, ok := e.ObjectOld.(*cozyv1alpha1.ApplicationDefinition)
+	if !ok {
+		return true
+	}
+	newDef, ok := e.ObjectNew.(*cozyv1alpha1.ApplicationDefinition)
+	if !ok {
+		return true
+	}
+	return !reflect.DeepEqual(oldDef.Spec.Secrets, newDef.Spec.Secrets)
 }

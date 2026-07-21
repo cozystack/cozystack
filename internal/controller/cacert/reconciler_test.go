@@ -47,6 +47,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -1118,6 +1119,59 @@ func TestReconcile_UnrelatedDefinitionChange_DoesNotRewrite(t *testing.T) {
 
 	if got := mustProjection(t, c); got.ResourceVersion != before.ResourceVersion {
 		t.Errorf("an edit that cannot affect tenant visibility must not rewrite the projection")
+	}
+}
+
+// TestApplicationDefinitionPredicate_GatesOnSecrets pins the no-ENQUEUE half of the
+// same property TestReconcile_UnrelatedDefinitionChange_DoesNotRewrite pins for the
+// no-WRITE half: an edit that cannot move the selectors digest never reaches the
+// mapping, so Flux's periodic no-op re-apply of every *-rd definition does not fan
+// out to every sentinel in the cluster. Creates and deletes still fall through.
+func TestApplicationDefinitionPredicate_GatesOnSecrets(t *testing.T) {
+	base := appDef()
+	for _, tc := range []struct {
+		name   string
+		mutate func(*cozyv1alpha1.ApplicationDefinition)
+		want   bool
+	}{
+		{
+			name:   "unrelated field change is not delivered",
+			mutate: func(d *cozyv1alpha1.ApplicationDefinition) { d.Spec.Application.Plural = "postgresqls" },
+			want:   false,
+		},
+		{
+			name: "spec.secrets change is delivered",
+			mutate: func(d *cozyv1alpha1.ApplicationDefinition) {
+				d.Spec.Secrets.Include = []*cozyv1alpha1.ApplicationDefinitionResourceSelector{{
+					LabelSelector: metav1.LabelSelector{MatchLabels: map[string]string{TenantCALabel: trueValue}},
+				}}
+			},
+			want: true,
+		},
+		{
+			name:   "identical definition is not delivered",
+			mutate: func(*cozyv1alpha1.ApplicationDefinition) {},
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			oldDef := base.DeepCopy()
+			newDef := base.DeepCopy()
+			tc.mutate(newDef)
+			got := applicationDefinitionPredicate.Update(event.UpdateEvent{ObjectOld: oldDef, ObjectNew: newDef})
+			if got != tc.want {
+				t.Errorf("predicate delivered=%v, want %v", got, tc.want)
+			}
+		})
+	}
+
+	// A definition appearing or disappearing can change a verdict, so creates and
+	// deletes must always fall through.
+	if !applicationDefinitionPredicate.Create(event.CreateEvent{Object: base}) {
+		t.Errorf("a definition create must be delivered")
+	}
+	if !applicationDefinitionPredicate.Delete(event.DeleteEvent{Object: base}) {
+		t.Errorf("a definition delete must be delivered")
 	}
 }
 
