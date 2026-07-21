@@ -589,9 +589,17 @@ func mssClampOp(dev, clamp string) vyos.Operation {
 // address (rules 10, 20, …), and everything else arriving on the tunnel
 // device is dropped by the rule-set default-action. The controller must
 // confirm this guard active before flipping the instance Ready (T08).
-// Requires a resolved TunnelDevice and at least one RemoteCIDR.
+//
+// Requires a resolved TunnelDevice; without one there is nothing to bind to,
+// so the filter is skipped. An empty RemoteCIDRs list is deliberately NOT an
+// early return: deleteManagedSubtrees has already removed the old ruleset and
+// its interface binding, so returning nothing here would leave forwarded
+// traffic unfiltered (fail-OPEN). Instead the established/related accept, the
+// default-action drop and the interface binding are still emitted — a resolved
+// tunnel device with no declared remote subnets fails CLOSED (drop everything
+// except return traffic) rather than open.
 func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
-	if in.TunnelDevice == "" || len(in.RemoteCIDRs) == 0 {
+	if in.TunnelDevice == "" {
 		return nil
 	}
 

@@ -124,6 +124,48 @@ func TestRenderTunnelIngressFilter_AllowsRemoteCIDRsAndDropsRest(t *testing.T) {
 	}
 }
 
+// TestRenderTunnelIngressFilter_EmptyRemoteCIDRsFailsClosed proves the
+// fail-closed guarantee: when the tunnel device is resolved but RemoteCIDRs
+// is empty, deleteManagedSubtrees has already removed the old ruleset and its
+// interface binding, so the render MUST still stamp the established/related
+// accept, the default-action drop and the binding. Returning nothing would
+// leave forwarded traffic unfiltered (fail-open).
+func TestRenderTunnelIngressFilter_EmptyRemoteCIDRsFailsClosed(t *testing.T) {
+	t.Parallel()
+
+	in := baseInputs()
+	in.TunnelDevice = "eth1"
+	in.RemoteCIDRs = nil // no declared remote subnets
+	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
+
+	ops := render.Render(in)
+
+	rs := "firewall/name/" + render.TunnelIngressRuleSet
+
+	// The ruleset drops everything not explicitly accepted.
+	if !containsSet(ops, rs+"/default-action", "drop") {
+		t.Errorf("expected fail-closed default-action=drop with empty RemoteCIDRs, ops: %+v", ops)
+	}
+
+	// Established/related return traffic is still accepted so the router does
+	// not black-hole its own reply packets.
+	if !containsSet(ops, rs+"/rule/5/action", "accept") ||
+		!containsSet(ops, rs+"/rule/5/state/established", "enable") {
+		t.Errorf("expected established/related accept even with empty RemoteCIDRs, ops: %+v", ops)
+	}
+
+	// No per-CIDR accept rule exists (there are no CIDRs to allow).
+	if containsSet(ops, rs+"/rule/10/action", "accept") {
+		t.Errorf("expected no source-accept rule with empty RemoteCIDRs, ops: %+v", ops)
+	}
+
+	// The ruleset is still bound to the resolved tunnel device inbound, so the
+	// drop actually takes effect.
+	if !containsSet(ops, "interfaces/ethernet/eth1/firewall/in/name", render.TunnelIngressRuleSet) {
+		t.Errorf("expected tunnel-ingress ruleset bound to eth1 inbound (fail-closed), ops: %+v", ops)
+	}
+}
+
 // TestRenderIPSec_ForcesUDPEncapsulation encodes T02 Acceptance: "IPsec
 // render forces UDP encapsulation". Native ESP is dropped pod-to-pod by
 // Cilium conntrack, so NAT-T (ESP-in-UDP) is forced unconditionally on

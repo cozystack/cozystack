@@ -210,9 +210,13 @@ func ParseBGPSummary(text string) []BGPObservation {
 //
 // We only care about columns 1 (neighbour), 9 (up/down) and 10 (state),
 // but anchor the regex on the wider shape to avoid matching the table
-// header.
+// header. The state column is either an alphabetic session state
+// ("Established", "Idle", …) or — for an up neighbour in raw FRR output —
+// a pure number: the received-prefix count that FRR prints in place of the
+// word. The alternation matches both so an ESTABLISHED peer whose
+// State/PfxRcd cell is numeric is not dropped.
 var bgpRowRe = regexp.MustCompile(
-	`^([\d.]+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\S+)\s+([A-Za-z][A-Za-z0-9/]*)`,
+	`^([\d.]+)\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+\d+\s+(\S+)\s+([A-Za-z][A-Za-z0-9/]*|\d+)`,
 )
 
 func normaliseBGPState(raw string) BGPSessionState {
@@ -221,6 +225,13 @@ func normaliseBGPState(raw string) BGPSessionState {
 	state := raw
 	if idx := strings.Index(state, "/"); idx > 0 {
 		state = state[:idx]
+	}
+
+	// An all-numeric State/PfxRcd column is FRR's shorthand for an up
+	// session: the value is the received-prefix count, which only appears
+	// once the neighbour is Established. Map it accordingly.
+	if isAllDigits(state) {
+		return BGPSessionStateEstablished
 	}
 
 	switch strings.ToLower(state) {
@@ -239,4 +250,21 @@ func normaliseBGPState(raw string) BGPSessionState {
 	default:
 		return BGPSessionStateIdle
 	}
+}
+
+// isAllDigits reports whether s is non-empty and consists solely of ASCII
+// digits. Used to recognise the numeric received-prefix count FRR prints in
+// the State/PfxRcd column for an established neighbour.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+
+	return true
 }

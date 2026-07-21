@@ -61,6 +61,16 @@ Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down Sta
 203.0.113.2     4      65000         0         0        0    0    0    never Idle               0
 `
 
+// sampleBGPSummaryNumericPfx is raw FRR `show bgp summary` output where an
+// established neighbour reports a numeric received-prefix count in the
+// State/PfxRcd column instead of the word "Established" (the VyOS wrapper
+// spells the state out; raw FRR prints the pfx count once the session is up).
+// The parser must still classify such a neighbour as Established.
+const sampleBGPSummaryNumericPfx = `
+Neighbor        V         AS   MsgRcvd   MsgSent   TblVer  InQ OutQ  Up/Down State/PfxRcd   PfxSnt
+10.0.0.1        4      65000       120       118        0    0    0 00:12:00            5        5
+`
+
 func TestParseIPSecSA_Established(t *testing.T) {
 	t.Parallel()
 
@@ -142,6 +152,24 @@ func TestParseBGPSummary_EstablishedAndIdle(t *testing.T) {
 
 	if obs[1].Uptime != "never" {
 		t.Errorf("expected uptime=never, got %q", obs[1].Uptime)
+	}
+}
+
+func TestParseBGPSummary_NumericPfxCountIsEstablished(t *testing.T) {
+	t.Parallel()
+
+	obs := vyos.ParseBGPSummary(sampleBGPSummaryNumericPfx)
+
+	if len(obs) != 1 {
+		t.Fatalf("expected 1 neighbour, got %d: %+v", len(obs), obs)
+	}
+
+	if obs[0].PeerAddress != "10.0.0.1" || obs[0].Session != vyos.BGPSessionStateEstablished {
+		t.Errorf("numeric pfx-count neighbour must map to Established: %+v", obs[0])
+	}
+
+	if obs[0].Uptime != "00:12:00" {
+		t.Errorf("expected uptime=00:12:00, got %q", obs[0].Uptime)
 	}
 }
 
