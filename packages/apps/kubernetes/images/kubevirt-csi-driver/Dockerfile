@@ -14,7 +14,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build \
     -ldflags "-X kubevirt.io/csi-driver/pkg/service.VendorVersion=0.2.0" \
     -o kubevirt-csi-driver .
 
-FROM quay.io/centos/centos:stream9@sha256:3714c89f1903dac5a5e1eb6c02d84189ff6d962a0c18df01feba0a5406856926
+FROM docker.io/library/almalinux:9@sha256:d2515c769e7b73f95c4fde38c0a505336ff38f14990c0b7253b77060a049a743
 
 RUN dnf install -y e2fsprogs xfsprogs nfs-utils && dnf clean all
 
