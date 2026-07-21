@@ -5,7 +5,7 @@
        imply the system bundle is actually emitted, and every package below depends
        on its control-plane body. */ -}}
 {{- if and .Values.bundles.naas.enabled (not .Values.bundles.system.enabled) }}
-{{- fail "bundles.naas.enabled requires bundles.system.enabled: the naas catalog depends on packages emitted by the system bundle (cozystack-engine, which ships the ApplicationDefinition CRD, plus cozystack.networking). To run a hosted platform where the host provides CNI, storage and virtualisation, keep bundles.system.enabled: true and set bundles.system.variant: isp-hosted (which selects a noop networking Package) with bundles.iaas.enabled: false — do not disable the system bundle." }}
+{{- fail "bundles.naas.enabled requires bundles.system.enabled: the naas catalog depends on packages emitted by the system bundle (cozystack.cozystack-engine, which ships the ApplicationDefinition CRD, plus cozystack.networking). To run a hosted platform where the host provides CNI, storage and virtualisation, keep bundles.system.enabled: true and set bundles.system.variant: isp-hosted (which selects a noop networking Package) with bundles.iaas.enabled: false — do not disable the system bundle." }}
 {{- end }}
 {{- if and .Values.bundles.naas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") (eq .Values.bundles.system.variant "isp-hosted")) }}
 {{include "cozystack.platform.package.default" (list "cozystack.http-cache-application" $) }}

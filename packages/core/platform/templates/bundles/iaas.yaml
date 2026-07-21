@@ -7,7 +7,7 @@
        depends on its control-plane body — rendering iaas without it leaves all 12
        Packages in DependenciesNotReady with nothing naming the cause. */ -}}
 {{- if and .Values.bundles.iaas.enabled (not .Values.bundles.system.enabled) }}
-{{- fail "bundles.iaas.enabled requires bundles.system.enabled: the iaas bundle depends on packages emitted by the system bundle (cozystack.networking, cozystack-engine, cert-manager, prometheus-operator-crds and cozystack-basics). Enable the system bundle with bundles.system.variant: isp-full or isp-full-generic." }}
+{{- fail "bundles.iaas.enabled requires bundles.system.enabled: the iaas bundle depends on packages emitted by the system bundle (cozystack.networking, cozystack.cozystack-engine, cozystack.cert-manager, cozystack.prometheus-operator-crds and cozystack.cozystack-basics). Enable the system bundle with bundles.system.variant: isp-full or isp-full-generic." }}
 {{- end }}
 {{- if and .Values.bundles.iaas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic")) }}
 {{- $kubevirtValues := dict -}}

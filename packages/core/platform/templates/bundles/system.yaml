@@ -241,7 +241,7 @@ cozystack-platform HelmRelease never becomes Ready. */}}
        system-on/iaas-off configuration (i.e. isp-hosted) left
        backupstrategy-controller permanently DependenciesNotReady. Both isp-full
        presets masked that by enabling iaas. Same reasoning as the velero comment
-       below: a hard dependency of a default package must itself be emitted
+       above: a hard dependency of a default package must itself be emitted
        wherever that default package is. */ -}}
 {{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
 
