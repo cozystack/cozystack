@@ -78,3 +78,26 @@
   pushes=$(echo "$tout" | grep 'docker://' | grep -vF '[ -z ' || true)
   if [ -n "$pushes" ]; then echo "FAIL: talos pushes an ungated image under OCI_EXPORT_DIR with PUBLISH_*=1: $pushes"; false; fi
 }
+
+@test "default path (OCI_EXPORT_DIR unset) still pushes and keeps release tags (#3262)" {
+  # Every other test here sets OCI_EXPORT_DIR, so nothing covered the OFF path —
+  # the one every same-repo PR, main and release build still takes. Without this
+  # case a refactor of the export wiring could stop pushing altogether, or strip
+  # the release tags, and the suite would stay green.
+  out=$(make -n -C packages/system/cozystack-controller image PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  # buildx pushes, and no per-image archive is written.
+  echo "$out" | grep -q -- '--push=1'
+  if echo "$out" | grep -q -- '--output type=oci'; then echo "FAIL: OCI archive export leaked into the default path"; false; fi
+  # image-tags expands all three release tags when not exporting: the
+  # build-unique IMAGE_TAG, the versioned tag and :latest.
+  tags=$(echo "$out" | grep -o -- '--tag' | wc -l)
+  [ "$tags" -eq 3 ]
+  echo "$out" | grep -q -- ':latest'
+  # talos bypasses image-tags. Its skopeo copies must target the registry, and
+  # the `[ -z "$(OCI_EXPORT_DIR)" ]` release gates must be INERT off-export
+  # (expanding to `[ -z "" ]`) so a release run still pushes versioned+floating.
+  tout=$(make -n -C packages/core/talos image PUBLISH_VERSIONED=1 PUBLISH_FLOATING=1 IMAGE_TAG=pr-1-abc COZYSTACK_VERSION=0 BUILDER=b)
+  echo "$tout" | grep -q 'docker://.*/talos:pr-1-abc'
+  echo "$tout" | grep -q 'docker://.*/talos:latest'
+  if echo "$tout" | grep -q 'oci-archive:'; then echo "FAIL: talos exports an archive without OCI_EXPORT_DIR"; false; fi
+}
