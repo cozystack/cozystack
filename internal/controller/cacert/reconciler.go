@@ -113,10 +113,14 @@ limitations under the License.
 // label that lets the tenant read it through the tenantsecrets API.
 //
 // Referencing the sentinel rather than the HelmRelease directly is also what
-// ties the projection's lifetime to the declaration: when the chart stops
-// rendering the sentinel, Flux prunes it and Kubernetes garbage-collects the
-// projection through the owner reference. There is no withdrawal logic here — a
-// retired declaration is a deleted sentinel, and the trust anchor goes with it.
+// ties the projection's lifetime to the declaration. A retired declaration is
+// withdrawn by one of two mechanisms. When the chart stops rendering the sentinel
+// entirely, Flux prunes it and Kubernetes garbage-collects the projection through
+// the owner reference. When the sentinel outlives its CACert entry — it keeps
+// existing but stops declaring the anchor, so the owner still exists and GC never
+// fires — withdrawProjection deletes the projection explicitly, and only one this
+// sentinel owns; a foreign Secret, or another sentinel's projection at the name,
+// is left untouched.
 //
 // # What this controller does NOT decide
 //
