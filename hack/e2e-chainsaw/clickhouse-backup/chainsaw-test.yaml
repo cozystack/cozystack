@@ -98,6 +98,22 @@ spec:
           (spec.containers[?name == 'clickhouse-backup'] | [0].ports[?name == 'ch-backup-api']):
           - containerPort: 7171
             protocol: TCP
+          # And that the sidecar actually authenticates from that Secret: the
+          # API_USERNAME/API_PASSWORD env must resolve valueFrom the
+          # backup-api-auth Secret's username/password keys. A chart change that
+          # kept both the Secret and the port but repointed or dropped these
+          # secretKeyRefs would otherwise slip through and surface only as 401s
+          # at BackupJob time — the exact silent break this suite guards.
+          (spec.containers[?name == 'clickhouse-backup'] | [0].env[?name == 'API_USERNAME']):
+          - valueFrom:
+              secretKeyRef:
+                name: clickhouse-test-backup-backup-api-auth
+                key: username
+          (spec.containers[?name == 'clickhouse-backup'] | [0].env[?name == 'API_PASSWORD']):
+          - valueFrom:
+              secretKeyRef:
+                name: clickhouse-test-backup-backup-api-auth
+                key: password
 
   # The strategy Pod authenticates to the sidecar with the credentials in the
   # chart-emitted <release>-backup-api-auth Secret (env API_USERNAME /
