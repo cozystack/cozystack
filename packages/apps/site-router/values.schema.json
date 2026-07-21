@@ -94,8 +94,10 @@
           "default": false
         },
         "localASN": {
-          "description": "Local autonomous system number.",
-          "type": "integer"
+          "description": "Local autonomous system number. Required when `enabled` is true; must be a valid ASN (1..4294967295).",
+          "type": "integer",
+          "maximum": 4294967295,
+          "minimum": 1
         },
         "neighbors": {
           "description": "BGP neighbors to peer with.",
@@ -112,8 +114,10 @@
                 "type": "string"
               },
               "remoteASN": {
-                "description": "Remote autonomous system number of the neighbor.",
-                "type": "integer"
+                "description": "Remote autonomous system number of the neighbor. Must be a valid ASN (1..4294967295).",
+                "type": "integer",
+                "maximum": 4294967295,
+                "minimum": 1
               }
             }
           }

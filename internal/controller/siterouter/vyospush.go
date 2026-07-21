@@ -242,7 +242,7 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 		device = defaultTunnelDevice
 	}
 
-	inputs := r.resolveInputs(inst, psk, device)
+	inputs := r.resolveInputs(ctx, inst, psk, device)
 	ops := render.Render(inputs)
 
 	hash, err := configHash(ops)
@@ -387,7 +387,7 @@ func (r *SiteRouterReconciler) pollRuntimeState(ctx context.Context, inst *insta
 // its design default (1320 → clamp 1280); ExternalIP is left empty so VyOS
 // auto-detects the IPsec local-address (Phase-1 responder model — the LB tunnel
 // address wiring is a documented follow-up).
-func (r *SiteRouterReconciler) resolveInputs(inst *instance, psk, tunnelDevice string) render.Inputs {
+func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance, psk, tunnelDevice string) render.Inputs {
 	vals := inst.values
 	remoteCIDRs := stringSlice(vals[remoteCIDRsValueKey])
 
@@ -428,22 +428,38 @@ func (r *SiteRouterReconciler) resolveInputs(inst *instance, psk, tunnelDevice s
 	}
 
 	if boolField(vals["bgp"], "enabled") {
-		cfg := &render.BGPConfig{Asn: intField(vals["bgp"], "localASN")}
-		for _, n := range sliceOf(mapGet(vals["bgp"], "neighbors")) {
-			addr := stringField(n, "address")
-			if addr == "" {
-				continue
+		localASN := intField(vals["bgp"], "localASN")
+		if validASN(localASN) {
+			cfg := &render.BGPConfig{Asn: localASN}
+			for _, n := range sliceOf(mapGet(vals["bgp"], "neighbors")) {
+				addr := stringField(n, "address")
+				remoteASN := intField(n, "remoteASN")
+				// Skip a neighbor with no address or an out-of-range ASN rather than
+				// emit `neighbor <addr> remote-as 0`.
+				if addr == "" || !validASN(remoteASN) {
+					continue
+				}
+				cfg.Peers = append(cfg.Peers, render.BGPPeer{
+					PeerAddress: addr,
+					PeerAsn:     remoteASN,
+				})
 			}
-			cfg.Peers = append(cfg.Peers, render.BGPPeer{
-				PeerAddress: addr,
-				PeerAsn:     intField(n, "remoteASN"),
-			})
+			in.BGP = cfg
+		} else {
+			// bgp.enabled but no valid local ASN: the schema (minimum/maximum)
+			// rejects this at admission; guard the reconcile path against a stale or
+			// hand-crafted HelmRelease so the render never emits `system-as 0`.
+			log.FromContext(ctx).Info("skipping BGP: bgp.enabled but localASN is missing or outside the valid range (1..4294967295)",
+				"instance", inst.name, "namespace", inst.namespace, "localASN", localASN)
 		}
-		in.BGP = cfg
 	}
 
 	return in
 }
+
+// validASN reports whether n is a valid, nonzero autonomous-system number
+// (1..4294967295, the 32-bit ASN range).
+func validASN(n int64) bool { return n >= 1 && n <= 4294967295 }
 
 // discoverInterfaceDevices resolves the kernel device carrying tunnel / forwarded
 // traffic by joining the gateway VMI's NIC MACs (status.interfaces[].mac) against

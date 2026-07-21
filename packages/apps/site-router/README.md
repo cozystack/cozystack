@@ -30,10 +30,10 @@ Site Router connects a Cozystack tenant network to a remote network over an IPse
 | `staticRoutes[i].nextHop`     | Next-hop IP address for the destination.                                                                                              | `string`   | `""`    |
 | `bgp`                         | Optional BGP peering over the tunnel. Disabled by default.                                                                            | `object`   | `{}`    |
 | `bgp.enabled`                 | Enable BGP peering.                                                                                                                   | `bool`     | `false` |
-| `bgp.localASN`                | Local autonomous system number.                                                                                                       | `int`      | `0`     |
+| `bgp.localASN`                | Local autonomous system number. Required when `enabled` is true; must be a valid ASN (1..4294967295).                                 | `int`      | `0`     |
 | `bgp.neighbors`               | BGP neighbors to peer with.                                                                                                           | `[]object` | `[]`    |
 | `bgp.neighbors[i].address`    | Neighbor IP address.                                                                                                                  | `string`   | `""`    |
-| `bgp.neighbors[i].remoteASN`  | Remote autonomous system number of the neighbor.                                                                                      | `int`      | `0`     |
+| `bgp.neighbors[i].remoteASN`  | Remote autonomous system number of the neighbor. Must be a valid ASN (1..4294967295).                                                 | `int`      | `0`     |
 
 
 ### Common parameters

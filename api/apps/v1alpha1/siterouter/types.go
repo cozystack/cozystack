@@ -53,7 +53,9 @@ type BGP struct {
 	// Enable BGP peering.
 	// +kubebuilder:default:=false
 	Enabled bool `json:"enabled"`
-	// Local autonomous system number.
+	// Local autonomous system number. Required when `enabled` is true; must be a valid ASN (1..4294967295).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=4.294967295e+09
 	LocalASN int `json:"localASN,omitempty"`
 	// BGP neighbors to peer with.
 	Neighbors []BGPNeighbor `json:"neighbors,omitempty"`
@@ -62,7 +64,9 @@ type BGP struct {
 type BGPNeighbor struct {
 	// Neighbor IP address.
 	Address string `json:"address"`
-	// Remote autonomous system number of the neighbor.
+	// Remote autonomous system number of the neighbor. Must be a valid ASN (1..4294967295).
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=4.294967295e+09
 	RemoteASN int `json:"remoteASN"`
 }
 

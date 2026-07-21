@@ -482,6 +482,39 @@ func TestReconcile_MACDiscoveryFallsBackPositional(t *testing.T) {
 	}
 }
 
+// TestReconcile_BGPEnabledWithoutValidASN_SkipsBGP encodes the R5 defensive
+// guard: bgp.enabled with a missing/zero localASN must NOT render
+// `protocols bgp system-as 0`; the whole BGP subtree is skipped. A neighbor with
+// an out-of-range remoteASN is likewise dropped rather than emitting
+// `remote-as 0`.
+func TestReconcile_BGPEnabledWithoutValidASN_SkipsBGP(t *testing.T) {
+	values := routedValues()
+	values["bgp"] = map[string]interface{}{
+		"enabled": true, // no localASN -> intField yields 0
+		"neighbors": []interface{}{
+			map[string]interface{}{"address": "203.0.113.1", "remoteASN": 65000},
+		},
+	}
+	fakeV := &fakeVyOS{
+		retrieveResult:  json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`),
+		ethObservations: []vyos.EthernetObservation{{Device: "eth0", MAC: "52:54:00:00:00:01"}},
+	}
+	r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", values, "10.244.0.5")...)
+
+	reconcileInstance(t, r, "demo")
+
+	ops := fakeV.lastOps()
+	if len(ops) == 0 {
+		t.Fatalf("expected the resolved config to be pushed, got no Configure ops")
+	}
+	if opsHave(ops, "protocols/bgp/system-as", "") {
+		t.Errorf("BGP must be skipped (no system-as) when enabled without a valid localASN, ops: %+v", ops)
+	}
+	if opsHave(ops, "protocols/bgp/neighbor/203.0.113.1/remote-as", "") {
+		t.Errorf("no BGP neighbor should be rendered when localASN is invalid, ops: %+v", ops)
+	}
+}
+
 // TestReconcile_PSKMissingRequeues encodes T06 risk "PSK secret race: ensure the
 // PSK Secret exists before the first Configure; requeue if not yet present"
 // (T12 "PSK-missing requeue"). With no PSK Secret the controller must NOT push a
