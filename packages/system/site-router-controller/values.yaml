@@ -1,0 +1,20 @@
+siteRouterController:
+  image: "ghcr.io/cozystack/cozystack/site-router-controller:v0.0.0"
+  # Single replica: the controller is leader-elected, so a second replica would
+  # only ever stand by.
+  replicas: 1
+  debug: false
+  # managementCidr MUST match the site-router chart's managementCIDR value. Both
+  # default to the cluster pod CIDR: the chart seeds the VyOS first-boot
+  # management firewall from its value and the controller re-stamps the same rule
+  # over the VyOS API from this one. A drift locks the controller out of the
+  # router. Set to "" only together with allowOpenManagement=true (test only).
+  managementCidr: "10.244.0.0/16"
+  allowOpenManagement: false
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
