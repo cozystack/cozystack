@@ -175,8 +175,11 @@ jobs:
             // base-repo PR labels drive the full-e2e override. Deriving these
             // from `git diff` on the fork-controlled merge ref would let a fork
             // shape the diff so TIA selects nothing and e2e is skipped — the
-            // same class of bypass #3257 closes. select-e2e.sh fails safe to the
-            // full suite on any unrecognised path, so this can only narrow.
+            // same class of bypass #3257 closes. Note select-e2e.sh escalates
+            // to the full suite for an unrecognised path INSIDE packages/, but
+            // silently selects nothing for a path it does not recognise at all
+            // (e.g. hack/*.mk) — a pre-existing fail-open shared with the
+            // in-tree lane, tracked in #3392.
             // Both sides of a rename go to TIA too: the old path is a removal
             // the selector must see (a moved packages/<app>/… still affects
             // that app's suite). Extra paths can only widen the selection.
@@ -445,8 +448,10 @@ jobs:
       # affects. The changed-file list is resolve's TRUSTED base-repo listFiles
       # (base64 through the job output), NOT a git diff on the fork-controlled
       # merge ref — so a fork cannot shape the diff to make TIA select nothing.
-      # select-e2e.sh escalates to the full suite on any unrecognised path, so
-      # this only narrows. Skipped (→ full suite below) on the full-e2e label.
+      # select-e2e.sh escalates to the full suite for an unrecognised path
+      # inside packages/; a path it does not recognise at all selects nothing
+      # and the run below is skipped (#3392 — same in the in-tree lane).
+      # Skipped (→ full suite below) on the full-e2e label.
       - name: Select E2E tests
         id: select
         if: ${{ needs.resolve.outputs.full_e2e != 'true' }}
