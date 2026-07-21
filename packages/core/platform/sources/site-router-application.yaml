@@ -20,8 +20,9 @@ spec:
         - cozystack.kubevirt-cdi
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
-        # TODO(T05): add cozystack.site-router-controller once that source exists
-        # so the controller is installed before SiteRouter instances reconcile.
+        # site-router-controller mediates kube-ovn routing/port-security and pushes
+        # VyOS config; installed before SiteRouter instances so they reconcile.
+        - cozystack.site-router-controller
       libraries:
         - name: cozy-lib
           path: library/cozy-lib
