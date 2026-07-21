@@ -8,7 +8,10 @@ siteRouterController:
   # default to the cluster pod CIDR: the chart seeds the VyOS first-boot
   # management firewall from its value and the controller re-stamps the same rule
   # over the VyOS API from this one. A drift locks the controller out of the
-  # router. Set to "" only together with allowOpenManagement=true (test only).
+  # router. The default below is the kube-ovn default pod CIDR; on a cluster with
+  # a non-default networking.podCIDR, set this (and the app chart's
+  # managementCIDR) to that pod CIDR or the controller source is firewalled off.
+  # Set to "" only together with allowOpenManagement=true (test only).
   managementCidr: "10.244.0.0/16"
   allowOpenManagement: false
   resources:

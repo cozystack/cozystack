@@ -38,7 +38,7 @@ type ConfigSpec struct {
 	// Boot-disk image source for the router VM.
 	// +kubebuilder:default:={}
 	Image Image `json:"image"`
-	// Source CIDR allowed to reach the VyOS management API (SSH 22, HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16) and must be kept consistent. An empty value requires `allowOpenManagement=true` (fail-closed).
+	// Source CIDR allowed to reach the VyOS management API (SSH 22, HTTPS 443) through the first-boot firewall. This value and the controller's --management-cidr flag (T05/T06) must agree: both default to the cluster pod CIDR (10.244.0.0/16, the kube-ovn default) and must be kept consistent. On a cluster with a non-default `networking.podCIDR`, set this (and the controller's managementCidr) to that pod CIDR, or the firewall will reject the real controller source. An empty value requires `allowOpenManagement=true` (fail-closed).
 	// +kubebuilder:default:="10.244.0.0/16"
 	ManagementCIDR string `json:"managementCIDR"`
 	// Permit an empty `managementCIDR`, leaving the VyOS management API unrestricted (no first-boot firewall). Fail-closed by default: an empty `managementCIDR` with this false aborts rendering.
