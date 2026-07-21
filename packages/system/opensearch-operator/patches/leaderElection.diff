@@ -1,23 +1,34 @@
 diff --git a/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml b/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
 --- a/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
 +++ b/charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml
-@@ -5,7 +5,14 @@
+@@ -5,7 +5,25 @@ metadata:
      control-plane: controller-manager
    name: {{ include "opensearch-operator.fullname" . }}-controller-manager
  spec:
 -  replicas: 1
 +  replicas: {{ .Values.manager.replicaCount | default 1 }}
 +  {{- if le (int (.Values.manager.replicaCount | default 1)) 1 }}
-+  # On a single replica a RollingUpdate briefly runs two managers (maxSurge) during
-+  # an upgrade; with leader election gated off they would both reconcile without lease
-+  # coordination. Recreate closes that window at zero availability cost on one replica.
++  # Leader election is gated off on a single replica, so a rollout should not run two
++  # managers side by side. maxSurge: 0 caps total pods at replicas, so the old manager is
++  # scaled down before the new one is scaled up (maxUnavailable: 1 permits the gap),
++  # unlike the default 25% surge which starts a second manager while the first is fully
++  # live. This is not Recreate's exclusivity: the old manager may still be draining
++  # in-flight reconciles (up to terminationGracePeriodSeconds) as the new one starts.
++  # Recreate cannot be used here: under server-side apply (helm-controller's default) the
++  # apiserver-defaulted rollingUpdate block on an existing Deployment is not owned by the
++  # helm-controller field manager, so switching type to Recreate does not clear it and the
++  # merged object is rejected as invalid ("spec.strategy.rollingUpdate: Forbidden").
++  # Multi-replica installs keep the default (25%) with leader election on.
 +  strategy:
-+    type: Recreate
++    type: RollingUpdate
++    rollingUpdate:
++      maxSurge: 0
++      maxUnavailable: 1
 +  {{- end }}
    selector:
      matchLabels:
        control-plane: controller-manager
-@@ -49,7 +56,9 @@
+@@ -49,7 +67,9 @@ spec:
        - args:
          - --health-probe-bind-address=:8081
          - --metrics-bind-address=127.0.0.1:8080
