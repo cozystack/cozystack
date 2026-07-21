@@ -167,3 +167,20 @@ images:
       version: "3.21"
     architecture: amd64
     description: "Alpine Linux 3.21 cloud image (cloud-init)"
+  ## VyOS 1.5-rolling router appliance for the site-router app (NoCloud cloud-init + HTTPS API).
+  ## DISABLED BY DEFAULT (commented out) on purpose: this chart renders every entry in this list
+  ## unconditionally as a CDI DataVolume HTTP import, and the URL below is a cozystack-owned
+  ## PLACEHOLDER that does not exist yet — leaving it live would create a perpetually-failing
+  ## import for anyone who opts into this golden-image collection. See the provenance record at
+  ## packages/apps/site-router/docs/image-lifecycle.md.
+  ## TODO(site-router,T14): publish the cozystack-owned VyOS 1.5-rolling qcow2 (reproducible
+  ## in-repo build), then uncomment this entry and pin the exact snapshot URL + @sha256 digest.
+  # - name: vyos-router
+  #   url: https://github.com/cozystack/cozystack/releases/download/vyos-router-1.5-rolling/vyos-router-1.5-rolling-amd64.qcow2
+  #   storage: 5Gi
+  #   os:
+  #     family: Linux
+  #     name: VyOS
+  #     version: "1.5-rolling"
+  #   architecture: amd64
+  #   description: "VyOS 1.5-rolling router appliance (NoCloud cloud-init + HTTPS API) for site-router"
