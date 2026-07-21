@@ -218,9 +218,18 @@ const (
 	// 1320 - 40 = 1280 (the design default clamp).
 	MSSClampOverhead = 40
 
-	// TunnelIngressRuleSet is the name of the platform-owned firewall
-	// rule set that guards traffic arriving on the tunnel device.
+	// TunnelIngressRuleSet is the name of the platform-owned firewall rule set
+	// that holds the tunnel-ingress source allow-list. Post-M2 redesign it is
+	// reached only via a `firewall forward` ipsec-match jump (renderForwardFilter),
+	// never a per-interface inbound binding. The name/path is unchanged so the
+	// controller's confirmSourceFilterActive Retrieve stays valid.
 	TunnelIngressRuleSet = "TUNNEL-INGRESS"
+
+	// tunnelMgmtDropRule is the `firewall input` rule number of the Boundary-A
+	// drop (T08 §4): IPsec-decrypted traffic addressed to the guest's own
+	// management ports is dropped before any accept rule (rule 1 evaluates
+	// first). Unexported — only the render and its delete-then-set reference it.
+	tunnelMgmtDropRule = "1"
 )
 
 // Render returns the full set of VyOS operations needed to realise the
@@ -243,8 +252,10 @@ func Render(in Inputs) []vyos.Operation {
 	ops = append(ops, renderRemovedInterfaceCleanup(in)...)
 	ops = append(ops, renderInterfaces(in)...)
 	ops = append(ops, renderManagementFirewall(in)...)
+	ops = append(ops, renderTunnelManagementDrop(in)...)
 	ops = append(ops, renderMSSClamp(in)...)
 	ops = append(ops, renderTunnelIngressFilter(in)...)
+	ops = append(ops, renderForwardFilter(in)...)
 	ops = append(ops, renderStaticRoutes(in)...)
 	ops = append(ops, renderIPSec(in)...)
 	ops = append(ops, renderBGP(in)...)
@@ -286,24 +297,37 @@ func deleteManagedSubtrees(in Inputs) []vyos.Operation {
 	// ManagementCIDR (`--allow-open-management` test path), the renderer
 	// emits no firewall rules — deleting the chain would silently wipe
 	// any rules an operator added manually. Skip the delete in that case.
+	// firewall/input is controller-owned when the management ACL (ManagementCIDR)
+	// OR the Boundary-A tunnel-management drop (TunnelDevice) is stamped. With
+	// both absent the chain is left alone so operator-added rules survive a no-op
+	// Configure. When the management ACL is present the whole chain is
+	// deleted+rebuilt (the Boundary-A rule is re-added by renderTunnelManagementDrop);
+	// when only the Boundary-A drop is present its single rule is cleaned up on
+	// its own so a config that later drops the tunnel does not strand it.
 	if in.ManagementCIDR != "" {
 		ops = append(ops,
 			vyos.Operation{Op: vyos.OpDelete, Path: []string{"firewall", "input"}},
 		)
+	} else if in.TunnelDevice != "" {
+		ops = append(ops,
+			vyos.Operation{Op: vyos.OpDelete, Path: inputFilterPath("rule", tunnelMgmtDropRule)},
+		)
 	}
 
-	// Net-new domain: clear the platform-owned tunnel-ingress rule set and
-	// its interface binding before re-rendering, so a shrunk RemoteCIDRs
-	// list does not leave stale accept rules behind (delete-then-set). Only
-	// fired when a tunnel device is resolved (the feature is otherwise off).
+	// Net-new platform-owned domains: clear the tunnel-ingress source allow-list
+	// (the named rule set) and the whole guest forward-chain filter before
+	// re-rendering, so a shrunk RemoteCIDRs list leaves no stale accept rule and
+	// no stale forward jump (delete-then-set). Only fired when a tunnel device is
+	// resolved (the feature is otherwise off). The M2 pod-NIC-inbound binding is
+	// gone — the guard is now a `firewall forward` ipsec-match jump, so there is
+	// no per-interface binding to delete.
 	//
-	// TODO(T06): validate against VyOS 1.5-rolling nftables — firewall ipv4
-	// name / forward filter inbound-interface jump binding; paths provisional
-	// until live push.
+	// TODO(T13): validate against the shipped VyOS 1.5 image — see the
+	// consolidated syntax note on forwardFilterPath.
 	if in.TunnelDevice != "" {
 		ops = append(ops,
 			vyos.Operation{Op: vyos.OpDelete, Path: []string{"firewall", "name", TunnelIngressRuleSet}},
-			vyos.Operation{Op: vyos.OpDelete, Path: []string{"interfaces", "ethernet", in.TunnelDevice, "firewall", "in", "name"}},
+			vyos.Operation{Op: vyos.OpDelete, Path: []string{"firewall", "forward"}},
 		)
 	}
 
@@ -548,10 +572,12 @@ func renderBGPFirewallAccept(in Inputs) []vyos.Operation {
 // --- Net-new Phase-1 render domains -------------------------------------
 //
 // The renderers below implement Phase-1 requirements absent from the
-// upstream VyOS-router reference implementation (T02). Each isolates the
-// VyOS-version-specific leaf path or binding in a single helper (mssClampOp;
-// tunnelIngressPath / tunnelIngressBindingOp; the force-encapsulation leaf
-// lives in renderIPSec) so the syntax can be swapped in one place once the
+// upstream VyOS-router reference implementation (T02) plus the T08 guest
+// security guards. Each isolates the VyOS-version-specific leaf path in a
+// single helper (mssClampOp; tunnelIngressPath for the source allow-list;
+// forwardFilterPath / inputFilterPath for the forward default-deny, the
+// ipsec-match jump and the Boundary-A management drop; the force-encapsulation
+// leaf lives in renderIPSec) so the syntax can be swapped in one place once the
 // live push validates it against the shipped image.
 
 // renderMSSClamp emits a TCP MSS clamp on the resolved tunnel device,
@@ -583,38 +609,38 @@ func mssClampOp(dev, clamp string) vyos.Operation {
 	return set([]string{"firewall", "options", "interface", dev, "adjust-mss"}, clamp)
 }
 
-// renderTunnelIngressFilter renders the platform-owned guest
-// tunnel-ingress source allow-list: established/related return traffic is
-// accepted (rule 5), each declared remote CIDR is accepted by source
-// address (rules 10, 20, …), and everything else arriving on the tunnel
-// device is dropped by the rule-set default-action. The controller must
-// confirm this guard active before flipping the instance Ready (T08).
+// renderTunnelIngressFilter renders the platform-owned tunnel-ingress source
+// allow-list into the named rule set TUNNEL-INGRESS: established/related return
+// traffic is accepted (rule 5), each declared remote CIDR is accepted by source
+// address (rules 10, 20, …), and everything else is dropped by the rule-set
+// default-action. The rule set only takes effect via renderForwardFilter's
+// ipsec-match jump — it is NOT bound to any interface (see the M2 redesign
+// note there). The controller confirms this named set is live before flipping
+// the instance Ready (T08); its Retrieve path is TUNNEL-INGRESS, unchanged.
 //
-// Requires a resolved TunnelDevice; without one there is nothing to bind to,
-// so the filter is skipped. An empty RemoteCIDRs list is deliberately NOT an
-// early return: deleteManagedSubtrees has already removed the old ruleset and
-// its interface binding, so returning nothing here would leave forwarded
-// traffic unfiltered (fail-OPEN). Instead the established/related accept, the
-// default-action drop and the interface binding are still emitted — a resolved
-// tunnel device with no declared remote subnets fails CLOSED (drop everything
-// except return traffic) rather than open.
+// Requires a resolved TunnelDevice; without one the feature is off. An empty
+// RemoteCIDRs list is deliberately NOT an early return: deleteManagedSubtrees
+// has already removed the old rule set, so returning nothing would leave the
+// forward jump pointing at an empty target (fail-OPEN — decrypted traffic would
+// fall through). Instead the established/related accept and the default-action
+// drop are still emitted — a resolved tunnel with no declared remotes fails
+// CLOSED (drop all decrypted traffic except return) rather than open.
 func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 	if in.TunnelDevice == "" {
 		return nil
 	}
 
-	ops := make([]vyos.Operation, 0, len(in.RemoteCIDRs)*2+5)
+	ops := make([]vyos.Operation, 0, len(in.RemoteCIDRs)*2+4)
 
-	// Rule 5: accept established/related return traffic before any source
-	// match (mirrors the management-firewall chain).
+	// Rule 5: accept established/related return traffic before any source match.
 	ops = append(ops,
 		set(tunnelIngressPath("rule", "5", "action"), "accept"),
 		set(tunnelIngressPath("rule", "5", "state", "established"), "enable"),
 		set(tunnelIngressPath("rule", "5", "state", "related"), "enable"),
 	)
 
-	// One source-restricted accept per declared remote CIDR, numbered from
-	// 10 with step 10 (gaps leave room for manual debugging interventions).
+	// One source-restricted accept per declared remote CIDR, numbered from 10
+	// with step 10 (gaps leave room for manual debugging interventions).
 	rule := 10
 	for _, cidr := range in.RemoteCIDRs {
 		n := strconv.Itoa(rule)
@@ -626,32 +652,110 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 	}
 
 	// Drop everything sourced outside the declared remote subnets.
+	//
+	// TODO(T13): the source allow-list accepts decrypted traffic by SOURCE only.
+	// The T13 negative-security suite must prove that decrypted traffic with a
+	// VALID remote source but a non-tenant / world DESTINATION is still dropped —
+	// a chain accept here may terminate traversal and let renderForwardFilter's
+	// §3 default-deny be bypassed by a good-source packet. If T13 shows that, the
+	// fix is a destination constraint on this rule set (accept source ∈
+	// remoteCIDRs AND dest ∈ the tenant network). Do not pre-solve it here.
 	ops = append(ops, set(tunnelIngressPath("default-action"), "drop"))
-
-	// Bind the rule set to inbound traffic on the resolved tunnel device.
-	ops = append(ops, tunnelIngressBindingOp(in.TunnelDevice))
 
 	return ops
 }
 
-// tunnelIngressPath is the single place that emits the version-specific
-// base path for the tunnel-ingress rule set.
+// renderForwardFilter renders the guest forward-chain filter — the M2 redesign
+// of how the tunnel-ingress source allow-list is applied, plus the §3
+// default-deny. The old design bound TUNNEL-INGRESS to the pod-NIC INBOUND hook
+// (`interfaces ethernet <dev> firewall in name`), which dropped locally-
+// originated tenant→remote egress before IPsec: a cluster source (e.g.
+// 10.244.x.x) is never a member of remoteCIDRs, so the source allow-list's
+// default-drop black-holed it. The redesign filters ONLY IPsec-decrypted
+// ingress:
 //
-// TODO(T06): validate against VyOS 1.5-rolling nftables — `firewall ipv4
-// name <NAME> rule ...`; path provisional until live push.
+//   - default-action drop — routed mode advertises specific remote networks and
+//     never a default route, so forwarding is denied by default (§3 tunnel→world
+//     default-deny); only the recognised flows below pass;
+//   - rule 5 accepts established/related return traffic;
+//   - rule 10 matches non-IPsec traffic (`ipsec match-none`) and accepts it, so
+//     locally-originated (plaintext, pre-IPsec) tenant→remote egress is NOT
+//     subject to the source-filter drop;
+//   - rule 20 matches IPsec-decrypted traffic (`ipsec match-ipsec`) and jumps to
+//     TUNNEL-INGRESS, so the source allow-list + its default-drop apply to
+//     decrypted-from-tunnel traffic ONLY.
+//
+// Requires a resolved TunnelDevice; the filter is version-specific and shares
+// the forwardFilterPath TODO(T13).
+func renderForwardFilter(in Inputs) []vyos.Operation {
+	if in.TunnelDevice == "" {
+		return nil
+	}
+
+	return []vyos.Operation{
+		// §3 default-deny tunnel→world.
+		set(forwardFilterPath("default-action"), "drop"),
+		// Established/related return traffic (both directions).
+		set(forwardFilterPath("rule", "5", "action"), "accept"),
+		set(forwardFilterPath("rule", "5", "state", "established"), "enable"),
+		set(forwardFilterPath("rule", "5", "state", "related"), "enable"),
+		// Non-IPsec (local egress) — accepted, NOT subject to the source-filter
+		// drop. This is the M2 fix.
+		set(forwardFilterPath("rule", "10", "ipsec", "match-none"), ""),
+		set(forwardFilterPath("rule", "10", "action"), "accept"),
+		// IPsec-decrypted ingress — source-filtered via the named rule set.
+		set(forwardFilterPath("rule", "20", "ipsec", "match-ipsec"), ""),
+		set(forwardFilterPath("rule", "20", "action"), "jump"),
+		set(forwardFilterPath("rule", "20", "jump-target"), TunnelIngressRuleSet),
+	}
+}
+
+// renderTunnelManagementDrop renders Boundary A (T08 §4): a local-input drop of
+// the management ports (SSH 22, HTTPS API 443) for IPsec-decrypted traffic. A
+// packet decrypted by VyOS and addressed to the guest itself does not cross the
+// pod veth where Cilium enforces, so the guest must drop it. Matching the
+// IPsec-decrypted property (rather than an interface) covers every tunnel
+// interface, including any created dynamically, with a single rule. It is gated
+// on a resolved TunnelDevice and is emitted regardless of ManagementCIDR — a
+// decrypted packet to the API must be dropped even on the open-management path.
+func renderTunnelManagementDrop(in Inputs) []vyos.Operation {
+	if in.TunnelDevice == "" {
+		return nil
+	}
+
+	return []vyos.Operation{
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "ipsec", "match-ipsec"), ""),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "destination", "port"), "22,443"),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "action"), "drop"),
+	}
+}
+
+// tunnelIngressPath / forwardFilterPath / inputFilterPath are the single places
+// that emit the version-specific base paths for, respectively, the named source
+// allow-list rule set, the guest forward-chain filter (§3 default-deny + the
+// ipsec-match jump), and the local-input chain (Boundary A + the management
+// ACL).
+//
+// TODO(T13): CONSOLIDATED VyOS 1.5 syntax validation. The current paths use the
+// flat 1.4-style family (`firewall name <NAME>`, `firewall forward`, `firewall
+// input`) and the ipsec matchers (`ipsec match-ipsec` / `ipsec match-none`) as
+// value-less leaves. VyOS 1.5-rolling moved these under
+// `firewall ipv4 {name <NAME>,forward filter,input filter}` and may spell the
+// ipsec matcher / jump differently. Validate the whole family live against the
+// shipped image and flip all three helpers (plus mssClampOp and the
+// force-encapsulation leaf) together — the controller's tunnelIngressRulesetPath
+// must be flipped in lockstep. See also the destination-constraint TODO(T13) on
+// renderTunnelIngressFilter's default-action.
 func tunnelIngressPath(sub ...string) []string {
 	return append([]string{"firewall", "name", TunnelIngressRuleSet}, sub...)
 }
 
-// tunnelIngressBindingOp is the single place that emits the
-// version-specific binding of the rule set to the tunnel device.
-//
-// TODO(T06): validate against VyOS 1.5-rolling nftables — the per-interface
-// `firewall in name` binding was removed; 1.5 filters forwarded traffic via
-// `firewall ipv4 forward filter rule N inbound-interface <dev> action jump
-// jump-target <NAME>`. Binding provisional until live push.
-func tunnelIngressBindingOp(dev string) vyos.Operation {
-	return set([]string{"interfaces", "ethernet", dev, "firewall", "in", "name"}, TunnelIngressRuleSet)
+func forwardFilterPath(sub ...string) []string {
+	return append([]string{"firewall", "forward"}, sub...)
+}
+
+func inputFilterPath(sub ...string) []string {
+	return append([]string{"firewall", "input"}, sub...)
 }
 
 func renderStaticRoutes(in Inputs) []vyos.Operation {

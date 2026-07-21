@@ -16,12 +16,19 @@ limitations under the License.
 
 // These tests encode the Phase-1 net-new render requirements that do not
 // exist in the upstream VyOS-router reference implementation (T02
-// Acceptance). The render logic for MSS clamp, the tunnel-ingress source
-// filter and forced UDP encapsulation is implemented in Phase B — until
-// then those three tests fail on the missing operations.
+// Acceptance): the MSS clamp and forced UDP encapsulation.
+//
+// The tunnel-ingress source filter's tests moved to render_security_test.go,
+// where the T08 redesign is encoded: the guard now filters IPsec-decrypted
+// forward traffic by source (via a `firewall forward` ipsec-match jump), NOT
+// via a pod-NIC-inbound binding — the M2 review flagged the inbound binding as
+// wrong because it dropped locally-originated tenant→remote egress before
+// IPsec. The other guest security guards (forward default-deny tunnel→world,
+// the management-API local-input drop on IPsec-decrypted traffic) live there
+// too.
+//
 // TestRender_NoNATOperations is a standing guard: it validates the routed
-// subset (DECISIONS.md D3) that is already in place in Phase A and
-// therefore passes.
+// subset (DECISIONS.md D3).
 package render_test
 
 import (
@@ -78,92 +85,6 @@ func TestRenderMSSClamp_DefaultsToDesignClamp(t *testing.T) {
 	want := strconv.Itoa(render.DefaultOverlayMTU - render.MSSClampOverhead) // 1280
 	if !containsSet(ops, "firewall/options/interface/eth1/adjust-mss", want) {
 		t.Errorf("expected default adjust-mss=%s (1320-40), ops: %+v", want, ops)
-	}
-}
-
-// TestRenderTunnelIngressFilter_AllowsRemoteCIDRsAndDropsRest encodes T02
-// Acceptance: "tunnel-ingress source filter accepts declared remoteCIDRs
-// and drops others". Established/related is accepted, each remote CIDR is
-// accepted by source address, everything else is dropped by the ruleset
-// default-action, and the ruleset attaches to the resolved TunnelDevice.
-func TestRenderTunnelIngressFilter_AllowsRemoteCIDRsAndDropsRest(t *testing.T) {
-	t.Parallel()
-
-	in := baseInputs()
-	in.TunnelDevice = "eth1"
-	in.RemoteCIDRs = []string{"172.31.0.0/16", "10.10.0.0/16"}
-	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
-
-	ops := render.Render(in)
-
-	rs := "firewall/name/" + render.TunnelIngressRuleSet
-
-	// Everything outside the allow-list is dropped.
-	if !containsSet(ops, rs+"/default-action", "drop") {
-		t.Errorf("expected tunnel-ingress default-action=drop, ops: %+v", ops)
-	}
-
-	// Established/related return traffic is accepted first.
-	if !containsSet(ops, rs+"/rule/5/action", "accept") ||
-		!containsSet(ops, rs+"/rule/5/state/established", "enable") {
-		t.Errorf("expected established/related accept as the first tunnel-ingress rule, ops: %+v", ops)
-	}
-
-	// Each declared remote CIDR is accepted by source address.
-	if !containsSet(ops, rs+"/rule/10/action", "accept") ||
-		!containsSet(ops, rs+"/rule/10/source/address", "172.31.0.0/16") {
-		t.Errorf("expected accept for first remote CIDR 172.31.0.0/16, ops: %+v", ops)
-	}
-
-	if !containsSet(ops, rs+"/rule/20/source/address", "10.10.0.0/16") {
-		t.Errorf("expected accept for second remote CIDR 10.10.0.0/16, ops: %+v", ops)
-	}
-
-	// The ruleset is bound to the caller-resolved tunnel device inbound.
-	if !containsSet(ops, "interfaces/ethernet/eth1/firewall/in/name", render.TunnelIngressRuleSet) {
-		t.Errorf("expected tunnel-ingress ruleset bound to eth1 inbound, ops: %+v", ops)
-	}
-}
-
-// TestRenderTunnelIngressFilter_EmptyRemoteCIDRsFailsClosed proves the
-// fail-closed guarantee: when the tunnel device is resolved but RemoteCIDRs
-// is empty, deleteManagedSubtrees has already removed the old ruleset and its
-// interface binding, so the render MUST still stamp the established/related
-// accept, the default-action drop and the binding. Returning nothing would
-// leave forwarded traffic unfiltered (fail-open).
-func TestRenderTunnelIngressFilter_EmptyRemoteCIDRsFailsClosed(t *testing.T) {
-	t.Parallel()
-
-	in := baseInputs()
-	in.TunnelDevice = "eth1"
-	in.RemoteCIDRs = nil // no declared remote subnets
-	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
-
-	ops := render.Render(in)
-
-	rs := "firewall/name/" + render.TunnelIngressRuleSet
-
-	// The ruleset drops everything not explicitly accepted.
-	if !containsSet(ops, rs+"/default-action", "drop") {
-		t.Errorf("expected fail-closed default-action=drop with empty RemoteCIDRs, ops: %+v", ops)
-	}
-
-	// Established/related return traffic is still accepted so the router does
-	// not black-hole its own reply packets.
-	if !containsSet(ops, rs+"/rule/5/action", "accept") ||
-		!containsSet(ops, rs+"/rule/5/state/established", "enable") {
-		t.Errorf("expected established/related accept even with empty RemoteCIDRs, ops: %+v", ops)
-	}
-
-	// No per-CIDR accept rule exists (there are no CIDRs to allow).
-	if containsSet(ops, rs+"/rule/10/action", "accept") {
-		t.Errorf("expected no source-accept rule with empty RemoteCIDRs, ops: %+v", ops)
-	}
-
-	// The ruleset is still bound to the resolved tunnel device inbound, so the
-	// drop actually takes effect.
-	if !containsSet(ops, "interfaces/ethernet/eth1/firewall/in/name", render.TunnelIngressRuleSet) {
-		t.Errorf("expected tunnel-ingress ruleset bound to eth1 inbound (fail-closed), ops: %+v", ops)
 	}
 }
 
