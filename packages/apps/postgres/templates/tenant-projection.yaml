@@ -1,0 +1,10 @@
+---
+apiVersion: internal.cozystack.io/v1alpha1
+kind: TenantProjection
+metadata:
+  name: {{ .Release.Name }}-ca
+spec:
+  projections:
+    - type: CACert
+      sourceSecretName: {{ .Release.Name }}-ca
+      sourceKey: ca.crt

@@ -39,6 +39,11 @@ spec:
     include:
       - resourceNames:
           - postgres-{{ .name }}-credentials
+      # The key-free trust anchor the CA-extraction controller publishes. This
+      # is the single, engine-agnostic selector every converged engine shares;
+      # it carries no per-release name templating.
+      - matchLabels:
+          internal.cozystack.io/tenant-ca: "true"
   services:
     exclude: []
     include:
