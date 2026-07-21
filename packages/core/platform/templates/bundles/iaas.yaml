@@ -1,6 +1,14 @@
 {{- if and .Values.bundles.iaas.enabled (not (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic"))) }}
 {{- fail "bundles.iaas.enabled can only be true when bundles.system.variant is 'isp-full' or 'isp-full-generic'" }}
 {{- end }}
+{{- /* Same hole as the paas/naas guards closed: bundles.system.variant keeps its
+       value when bundles.system.enabled is false, so the check above passes on a
+       configuration that skips the system bundle entirely. Every package below
+       depends on its control-plane body — rendering iaas without it leaves all 12
+       Packages in DependenciesNotReady with nothing naming the cause. */ -}}
+{{- if and .Values.bundles.iaas.enabled (not .Values.bundles.system.enabled) }}
+{{- fail "bundles.iaas.enabled requires bundles.system.enabled: the iaas bundle depends on packages emitted by the system bundle (cozystack.networking, cozystack-engine, cert-manager, prometheus-operator-crds and cozystack-basics). Enable the system bundle with bundles.system.variant: isp-full or isp-full-generic." }}
+{{- end }}
 {{- if and .Values.bundles.iaas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic")) }}
 {{- $kubevirtValues := dict -}}
 {{- if .Values.resources.cpuAllocationRatio -}}
@@ -155,7 +163,6 @@
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-core" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-cp-kamaji" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.capi-provider-infra-kubevirt" $) }}
-{{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
 {{include "cozystack.platform.package" (list "cozystack.kubernetes-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.virtualprivatecloud-application" "kubevirt" $) }}
 {{include "cozystack.platform.package" (list "cozystack.vm-disk-application" "kubevirt" $) }}
