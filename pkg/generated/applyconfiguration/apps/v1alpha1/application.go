@@ -27,6 +27,8 @@ import (
 
 // ApplicationApplyConfiguration represents a declarative configuration of the Application type for use
 // with apply.
+//
+// Application is an example type with a spec and a status.
 type ApplicationApplyConfiguration struct {
 	v1.TypeMetaApplyConfiguration    `json:",inline"`
 	*v1.ObjectMetaApplyConfiguration `json:"metadata,omitempty"`
@@ -45,6 +47,7 @@ func Application(name, namespace string) *ApplicationApplyConfiguration {
 	b.WithAPIVersion("apps.cozystack.io/v1alpha1")
 	return b
 }
+
 func (b ApplicationApplyConfiguration) IsApplyConfiguration() {}
 
 // WithKind sets the Kind field in the declarative configuration to the given value
