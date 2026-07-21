@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
@@ -40,8 +41,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	gatewayv1alpha1 "github.com/cozystack/cozystack/api/gateway/v1alpha1"
+	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozystackiov1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/internal/controller"
+	"github.com/cozystack/cozystack/internal/controller/cacert"
 	"github.com/cozystack/cozystack/internal/controller/tenantgateway"
 	"github.com/cozystack/cozystack/internal/controller/tenantquota"
 	"github.com/cozystack/cozystack/internal/controller/wildcardsecret"
@@ -65,6 +68,7 @@ func init() {
 
 	utilruntime.Must(cozystackiov1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(internalv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayv1.Install(scheme))
 	utilruntime.Must(gatewayv1alpha2.Install(scheme))
 	utilruntime.Must(cmv1.AddToScheme(scheme))
@@ -177,11 +181,20 @@ func main() {
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "19a0338c.cozystack.io",
-		// Scope the Secret informer so the WildcardSecret reconciler's
+		// Scope the shared Secret informer so the WildcardSecret reconciler's
 		// cluster-wide Secret watch does not cache every Secret (and its key
 		// material) in memory. Only managed wildcard replicas and the values
-		// channel are cached; no other reconciler in this manager reads
-		// Secrets via the cache. See wildcardsecret.SecretCacheByObject.
+		// channel are cached; no other reconciler reads Secrets through THIS
+		// (the manager's) typed Secret cache. See wildcardsecret.SecretCacheByObject.
+		//
+		// The CA-extraction reconciler does NOT use this cache at all — neither its
+		// typed Secret informer nor a metadata one. A metadata informer for
+		// v1/Secret would route to THIS same per-GVK cache and inherit its
+		// wildcard-replica label selector, so its source watch would never fire for
+		// an unlabelled CA source. It therefore owns a SEPARATE metadata-only cache
+		// (caSecretCluster, below) and reads the one source it projects through the
+		// uncached APIReader. So this manager-level Secret scoping is
+		// wildcardsecret's alone.
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				&corev1.Secret{}: wildcardsecret.SecretCacheByObject(),
@@ -261,6 +274,38 @@ func main() {
 		Recorder: mgr.GetEventRecorderFor("wildcardsecret"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "WildcardSecret")
+		os.Exit(1)
+	}
+
+	// The CA-extraction reconciler watches its source Secrets as metadata only, so
+	// no private key ever enters a cache. It cannot watch them on the manager's
+	// cache: that cache's Secret informer is label-scoped to WildcardSecret's
+	// replicas (above), a metadata informer for the same v1/Secret GVK routes to
+	// that same scoped informer and inherits the selector, and the watch would
+	// then silently never fire for an unlabelled CA source — the projection would
+	// appear only on the slow resync. So it owns a SEPARATE cache, metadata-only
+	// and unscoped, holding Secret metadata stubs cluster-wide (no key material).
+	// It is a cluster.Cluster so mgr.Add registers it in the manager's
+	// cache-runnable group — started, waited-for-sync before the controllers run,
+	// and stopped on shutdown, exactly like the shared cache.
+	caSecretCluster, err := cluster.New(config, func(o *cluster.Options) {
+		o.Scheme = scheme
+	})
+	if err != nil {
+		setupLog.Error(err, "unable to build the CA source metadata cache")
+		os.Exit(1)
+	}
+	if err = mgr.Add(caSecretCluster); err != nil {
+		setupLog.Error(err, "unable to add the CA source metadata cache to the manager")
+		os.Exit(1)
+	}
+
+	if err = (&cacert.Reconciler{
+		Client:   mgr.GetClient(),
+		Reader:   mgr.GetAPIReader(),
+		Recorder: mgr.GetEventRecorderFor("cacert-controller"),
+	}).SetupWithManager(mgr, caSecretCluster.GetCache()); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "CACert")
 		os.Exit(1)
 	}
 
