@@ -44,6 +44,7 @@ type TenantProjectionEntry struct {
 	// key-free certificate is ever published, so naming a Secret that
 	// also carries private key material does not widen tenant visibility.
 	// +required
+	// +kubebuilder:validation:MinLength=1
 	SourceSecretName string `json:"sourceSecretName"`
 
 	// SourceKey is the key inside the source Secret holding the CA

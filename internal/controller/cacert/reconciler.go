@@ -309,6 +309,7 @@ const (
 // now visible with `kubectl get tproj`.
 const (
 	reasonProjected             = "Projected"
+	reasonSourceInvalid         = "SourceInvalid"
 	reasonSourceNotFound        = "SourceNotFound"
 	reasonSourceNotReady        = "SourceNotReady"
 	reasonSourceRejected        = "SourceRejected"
@@ -543,6 +544,18 @@ func (r *Reconciler) reconcileCACert(ctx context.Context, tp *internalv1alpha1.T
 	key := strings.TrimSpace(entry.SourceKey)
 	if key == "" {
 		key = caCertKey
+	}
+
+	if sourceName == "" {
+		// The CRD pins sourceSecretName to MinLength=1, so a live apiserver rejects
+		// this at admission; an object admitted by an older CRD can still reach here.
+		// Resolve it to a condition rather than a Get: an empty name makes the
+		// apiserver return "resource name may not be empty", which is not NotFound,
+		// so it would escape the not-found branch below and wedge the reconcile on
+		// backoff with no status ever written — the silent retry the sentinel exists
+		// to make visible.
+		return notReady(reasonSourceInvalid,
+			"the projection declares an empty sourceSecretName; no source Secret can be resolved"), nil
 	}
 
 	secret := &corev1.Secret{}

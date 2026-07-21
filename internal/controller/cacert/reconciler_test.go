@@ -46,6 +46,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	internalv1alpha1 "github.com/cozystack/cozystack/api/internalapi/v1alpha1"
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -421,6 +422,49 @@ func TestReconcile_SourceNotReady_EmptyValue(t *testing.T) {
 		t.Errorf("no projection may be published before the source carries its certificate")
 	}
 	assertReady(t, c, metav1.ConditionFalse, reasonSourceNotReady)
+}
+
+// TestReconcile_EmptySourceSecretName_ReportsCondition pins that an entry with an
+// empty sourceSecretName resolves to a Ready=False condition, not a returned error.
+// The CRD now forbids the empty string (MinLength=1), but an object admitted by an
+// older CRD can still carry one.
+//
+// The threat is what the apiserver does with a Get for an empty name: it returns
+// "resource name may not be empty", which is NOT NotFound, so without a guard it
+// escapes the not-found branch and is returned from Reconcile — exponential backoff
+// forever, and because the error path returns before any status write, no Ready
+// condition is ever recorded. That is the silent retry the sentinel exists to
+// eliminate. The bare fake client masks it (an empty-name Get returns NotFound), so
+// the test installs a Get interceptor that reproduces the apiserver's BadRequest,
+// making the pre-guard reconcile wedge exactly as production would.
+func TestReconcile_EmptySourceSecretName_ReportsCondition(t *testing.T) {
+	c := fake.NewClientBuilder().
+		WithScheme(newScheme(t)).
+		WithStatusSubresource(&internalv1alpha1.TenantProjection{}).
+		WithObjects(helmRelease(), appDef(), sentinelWithSource("", caCertKey)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if key.Name == "" {
+					// What the real apiserver returns, and what makes the bug bite:
+					// not NotFound, so the not-found branch does not catch it.
+					return apierrors.NewBadRequest("resource name may not be empty")
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+
+	rec := record.NewFakeRecorder(16)
+	_, err := newReconciler(c, rec).Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: testSentinel},
+	})
+	if err != nil {
+		t.Fatalf("an empty sourceSecretName must resolve to a condition, not an error: %v", err)
+	}
+	if _, ok := getSecret(t, c, testProjection); ok {
+		t.Errorf("no projection may be published for an empty sourceSecretName")
+	}
+	assertReady(t, c, metav1.ConditionFalse, reasonSourceInvalid)
 }
 
 // TestReconcile_NoReleaseLabel pins that a sentinel Flux did not render — one

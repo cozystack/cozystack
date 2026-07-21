@@ -76,6 +76,7 @@ spec:
                         namespace holding the material to project. Only the extracted,
                         key-free certificate is ever published, so naming a Secret that
                         also carries private key material does not widen tenant visibility.
+                      minLength: 1
                       type: string
                     type:
                       description: Type selects what to project. CACert is the only
