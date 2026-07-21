@@ -79,7 +79,12 @@ type ApplicationDefinitionRelease struct {
 	ChartRef *helmv2.CrossNamespaceSourceReference `json:"chartRef"`
 	// Labels for the release
 	Labels map[string]string `json:"labels,omitempty"`
-	// Prefix for the release name
+	// Prefix for the release name. Release names are "<prefix><app name>" and the
+	// tenant CA trust anchor is projected to "<release>.tenant-ca", where the dot
+	// is a separator no release name may contain — so the prefix must be dot-free.
+	// It is restricted to lowercase DNS-1123 characters, which excludes the dot by
+	// construction.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9-]*$`
 	Prefix string `json:"prefix"`
 
 	// WaitStrategy maps to HelmReleaseSpec.WaitStrategy.Name — a deliberate
