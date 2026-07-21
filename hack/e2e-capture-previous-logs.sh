@@ -7,13 +7,13 @@
 # individually time-boxed and every failure is swallowed.
 #
 # Why this exists: when a pod crash-loops, the decisive evidence is almost
-# always in the FIRST container instance -- the interrupted bootstrap, the
-# assertion that killed the process, the config error that made the entrypoint
-# exit. `kubectl logs <pod> -c <container>` only ever shows the CURRENT
-# instance, which for a crash-looping container is the Nth restart: a fresh,
-# uninformative replay of the same startup path. The first instance is reachable
-# only via `--previous`, and once the kubelet garbage-collects that dead
-# container the evidence is gone for good.
+# always in the immediately preceding terminated instance -- the interrupted
+# bootstrap, the assertion that killed the process, the config error that made
+# the entrypoint exit. `kubectl logs <pod> -c <container>` only ever shows the
+# CURRENT instance, which for a crash-looping container is the Nth restart: a
+# fresh, uninformative replay of the same startup path. That instance is
+# reachable only via `--previous`, and once the kubelet garbage-collects that
+# dead container the evidence is gone for good.
 #
 # The Chainsaw suites capture current logs through the built-in `podLogs`
 # collector, which has no `previous` option (chainsaw v0.2.15 PodLogs exposes

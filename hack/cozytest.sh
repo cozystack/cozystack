@@ -100,7 +100,7 @@ _cozy_on_exit() {
     mkdir -p "$_snap" 2>/dev/null || true
     # Previous-instance container logs for anything that crash-looped. `kubectl
     # logs` shows only the current instance, so for a crash-looping pod the
-    # decisive evidence — the first, interrupted run — is reachable only via
+    # decisive evidence — the immediately preceding run — is reachable only via
     # `--previous` and is lost once the kubelet garbage-collects that container.
     # FIRST, ahead of both captures below: it is the cheapest leg and the only
     # one whose subject is perishable. The kubelet retains one dead container

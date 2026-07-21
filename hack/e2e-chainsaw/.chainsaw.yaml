@@ -91,8 +91,8 @@ spec:
           # `kubectl logs` shows only the CURRENT container instance, so for a
           # crash-looping pod the suite's own `podLogs` collector captures the
           # Nth restart — a fresh replay of the same startup path — while the
-          # evidence that explains the failure sits in the FIRST instance,
-          # reachable only via `--previous`. Chainsaw v0.2.15's podLogs
+          # evidence that explains the failure sits in the immediately preceding
+          # instance, reachable only via `--previous`. Chainsaw v0.2.15's podLogs
           # collector has no `previous` option (it exposes container/tail/
           # selector only), so this closes the gap once for every suite here
           # instead of per-suite. crust-gather does archive a previous.log per
