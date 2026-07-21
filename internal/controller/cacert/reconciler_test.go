@@ -539,6 +539,76 @@ func TestReconcile_EntryRemoved_WithdrawsProjection(t *testing.T) {
 	}
 }
 
+// TestReconcile_EntryRemoved_WithdrawsStaleUIDProjection pins that withdrawal
+// recognises a projection this sentinel owns by NAME, not by an exact owner-
+// reference match. Delete-and-recreate an application under the same name leaves a
+// projection carrying this sentinel's name in its owner reference but the PREVIOUS
+// incarnation's UID; if the live sentinel then stops declaring the anchor, an exact
+// UID match would read the retired projection as "not ours" and walk away, leaving
+// it tenant-readable forever — owner-reference GC only fires when the sentinel
+// itself is pruned. Adoption already re-homes such a stale-UID projection, so
+// withdrawal must recognise the same object.
+func TestReconcile_EntryRemoved_WithdrawsStaleUIDProjection(t *testing.T) {
+	stale := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      testProjection,
+			Namespace: testNamespace,
+			Labels:    map[string]string{TenantCALabel: trueValue, ManagedLabel: trueValue},
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: internalv1alpha1.GroupVersion.String(),
+				Kind:       "TenantProjection",
+				Name:       testSentinel,
+				UID:        types.UID("dead0000-0000-0000-0000-000000000000"), // previous incarnation
+				Controller: new(true),
+			}},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{caCertKey: []byte("STALE")},
+	}
+	// The live sentinel no longer declares a CACert projection (a future non-CACert
+	// entry replaced it), so the reconcile takes the withdrawal path.
+	s := sentinel()
+	s.Spec.Projections = nil
+	c := newClient(t, helmRelease(), appDef(), s, stale)
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, testProjection); ok {
+		t.Errorf("a retired anchor owned by a stale sentinel UID must be withdrawn, not left tenant-readable forever")
+	}
+}
+
+// TestReconcile_EntryRemoved_WithdrawsDespiteBlockOwnerDeletionDrift pins that a
+// drift of the owner reference's BlockOwnerDeletion flag — the exact drift the
+// adoption path normalizes — does not defeat withdrawal. An exact owner-reference
+// match reads the drifted projection as "not ours" and no-ops; matching by name
+// withdraws it.
+func TestReconcile_EntryRemoved_WithdrawsDespiteBlockOwnerDeletionDrift(t *testing.T) {
+	c := newClient(t, helmRelease(), appDef(), sentinel(),
+		operatorSecret(testOperatorCA, map[string][]byte{caCertKey: []byte(testCA), caKeyKey: []byte(testKey)}),
+	)
+	mustReconcile(t, c)
+
+	proj := mustProjection(t, c)
+	proj.OwnerReferences[0].BlockOwnerDeletion = new(true)
+	if err := c.Update(context.TODO(), proj); err != nil {
+		t.Fatalf("set BlockOwnerDeletion drift: %v", err)
+	}
+
+	tp := &internalv1alpha1.TenantProjection{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Namespace: testNamespace, Name: testSentinel}, tp); err != nil {
+		t.Fatalf("get sentinel: %v", err)
+	}
+	tp.Spec.Projections = nil
+	if err := c.Update(context.TODO(), tp); err != nil {
+		t.Fatalf("drop the CACert entry: %v", err)
+	}
+	mustReconcile(t, c)
+
+	if _, ok := getSecret(t, c, testProjection); ok {
+		t.Errorf("withdrawal must not be blocked by a BlockOwnerDeletion flag drift on the owner reference")
+	}
+}
+
 // TestReconcile_TwoSentinelsForOneRelease_Refused pins the two-sentinel guard: two
 // sentinels in one namespace carrying the same release label both resolve to the
 // single canonical name. Without the guard, whichever reconciles first publishes an

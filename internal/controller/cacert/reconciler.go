@@ -601,13 +601,22 @@ func (r *Reconciler) reconcileCACert(ctx context.Context, tp *internalv1alpha1.T
 }
 
 // withdrawProjection deletes the canonical trust-anchor Secret when the sentinel
-// no longer declares one, but ONLY when it still carries this sentinel's owner
-// reference. Deleting the whole sentinel is handled by garbage collection through
-// that reference; this covers the narrower case of a sentinel that keeps existing
-// with its CACert declaration removed, which GC never sees. A foreign Secret at the
-// name, or a projection another sentinel owns, is never deleted — the owner-
-// reference check is what keeps the withdrawal from destroying data that is not
-// this sentinel's to withdraw.
+// no longer declares one, but ONLY when the Secret is one this sentinel owns.
+// Deleting the whole sentinel is handled by garbage collection through the owner
+// reference; this covers the narrower case of a sentinel that keeps existing with
+// its CACert declaration removed, which GC never sees. A foreign Secret at the
+// name, or a projection another sentinel owns, is never deleted.
+//
+// Ownership is decided by isOurProjection — the SAME name-match adoption uses —
+// not by an exact owner-reference match. The two must answer "ours?" the same way,
+// and "safe to overwrite" is the stronger claim: a projection this reconcile would
+// adopt and rewrite it must also be willing to withdraw. An exact match is strictly
+// too strict here, and in the wrong direction. It walks away from a projection left
+// by a previous incarnation of the application (right name, this sentinel's name in
+// the owner reference, the PREVIOUS UID) — which adoption re-homes but GC never
+// collects, so the retired anchor would stay tenant-readable forever — and from a
+// projection whose BlockOwnerDeletion flag has drifted, the very drift the adoption
+// path normalizes.
 func (r *Reconciler) withdrawProjection(ctx context.Context, tp *internalv1alpha1.TenantProjection, target string) error {
 	existing := &corev1.Secret{}
 	if err := r.Reader.Get(ctx, types.NamespacedName{Namespace: tp.Namespace, Name: target}, existing); err != nil {
@@ -616,7 +625,7 @@ func (r *Reconciler) withdrawProjection(ctx context.Context, tp *internalv1alpha
 		}
 		return fmt.Errorf("get CA projection %s/%s: %w", tp.Namespace, target, err)
 	}
-	if !hasOwner(existing.OwnerReferences, sentinelOwnerRef(tp)) {
+	if !isOurProjection(existing, tp) {
 		return nil
 	}
 	if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
