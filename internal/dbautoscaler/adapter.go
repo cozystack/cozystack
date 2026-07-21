@@ -60,11 +60,18 @@ type TopologyAdapter interface {
 }
 
 // AdapterFor returns the adapter for a kind, or nil if the engine is not
-// supported for horizontal autoscaling.
+// supported for horizontal autoscaling. Sharded/data-rebalancing engines
+// (ClickHouse, Kafka) have no adapter and so report ScalingActive=False.
 func AdapterFor(kind string) TopologyAdapter {
 	switch kind {
 	case "Postgres":
 		return PostgresAdapter{}
+	case "MariaDB":
+		return MariaDBAdapter{}
+	case "Redis":
+		return RedisAdapter{}
+	case "MongoDB":
+		return MongoDBAdapter{}
 	default:
 		return nil
 	}

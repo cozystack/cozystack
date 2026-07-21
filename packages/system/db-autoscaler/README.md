@@ -2,7 +2,22 @@
 
 Optional platform operator that automatically scales the number of **read replicas** of a managed database in response to load, driven by the `DatabaseHorizontalAutoscaler` (DHA) custom resource (group `autoscaling.cozystack.io/v1alpha1`).
 
-It is the implementation of the [Database Horizontal Autoscaler design proposal](https://github.com/cozystack/community/tree/main/design-proposals/database-horizontal-autoscaling). The MVP ships the PostgreSQL (CloudNativePG) topology adapter; `mariadb`, `redis` and `mongodb` follow.
+It is the implementation of the [Database Horizontal Autoscaler design proposal](https://github.com/cozystack/community/tree/main/design-proposals/database-horizontal-autoscaling).
+
+## Supported engines
+
+Horizontal autoscaling applies to primary-replica engines (read replicas are scaled; the primary is never touched):
+
+| Kind | Topology | Notes |
+|---|---|---|
+| `Postgres` | CloudNativePG, 1 primary + standbys | Validated end-to-end on a live cluster. Quorum floor = `quorum.maxSyncReplicas + 1`. |
+| `MariaDB` | mariadb-operator async replication | Read replicas exist when `replicas > 1`; no sync-replica quorum (floor = 1). |
+| `Redis` | spotahome RedisFailover (Sentinel) | 1 master + read-serving slaves; role label `redisfailovers-role`. |
+| `MongoDB` | Percona replica set (`rs0`) | Scalable only when `sharding: false`; a sharded cluster reports `ScalingActive=False`. Requires the Percona PMM / mongodb_exporter to be enabled (off by default) — without metrics the loop fail-safe freezes rather than scaling blind. |
+
+Engines that require data rebalancing — `ClickHouse`, `Kafka`, and sharded `MongoDB` — are intentionally **not** scalable and report `ScalingActive=False` with a reason.
+
+The `Postgres` adapter's PromQL is calibrated against a live cluster; the `mariadb`/`redis`/`mongodb` expressions are namespace-scoped best-effort and are calibrated on real workloads in follow-ups (the design's Open questions). All queries constrain to the tenant namespace — a tenant can never read another tenant's series.
 
 ## How it works
 
