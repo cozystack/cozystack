@@ -138,7 +138,20 @@ jobs:
             const files = await github.paginate(github.rest.pulls.listFiles, {
               owner, repo, pull_number: Number(prNumber), per_page: 100,
             });
-            const hasNonDocs = files.some(f => !f.filename.startsWith('docs/'));
+            // listFiles is capped at 3000 files. A truncated list could omit the
+            // only non-docs path and green the gate, so fail closed at the cap
+            // rather than rule docs-only on a list we know may be incomplete.
+            if (files.length >= 3000) {
+              await decide('failure', 'PR file list hit the 3000-file API cap — cannot verify docs-only');
+              return;
+            }
+            // A rename reports the NEW path in `filename` and the old one in
+            // `previous_filename`. Checking only `filename` would read a
+            // packages/… -> docs/… rename as docs-only, when it in fact removes
+            // a code path. BOTH sides must be under docs/ to count as docs-only.
+            const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
+            const hasNonDocs = files.some(f =>
+              !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
             if (!hasNonDocs) {
               await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
               return;
@@ -164,7 +177,12 @@ jobs:
             // shape the diff so TIA selects nothing and e2e is skipped — the
             // same class of bypass #3257 closes. select-e2e.sh fails safe to the
             // full suite on any unrecognised path, so this can only narrow.
-            const changed = files.map(f => f.filename).join('\n');
+            // Both sides of a rename go to TIA too: the old path is a removal
+            // the selector must see (a moved packages/<app>/… still affects
+            // that app's suite). Extra paths can only widen the selection.
+            const changed = files
+              .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
+              .join('\n');
             core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
             const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
             core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
