@@ -36,6 +36,14 @@ Site Router connects a Cozystack tenant network to a remote network over an IPse
 | `bgp.neighbors[i].remoteASN`  | Remote autonomous system number of the neighbor. Must be a valid ASN (1..4294967295).                                                 | `int`      | `0`     |
 
 
+### Security
+
+| Name                       | Description                                                                                                                                                                                                                                                                                                                                                                            | Type       | Value |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- | ----- |
+| `security`                 | Platform-owned network security guards for the gateway VM.                                                                                                                                                                                                                                                                                                                             | `object`   | `{}`  |
+| `security.egressDenyCIDRs` | Extra destination CIDRs the gateway is denied egress to, on top of the built-in link-local `169.254.0.0/16` deny (which always applies and covers the cloud metadata endpoint `169.254.169.254`). Use for management or node ranges that do not overlap tenant workloads; do NOT list the cluster pod/service/join ranges (the gateway must reach tenant workloads). Empty by default. | `[]string` | `[]`  |
+
+
 ### Common parameters
 
 | Name               | Description                                                                                                                                                                   | Type       | Value |

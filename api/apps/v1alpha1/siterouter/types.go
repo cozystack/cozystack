@@ -32,6 +32,9 @@ type ConfigSpec struct {
 	// Optional BGP peering over the tunnel. Disabled by default.
 	// +kubebuilder:default:={}
 	Bgp BGP `json:"bgp"`
+	// Platform-owned network security guards for the gateway VM.
+	// +kubebuilder:default:={}
+	Security Security `json:"security"`
 	// Explicit CPU and memory sizing for the router VM.
 	// +kubebuilder:default:={}
 	Resources Resources `json:"resources"`
@@ -105,6 +108,12 @@ type Resources struct {
 	// Memory (RAM) allocated to the router VM.
 	// +kubebuilder:default:="2Gi"
 	Memory resource.Quantity `json:"memory"`
+}
+
+type Security struct {
+	// Extra destination CIDRs the gateway is denied egress to, on top of the built-in link-local `169.254.0.0/16` deny (which always applies and covers the cloud metadata endpoint `169.254.169.254`). Use for management or node ranges that do not overlap tenant workloads; do NOT list the cluster pod/service/join ranges (the gateway must reach tenant workloads). Empty by default.
+	// +kubebuilder:default:={}
+	EgressDenyCIDRs []string `json:"egressDenyCIDRs,omitempty"`
 }
 
 type StaticRoute struct {

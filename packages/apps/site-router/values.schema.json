@@ -124,6 +124,21 @@
         }
       }
     },
+    "security": {
+      "description": "Platform-owned network security guards for the gateway VM.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "egressDenyCIDRs": {
+          "description": "Extra destination CIDRs the gateway is denied egress to, on top of the built-in link-local `169.254.0.0/16` deny (which always applies and covers the cloud metadata endpoint `169.254.169.254`). Use for management or node ranges that do not overlap tenant workloads; do NOT list the cluster pod/service/join ranges (the gateway must reach tenant workloads). Empty by default.",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
     "resources": {
       "description": "Explicit CPU and memory sizing for the router VM.",
       "type": "object",

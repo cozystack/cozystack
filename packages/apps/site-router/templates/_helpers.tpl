@@ -91,7 +91,10 @@ the api-key Secret and the cloud-init seed never diverge on first install.
 First-boot cloud-init userdata (VyOS `vyos_config_commands`). Ported from
 the upstream VyOS-router reference implementation's buildCloudInitUserData:
 hostname, HTTPS API key, listen-address, and the fail-closed management
-firewall. Takes a dict {ctx, token} so the token
+firewall — plus the T08 guest security guards (Boundary-A management-API drop
+for IPsec-decrypted traffic, forward-chain default-deny), seeded so the router
+is fail-closed from first boot until the controller re-stamps the full set.
+Takes a dict {ctx, token} so the token
 is resolved once by the caller and shared with the api-key Secret.
 
 listen-address is 0.0.0.0 because the pod IP is unknown at render time; the
@@ -116,6 +119,16 @@ reachable with allowOpenManagement=true) no firewall is stamped.
 {{- $lines = append $lines "  - set firewall input rule 10 protocol tcp" -}}
 {{- $lines = append $lines "  - set firewall input rule 10 destination port '22,443'" -}}
 {{- $lines = append $lines "  - set firewall input default-action drop" -}}
+{{/* T08 guest security guards, seeded fail-closed from first boot BEFORE the controller can reach the router (it re-stamps the full set on its first reconcile). Grouped inside the managementCIDR block so the open-management escape hatch stays "no firewall at all". Boundary A: drop the management ports for IPsec-decrypted traffic — a packet decrypted by VyOS and addressed to the guest's own API does not cross the pod veth where Cilium enforces. §3: forward-chain default-deny (routed mode advertises specific remotes, never a default route out the tunnel). TODO(T13): the `ipsec match-ipsec`/`match-none` and `firewall forward` 1.5 syntax is PROVISIONAL — validate against the shipped image; keep in lockstep with internal/vyos/render. */}}
+{{- $lines = append $lines "  - set firewall input rule 1 ipsec match-ipsec" -}}
+{{- $lines = append $lines "  - set firewall input rule 1 destination port '22,443'" -}}
+{{- $lines = append $lines "  - set firewall input rule 1 action drop" -}}
+{{- $lines = append $lines "  - set firewall forward default-action drop" -}}
+{{- $lines = append $lines "  - set firewall forward rule 5 action accept" -}}
+{{- $lines = append $lines "  - set firewall forward rule 5 state established 'enable'" -}}
+{{- $lines = append $lines "  - set firewall forward rule 5 state related 'enable'" -}}
+{{- $lines = append $lines "  - set firewall forward rule 10 ipsec match-none" -}}
+{{- $lines = append $lines "  - set firewall forward rule 10 action accept" -}}
 {{- end -}}
 {{- join "\n" $lines -}}
 {{- end -}}

@@ -57,6 +57,17 @@ bgp:
   enabled: false
 
 ##
+## @section Security
+##
+
+## @typedef {struct} Security - Platform-owned network security guards for the gateway VM.
+## @field {[]string} [egressDenyCIDRs] - Extra destination CIDRs the gateway is denied egress to, on top of the built-in link-local `169.254.0.0/16` deny (which always applies and covers the cloud metadata endpoint `169.254.169.254`). Use for management or node ranges that do not overlap tenant workloads; do NOT list the cluster pod/service/join ranges (the gateway must reach tenant workloads). Empty by default.
+
+## @param {Security} security - Platform-owned network security guards for the gateway VM.
+security:
+  egressDenyCIDRs: []
+
+##
 ## @section Common parameters
 ##
 
