@@ -348,6 +348,9 @@ ALLOW
   . hack/lib/image-refs.sh
   tmp=$(mktemp -d)
   D=$(printf 'a%.0s' $(seq 64))
+  # A second, distinct digest so a per-file (rather than per-map) digest
+  # binding is detectable.
+  D2=$(printf 'f%.0s' $(seq 64))
 
   printf 'image: ghcr.io/cozystack/cozystack/one:v1@sha256:%s\n' "$D" > "$tmp/s1.yaml"
   # Tagless: a digest-only pin is an ordinary Helm spelling. Narrowing shape 1
@@ -358,7 +361,12 @@ ALLOW
   # caught only by a single nightly-mirror fixture (no real package uses shape
   # 2 with a split host, so promote-retag misses it too).
   printf 'image:\n  registry: ghcr.io\n  repository: cozystack/cozystack/two\n  tag: v1\n  digest: "sha256:%s"\n' "$D" > "$tmp/s2.yaml"
-  printf 'image:\n  registry: ghcr.io\n  repository: cozystack/cozystack/three\n  tag: "v1@sha256:%s"\n' "$D" > "$tmp/s3.yaml"
+  # TWO shape-3 maps with DISTINCT digests in one file. With a single pair, a
+  # rule that binds one digest per file and reuses it for every repository
+  # passes — and on the real linstor values that hands piraeus-server's digest
+  # to linstor-csi, i.e. silently ships the wrong image under the right name.
+  # The per-map digest binding is the property worth pinning here.
+  printf 'image:\n  registry: ghcr.io\n  repository: cozystack/cozystack/three\n  tag: "v1@sha256:%s"\nsecond:\n  image:\n    registry: ghcr.io\n    repository: cozystack/cozystack/threeb\n    tag: "v1@sha256:%s"\n' "$D" "$D2" > "$tmp/s3.yaml"
   # Shape 4 carries a digest-pinned sibling OUTSIDE global.images. The rule is
   # deliberately scoped to .global.images[] because the host is a
   # document-level key: binding it to any map in the file would staple
@@ -382,11 +390,13 @@ ALLOW
   # digest previously left the rewrite, retag and mirror suites entirely green.
   # The digest is the only part that decides which bytes get retagged, so it is
   # the part most worth pinning.
-  for n in one onebare two three four five six; do
+  for n in one onebare two three threeb four five six; do
+    want_d="$D"
     case "$n" in one) f=s1.yaml ;; onebare) f=s1b.yaml ;; two) f=s2.yaml ;;
-                 three) f=s3.yaml ;; four) f=s4.yaml ;; five) f=s5.yaml ;;
+                 three) f=s3.yaml ;; threeb) f=s3.yaml; want_d="$D2" ;;
+                 four) f=s4.yaml ;; five) f=s5.yaml ;;
                  six) f=s6.tag ;; esac
-    want="ghcr.io/cozystack/cozystack/${n}@sha256:${D}"
+    want="ghcr.io/cozystack/cozystack/${n}@sha256:${want_d}"
     # Canonicalize away the cosmetic :tag that shapes 1 and 6 carry through.
     got=$(collect_refs_from_file "$tmp/$f" | sed -E 's|:[^/@]*@|@|' | grep "cozystack/${n}@" || true)
     if [ "$got" != "$want" ]; then
