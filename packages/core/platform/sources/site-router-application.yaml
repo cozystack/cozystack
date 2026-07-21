@@ -1,0 +1,32 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.site-router-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        # kube-ovn + Cilium: the router VM attaches to the tenant pod network.
+        - cozystack.networking
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
+        # TODO(T05): add cozystack.site-router-controller once that source exists
+        # so the controller is installed before SiteRouter instances reconcile.
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: site-router
+          path: apps/site-router
+          libraries: ["cozy-lib"]
+        - name: site-router-rd
+          path: system/site-router-rd
+          install:
+            namespace: cozy-system
+            releaseName: site-router-rd

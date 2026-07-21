@@ -34,6 +34,11 @@ src_to_suites() {
     postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
+    # The Go types module is `siterouter` (no hyphen, Go package rule) but the
+    # Chainsaw suite dir is `site-router`. The suffix-strip default already
+    # yields `site-router`; pin it explicitly so the mapping is documented and
+    # stays correct if the default ever changes.
+    site-router-application) echo site-router ;;
     external-dns) echo external-dns ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
