@@ -1008,18 +1008,54 @@ func TestReconcile_SourceAtCanonicalName_KeyBearing(t *testing.T) {
 
 // TestReconcile_SourceAtCanonicalName_KeyFree pins the benign case: a key-free
 // Secret already at the canonical name IS the tenant's trust anchor, so the
-// controller leaves it and reports Ready.
+// controller leaves it and reports Ready. Reporting Ready is not the same as the
+// tenant being able to read it: an engine-owned Secret at that name carries no
+// internal.cozystack.io/tenant-ca label, so the lineage webhook marks it
+// tenantresource=false and the tenant is locked out while the controller says
+// "published". The contract check must name that gap, and must stay silent once
+// the label is present.
 func TestReconcile_SourceAtCanonicalName_KeyFree(t *testing.T) {
-	src := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: testProjection, Namespace: testNamespace},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       map[string][]byte{caCertKey: []byte(testCA)},
-	}
-	c := newClient(t, helmRelease(), appDef(),
-		sentinelWithSource(testProjection, caCertKey), src,
-	)
-	mustReconcile(t, c)
-	assertReady(t, c, metav1.ConditionTrue, reasonProjected)
+	t.Run("missing tenant-ca label warns and names it", func(t *testing.T) {
+		src := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: testProjection, Namespace: testNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       map[string][]byte{caCertKey: []byte(testCA)},
+		}
+		c := newClient(t, helmRelease(), appDef(),
+			sentinelWithSource(testProjection, caCertKey), src,
+		)
+		rec := mustReconcile(t, c)
+
+		assertReady(t, c, metav1.ConditionTrue, reasonProjected)
+		joined := strings.Join(warnings(t, rec), "\n")
+		if !strings.Contains(joined, reasonCanonicalNameContract) {
+			t.Errorf("a key-free anchor missing the tenant-ca label must warn %s, got %q", reasonCanonicalNameContract, joined)
+		}
+		if !strings.Contains(joined, TenantCALabel) {
+			t.Errorf("the contract warning must name the missing %q label the tenant is locked out by, got %q", TenantCALabel, joined)
+		}
+	})
+
+	t.Run("with the tenant-ca label the contract is met and nothing warns", func(t *testing.T) {
+		src := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testProjection,
+				Namespace: testNamespace,
+				Labels:    map[string]string{TenantCALabel: trueValue},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{caCertKey: []byte(testCA)},
+		}
+		c := newClient(t, helmRelease(), appDef(),
+			sentinelWithSource(testProjection, caCertKey), src,
+		)
+		rec := mustReconcile(t, c)
+
+		assertReady(t, c, metav1.ConditionTrue, reasonProjected)
+		if w := warnings(t, rec); len(w) != 0 {
+			t.Errorf("a key-free anchor carrying the tenant-ca label meets the contract, so nothing may warn, got %v", w)
+		}
+	})
 }
 
 // TestReconcile_TerminatingProjection_WaitsForCollection pins that the reconciler

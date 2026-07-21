@@ -720,7 +720,7 @@ func (r *Reconciler) reconcileSourceAtCanonicalName(src *corev1.Secret, target s
 	// do is skip the check and imply it passed.
 	if deviation := canonicalContractDeviation(src); deviation != "" {
 		r.warn(src, reasonCanonicalNameContract,
-			"the Secret %q occupies the canonical trust-anchor name but %s; the tenant reads it as this release's trust anchor exactly as it stands",
+			"the Secret %q occupies the canonical trust-anchor name but %s; it is left untouched, so it does not meet the clean, tenant-readable ca.crt that name promises",
 			target, deviation)
 	}
 
@@ -735,14 +735,25 @@ func (r *Reconciler) reconcileSourceAtCanonicalName(src *corev1.Secret, target s
 // trust-anchor name departs from the contract that name carries, or "" when it
 // satisfies it. Key material is NOT its business: the caller has already refused
 // that, louder and for a different reason.
+//
+// The contract is not only about SHAPE. The name promises a clean ca.crt the
+// TENANT can read, and tenant visibility comes from the internal.cozystack.io/tenant-ca
+// label: the lineage webhook stamps tenantresource=false on a Secret that lacks it,
+// so an engine-owned anchor at the canonical name is locked away from the tenant
+// until it is labelled. A key-free Secret of the right shape but missing that label
+// is "published" only in name, so the label is checked alongside type and keys.
+//
+// All deviations are collected, not just the first, so the warning names every way
+// the object falls short in one pass.
 func canonicalContractDeviation(s *corev1.Secret) string {
+	var deviations []string
 	if s.Type != corev1.SecretTypeOpaque {
-		return fmt.Sprintf("is of type %q rather than %q", s.Type, corev1.SecretTypeOpaque)
+		deviations = append(deviations, fmt.Sprintf("is of type %q rather than %q", s.Type, corev1.SecretTypeOpaque))
 	}
 	// Reuse the write path's own guard, so "is this a trust anchor?" is answered
 	// by one piece of code wherever it is asked.
 	if _, err := projectionData(s.Data[caCertKey]); err != nil {
-		return fmt.Sprintf("its %q does not carry a usable trust anchor (%v)", caCertKey, err)
+		deviations = append(deviations, fmt.Sprintf("its %q does not carry a usable trust anchor (%v)", caCertKey, err))
 	}
 	var extra []string
 	for _, key := range sortedKeys(s.Data) {
@@ -751,9 +762,12 @@ func canonicalContractDeviation(s *corev1.Secret) string {
 		}
 	}
 	if len(extra) > 0 {
-		return fmt.Sprintf("it carries %s besides %q", strings.Join(extra, ", "), caCertKey)
+		deviations = append(deviations, fmt.Sprintf("carries %s besides %q", strings.Join(extra, ", "), caCertKey))
 	}
-	return ""
+	if s.Labels[TenantCALabel] != trueValue {
+		deviations = append(deviations, fmt.Sprintf("is missing the %q label the tenant read path selects on, so no tenant can read it", TenantCALabel))
+	}
+	return strings.Join(deviations, "; and ")
 }
 
 // sortedKeys returns a map's keys in a stable order, so an event message reads
