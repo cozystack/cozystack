@@ -100,8 +100,8 @@ if grep -q "^## @enum {string} Version" "$VALUES_FILE"; then
             next
         }
         { print }
-    ' "$VALUES_FILE" > "$TEMP_FILE.tmp"
-    mv "$TEMP_FILE.tmp" "$VALUES_FILE"
+    ' "$VALUES_FILE" > "$TEMP_FILE"
+    cat "$TEMP_FILE" > "$VALUES_FILE"
 else
     echo "Inserting new version section in $VALUES_FILE..."
     awk -v new_section="$NEW_VERSION_SECTION" '
@@ -110,8 +110,8 @@ else
             print ""
         }
         { print }
-    ' "$VALUES_FILE" > "$TEMP_FILE.tmp"
-    mv "$TEMP_FILE.tmp" "$VALUES_FILE"
+    ' "$VALUES_FILE" > "$TEMP_FILE"
+    cat "$TEMP_FILE" > "$VALUES_FILE"
 fi
 
 echo "Successfully updated $VALUES_FILE with major versions: ${MAJOR_VERSIONS[*]}"

@@ -16,16 +16,16 @@ Service runs Valkey on the Spotahome Redis Operator for efficient management and
 
 ### Common parameters
 
-| Name               | Description                                                                                                                     | Type       | Value     |
-| ------------------ | ------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
+| Name               | Description                                                                                                                      | Type       | Value     |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- | ---------- | --------- |
 | `replicas`         | Number of Valkey replicas.                                                                                                       | `int`      | `2`       |
 | `resources`        | Explicit CPU and memory configuration for each Valkey replica. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`      |
-| `resources.cpu`    | CPU available to each replica.                                                                                                  | `quantity` | `""`      |
-| `resources.memory` | Memory (RAM) available to each replica.                                                                                         | `quantity` | `""`      |
-| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                         | `string`   | `t1.nano` |
-| `size`             | Persistent Volume Claim size available for application data.                                                                    | `quantity` | `1Gi`     |
-| `storageClass`     | StorageClass used to store the data.                                                                                            | `string`   | `""`      |
-| `external`         | Enable external access from outside the cluster.                                                                                | `bool`     | `false`   |
+| `resources.cpu`    | CPU available to each replica.                                                                                                   | `quantity` | `""`      |
+| `resources.memory` | Memory (RAM) available to each replica.                                                                                          | `quantity` | `""`      |
+| `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                          | `string`   | `t1.nano` |
+| `size`             | Persistent Volume Claim size available for application data.                                                                     | `quantity` | `1Gi`     |
+| `storageClass`     | StorageClass used to store the data.                                                                                             | `string`   | `""`      |
+| `external`         | Enable external access from outside the cluster.                                                                                 | `bool`     | `false`   |
 | `version`          | Valkey major version to deploy                                                                                                   | `string`   | `v8`      |
 
 

@@ -11,7 +11,7 @@ spec:
     matchNames:
     - {{ .Release.Namespace }}
   endpoints:
-  - metricRelabelConfigs:
+  - port: metrics
     relabelConfigs:
     - replacement: valkey
       targetLabel: job
@@ -19,9 +19,8 @@ spec:
       targetLabel: node
     - replacement: cluster
       targetLabel: tier
-    - target_label: service
+    - targetLabel: service
       replacement: {{ .Release.Name }}
-    port: metrics
   selector:
     matchLabels:
       app: {{ .Release.Name }}-metrics
@@ -34,7 +33,6 @@ metadata:
     app: {{ .Release.Name }}-metrics
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
-  annotations:
 spec:
   selector:
     app.kubernetes.io/component: redis
