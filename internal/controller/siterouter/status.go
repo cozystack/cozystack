@@ -16,8 +16,8 @@ import (
 
 // reasonPendingRoutes is the stable, machine-readable reason the controller
 // records when tenant workload pods have not yet inherited the site-router return
-// route. It is part of the D4 machine-readable contract cozyportal consumes at
-// runtime — do not rename without updating the consumers.
+// route. It is part of the D4 machine-readable contract the upstream consumer
+// consumes at runtime — do not rename without updating the consumers.
 const reasonPendingRoutes = "PendingRoutes"
 
 // updateStatus surfaces the instance's status. In Phase 1 the runtime readiness
@@ -58,8 +58,12 @@ func (r *SiteRouterReconciler) surfacePendingRoutePods(ctx context.Context, inst
 		return nil // nothing programmed yet; nothing can be pending
 	}
 
+	// List through the UNCACHED reader: the controller's Pod cache is label-scoped
+	// to SiteRouter gateway pods (CacheByObject), so ordinary tenant workload pods
+	// are absent from it. Listing them through the cached client would find none
+	// and the PendingRoutes event would never fire in production.
 	pods := &corev1.PodList{}
-	if err := r.List(ctx, pods, client.InNamespace(inst.namespace)); err != nil {
+	if err := r.reader().List(ctx, pods, client.InNamespace(inst.namespace)); err != nil {
 		return fmt.Errorf("list pods in namespace %s: %w", inst.namespace, err)
 	}
 

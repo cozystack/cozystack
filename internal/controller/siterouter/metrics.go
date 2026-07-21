@@ -37,7 +37,7 @@ const (
 //
 // site_router_tunnel_rekeys_total / _rx_bytes / _tx_bytes are intentionally NOT
 // emitted: the ported ParseIPSecSA extracts only per-peer state from
-// `show vpn ipsec sa` (its parity contract with cozyportal), and the VyOS
+// `show vpn ipsec sa` (its parity contract with the reference implementation), and the VyOS
 // operational output that command returns carries no byte/packet/rekey columns to
 // source them from. Emitting them would mean changing the guest command AND
 // widening the parser AND the IPSecObservation struct — speculative work against

@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/cozystack/cozystack/internal/siterouter/denyset"
 	"github.com/cozystack/cozystack/internal/vyos"
 	"github.com/cozystack/cozystack/internal/vyos/render"
 )
@@ -30,7 +31,7 @@ import (
 // runtime observations. It also paces the Degraded retry and the transient
 // waits (PSK Secret not yet present, gateway pod not scheduled, guest source
 // filter not yet confirmed) so those recover without a spec change. Ported from
-// cozyportal's 30s runtime poll.
+// the reference implementation's 30s runtime poll.
 const runtimePollInterval = 30 * time.Second
 
 // canonicalSchemaVersion stamps every config hash the controller records
@@ -39,7 +40,8 @@ const runtimePollInterval = 30 * time.Second
 // after a bump the controller sees an older v<N-1>: prefix, treats it as drift,
 // and force-reapplies. This is what stops a rolling controller update — where
 // the in-memory hash cache starts empty — from flapping every gateway when the
-// rendered config is byte-for-byte the same as before. Ported from cozyportal.
+// rendered config is byte-for-byte the same as before. Ported from the reference
+// implementation.
 const canonicalSchemaVersion = 1
 
 // defaultTunnelDevice is the positional fallback for the device carrying tunnel /
@@ -140,7 +142,8 @@ func tunnelIngressRulesetPath() []string {
 // configHash returns the canonical, schema-versioned hash of a rendered op slice
 // (v<N>:sha256:<hex>). JSON is a stable byte stream here: Op and Path are
 // deterministic and Value is a plain string, so an unchanged desired state hashes
-// identically and the controller skips the live push. Ported from cozyportal.
+// identically and the controller skips the live push. Ported from the reference
+// implementation.
 func configHash(ops []vyos.Operation) (string, error) {
 	payload, err := json.Marshal(ops)
 	if err != nil {
@@ -200,8 +203,9 @@ func (r *SiteRouterReconciler) forgetAppliedHash(key types.NamespacedName) {
 //
 // The client is built (and the token read) on every reconcile that reaches this
 // point, even when the push is skipped, because MAC discovery must run before the
-// hash is computed (a device change is drift). This is cozyportal's reconcileReady
-// order — not its reconcileConfiguring order — merged into the single pipeline.
+// hash is computed (a device change is drift). This is the reference
+// implementation's reconcileReady order — not its reconcileConfiguring order —
+// merged into the single pipeline.
 func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instance) error {
 	if inst.gatewayPod == nil || inst.gatewayPod.Status.PodIP == "" {
 		return &reconcileError{
@@ -403,10 +407,20 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 	vals := inst.values
 	remoteCIDRs := stringSlice(vals[remoteCIDRsValueKey])
 
+	// Tenant-reachable cluster networks constrain each tunnel-ingress source-accept
+	// so a decrypted packet with a valid remote source but a non-tenant / world
+	// destination is dropped (render.renderTunnelIngressFilter). Sourced from the
+	// same cozy-system/cozystack ConfigMap the deny-set validation reads; any read
+	// error still yields the platform defaults (clusterNetworks returns the
+	// all-defaults set alongside the error), so the constraint is never silently
+	// dropped — a bad ConfigMap read has already surfaced at validateRemoteCIDRs.
+	nets, _ := r.clusterNetworks(ctx)
+
 	in := render.Inputs{
-		ManagementCIDR: r.ManagementCIDR,
-		TunnelDevice:   tunnelDevice,
-		RemoteCIDRs:    remoteCIDRs,
+		ManagementCIDR:     r.ManagementCIDR,
+		TunnelDevice:       tunnelDevice,
+		RemoteCIDRs:        remoteCIDRs,
+		TenantNetworkCIDRs: tenantNetworkCIDRs(nets),
 	}
 
 	// Single ipsec peer per instance (schema keeps tunnel.type single-value). A
@@ -472,6 +486,21 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 // validASN reports whether n is a valid, nonzero autonomous-system number
 // (1..4294967295, the 32-bit ASN range).
 func validASN(n int64) bool { return n >= 1 && n <= 4294967295 }
+
+// tenantNetworkCIDRs is the set of tenant-reachable cluster networks a decrypted
+// tunnel packet may be destined for — the cluster pod and service CIDRs. It feeds
+// render.Inputs.TenantNetworkCIDRs so each tunnel-ingress source-accept is
+// destination-constrained (no world egress). Empty CIDRs are skipped.
+func tenantNetworkCIDRs(nets denyset.ClusterNetworks) []string {
+	out := make([]string, 0, 2)
+	if nets.PodCIDR != "" {
+		out = append(out, nets.PodCIDR)
+	}
+	if nets.ServiceCIDR != "" {
+		out = append(out, nets.ServiceCIDR)
+	}
+	return out
+}
 
 // discoverInterfaceDevices resolves the kernel device carrying tunnel / forwarded
 // traffic by joining the gateway VMI's NIC MACs (status.interfaces[].mac) against
@@ -653,7 +682,7 @@ func redactSecrets(s string, secrets ...string) string {
 
 // truncErr collapses an error message to a single, rune-safe, length-capped line
 // suitable for a Kubernetes Event/condition. VyOS API errors can be long
-// multi-line dumps. Ported from cozyportal.
+// multi-line dumps. Ported from the reference implementation.
 func truncErr(err error) string {
 	const maxLen = 256
 	msg := strings.ReplaceAll(err.Error(), "\n", " ")

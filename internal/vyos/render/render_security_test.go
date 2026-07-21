@@ -93,6 +93,50 @@ func anyInterfaceInboundFirewall(ops []vyos.Operation) bool {
 	return false
 }
 
+// tunnelIngressAccepts inspects the TUNNEL-INGRESS named rule set and returns the
+// set of source addresses across its source-accept rules, the set of destination
+// addresses those rules carry, and whether EVERY source-accept is
+// destination-constrained. A source-accept without a destination is the R1
+// world-egress bug: a jumped-chain accept is a terminal verdict, so a source-only
+// accept forwards a valid-source packet to any destination — bypassing the
+// forward-chain default-drop. It scans by rule number so it does not pin a
+// specific numbering.
+func tunnelIngressAccepts(ops []vyos.Operation, ruleset string) (sources, dests map[string]bool, allConstrained bool) {
+	prefix := "firewall/name/" + ruleset + "/rule/"
+	srcByRule := map[string]string{}
+	dstByRule := map[string]string{}
+	for _, op := range ops {
+		if op.Op != vyos.OpSet {
+			continue
+		}
+		p := strings.Join(op.Path, "/")
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(p, prefix), "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		switch parts[1] {
+		case "source/address":
+			srcByRule[parts[0]] = op.Value
+		case "destination/address":
+			dstByRule[parts[0]] = op.Value
+		}
+	}
+	sources, dests = map[string]bool{}, map[string]bool{}
+	allConstrained = true
+	for n, s := range srcByRule {
+		sources[s] = true
+		if d, ok := dstByRule[n]; ok {
+			dests[d] = true
+		} else {
+			allConstrained = false
+		}
+	}
+	return sources, dests, allConstrained
+}
+
 // TestRenderTunnelIngress_FiltersDecryptedBySourceViaForwardFilter encodes the
 // T08 redesign + Acceptance (a)+(b)+(d): decrypted-from-tunnel traffic is
 // filtered by source against remoteCIDRs — a source outside the list is dropped
@@ -104,6 +148,7 @@ func TestRenderTunnelIngress_FiltersDecryptedBySourceViaForwardFilter(t *testing
 	in := baseInputs()
 	in.TunnelDevice = "eth0" // single-homed pod NIC
 	in.RemoteCIDRs = []string{"172.31.0.0/16", "10.10.0.0/16"}
+	in.TenantNetworkCIDRs = []string{"10.244.0.0/16", "10.96.0.0/16"} // cluster pod + service
 	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
 
 	ops := render.Render(in)
@@ -116,13 +161,19 @@ func TestRenderTunnelIngress_FiltersDecryptedBySourceViaForwardFilter(t *testing
 		t.Errorf("expected TUNNEL-INGRESS default-action=drop (decrypted, source ∉ remoteCIDRs → dropped), ops: %+v", ops)
 	}
 
-	// (b) Each declared remote CIDR is accepted by source address.
-	if !containsSet(ops, rs+"/rule/10/action", "accept") ||
-		!containsSet(ops, rs+"/rule/10/source/address", "172.31.0.0/16") {
-		t.Errorf("expected accept for first remote CIDR 172.31.0.0/16, ops: %+v", ops)
+	// (b) Each declared remote CIDR is accepted by source address AND every
+	// source-accept is destination-constrained to a tenant network on the SAME
+	// rule (the R1 world-egress fix): a source-only accept would forward a
+	// valid-source packet to any destination, bypassing the forward default-drop.
+	sources, dests, allConstrained := tunnelIngressAccepts(ops, render.TunnelIngressRuleSet)
+	if !sources["172.31.0.0/16"] || !sources["10.10.0.0/16"] {
+		t.Errorf("expected a source-accept per declared remote CIDR, sources %v", sources)
 	}
-	if !containsSet(ops, rs+"/rule/20/source/address", "10.10.0.0/16") {
-		t.Errorf("expected accept for second remote CIDR 10.10.0.0/16, ops: %+v", ops)
+	if !allConstrained {
+		t.Errorf("every TUNNEL-INGRESS source-accept must carry a tenant-network destination (R1), ops: %+v", ops)
+	}
+	if !dests["10.244.0.0/16"] || !dests["10.96.0.0/16"] {
+		t.Errorf("expected the source-accepts destination-constrained to the tenant networks, got dests %v", dests)
 	}
 
 	// Established/related return traffic is accepted before any source match.
@@ -148,6 +199,47 @@ func TestRenderTunnelIngress_FiltersDecryptedBySourceViaForwardFilter(t *testing
 	// (d) The pod-NIC-inbound binding (the M2 bug) must be gone entirely.
 	if anyInterfaceInboundFirewall(ops) {
 		t.Errorf("expected NO per-interface inbound firewall binding after the redesign, ops: %+v", ops)
+	}
+}
+
+// TestRenderTunnelIngress_NonTenantDestinationNotAccepted proves the R1 fix: a
+// decrypted packet with a VALID remote source but a WORLD / non-tenant
+// destination is NOT accepted by the source rule. Every source-accept is
+// destination-constrained to a tenant network, so such a packet matches no accept
+// and falls through to the default-action drop — the gateway cannot be turned into
+// unintended internet egress by a good-source packet.
+func TestRenderTunnelIngress_NonTenantDestinationNotAccepted(t *testing.T) {
+	t.Parallel()
+
+	in := baseInputs()
+	in.TunnelDevice = "eth0"
+	in.RemoteCIDRs = []string{"172.31.0.0/16"}
+	in.TenantNetworkCIDRs = []string{"10.244.0.0/16", "10.96.0.0/16"}
+	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
+
+	ops := render.Render(in)
+	rs := "firewall/name/" + render.TunnelIngressRuleSet
+
+	sources, dests, allConstrained := tunnelIngressAccepts(ops, render.TunnelIngressRuleSet)
+	if !sources["172.31.0.0/16"] {
+		t.Fatalf("expected a source-accept for the declared remote CIDR, sources %v", sources)
+	}
+	if !allConstrained {
+		t.Errorf("a source-accept without a destination constraint would forward a valid-source packet to the world (R1), ops: %+v", ops)
+	}
+	// The only accepted destinations are the tenant networks — never the world.
+	for d := range dests {
+		if d != "10.244.0.0/16" && d != "10.96.0.0/16" {
+			t.Errorf("unexpected non-tenant destination %q accepted by a source rule, ops: %+v", d, ops)
+		}
+	}
+	if dests["0.0.0.0/0"] {
+		t.Errorf("a world destination must never be accepted by a source rule, ops: %+v", ops)
+	}
+	// Fail-closed backstop: everything not matched (including a world destination)
+	// is dropped by the named-set default-action.
+	if !containsSet(ops, rs+"/default-action", "drop") {
+		t.Errorf("expected default-action drop, ops: %+v", ops)
 	}
 }
 

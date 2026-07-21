@@ -4,6 +4,7 @@
 package siterouter
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -194,6 +195,39 @@ func TestUpdateMetrics_ForgetOnDelete(t *testing.T) {
 
 	if series := gaugeSeriesFor(t, "site_router_tunnel_up", "tenant-test", inst); len(series) != 0 {
 		t.Errorf("forgetMetrics should delete all series for the instance, got %v", series)
+	}
+}
+
+// TestReconcile_PollErrorPreservesMetrics encodes the R7 fix: a transient
+// runtime-poll failure (ShowVPNIPSecSA errors) must NOT erase the tunnel/BGP
+// gauges. Each reconcile builds a fresh instance whose observation slices start
+// empty; feeding those to updateMetrics on a failed poll would look like every
+// peer disappeared and delete all series. The reconcile now skips updateMetrics
+// when the poll errored, so the prior snapshot survives until the next good poll.
+func TestReconcile_PollErrorPreservesMetrics(t *testing.T) {
+	const inst = "metrics-pollerr"
+	fakeV := &fakeVyOS{
+		retrieveResult:    json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`),
+		ipsecObservations: []vyos.IPSecObservation{{PeerName: "aws-prod", State: vyos.IPSecTunnelStateUp}},
+	}
+	r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, inst, routedValues(), "10.244.0.5")...)
+
+	// 1) A good poll sets the tunnel gauge to 1.
+	reconcileInstance(t, r, inst)
+	if got := tunnelUpValue(t, "tenant-test", inst, "aws-prod"); got != 1 {
+		t.Fatalf("expected site_router_tunnel_up=1 after a good poll, got %v", got)
+	}
+
+	// 2) The next poll fails transiently: the gauge must be preserved, not deleted.
+	fakeV.setIPSecErr(errors.New("vyos query timeout"))
+	reconcileInstance(t, r, inst)
+
+	series := gaugeSeriesFor(t, "site_router_tunnel_up", "tenant-test", inst)
+	if _, ok := series["aws-prod"]; !ok {
+		t.Errorf("a transient poll failure must not erase the tunnel gauge, series: %v", series)
+	}
+	if series["aws-prod"] != 1 {
+		t.Errorf("expected the prior gauge value (1) preserved across a poll failure, got %v", series["aws-prod"])
 	}
 }
 

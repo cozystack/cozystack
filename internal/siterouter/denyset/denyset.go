@@ -23,8 +23,8 @@ import (
 // ReasonInvalidRemoteCIDR is the stable, machine-readable reason both callers
 // surface for a remoteCIDR that is malformed or overlaps a cluster network: the
 // admission check as the reason of a Forbidden error, the controller as the
-// reason of its Ready=False condition. It is part of the contract cozyportal
-// consumes, so it must not change.
+// reason of its Ready=False condition. It is part of the contract the upstream
+// consumer consumes, so it must not change.
 const ReasonInvalidRemoteCIDR = "InvalidRemoteCIDR"
 
 // Machine-readable labels for the network a rejected remoteCIDR collides with.

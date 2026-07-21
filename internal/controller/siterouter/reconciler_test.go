@@ -251,6 +251,44 @@ func TestReconcile_ProgramsNamespaceRoutes(t *testing.T) {
 	}
 }
 
+// TestReconcile_EmptyRemoteCIDRsWithdrawsRoute encodes the R4 fix: emptying
+// remoteCIDRs (non-empty -> []) must still reconcile the namespace annotation and
+// withdraw this gateway's stale entry. The old early-return skipped mergeRoutes
+// whenever the desired set was empty, stranding the entry forever. A co-tenant
+// entry (different gw) must survive.
+func TestReconcile_EmptyRemoteCIDRsWithdrawsRoute(t *testing.T) {
+	fakeV := &fakeVyOS{retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`)}
+	values := map[string]interface{}{
+		"tunnel":      map[string]interface{}{"type": "ipsec"},
+		"peer":        map[string]interface{}{"address": "203.0.113.10"},
+		"remoteCIDRs": []interface{}{}, // emptied
+	}
+	objs := readyObjects(t, "demo", values, "10.244.0.5")
+	// Seed the namespace with this gateway's now-stale entry plus a co-tenant entry.
+	for _, o := range objs {
+		if ns, ok := o.(*corev1.Namespace); ok {
+			ns.Annotations = map[string]string{
+				routesAnnotation: `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"192.0.2.0/24","gw":"10.244.0.9"}]`,
+			}
+		}
+	}
+	r, _ := newVyOSReconciler(t, fakeV, objs...)
+
+	reconcileInstance(t, r, "demo")
+
+	ns := &corev1.Namespace{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, ns); err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	set := routeSet(t, ns.Annotations[routesAnnotation])
+	if _, ok := set["172.31.0.0/16"]; ok {
+		t.Errorf("emptying remoteCIDRs must withdraw this gateway's stale entry, got %q", ns.Annotations[routesAnnotation])
+	}
+	if set["192.0.2.0/24"] != "10.244.0.9" {
+		t.Errorf("a co-tenant entry must survive the withdrawal, got %q", ns.Annotations[routesAnnotation])
+	}
+}
+
 // TestReconcile_FinalizerRestoresStateOnDelete encodes the T07 Acceptance
 // "deleting the instance removes the routes annotation + restores port_security":
 // on delete the controller must withdraw its own route entry from the namespace

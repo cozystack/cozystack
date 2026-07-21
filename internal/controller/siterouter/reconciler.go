@@ -300,13 +300,20 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.relaxGatewayPortSecurity(ctx, inst); err != nil { // T07: Ready-gated port_security relax
 		return r.classify(ctx, err)
 	}
-	if err := r.pollRuntimeState(ctx, inst); err != nil { // T06: tunnel/BGP observations (data for T09/T10)
+	pollErr := r.pollRuntimeState(ctx, inst) // T06: tunnel/BGP observations (data for T09/T10)
+	if pollErr != nil {
 		// Runtime polling is best-effort: a transient query failure keeps the
 		// previous observations rather than failing the whole reconcile.
-		logger.Error(err, "VyOS runtime poll failed; keeping previous observations",
+		logger.Error(pollErr, "VyOS runtime poll failed; keeping previous observations and metrics",
 			"instance", inst.name, "namespace", inst.namespace)
+	} else {
+		// Refresh the tunnel/BGP gauges only from a successful poll (bump-on-change).
+		// A failed poll leaves the instance's observation slices empty; feeding those
+		// to updateMetrics would look like every peer disappeared and delete all
+		// series, erasing the gauges on a transient query failure. Skipping keeps the
+		// last snapshot intact until the next good poll.
+		r.updateMetrics(inst) // T10
 	}
-	r.updateMetrics(inst) // T10: refresh tunnel/BGP gauges from the latest observations (bump-on-change)
 	if err := r.updateStatus(ctx, inst); err != nil { // T09: status surface
 		return r.classify(ctx, err)
 	}
@@ -410,9 +417,11 @@ func (r *SiteRouterReconciler) validateRemoteCIDRs(ctx context.Context, inst *in
 // reconcile when the IP appears).
 func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst *instance) error {
 	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
-	if len(cidrs) == 0 {
-		return nil
-	}
+	// An empty cidrs is deliberately NOT an early return: mergeRoutes supports an
+	// empty desired set (it withdraws every entry this gateway still owns), so a
+	// remoteCIDRs list emptied down to [] must still reconcile the annotation to
+	// prune this gateway's stale entries instead of stranding them. Only the
+	// gateway-IP guard below short-circuits, because ownership is keyed by that IP.
 	if inst.gatewayPod == nil || inst.gatewayPod.Status.PodIP == "" {
 		// No next hop yet; the pod watch re-triggers once the IP is assigned.
 		return nil

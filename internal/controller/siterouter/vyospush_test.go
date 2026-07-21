@@ -29,8 +29,8 @@ import (
 )
 
 // -----------------------------------------------------------------------------
-// fakeVyOS — the injectable VyOS client stub, ported from cozyportal's
-// router_controller_test.go and extended with Retrieve (the source-filter
+// fakeVyOS — the injectable VyOS client stub, ported from the reference
+// implementation's router_controller_test.go and extended with Retrieve (the source-filter
 // confirmation query, net-new for OSS). It records every Configure batch,
 // lets a test inject a Configure failure, and serves canned Show/Retrieve
 // results. Concurrent-safe though the controller is single-threaded per
@@ -46,6 +46,9 @@ type fakeVyOS struct {
 	bgpObservations   []vyos.BGPObservation
 	ethObservations   []vyos.EthernetObservation
 	ethErr            error
+	// ipsecErr injects a transient runtime-poll failure (ShowVPNIPSecSA) so a test
+	// can prove a failed poll does not erase the tunnel/BGP metric series.
+	ipsecErr error
 
 	// retrieveResult / retrieveErr back confirmSourceFilterActive's guest query.
 	// A nil/`null` result means the tunnel-ingress rule set is not present yet.
@@ -61,7 +64,17 @@ func (f *fakeVyOS) Configure(_ context.Context, ops []vyos.Operation) error {
 }
 
 func (f *fakeVyOS) ShowVPNIPSecSA(_ context.Context) ([]vyos.IPSecObservation, error) {
-	return f.ipsecObservations, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.ipsecObservations, f.ipsecErr
+}
+
+// setIPSecErr swaps the canned ShowVPNIPSecSA error mid-test, standing in for a
+// transient runtime-poll failure between polls.
+func (f *fakeVyOS) setIPSecErr(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.ipsecErr = err
 }
 
 func (f *fakeVyOS) ShowBGPSummary(_ context.Context) ([]vyos.BGPObservation, error) {
@@ -220,6 +233,42 @@ func opsHave(ops []vyos.Operation, path, value string) bool {
 		}
 	}
 	return false
+}
+
+// tunnelIngressSources collects, from a pushed op batch, the source addresses
+// across the TUNNEL-INGRESS named set's source-accept rules and whether every one
+// is destination-constrained (the R1 world-egress fix: a source-only accept would
+// forward a valid-source packet to any destination). It scans by rule number so
+// it does not pin a specific numbering.
+func tunnelIngressSources(ops []vyos.Operation) (sources map[string]bool, allConstrained bool) {
+	prefix := "firewall/name/" + render.TunnelIngressRuleSet + "/rule/"
+	srcByRule := map[string]string{}
+	dstByRule := map[string]bool{}
+	for i := range ops {
+		p := opPath(ops[i])
+		if !strings.HasPrefix(p, prefix) {
+			continue
+		}
+		parts := strings.SplitN(strings.TrimPrefix(p, prefix), "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		switch parts[1] {
+		case "source/address":
+			srcByRule[parts[0]] = ops[i].Value
+		case "destination/address":
+			dstByRule[parts[0]] = true
+		}
+	}
+	sources = map[string]bool{}
+	allConstrained = true
+	for n, s := range srcByRule {
+		sources[s] = true
+		if !dstByRule[n] {
+			allConstrained = false
+		}
+	}
+	return sources, allConstrained
 }
 
 func recordedEvents(rec *record.FakeRecorder) []string {
@@ -617,11 +666,16 @@ func TestReconcile_ResolveInputsMapping(t *testing.T) {
 	if !opsHave(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/force-encapsulation", "enable") {
 		t.Errorf("expected forced UDP encapsulation on the peer, ops: %+v", ops)
 	}
-	// Tunnel-ingress source allow-list from remoteCIDRs + default-action drop.
+	// Tunnel-ingress source allow-list from remoteCIDRs, each source-accept
+	// destination-constrained to a tenant network (R1 world-egress fix), plus the
+	// default-action drop.
 	rs := "firewall/name/" + render.TunnelIngressRuleSet
-	if !opsHave(ops, rs+"/rule/10/source/address", "172.31.0.0/16") ||
-		!opsHave(ops, rs+"/rule/20/source/address", "10.10.0.0/16") {
+	srcs, allConstrained := tunnelIngressSources(ops)
+	if !srcs["172.31.0.0/16"] || !srcs["10.10.0.0/16"] {
 		t.Errorf("expected a source-accept rule per remoteCIDR, ops: %+v", ops)
+	}
+	if !allConstrained {
+		t.Errorf("every tunnel-ingress source-accept must be destination-constrained to a tenant network (R1), ops: %+v", ops)
 	}
 	if !opsHave(ops, rs+"/default-action", "drop") {
 		t.Errorf("expected tunnel-ingress default-action drop, ops: %+v", ops)

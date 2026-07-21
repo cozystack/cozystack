@@ -206,6 +206,20 @@ type Inputs struct {
 	// tunnel-ingress source filter accepts traffic sourced from these and
 	// drops everything else arriving on TunnelDevice.
 	RemoteCIDRs []string
+
+	// TenantNetworkCIDRs is the set of tenant-reachable cluster networks a
+	// decrypted tunnel packet is allowed to be destined for — the cluster pod
+	// (+ service) CIDR(s) the controller reads from the cozy-system/cozystack
+	// ConfigMap. Each TUNNEL-INGRESS source-accept is additionally constrained to
+	// a destination in this set, so a packet with a valid remote source but a
+	// WORLD / non-tenant destination is NOT accepted: a jumped-chain accept is a
+	// terminal verdict, so a source-only accept would forward a valid-source
+	// packet to ANY destination, bypassing renderForwardFilter's §3 default-drop
+	// and turning the gateway into unintended internet egress. Empty leaves the
+	// source-accepts unconstrained — the controller always resolves it in
+	// production (from clusterNetworks, which falls back to the platform
+	// defaults); only the render's own unit tests omit it.
+	TenantNetworkCIDRs []string
 }
 
 const (
@@ -639,27 +653,48 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 		set(tunnelIngressPath("rule", "5", "state", "related"), "enable"),
 	)
 
-	// One source-restricted accept per declared remote CIDR, numbered from 10
-	// with step 10 (gaps leave room for manual debugging interventions).
+	// One accept per (declared remote CIDR × tenant-reachable cluster network),
+	// numbered from 10 with step 10 (gaps leave room for manual debugging
+	// interventions). Each accept matches source ∈ remoteCIDR AND destination ∈
+	// tenant network: a jumped-chain accept is a terminal verdict, so without the
+	// destination constraint a valid-source packet to ANY destination — including
+	// the world — would be forwarded, bypassing renderForwardFilter's §3
+	// default-drop and making the gateway unintended internet egress. A decrypted
+	// packet to a non-tenant destination matches no accept and falls through to the
+	// default-action drop. When TenantNetworkCIDRs is empty (render unit tests
+	// only — the controller always resolves it) the accept stays source-only.
 	rule := 10
 	for _, cidr := range in.RemoteCIDRs {
-		n := strconv.Itoa(rule)
-		ops = append(ops,
-			set(tunnelIngressPath("rule", n, "action"), "accept"),
-			set(tunnelIngressPath("rule", n, "source", "address"), cidr),
-		)
-		rule += 10
+		if len(in.TenantNetworkCIDRs) == 0 {
+			n := strconv.Itoa(rule)
+			ops = append(ops,
+				set(tunnelIngressPath("rule", n, "action"), "accept"),
+				set(tunnelIngressPath("rule", n, "source", "address"), cidr),
+			)
+			rule += 10
+			continue
+		}
+		for _, tenantNet := range in.TenantNetworkCIDRs {
+			n := strconv.Itoa(rule)
+			ops = append(ops,
+				set(tunnelIngressPath("rule", n, "action"), "accept"),
+				set(tunnelIngressPath("rule", n, "source", "address"), cidr),
+				set(tunnelIngressPath("rule", n, "destination", "address"), tenantNet),
+			)
+			rule += 10
+		}
 	}
 
-	// Drop everything sourced outside the declared remote subnets.
+	// Drop everything that is not an accepted (source ∈ remoteCIDR AND dest ∈
+	// tenant network) decrypted flow — including a valid-source packet to a
+	// non-tenant / world destination (the destination-constrained accepts above).
 	//
-	// TODO(T13): the source allow-list accepts decrypted traffic by SOURCE only.
-	// The T13 negative-security suite must prove that decrypted traffic with a
-	// VALID remote source but a non-tenant / world DESTINATION is still dropped —
-	// a chain accept here may terminate traversal and let renderForwardFilter's
-	// §3 default-deny be bypassed by a good-source packet. If T13 shows that, the
-	// fix is a destination constraint on this rule set (accept source ∈
-	// remoteCIDRs AND dest ∈ the tenant network). Do not pre-solve it here.
+	// TODO(T13): the destination-constrained accept STRUCTURE is now in place; its
+	// exact VyOS 1.5 leaf syntax (`rule N destination address <net>` alongside the
+	// source match) still needs live validation against the shipped image, in
+	// lockstep with the other version-specific paths (see forwardFilterPath). The
+	// T13 negative-security suite must confirm on the live gateway that a
+	// valid-source / world-destination packet is dropped.
 	ops = append(ops, set(tunnelIngressPath("default-action"), "drop"))
 
 	return ops
