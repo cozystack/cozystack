@@ -7,10 +7,7 @@ include ../../../hack/package.mk
 
 update:
 	rm -rf charts
-	helm repo add redis-operator https://spotahome.github.io/redis-operator
-	helm repo update redis-operator
-	helm pull redis-operator/redis-operator --untar --untardir charts
-	sed -i '/{{/d' charts/redis-operator/crds/databases.spotahome.com_redisfailovers.yaml
+	helm pull oci://ghcr.io/freshworks-oss/charts/redis-operator --version $(patsubst v%,%,$(REDIS_OPERATOR_TAG)) --untar --untardir charts
 
 image:
 	docker buildx build images/redis-operator \
