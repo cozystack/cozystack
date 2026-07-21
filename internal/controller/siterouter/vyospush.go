@@ -258,7 +258,12 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 	}
 
 	if err := inst.vc.Configure(ctx, ops); err != nil {
-		msg := "VyOS Configure failed: " + truncErr(err)
+		// A VyOS /configure failure can echo the offending set-command — which
+		// includes the PSK and the api-key token — back in its error body. Redact
+		// both before the error reaches an Event, a condition message or a log,
+		// so a tenant-readable surface never leaks the secret. The pushed op batch
+		// itself is never included (only the client's error string is).
+		msg := redactSecrets("VyOS Configure failed: "+truncErr(err), psk, token)
 		if r.Recorder != nil {
 			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonConfigureFailed, msg)
 		}
@@ -620,6 +625,22 @@ func intField(v interface{}, key string) int64 {
 
 func sliceOf(v interface{}) []interface{} {
 	s, _ := v.([]interface{})
+	return s
+}
+
+// redactSecrets replaces every non-empty secret occurrence in s with a fixed
+// placeholder, so a message derived from a VyOS API error (which can echo the
+// failing set-command, PSK and api-key token included) can be safely recorded to
+// an Event, a condition or a log. Empty secrets are ignored (nothing to redact),
+// so a call with an unresolved PSK/token is a harmless no-op.
+func redactSecrets(s string, secrets ...string) string {
+	const placeholder = "[redacted]"
+	for _, secret := range secrets {
+		if secret == "" {
+			continue
+		}
+		s = strings.ReplaceAll(s, secret, placeholder)
+	}
 	return s
 }
 

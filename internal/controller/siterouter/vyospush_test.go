@@ -312,6 +312,44 @@ func TestReconcile_DegradedOnConfigureError(t *testing.T) {
 	}
 }
 
+// TestReconcile_ConfigureErrorRedactsSecrets encodes the R8 fix: a VyOS
+// /configure failure that echoes the failing set-command (PSK and api-key token
+// included) must not leak either secret into the tenant-readable ConfigureFailed
+// Event — they are replaced with a placeholder.
+func TestReconcile_ConfigureErrorRedactsSecrets(t *testing.T) {
+	const psk = "shared-secret"    // matches readyObjects' pskSecret
+	const token = "api-token-xyz"  // matches readyObjects' apiKeySecret
+	fakeV := &fakeVyOS{configureErr: errors.New(
+		"vyos error: Configuration error near 'set vpn ipsec site-to-site peer 203.0.113.10 " +
+			"authentication pre-shared-secret " + psk + "' with key " + token)}
+	r, rec := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
+
+	res := reconcileInstance(t, r, "demo")
+	if res.RequeueAfter != runtimePollInterval {
+		t.Fatalf("expected a Degraded requeue on Configure failure, got %s", res.RequeueAfter)
+	}
+
+	events := recordedEvents(rec)
+	if len(events) == 0 {
+		t.Fatalf("expected a ConfigureFailed event")
+	}
+	foundRedacted := false
+	for _, e := range events {
+		if strings.Contains(e, psk) {
+			t.Errorf("ConfigureFailed event must not echo the PSK, got %q", e)
+		}
+		if strings.Contains(e, token) {
+			t.Errorf("ConfigureFailed event must not echo the api-key token, got %q", e)
+		}
+		if strings.Contains(e, "[redacted]") {
+			foundRedacted = true
+		}
+	}
+	if !foundRedacted {
+		t.Errorf("expected the redaction placeholder in the ConfigureFailed event, events: %v", events)
+	}
+}
+
 // TestReconcile_DriftReApplies encodes T06 Acceptance "editing
 // remoteCIDRs/staticRoutes/peer triggers a live POST /configure" (T12 "drift
 // re-apply"): after a steady-state apply, changing spec.values re-renders a
