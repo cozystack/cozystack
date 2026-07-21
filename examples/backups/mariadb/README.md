@@ -44,6 +44,8 @@ NAMESPACE=tenant-root examples/backups/mariadb/run-all.sh
 NAMESPACE=tenant-root examples/backups/mariadb/cleanup.sh
 ```
 
+`S3_CA_NAMESPACE` defaults to `tenant-root` (where the shared seaweedfs and its CA live) independently of `NAMESPACE`. Running against a different tenant whose own seaweedfs CA lives elsewhere means overriding `S3_CA_NAMESPACE` (and `S3_CA_SECRET`) too, alongside `NAMESPACE`.
+
 `run-all.sh` writes a sentinel row into the source, waits for the `BackupJob` to reach `Succeeded`, restores to a copy with a to-copy `RestoreJob`, and asserts the sentinel round-tripped through S3 into the restored copy while the source is left untouched. Set `SKIP_RESTORE=1` to stop after a successful backup.
 
 Same-namespace flows are the supported path. Cross-tenant restores (target in `tenant-test`, source's seaweedfs in `tenant-root`) are blocked by the per-tenant Cilium egress policy and stay a manual / dev-cluster flow.
