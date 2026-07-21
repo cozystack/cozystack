@@ -119,13 +119,16 @@ func mergeRoutes(existing, gatewayIP string, remoteCIDRs []string) (string, erro
 }
 
 // removeRoutes withdraws this instance's route entries from the existing
-// annotation value: every entry this instance owns (gw == gatewayIP) plus, as a
-// fallback when the gateway IP is unknown (the pod may already be gone at
-// finalizer time), every entry whose dst is one of remoteCIDRs. Entries owned by
-// a co-tenant gateway (a different gw and a dst this instance does not declare)
-// are preserved. It returns the remaining canonical JSON (emptyRoutes when
-// nothing is left) so a finalizer can drop its routes without disturbing a
-// co-tenant instance's.
+// annotation value. Ownership is keyed strictly by the gateway IP: when it is
+// known, ONLY entries whose gw == gatewayIP are dropped. The dst-based match is a
+// fallback used ONLY when the gateway IP is unavailable (the pod may already be
+// gone at finalizer time), where every entry whose dst is one of remoteCIDRs is
+// dropped. Keying by dst even when the gateway IP is known would wrongly delete a
+// co-tenant's entry: if two instances declared the same dst and a later upsert
+// moved that dst's entry to the co-tenant's gw, the dst still sits in this
+// instance's remoteCIDRs, so the fallback would drop the co-tenant's live entry.
+// It returns the remaining canonical JSON (emptyRoutes when nothing is left) so a
+// finalizer can drop its routes without disturbing a co-tenant instance's.
 func removeRoutes(existing, gatewayIP string, remoteCIDRs []string) (string, error) {
 	entries, err := decodeRoutes(existing)
 	if err != nil {
@@ -138,11 +141,20 @@ func removeRoutes(existing, gatewayIP string, remoteCIDRs []string) (string, err
 	}
 	kept := make([]routeEntry, 0, len(entries))
 	for _, e := range entries {
-		if gatewayIP != "" && e.Gw == gatewayIP {
-			continue // owned by this instance
+		if gatewayIP != "" {
+			// Gateway IP known: remove strictly by ownership (gw == this gateway).
+			// Do NOT fall back to dst — a co-tenant may have upserted the same dst to
+			// its own gw, and dropping by dst would delete that co-tenant's entry.
+			if e.Gw == gatewayIP {
+				continue
+			}
+			kept = append(kept, e)
+			continue
 		}
+		// Gateway IP unavailable (pod already gone): fall back to this instance's
+		// declared dsts.
 		if _, ok := drop[e.Dst]; ok {
-			continue // declared dst (ownership fallback when the gateway IP is unknown)
+			continue
 		}
 		kept = append(kept, e)
 	}

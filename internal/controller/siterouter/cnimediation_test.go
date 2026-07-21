@@ -137,6 +137,46 @@ func TestRemoveRoutes_RemovesAllOwnEntriesByGatewayIP(t *testing.T) {
 	}
 }
 
+// TestRemoveRoutes_PreservesCoTenantSameDstDifferentGw encodes the R5 fix: when
+// two instances declared the same dst and a later upsert moved that dst's entry
+// to the co-tenant's gateway, deleting THIS instance (by its own gateway IP) must
+// remove only entries it still owns (gw == its IP). The dst-based fallback must
+// NOT fire while the gateway IP is known, or it would wrongly drop the co-tenant's
+// live same-dst entry.
+func TestRemoveRoutes_PreservesCoTenantSameDstDifferentGw(t *testing.T) {
+	// The shared dst 172.31.0.0/16 now points at the co-tenant gateway 10.244.0.9
+	// (a later upsert moved the gw). This instance's gateway is 10.244.0.5 and it
+	// still declares 172.31.0.0/16.
+	existing := `[{"dst":"172.31.0.0/16","gw":"10.244.0.9"}]`
+	got, err := removeRoutes(existing, "10.244.0.5", []string{"172.31.0.0/16"})
+	if err != nil {
+		t.Fatalf("removeRoutes: %v", err)
+	}
+	set := routeSet(t, got)
+	if set["172.31.0.0/16"] != "10.244.0.9" {
+		t.Errorf("the co-tenant's same-dst entry (gw 10.244.0.9) must survive deleting this instance (gw 10.244.0.5), got %q", got)
+	}
+}
+
+// TestRemoveRoutes_DstFallbackWhenGatewayIPUnavailable proves the dst-based
+// fallback still fires when the gateway IP is unknown (the pod is already gone at
+// finalizer time): this instance's declared dsts are withdrawn, a co-tenant's
+// undeclared dst survives.
+func TestRemoveRoutes_DstFallbackWhenGatewayIPUnavailable(t *testing.T) {
+	existing := `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"192.0.2.0/24","gw":"10.244.0.9"}]`
+	got, err := removeRoutes(existing, "", []string{"172.31.0.0/16"}) // gateway IP unavailable
+	if err != nil {
+		t.Fatalf("removeRoutes: %v", err)
+	}
+	set := routeSet(t, got)
+	if _, ok := set["172.31.0.0/16"]; ok {
+		t.Errorf("with the gateway IP unavailable, a declared dst must be withdrawn by the fallback, got %q", got)
+	}
+	if set["192.0.2.0/24"] != "10.244.0.9" {
+		t.Errorf("an undeclared co-tenant dst must survive the fallback, got %q", got)
+	}
+}
+
 // TestMergeRoutes_PrunesOwnStaleOnShrink encodes the R3 fix: when remoteCIDRs
 // shrinks ([A,B] -> [A]) the entry this instance left behind (B, own gw) is
 // withdrawn on the next programming, while the kept entry (A) and a co-tenant
