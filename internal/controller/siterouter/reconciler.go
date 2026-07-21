@@ -30,6 +30,8 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
+	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 
@@ -51,6 +53,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/cozystack/cozystack/internal/siterouter/denyset"
+	"github.com/cozystack/cozystack/internal/vyos"
 )
 
 const (
@@ -159,6 +162,20 @@ type SiteRouterReconciler struct {
 	// AllowOpenManagement mirrors --allow-open-management: when true an empty
 	// ManagementCIDR is tolerated (test environments only).
 	AllowOpenManagement bool
+
+	// VyOSClientFactory builds a VyOSClient for a resolved gateway endpoint and
+	// API token (T06 config push / runtime poll). Nil selects
+	// DefaultVyOSClientFactory (production, self-signed TLS + in-band token).
+	// Tests inject a fake to avoid standing up an HTTPS server; see vyospush.go.
+	VyOSClientFactory VyOSClientFactory
+
+	// hashMu guards appliedHashes.
+	hashMu sync.Mutex
+	// appliedHashes caches, per instance HelmRelease, the config hash of the last
+	// successful VyOS push, so a no-op reconcile makes no HTTP call. In-memory is
+	// safe because leader election gives a single writer; see the config-hash
+	// cache note in vyospush.go for the restart trade-off.
+	appliedHashes map[types.NamespacedName]string
 }
 
 // instance is the resolved reconcile context threaded through the step methods.
@@ -178,6 +195,17 @@ type instance struct {
 	// gatewayPod is the gateway VM's virt-launcher pod, or nil if it has not been
 	// scheduled yet (a normal transient state early in an instance's life).
 	gatewayPod *corev1.Pod
+
+	// vc is the VyOS management client built by pushVyOSConfig once the gateway
+	// pod IP and API token are known; the confirm and runtime-poll steps reuse it
+	// so they need not re-read the token or rebuild the client. Nil until push
+	// reaches that point.
+	vc VyOSClient
+	// ipsecObservations / bgpObservations are the latest runtime readings from the
+	// guest (pollRuntimeState), produced as data for T09 (status) / T10 (metrics)
+	// to consume; this task builds neither conditions nor metrics (D9).
+	ipsecObservations []vyos.IPSecObservation
+	bgpObservations   []vyos.BGPObservation
 }
 
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;patch
@@ -253,33 +281,39 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			"pod", pod.Name, "phase", pod.Status.Phase, "podIP", pod.Status.PodIP)
 	}
 
-	// Mediation pipeline, in dependency order. Every call is a no-op stub today.
-	// The ordering is load-bearing: routes must be programmed and the guest
-	// source filter must be up before port security is relaxed (D8), and the
-	// VyOS config (which installs that filter) must be pushed before we confirm
-	// it and relax the port. T06/T07/T09 fill these in; keep the order.
+	// Mediation pipeline, in dependency order. The ordering is load-bearing:
+	// routes must be programmed and the guest source filter must be up before port
+	// security is relaxed (D8), and the VyOS config (which installs that filter)
+	// must be pushed before we confirm it and relax the port. classify turns a
+	// soft wait/Degraded (deny-set stays a hard error) into a paced requeue.
 	if err := r.validateRemoteCIDRs(ctx, inst); err != nil { // T07: deny-set validation
-		return ctrl.Result{}, err
+		return r.classify(ctx, err)
 	}
 	if err := r.programNamespaceRoutes(ctx, inst); err != nil { // T07: kube-ovn return routes
-		return ctrl.Result{}, err
+		return r.classify(ctx, err)
 	}
 	if err := r.pushVyOSConfig(ctx, inst); err != nil { // T06: VyOS HTTPS API push
-		return ctrl.Result{}, err
+		return r.classify(ctx, err)
 	}
 	if err := r.confirmSourceFilterActive(ctx, inst); err != nil { // T08/T06: guest source guard up
-		return ctrl.Result{}, err
+		return r.classify(ctx, err)
 	}
 	if err := r.relaxGatewayPortSecurity(ctx, inst); err != nil { // T07: Ready-gated port_security relax
-		return ctrl.Result{}, err
+		return r.classify(ctx, err)
+	}
+	if err := r.pollRuntimeState(ctx, inst); err != nil { // T06: tunnel/BGP observations (data for T09/T10)
+		// Runtime polling is best-effort: a transient query failure keeps the
+		// previous observations rather than failing the whole reconcile.
+		logger.Error(err, "VyOS runtime poll failed; keeping previous observations",
+			"instance", inst.name, "namespace", inst.namespace)
 	}
 	if err := r.updateStatus(ctx, inst); err != nil { // T09: status surface
-		return ctrl.Result{}, err
+		return r.classify(ctx, err)
 	}
 
-	// No requeue in the scaffold. T06 adds the ~30s runtime poll that re-applies
-	// VyOS config on drift and refreshes tunnel/BGP status.
-	return ctrl.Result{}, nil
+	// Steady-state runtime poll: re-render + re-apply on drift and refresh the
+	// tunnel/BGP observations without waiting for a spec change (T06).
+	return ctrl.Result{RequeueAfter: runtimePollInterval}, nil
 }
 
 // reconcileDelete tears down the controller's kube-ovn mediation in reverse
@@ -317,6 +351,9 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	if err := r.removeNamespaceRoutes(ctx, inst); err != nil { // T07: withdraw kube-ovn routes
 		return ctrl.Result{}, err
 	}
+
+	// Drop the cached config hash so a later instance reusing this key re-applies.
+	r.forgetAppliedHash(client.ObjectKeyFromObject(inst.hr))
 
 	if err := r.removeFinalizer(ctx, inst.hr); err != nil {
 		return ctrl.Result{}, err
@@ -404,21 +441,7 @@ func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst 
 	return nil
 }
 
-// pushVyOSConfig renders the routed VyOS configuration from the instance inputs
-// and applies it atomically over the VyOS HTTPS API, skipping the call when the
-// config hash is unchanged.
-func (r *SiteRouterReconciler) pushVyOSConfig(_ context.Context, _ *instance) error {
-	// TODO(T06): render + push VyOS config over the management API.
-	return nil
-}
-
-// confirmSourceFilterActive verifies the guest tunnel-ingress source filter is
-// live before any port-security relaxation, so traffic sourced outside
-// remoteCIDRs is dropped by the router first (D8).
-func (r *SiteRouterReconciler) confirmSourceFilterActive(_ context.Context, _ *instance) error {
-	// TODO(T08/T06): confirm the guest source filter is active.
-	return nil
-}
+// pushVyOSConfig and confirmSourceFilterActive live in vyospush.go (T06).
 
 // relaxGatewayPortSecurity patches ovn.kubernetes.io/port_security=false on the
 // gateway virt-launcher pod only, with a single-key merge patch so no other pod
@@ -581,15 +604,38 @@ func decodeValues(hr *helmv2.HelmRelease) (map[string]interface{}, error) {
 // so a reason set deep in a step (e.g. denyset.ReasonInvalidRemoteCIDR) survives
 // up to Reconcile's return and, in T09, onto the instance's Ready condition. It
 // satisfies error; T09 type-asserts it to read Reason().
+//
+// requeueAfter distinguishes a soft, self-healing wait/Degraded (a positive
+// duration: classify turns it into ctrl.Result{RequeueAfter} with a nil error, so
+// controller-runtime does not apply exponential backoff and the reconcile retries
+// on the poll cadence) from a hard error (zero: classify returns it so the manager
+// logs and backs off). Deny-set rejection leaves it zero — a spec fix, not a
+// requeue, resolves it — which keeps the T07 admission-parity contract.
 type reconcileError struct {
-	reason  string
-	message string
+	reason       string
+	message      string
+	requeueAfter time.Duration
 }
 
 func (e *reconcileError) Error() string { return e.reason + ": " + e.message }
 
 // Reason exposes the machine-readable reason for T09/status.
 func (e *reconcileError) Reason() string { return e.reason }
+
+// classify turns a step error into the reconcile result. A reconcileError with a
+// positive requeueAfter is a soft, event-backed wait/Degraded: requeue on that
+// cadence with no hard error (no backoff, no double-report — the failing step has
+// already recorded any Event). Everything else is a hard error the manager logs
+// and backs off on.
+func (r *SiteRouterReconciler) classify(ctx context.Context, err error) (ctrl.Result, error) {
+	var re *reconcileError
+	if errors.As(err, &re) && re.requeueAfter > 0 {
+		log.FromContext(ctx).V(1).Info("requeueing SiteRouter reconcile",
+			"reason", re.reason, "message", re.message, "after", re.requeueAfter.String())
+		return ctrl.Result{RequeueAfter: re.requeueAfter}, nil
+	}
+	return ctrl.Result{}, err
+}
 
 // reader returns the uncached APIReader when one is wired (production), else the
 // cached Client (unit tests, where the fake client serves every read). It is
