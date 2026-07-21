@@ -223,6 +223,34 @@ func TestReconcile_DenySetRejection(t *testing.T) {
 	}
 }
 
+// TestReconcile_ProgramsNamespaceRoutes is the positive counterpart to
+// TestReconcile_DenySetRejection: a valid, cluster-disjoint remoteCIDR set drives
+// the tenant namespace's ovn.kubernetes.io/routes annotation through the real
+// server-side-apply path, one {dst,gw} entry per remoteCIDR pointing at the
+// gateway pod IP.
+func TestReconcile_ProgramsNamespaceRoutes(t *testing.T) {
+	fakeV := &fakeVyOS{retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`)}
+	r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
+
+	reconcileInstance(t, r, "demo")
+
+	ns := &corev1.Namespace{}
+	if err := r.Get(context.Background(), types.NamespacedName{Name: "tenant-test"}, ns); err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	ann := ns.Annotations[routesAnnotation]
+	if ann == "" {
+		t.Fatalf("expected the tenant namespace to carry %s after reconcile", routesAnnotation)
+	}
+	set := routeSet(t, ann)
+	if set["172.31.0.0/16"] != "10.244.0.5" {
+		t.Errorf("expected route 172.31.0.0/16 -> 10.244.0.5, got %q", ann)
+	}
+	if set["10.10.0.0/16"] != "10.244.0.5" {
+		t.Errorf("expected route 10.10.0.0/16 -> 10.244.0.5, got %q", ann)
+	}
+}
+
 // TestReconcile_FinalizerRestoresStateOnDelete encodes the T07 Acceptance
 // "deleting the instance removes the routes annotation + restores port_security":
 // on delete the controller must withdraw its own route entry from the namespace

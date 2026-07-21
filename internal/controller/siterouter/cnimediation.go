@@ -70,40 +70,63 @@ func encodeRoutes(entries []routeEntry) (string, error) {
 	return string(b), nil
 }
 
-// mergeRoutes upserts a route entry {dst: cidr, gw: gatewayIP} for each remoteCIDR
-// into the existing ovn.kubernetes.io/routes annotation value (which may be empty
-// or hold entries programmed by another site-router instance sharing the
-// namespace), keying by dst so an entry for a dst already present has only its gw
-// replaced and unrelated entries are preserved. It returns the canonical
-// (deterministically ordered) JSON so an unchanged desired state produces an
-// identical string.
+// mergeRoutes reconciles the existing ovn.kubernetes.io/routes annotation value
+// (which may be empty or hold entries programmed by another site-router instance
+// sharing the namespace) to this instance's desired state: it upserts a
+// {dst: cidr, gw: gatewayIP} entry for each remoteCIDR (keying by dst, so an
+// entry for a dst already present has only its gw replaced) AND withdraws any
+// entry this instance still owns — gw == gatewayIP — whose dst is no longer in
+// remoteCIDRs, so a shrinking remoteCIDRs prunes the routes it left behind.
+// Entries owned by a co-tenant gateway (a different gw) are always preserved.
+// The gateway pod IP is the owner key (D-n3: a gateway-IP change is out of
+// scope; entries stranded under a prior IP are handled by the delete path). It
+// returns the canonical (deterministically ordered) JSON so an unchanged desired
+// state produces an identical string.
 func mergeRoutes(existing, gatewayIP string, remoteCIDRs []string) (string, error) {
 	entries, err := decodeRoutes(existing)
 	if err != nil {
 		return "", err
 	}
 
-	indexByDst := make(map[string]int, len(entries))
-	for i := range entries {
-		indexByDst[entries[i].Dst] = i
+	desired := make(map[string]struct{}, len(remoteCIDRs))
+	for _, cidr := range remoteCIDRs {
+		desired[cidr] = struct{}{}
 	}
+
+	// Keep co-tenant entries and this instance's still-desired entries; drop this
+	// instance's entries whose dst dropped out of remoteCIDRs.
+	kept := make([]routeEntry, 0, len(entries)+len(remoteCIDRs))
+	indexByDst := make(map[string]int, len(entries)+len(remoteCIDRs))
+	for _, e := range entries {
+		if e.Gw == gatewayIP {
+			if _, want := desired[e.Dst]; !want {
+				continue
+			}
+		}
+		indexByDst[e.Dst] = len(kept)
+		kept = append(kept, e)
+	}
+
 	for _, cidr := range remoteCIDRs {
 		if i, ok := indexByDst[cidr]; ok {
-			entries[i].Gw = gatewayIP
+			kept[i].Gw = gatewayIP
 			continue
 		}
-		entries = append(entries, routeEntry{Dst: cidr, Gw: gatewayIP})
-		indexByDst[cidr] = len(entries) - 1
+		indexByDst[cidr] = len(kept)
+		kept = append(kept, routeEntry{Dst: cidr, Gw: gatewayIP})
 	}
-	return encodeRoutes(entries)
+	return encodeRoutes(kept)
 }
 
-// removeRoutes deletes only the entries whose dst is one of remoteCIDRs from the
-// existing annotation value (the entries this instance programmed), preserving
-// every other entry, and returns the remaining canonical JSON (emptyRoutes when
-// nothing is left). It is the delete path that lets a finalizer withdraw an
-// instance's routes without disturbing a co-tenant instance's.
-func removeRoutes(existing string, remoteCIDRs []string) (string, error) {
+// removeRoutes withdraws this instance's route entries from the existing
+// annotation value: every entry this instance owns (gw == gatewayIP) plus, as a
+// fallback when the gateway IP is unknown (the pod may already be gone at
+// finalizer time), every entry whose dst is one of remoteCIDRs. Entries owned by
+// a co-tenant gateway (a different gw and a dst this instance does not declare)
+// are preserved. It returns the remaining canonical JSON (emptyRoutes when
+// nothing is left) so a finalizer can drop its routes without disturbing a
+// co-tenant instance's.
+func removeRoutes(existing, gatewayIP string, remoteCIDRs []string) (string, error) {
 	entries, err := decodeRoutes(existing)
 	if err != nil {
 		return "", err
@@ -115,8 +138,11 @@ func removeRoutes(existing string, remoteCIDRs []string) (string, error) {
 	}
 	kept := make([]routeEntry, 0, len(entries))
 	for _, e := range entries {
+		if gatewayIP != "" && e.Gw == gatewayIP {
+			continue // owned by this instance
+		}
 		if _, ok := drop[e.Dst]; ok {
-			continue
+			continue // declared dst (ownership fallback when the gateway IP is unknown)
 		}
 		kept = append(kept, e)
 	}

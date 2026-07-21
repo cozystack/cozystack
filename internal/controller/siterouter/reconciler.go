@@ -522,11 +522,6 @@ func (r *SiteRouterReconciler) restorePortSecurity(ctx context.Context, inst *in
 // namespace's other annotations are untouched); a missing namespace or absent
 // annotation is a clean no-op. Errors are returned, never masked with "|| true".
 func (r *SiteRouterReconciler) removeNamespaceRoutes(ctx context.Context, inst *instance) error {
-	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
-	if len(cidrs) == 0 {
-		return nil
-	}
-
 	ns := &corev1.Namespace{}
 	if err := r.reader().Get(ctx, types.NamespacedName{Name: inst.namespace}, ns); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -538,7 +533,13 @@ func (r *SiteRouterReconciler) removeNamespaceRoutes(ctx context.Context, inst *
 	if current == "" {
 		return nil
 	}
-	reduced, err := removeRoutes(current, cidrs)
+
+	cidrs := stringSlice(inst.values[remoteCIDRsValueKey])
+	gatewayIP := ""
+	if inst.gatewayPod != nil {
+		gatewayIP = inst.gatewayPod.Status.PodIP
+	}
+	reduced, err := removeRoutes(current, gatewayIP, cidrs)
 	if err != nil {
 		return fmt.Errorf("remove routes for namespace %s: %w", inst.namespace, err)
 	}

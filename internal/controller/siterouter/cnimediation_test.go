@@ -100,7 +100,7 @@ func TestMergeRoutes_Idempotent(t *testing.T) {
 // drops only its own dst entries and leaves the co-tenant's intact.
 func TestRemoveRoutes_RemovesOnlyOwnEntries(t *testing.T) {
 	existing := `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"10.10.0.0/16","gw":"10.244.0.9"}]`
-	got, err := removeRoutes(existing, []string{"172.31.0.0/16"})
+	got, err := removeRoutes(existing, "10.244.0.5", []string{"172.31.0.0/16"})
 	if err != nil {
 		t.Fatalf("removeRoutes: %v", err)
 	}
@@ -110,6 +110,71 @@ func TestRemoveRoutes_RemovesOnlyOwnEntries(t *testing.T) {
 	}
 	if set["10.10.0.0/16"] != "10.244.0.9" {
 		t.Errorf("co-tenant route 10.10.0.0/16 must survive removal, got %q", got)
+	}
+}
+
+// TestRemoveRoutes_RemovesAllOwnEntriesByGatewayIP proves the finalizer path
+// withdraws every entry this gateway owns even when remoteCIDRs has since shrunk
+// (so the stale dst is no longer in the declared set), while preserving a
+// co-tenant entry.
+func TestRemoveRoutes_RemovesAllOwnEntriesByGatewayIP(t *testing.T) {
+	existing := `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"10.10.0.0/16","gw":"10.244.0.5"},{"dst":"192.0.2.0/24","gw":"10.244.0.9"}]`
+	// remoteCIDRs was shrunk to just 172.31 before delete; 10.10 is stale but
+	// still owned by this gateway and must be reclaimed.
+	got, err := removeRoutes(existing, "10.244.0.5", []string{"172.31.0.0/16"})
+	if err != nil {
+		t.Fatalf("removeRoutes: %v", err)
+	}
+	set := routeSet(t, got)
+	if _, ok := set["172.31.0.0/16"]; ok {
+		t.Errorf("own route 172.31.0.0/16 should have been removed, got %q", got)
+	}
+	if _, ok := set["10.10.0.0/16"]; ok {
+		t.Errorf("stale own route 10.10.0.0/16 should have been removed by gateway-IP ownership, got %q", got)
+	}
+	if set["192.0.2.0/24"] != "10.244.0.9" {
+		t.Errorf("co-tenant route 192.0.2.0/24 must survive removal, got %q", got)
+	}
+}
+
+// TestMergeRoutes_PrunesOwnStaleOnShrink encodes the R3 fix: when remoteCIDRs
+// shrinks ([A,B] -> [A]) the entry this instance left behind (B, own gw) is
+// withdrawn on the next programming, while the kept entry (A) and a co-tenant
+// entry (different gw) survive.
+func TestMergeRoutes_PrunesOwnStaleOnShrink(t *testing.T) {
+	// This instance owns A (10.10) and B (172.31) at gw 10.244.0.5; a co-tenant
+	// owns C (192.0.2) at gw 10.244.0.9.
+	existing := `[{"dst":"10.10.0.0/16","gw":"10.244.0.5"},{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"192.0.2.0/24","gw":"10.244.0.9"}]`
+	got, err := mergeRoutes(existing, "10.244.0.5", []string{"10.10.0.0/16"}) // shrink to A only
+	if err != nil {
+		t.Fatalf("mergeRoutes: %v", err)
+	}
+	set := routeSet(t, got)
+	if _, ok := set["172.31.0.0/16"]; ok {
+		t.Errorf("stale own route 172.31.0.0/16 (B) must be pruned on shrink, got %q", got)
+	}
+	if set["10.10.0.0/16"] != "10.244.0.5" {
+		t.Errorf("kept own route 10.10.0.0/16 (A) missing, got %q", got)
+	}
+	if set["192.0.2.0/24"] != "10.244.0.9" {
+		t.Errorf("co-tenant route 192.0.2.0/24 (C) must be preserved, got %q", got)
+	}
+}
+
+// TestMergeRoutes_PrunesAllOwnOnEmptyShrink proves shrinking remoteCIDRs to []
+// withdraws every entry this instance owns while leaving a co-tenant entry.
+func TestMergeRoutes_PrunesAllOwnOnEmptyShrink(t *testing.T) {
+	existing := `[{"dst":"172.31.0.0/16","gw":"10.244.0.5"},{"dst":"192.0.2.0/24","gw":"10.244.0.9"}]`
+	got, err := mergeRoutes(existing, "10.244.0.5", nil)
+	if err != nil {
+		t.Fatalf("mergeRoutes: %v", err)
+	}
+	set := routeSet(t, got)
+	if _, ok := set["172.31.0.0/16"]; ok {
+		t.Errorf("own route 172.31.0.0/16 must be pruned when remoteCIDRs empties, got %q", got)
+	}
+	if set["192.0.2.0/24"] != "10.244.0.9" {
+		t.Errorf("co-tenant route 192.0.2.0/24 must be preserved, got %q", got)
 	}
 }
 
