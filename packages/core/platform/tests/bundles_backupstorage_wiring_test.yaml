@@ -1,0 +1,75 @@
+suite: bundles.system backupStorage → backupstrategy-controller wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Regression for #3245: the documented admin override for the cozy-default
+  # backup S3 coordinates rides on spec.components.platform.values.backupStorage
+  # of the cozystack-platform Package. The platform chart must forward that
+  # block into the emitted cozystack.backupstrategy-controller Package CR's
+  # components, otherwise the override silently never reaches the
+  # backupstrategy-controller HelmRelease.
+  - it: emits cozystack.backupstrategy-controller without a components block when backupStorage is unset
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backupstrategy-controller
+    asserts:
+      - equal:
+          path: kind
+          value: Package
+      - equal:
+          path: spec.variant
+          value: default
+      - notExists:
+          path: spec.components
+
+  - it: forwards backupStorage overrides into the backupstrategy-controller component values
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      backupStorage:
+        provisionBucket: false
+        endpoint: https://s3.example.com
+        region: eu-central-1
+        systemSecretName: external-s3-credentials
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backupstrategy-controller
+    asserts:
+      - equal:
+          path: spec.components.backupstrategy-controller.values.backupStorage.provisionBucket
+          value: false
+      - equal:
+          path: spec.components.backupstrategy-controller.values.backupStorage.endpoint
+          value: https://s3.example.com
+      - equal:
+          path: spec.components.backupstrategy-controller.values.backupStorage.region
+          value: eu-central-1
+      - equal:
+          path: spec.components.backupstrategy-controller.values.backupStorage.systemSecretName
+          value: external-s3-credentials
+
+  - it: forwards backupStorage overrides on the isp-full-generic variant too
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      backupStorage:
+        endpoint: https://s3.example.com
+    documentSelector:
+      path: metadata.name
+      value: cozystack.backupstrategy-controller
+    asserts:
+      - equal:
+          path: spec.components.backupstrategy-controller.values.backupStorage.endpoint
+          value: https://s3.example.com
