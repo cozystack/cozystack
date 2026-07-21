@@ -216,7 +216,7 @@ Known reasons this phase fails silently:
 
 ### Phase 3 — `update-website-docs`
 
-Runs with `if: always() && needs.prepare-release.result == 'success'` so it survives a failed changelog phase. Decides whether to promote `next/` → `vX.Y/` in the website repo (only for non-prerelease tags where the version directory doesn't yet exist), runs `make update-all`, then stages `content hugo.yaml data/versions` and opens a PR against `cozystack/website`.
+Runs with `if: !cancelled() && needs.prepare-release.result == 'success'` so it survives a failed or skipped changelog phase but stops when the workflow is cancelled. Decides whether to promote `next/` → `vX.Y/` in the website repo (only for non-prerelease tags where the version directory doesn't yet exist), runs `make update-all`, then stages `content hugo.yaml data/versions` and opens a PR against `cozystack/website`.
 
 If anyone changes the website Makefile to write somewhere else (e.g. `static/`, `i18n/`), the `git add` list must grow or the PR silently drops files.
 
