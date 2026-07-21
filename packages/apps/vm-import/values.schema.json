@@ -64,7 +64,7 @@
       "default": true
     },
     "tenantNamespace": {
-      "description": "Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption).",
+      "description": "Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption). A cross-namespace target is only honored when this VMImport is deployed in a privileged (non-`tenant-*`) namespace; a VMImport deployed inside a tenant namespace is confined to its own namespace, so a tenant cannot direct the import at another tenant.",
       "type": "string",
       "default": ""
     },

@@ -383,23 +383,47 @@ func (c *AdoptionController) isAdoptionEnabled(ctx context.Context, namespace, p
 	return enabled
 }
 
+// tenantNamespacePrefix identifies Cozystack tenant namespaces (e.g. tenant-foo).
+const tenantNamespacePrefix = "tenant-"
+
 // getTargetNamespace returns the namespace the VMInstance should be created in.
 // Forklift conversion runs in a privileged system namespace, but the managed
 // VMInstance must land in the user's tenant. The target tenant is recorded on
 // the Plan via the `vm-import.cozystack.io/target-namespace` annotation.
-// Defaults to the VM's own namespace (same-namespace adoption) when unset.
+// Defaults to the Plan's own namespace (same-namespace adoption) when unset.
+//
+// A cross-namespace target is only honored when the Plan lives outside a tenant
+// namespace, i.e. an admin created it in a privileged namespace and legitimately
+// directs the import at a tenant. A Plan created inside a `tenant-*` namespace is
+// confined to its own namespace: otherwise a tenant could name another tenant's
+// namespace and have this cluster-privileged controller create a VMInstance and
+// clone DataVolumes there (cross-tenant escalation).
 func (c *AdoptionController) getTargetNamespace(ctx context.Context, namespace, planName string) string {
 	gvr := schema.GroupVersionResource{Group: "forklift.konveyor.io", Version: "v1beta1", Resource: "plans"}
 	plan, err := c.dynamicClient.Resource(gvr).Namespace(namespace).Get(ctx, planName, metav1.GetOptions{})
 	if err != nil {
 		return namespace
 	}
-	if ann := plan.GetAnnotations(); ann != nil {
-		if ns := ann["vm-import.cozystack.io/target-namespace"]; ns != "" {
-			return ns
-		}
+	ann := plan.GetAnnotations()
+	if ann == nil {
+		return namespace
 	}
-	return namespace
+	return resolveTargetNamespace(namespace, planName, ann["vm-import.cozystack.io/target-namespace"])
+}
+
+// resolveTargetNamespace applies the cross-tenant guard: an empty or same-namespace
+// request keeps adoption local; a cross-namespace request is honored only when the
+// Plan lives outside a tenant namespace (an admin-directed import), otherwise it is
+// confined to the Plan's own namespace.
+func resolveTargetNamespace(planNamespace, planName, requested string) string {
+	if requested == "" || requested == planNamespace {
+		return planNamespace
+	}
+	if strings.HasPrefix(planNamespace, tenantNamespacePrefix) {
+		klog.Warningf("Plan %s/%s requests cross-namespace adoption into %q but lives in a tenant namespace; confining adoption to %q to prevent cross-tenant escalation", planNamespace, planName, requested, planNamespace)
+		return planNamespace
+	}
+	return requested
 }
 
 // getPlanPreset returns the optional instance type and preference chosen on the
