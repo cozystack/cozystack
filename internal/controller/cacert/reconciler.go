@@ -456,13 +456,15 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if caCertEntries == 0 {
-		// No CACert entry declares the trust anchor any more — a chart that gated its
-		// CACert entry (say on tls.enabled) while still rendering the sentinel lands
-		// here. Withdraw a projection a previous declaration published: garbage
-		// collection only fires when the whole sentinel is pruned, so a sentinel that
-		// keeps existing with its CACert entry removed would otherwise serve a stale
-		// anchor forever. Only a projection this sentinel owns is deleted; a foreign
-		// Secret, or another sentinel's projection at the name, is left untouched.
+		// No CACert entry declares the trust anchor any more. The CRD's MinItems=1
+		// keeps a sentinel from emptying its projections list, so this is reached
+		// when a FUTURE non-CACert entry replaces the CACert one — the list stays
+		// non-empty while the anchor's declaration is gone. Withdraw a projection a
+		// previous declaration published: garbage collection only fires when the
+		// whole sentinel is pruned, so a sentinel that keeps existing with its CACert
+		// entry removed would otherwise serve a stale anchor forever. Only a
+		// projection this sentinel owns is deleted; a foreign Secret, or another
+		// sentinel's projection at the name, is left untouched.
 		if err := r.withdrawProjection(ctx, tp, target); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -1007,13 +1009,19 @@ func isOurProjection(s *corev1.Secret, tp *internalv1alpha1.TenantProjection) bo
 // selectors the lineage webhook uses to decide whether the projection is visible
 // to the tenant. It is the drift signal that forces a re-admission when tenant
 // visibility changes; see SelectorsDigestAnnotation.
+//
+// The full digest is stored, not a truncated prefix. A collision skips exactly the
+// re-admission the doc calls load-bearing — the revocation direction, where a
+// tenant would silently keep read access after a definition stopped selecting the
+// anchor — and the annotation carries no length limit, so the full hash is free
+// hardening on the path that matters most.
 func selectorsDigest(def *cozyv1alpha1.ApplicationDefinition) (string, error) {
 	encoded, err := json.Marshal(def.Spec.Secrets)
 	if err != nil {
 		return "", fmt.Errorf("digest spec.secrets of ApplicationDefinition %s: %w", def.Name, err)
 	}
 	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:8]), nil
+	return hex.EncodeToString(sum[:]), nil
 }
 
 // projectionData builds the projection payload and is the single write-path
