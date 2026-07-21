@@ -172,16 +172,24 @@ spec:
             exit 1
           fi
 
-          # It lifted the right bytes: the projection's ca.crt is CNPG's ca.crt.
-          # This is what pins "{{ .release }}-ca" to reality — if CNPG ever
+          # It lifted the right certificate: the projection's ca.crt is CNPG's
+          # ca.crt. This is what pins "{{ .release }}-ca" to reality — if CNPG ever
           # renames its CA Secret, the controller finds nothing and this fails.
-          src=$(kubectl -n "$NAMESPACE" get secret postgres-test-ca -o jsonpath='{.data.ca\.crt}')
-          proj=$(kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca -o jsonpath='{.data.ca\.crt}')
+          #
+          # Compare the parsed certificates, not the raw PEM. The controller
+          # re-encodes ca.crt from the DER it parsed (certificateChainPEM), so a PEM
+          # header line or a column-width change at the source would redden a
+          # byte-for-byte comparison of a correct projection. The certificate
+          # fingerprint is identity-stable across any re-encoding.
+          src=$(kubectl -n "$NAMESPACE" get secret postgres-test-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          proj=$(kubectl -n "$NAMESPACE" get secret postgres-test.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
           if [ -z "$src" ]; then
             echo "CNPG's postgres-test-ca has no ca.crt — the declared source name or key is wrong" >&2
             exit 1
           fi
-          if [ "$src" != "$proj" ]; then
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
             echo "projection does not carry CNPG's CA certificate" >&2
             exit 1
           fi

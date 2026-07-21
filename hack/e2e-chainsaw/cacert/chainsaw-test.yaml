@@ -259,8 +259,14 @@ spec:
             echo "the projection leaked ca.key — the whole point of the controller failed"
             exit 1
           fi
-          got=$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.data.ca\.crt}' | base64 -d)
-          [ "$got" = "$(cat "$tmp/ca.crt")" ] || { echo "projected ca.crt does not match the source"; exit 1; }
+          # Compare the parsed certificate, not the raw PEM: the controller
+          # re-encodes ca.crt from the DER it parsed, so a header line or a
+          # column-width difference from openssl's output would fail a byte
+          # comparison of a correct projection. The fingerprint is stable across
+          # any re-encoding.
+          proj_fp=$(kubectl -n "$ns" get secret "$proj" -o jsonpath='{.data.ca\.crt}' | base64 -d | openssl x509 -noout -fingerprint -sha256)
+          src_fp=$(openssl x509 -in "$tmp/ca.crt" -noout -fingerprint -sha256)
+          [ "$proj_fp" = "$src_fp" ] || { echo "projected ca.crt does not match the source certificate"; exit 1; }
 
           # And the sentinel now reports Ready.
           # TODO(e2e-replace-fixed-timeouts): same reason as the polls above.
