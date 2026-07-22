@@ -24,7 +24,18 @@ _make_tree() {
   t="$1"
   mkdir -p "$t/system/foo" "$t/system/bar" "$t/system/split" "$t/system/third" \
            "$t/system/splithost" "$t/system/digesthost" "$t/system/globalreg" \
-           "$t/system/guarded" "$t/core/installer"
+           "$t/system/guarded" "$t/core/installer" \
+           "$t/system/tagfile/images" "$t/system/multus/templates"
+  # storage shape 2: a plain images/*.tag file, read by templates via
+  # .Files.Get rather than through values. Invisible to the depth-2 values.yaml
+  # glob this script used to scan, so it was neither mirrored NOR host-rewritten
+  # — leaving the published nightly tree pointing at the private build registry.
+  printf 'iad.ocir.io/idyksih5sir9/cozystack/tagfile:main@sha256:%s\n' "$D" \
+    > "$t/system/tagfile/images/thing.tag"
+  # storage shape 3: a ref sed'd straight into a vendored upstream manifest.
+  # The path must match IMAGE_REF_EXTRA_FILES in hack/lib/image-refs.sh.
+  printf '          image: iad.ocir.io/idyksih5sir9/cozystack/multus-cni:main@sha256:%s\n' "$D" \
+    > "$t/system/multus/templates/multus-daemonset-thick.yml"
   # shape 1: single string, cozystack-owned -> copied
   printf 'image: iad.ocir.io/idyksih5sir9/cozystack/foo:main@sha256:%s\n' "$D" > "$t/system/foo/values.yaml"
   # shape 2: split map, cozystack-owned -> copied
@@ -192,4 +203,46 @@ _make_tree() {
 
   [ "$rc" -ne 0 ]
   grep -q 'No cozystack-owned digest-pinned image refs found' "$tmp/err"
+}
+
+@test "mirrors refs stored in .tag files and declared templates" {
+  # A miss here is worse than the equivalent miss in promote-retag: the host
+  # rewrite walks the same file list as the collection, so an uncollected ref is
+  # also unrewritten and the published tree keeps pointing at the private build
+  # registry. Both shapes below were invisible while this scanned the depth-2
+  # values.yaml alone.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_tree "$tmp/tree"
+
+  hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree" --dry-run \
+    >"$tmp/out" 2>"$tmp/err"
+
+  grep -q 'docker://ghcr.io/cozystack/cozystack/tagfile:0.0.0-nightly.test' "$tmp/out"
+  grep -q 'docker://ghcr.io/cozystack/cozystack/multus-cni:0.0.0-nightly.test' "$tmp/out"
+}
+
+@test "the host rewrite and the mirror walk the same file list" {
+  # The two sets must be equal. A file rewritten but not mirrored leaves a
+  # dangling ref to an image never pushed to the dest registry; a file mirrored
+  # but not rewritten leaves the private host in the published tree. Both
+  # derive from image_ref_files now, so assert it reaches all three shapes.
+  #
+  # Scope, so the name does not overclaim: this pins WHICH FILES the rewrite
+  # visits, not that every ref inside them is successfully rewritten. The sed
+  # itself only runs outside --dry-run (it needs skopeo) and is a literal
+  # "<src>/" substring replace, so it still cannot rewrite a host split into a
+  # sibling `registry:` key (keycloak-operator) or one without a trailing slash
+  # (kubeovn's global.registry.address). That is a known gap recorded in
+  # docs/agents/image-refs.md, not something this test covers.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_tree "$tmp/tree"
+
+  . hack/lib/image-refs.sh
+  files=$(image_ref_files "$tmp/tree")
+
+  echo "$files" | grep -q '/system/foo/values.yaml$'
+  echo "$files" | grep -q '/system/tagfile/images/thing.tag$'
+  echo "$files" | grep -q '/system/multus/templates/multus-daemonset-thick.yml$'
 }

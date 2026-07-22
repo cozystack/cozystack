@@ -133,3 +133,30 @@
   # The diagnostic is written to stderr.
   grep -q 'No cozystack-owned digest-pinned image refs found' "$tmp/err"
 }
+
+@test "retags images whose ref lives outside a values.yaml" {
+  # Until the file enumeration moved to hack/lib/image-refs.sh this scanned the
+  # depth-2 values.yaml alone, so every ref held in an images/*.tag file or
+  # stamped into a template was skipped — the promotion reported success while
+  # never creating those images' :<version> tags. Twelve images were affected
+  # (30 refs selected before, 42 after). Because the retag stays inside one
+  # registry the digests still resolved, so nothing failed at pull time and the
+  # gap went unnoticed until a release shipped reading as a release candidate.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  rc=0
+  env -u REGISTRY hack/promote-retag.sh v9.9.9 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  # grafana lives in packages/system/monitoring/images/grafana.tag, and
+  # multus-cni is sed'd into packages/system/multus/templates/*.yml. Neither is
+  # reachable from any values.yaml.
+  grep -q 'cozystack/grafana:v9.9.9' "$tmp/out"
+  grep -q 'cozystack/multus-cni:v9.9.9' "$tmp/out"
+}

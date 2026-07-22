@@ -20,9 +20,10 @@
 #                     with the same max-semver test it uses for the release's
 #                     make_latest flag and sets MOVE_LATEST accordingly.
 #
-# Reads image refs from packages/*/*/values.yaml in the CURRENT tree, which is
-# expected to be the promoted stable digest-vendored tree (the release-X.Y.Z
-# branch, whose digests are the rc's — only the cosmetic tag string differs).
+# Reads image refs from the CURRENT tree (see hack/lib/image-refs.sh for which
+# files that covers), which is expected to be the promoted stable
+# digest-vendored tree (the release-X.Y.Z branch, whose digests are the rc's —
+# only the cosmetic tag string differs).
 # Requires: yq (mikefarah), skopeo, and a registry login already done.
 #
 # The repo/tag split (ref_repo below) strips the :tag from the last path
@@ -49,81 +50,21 @@ yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2
 # skopeo is only needed to actually copy; a --dry-run just prints the plan.
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
-# Collect "repo@sha256:..." refs from every package values.yaml. The shapes
-# below are the ones present in the tree today, found by auditing every
-# @sha256: digest under packages/*/*/values.yaml against this selector's
-# output — NOT a closed set the build is known to be limited to. Charts are
-# vendored from upstream and their values layout is theirs to change, so treat
-# this list as empirical and re-run that audit when a package is added:
-#   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
-#   2. split map       {[registry,] repository, tag, digest}      (e.g. .cilium.image)
-#   3. split map       {[registry,] repository, tag: <tag>@sha256:<digest>}
-#                      (e.g. .linstorCSI.image; .keycloak-operator.image adds registry)
-#   4. chart-global    global.registry.address + global.images.<n>.{repository, tag}
-#                      (kube-ovn's wrapper chart)
-#   5. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}
-#
-# The optional `registry` sibling in shapes 2/3 and the whole of shape 4 exist
-# because the host does not always live inside `repository`. When it does not,
-# the rule must rejoin it: a host-less ref reaches the ownership filter below
-# looking third-party and is dropped, which is the same silent-skip failure
-# this selector's shape-3 rule was added to fix. keycloak-operator
-# (registry: ghcr.io + repository: cozystack/cozystack/keycloak-operator) and
-# kubeovn (global.registry.address + repository: kubeovn) are both built and
-# pushed to $REGISTRY by cozystack — kubeovn by the cozystack/kubeovn-chart
-# wrapper repo, whose own `make image` writes exactly the shape-4 layout — and
-# both went untagged for every 1.x release until these rules landed.
-#
-# Shape 3 is the dominant one: most package Makefiles set `.image.tag` to
-# "$(IMAGE_TAG)@$(digest)" in a single yq call instead of maintaining a separate
-# `digest` key. It matches neither shape 2 (no `digest` key) nor, usefully, shape
-# 1 — that rule sees only the bare tag value, which carries no repository, so
-# ref_repo() reduces "<tag>@sha256:<digest>" to "<tag>" and the ownership filter
-# drops it. Omitting this rule silently skipped eight images across six packages
-# (kamaji, kilo, linstor-csi, piraeus-server, linstor-gui, metallb-controller,
-# metallb-speaker, redis-operator): the promotion reported success while never
-# creating their :<version> tags. Unlike the nightly mirror this retags within one
-# registry, so the digests still resolve and digest-pinned installs are unaffected
-# — but the release does not carry the tags it claims to, and nothing detects it.
-#
-# The `tag == "!!str"` guard is load-bearing: yq's test() aborts the expression on
-# a non-string tag ("cannot match with !!int"), and since this invocation swallows
-# stderr and status, that abort would silently drop every shape-3 ref in the same
-# file. `tag: 1.24` unquoted in a neighbouring third-party block is enough. Rule 1
-# is immune — its `select(tag == "!!str")` already precedes its test().
-#
-# `registry`, `repository` and `digest` are guarded the same way, but against a
-# different failure than `tag`. They are never fed to test(); they are string-
-# concatenated, and yq coerces most scalars on `+` — an int, bool, null or seq
-# flows through and merely yields a ref the ownership filter discards. Only a
-# !!map aborts, with "!!str () cannot be added to a !!map", and that abort takes
-# the whole file's expression down with it. So the guard is narrow insurance
-# against one nested-map typo in a vendored chart silently costing every
-# co-located owned ref. Being a select() rather than a test(), it drops just the
-# offending map and lets its neighbours through.
-collect_refs() {
-  for f in packages/*/*/values.yaml; do
-    [ -f "$f" ] || continue
-    # shape 1
-    yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$f" 2>/dev/null || true
-    # shape 2. The `sub("^/"; "")` is what makes `registry` optional: absent, it
-    # alternates to "" and leaves a leading slash on the join, which is stripped
-    # back to the bare repository the rule emitted before registry was handled.
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | select(.repository | tag == "!!str") | select(.digest | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + .digest' "$f" 2>/dev/null || true
-    # shape 3
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | select((.registry // "") | tag == "!!str") | (((.registry // "") + "/" + .repository) | sub("^/"; "")) + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
-    # shape 4. Scoped to global.images rather than a recursive descent: the host
-    # is a document-level key, so binding it to a map found anywhere in the file
-    # would attach kube-ovn's registry to unrelated repositories. Guarding on a
-    # non-empty address keeps a chart without one from emitting "/<repo>".
-    # $reg is a yq binding, not a shell variable — the single quotes are
-    # required, so SC2016's "expressions don't expand" is inverted here.
-    # shellcheck disable=SC2016
-    yq -r '(.global.registry.address // "") as $reg | select($reg != "") | select($reg | tag == "!!str") | .global.images[] | select(tag == "!!map") | select(has("repository") and has("tag")) | select(.tag | tag == "!!str") | select(.tag | test("@sha256:[0-9a-f]{64}")) | select(.repository | tag == "!!str") | $reg + "/" + .repository + "@" + (.tag | sub(".*@"; ""))' "$f" 2>/dev/null || true
-    # shape 5
-    yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
-  done
-}
+# Ref collection (which files are scanned, and the YAML shapes within them) is
+# shared with hack/nightly-mirror.sh and hack/promote-rewrite-tags.sh — see
+# hack/lib/image-refs.sh. It was duplicated between the first two for as long
+# as both existed, and they drifted: this script and the mirror scanned only
+# the depth-2 values.yaml, so every ref stored in an images/*.tag file or
+# stamped into a template was silently skipped. That is the same failure mode
+# the shape-3 rule was added for — the promotion reports success while never
+# creating those images' :<version> tags. Because the retag happens within one
+# registry the digests still resolve and digest-pinned installs are unaffected,
+# but the release does not carry the tags it claims to. Keep the enumeration in
+# one place so a fix reaches every consumer at once.
+# shellcheck source=hack/lib/image-refs.sh
+. "$(dirname "$0")/lib/image-refs.sh"
+
+collect_refs() { collect_image_refs packages; }
 
 # Split a "<repo>[:<tag>]@sha256:<digest>" ref into repo and digest.
 # ref_repo strips the :tag from the LAST path component only, so a registry
