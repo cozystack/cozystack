@@ -4,7 +4,7 @@ repos:
     - id: run-make-generate-root
       name: Run 'make generate' at repo root
       entry: |
-        flock -x .git/pre-commit.lock sh -c '
+        sh -c 'exec flock -x "$(git rev-parse --git-common-dir)/pre-commit.lock" "$@"' -- sh -c '
           echo "Running make generate at repo root"
           make generate || exit $?
           git diff --color=always | cat
@@ -15,7 +15,7 @@ repos:
     - id: run-make-generate
       name: Run 'make generate' in all app directories
       entry: |
-        flock -x .git/pre-commit.lock sh -c '
+        sh -c 'exec flock -x "$(git rev-parse --git-common-dir)/pre-commit.lock" "$@"' -- sh -c '
           for dir in ./packages/apps/*/ ./packages/extra/*/; do
             if [ -d "$dir" ]; then
               echo "Running make generate in $dir"
