@@ -301,7 +301,20 @@ jobs:
           fi
           # HEAD is the commit just tagged: the stale-tip guard above proved it
           # still equals the remote branch tip, so branch and tag agree.
-          git push origin "HEAD:refs/heads/$BRANCH"
+          #
+          # This push and the tag push above are independent operations. If the
+          # tag landed and this fails (transient blip, runner eviction), the
+          # line is tagged but not frozen, and the write-once tag guard refuses
+          # a same-tag re-dispatch — so recovery is manual. Fail loudly with the
+          # exact command instead of leaving the operator to reconstruct it.
+          # Nothing is silently wrong in the meantime: no wrong ref is pushed,
+          # and finalize still creates the branch later.
+          if ! git push origin "HEAD:refs/heads/$BRANCH"; then
+            echo "::error::Failed to create $BRANCH, but $TAG is already pushed."
+            echo "::error::Re-dispatching $TAG will be refused by the write-once tag guard."
+            echo "::error::Recover manually: git push origin $(git rev-parse HEAD):refs/heads/$BRANCH"
+            exit 1
+          fi
           echo "🔒 Froze the $LINE line: created $BRANCH at $(git rev-parse HEAD) ($TAG)."
           echo "   'main' is now open for the next minor."
           echo "   Fixes for $LINE must be cherry-picked onto $BRANCH."
