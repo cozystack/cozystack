@@ -16,6 +16,16 @@ spec:
     metadata:
       annotations:
         kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+        # A router forwards packets whose source IP is not its own pod IP, so
+        # OVN per-port anti-spoof (port_security) must be OFF on the gateway port.
+        # kube-ovn v1.15.10 only reconciles the logical-switch-port port_security
+        # field at pod CREATE — flipping the annotation on a live virt-launcher pod
+        # does NOT take effect (validated live) — so it is baked here on the pod
+        # template and the virt-launcher pod is born with it. The controller
+        # VERIFIES this annotation (it no longer patches live) and gates its Ready
+        # progression on the guest tunnel-ingress source filter, which is the
+        # sole compensating control (see docs/security-model.md, D8-ordering).
+        ovn.kubernetes.io/port_security: "false"
       labels:
         {{- include "site-router.selectorLabels" . | nindent 8 }}
     spec:

@@ -62,8 +62,15 @@ const (
 	// Degraded and the reconcile requeues to retry.
 	reasonConfigureFailed = "ConfigureFailed"
 	// reasonSourceFilterPending marks the guest tunnel-ingress source filter not
-	// yet confirmed active; port security stays enforcing until it is (D8).
+	// yet confirmed active; the controller does not treat the (chart-baked)
+	// port_security relaxation as effective until it is (D8 Ready-gate).
 	reasonSourceFilterPending = "SourceFilterPending"
+	// reasonPortSecurityPending marks a gateway pod that does not carry the
+	// chart-baked ovn.kubernetes.io/port_security relaxation. On kube-ovn v1.15.10
+	// a live annotation flip does not reconcile the OVN port, so the controller
+	// cannot relax it after creation — the pod must be recreated to pick up the
+	// pod-template annotation. The controller requeues rather than patch in vain.
+	reasonPortSecurityPending = "PortSecurityRelaxationPending"
 	// reasonPSKPending marks the per-instance PSK Secret not yet present; the
 	// controller requeues rather than push a tunnel with no authentication.
 	reasonPSKPending = "PSKSecretPending"
@@ -360,30 +367,30 @@ func (r *SiteRouterReconciler) confirmSourceFilterActive(ctx context.Context, in
 }
 
 // sourceFilterDown maintains the D8 invariant while the guest tunnel-ingress
-// source filter is not confirmed active. It (1) re-enforces port_security if a
-// prior cycle relaxed it — the compensating guard is down, so the port must not
-// stay open — and (2) invalidates the cached config hash when a prior push had
-// recorded one, so the next reconcile re-pushes and re-stamps the managed
-// subtrees (restoring the guest-side source filter after a wipe and re-stamping
-// the management firewall). It then returns the SourceFilterPending requeue.
+// source filter is not confirmed active. It invalidates the cached config hash
+// when a prior push had recorded one, so the next reconcile re-pushes and
+// re-stamps the managed subtrees — RE-ESTABLISHING the guest-side source filter
+// after a wipe and re-stamping the management firewall. It then returns the
+// SourceFilterPending requeue.
 //
-// A failed re-enforcement is returned as a hard error rather than masked by the
-// soft requeue: leaving the port relaxed while reporting only "pending" would
-// silently violate D8.
+// R3 change: it no longer flips port_security on the live pod to "re-enforce" it.
+// port_security is baked off at pod CREATE (templates/vm.yaml) and kube-ovn
+// v1.15.10 does not reconcile the OVN port from a live annotation flip (T13), so
+// a live re-enforce here would neither re-close the OVN port nor survive recovery
+// (verifyGatewayPortSecurityRelaxed no longer re-adds the annotation). The guest
+// source filter is the SOLE compensating control (see docs/security-model.md), so
+// the maintenance action when it drops is to re-push and re-establish IT — which
+// the hash invalidation below drives — not to toggle a port_security annotation
+// that has no OVN effect.
 func (r *SiteRouterReconciler) sourceFilterDown(ctx context.Context, inst *instance, msg string) error {
-	if inst.gatewayPod != nil && inst.gatewayPod.Annotations[portSecurityAnnotation] == portSecurityRelaxed {
-		if err := r.restorePortSecurity(ctx, inst); err != nil {
-			return err
-		}
-		log.FromContext(ctx).Info("re-enforced gateway port_security: tunnel-ingress source filter is down",
-			"instance", inst.name, "namespace", inst.namespace)
-	}
-
 	key := client.ObjectKeyFromObject(inst.hr)
 	if r.lastAppliedHash(key) != "" {
 		// Force a re-push on the next reconcile so the managed subtrees are
-		// re-stamped and the source filter is re-established.
+		// re-stamped and the source filter — the sole compensating control — is
+		// re-established.
 		r.forgetAppliedHash(key)
+		log.FromContext(ctx).Info("invalidated cached config hash to re-establish the guest tunnel-ingress source filter: filter is down",
+			"instance", inst.name, "namespace", inst.namespace)
 	}
 
 	return &reconcileError{

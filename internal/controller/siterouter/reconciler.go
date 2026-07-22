@@ -297,7 +297,7 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	if err := r.confirmSourceFilterActive(ctx, inst); err != nil { // T08/T06: guest source guard up
 		return r.classify(ctx, err)
 	}
-	if err := r.relaxGatewayPortSecurity(ctx, inst); err != nil { // T07: Ready-gated port_security relax
+	if err := r.verifyGatewayPortSecurityRelaxed(ctx, inst); err != nil { // T07/R3: Ready-gated verify of the chart-baked port_security relaxation
 		return r.classify(ctx, err)
 	}
 	pollErr := r.pollRuntimeState(ctx, inst) // T06: tunnel/BGP observations (data for T09/T10)
@@ -454,45 +454,52 @@ func (r *SiteRouterReconciler) programNamespaceRoutes(ctx context.Context, inst 
 
 // pushVyOSConfig and confirmSourceFilterActive live in vyospush.go (T06).
 
-// relaxGatewayPortSecurity patches ovn.kubernetes.io/port_security=false on the
-// gateway virt-launcher pod only, with a single-key merge patch so no other pod
-// and no other annotation is touched. OVN otherwise drops the guest's routed,
-// non-pod-IP source addresses; kube-ovn v1.15.10 cannot scope a CIDR in
-// allowed-address-pairs, so Phase 1 relaxes fully and relies on the guest
-// tunnel-ingress source filter (T08) as the compensating control — which is why
-// this runs only AFTER confirmSourceFilterActive in the reconcile pipeline (D8:
-// never relax before the guard is up). The finalizer restores it on delete.
+// verifyGatewayPortSecurityRelaxed confirms the gateway virt-launcher pod carries
+// the chart-baked ovn.kubernetes.io/port_security=false relaxation. OVN otherwise
+// drops the guest's routed, non-pod-IP source addresses; kube-ovn v1.15.10 cannot
+// scope a CIDR in allowed-address-pairs, so Phase 1 relaxes the port fully and
+// relies on the guest tunnel-ingress source filter (T08) as the compensating
+// control — which is why this runs only AFTER confirmSourceFilterActive in the
+// reconcile pipeline (D8 Ready-gate: the controller does not treat the relaxation
+// as effective until the guard is confirmed up).
 //
-// port_security timing (D8, validated empirically in T13): the kube-ovn mutating
-// webhook only inherits namespace annotations onto pods at CREATE
-// (packages/system/kubeovn-webhook admission.go: it no-ops for non-Create), so
-// this patches the annotation directly on the live gateway pod. Whether kube-ovn
-// v1.15.10 reconciles the logical-switch-port port_security field from an
-// annotation flip on an already-wired port — rather than only at port creation —
-// is not certain from the in-repo sources. If T13 shows the live toggle does not
-// take effect, the fallback is to bake ovn.kubernetes.io/port_security: "false"
-// onto the VM's pod template in the chart (applied at virt-launcher creation)
-// while this controller keeps the Ready gate and the finalizer restore. The
-// controller does NOT trigger a pod roll in Phase 1 — that decision waits on the
-// T13 finding.
-func (r *SiteRouterReconciler) relaxGatewayPortSecurity(ctx context.Context, inst *instance) error {
+// port_security timing (D8, validated empirically in T13): kube-ovn v1.15.10 only
+// reconciles the logical-switch-port port_security field at pod CREATE — flipping
+// ovn.kubernetes.io/port_security on an already-wired live virt-launcher pod does
+// NOT reconcile the OVN LSP. The earlier design patched the live pod with a
+// MergeFrom; T13 proved that ineffective. The relaxation is therefore baked onto
+// the VM's pod template in the chart (templates/vm.yaml) so the virt-launcher pod
+// is born with it, and this method only VERIFIES it — it no longer patches. The
+// finalizer's restorePortSecurity still runs on delete as best-effort cleanup.
+//
+// Consequence — the D8-ordering tradeoff: because the port is relaxed from boot
+// (baked at pod creation), it is open BEFORE this method confirms the guest
+// source filter, so the guest source filter (installed on the first config push)
+// is the SOLE compensating control and there is a boot window — before the first
+// push, tunnel not yet up, no decrypted traffic — where the port is relaxed with
+// no guest guard. This is the accepted Phase-1 posture; scoped port_security
+// (kube-ovn CIDR-AAP) is the follow-up. See docs/security-model.md.
+//
+// A pod that does not carry the baked annotation predates the template change (or
+// was created without it): the controller cannot relax the port after creation,
+// so it requeues for the pod to be recreated rather than patch a value that will
+// not take effect.
+func (r *SiteRouterReconciler) verifyGatewayPortSecurityRelaxed(ctx context.Context, inst *instance) error {
 	if inst.gatewayPod == nil {
 		// No gateway pod yet; the pod watch re-triggers once it is scheduled.
 		return nil
 	}
 	pod := inst.gatewayPod
 	if pod.Annotations[portSecurityAnnotation] == portSecurityRelaxed {
-		return nil // already relaxed
+		return nil // chart-baked relaxation present — the OVN port was created relaxed
 	}
-	patch := client.MergeFrom(pod.DeepCopy())
-	if pod.Annotations == nil {
-		pod.Annotations = map[string]string{}
+	return &reconcileError{
+		reason: reasonPortSecurityPending,
+		message: fmt.Sprintf("gateway pod %s/%s does not carry the chart-baked %s=%s relaxation; "+
+			"a live annotation flip does not reconcile the OVN port on kube-ovn v1.15.10, so recreate the gateway VM pod to pick up the pod-template annotation",
+			pod.Namespace, pod.Name, portSecurityAnnotation, portSecurityRelaxed),
+		requeueAfter: runtimePollInterval,
 	}
-	pod.Annotations[portSecurityAnnotation] = portSecurityRelaxed
-	if err := r.Patch(ctx, pod, patch); err != nil {
-		return fmt.Errorf("relax port_security on gateway pod %s/%s: %w", pod.Namespace, pod.Name, err)
-	}
-	return nil
 }
 
 // updateStatus surfaces the instance's status. It lives in status.go (T09).

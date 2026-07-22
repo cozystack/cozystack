@@ -6,6 +6,7 @@ package siterouter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -220,6 +221,10 @@ func TestMergeRoutes_PrunesAllOwnOnEmptyShrink(t *testing.T) {
 
 // gwPod builds a gateway virt-launcher pod carrying the lineage labels the
 // controller discovers it by, with a pod IP.
+// gwPod builds a running gateway virt-launcher pod. It carries the chart-baked
+// ovn.kubernetes.io/port_security=false annotation because the VM pod template
+// (templates/vm.yaml) bakes it, so every real gateway pod is born with it (R3);
+// the controller verifies rather than patches it.
 func gwPod(name, instance, podIP string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -229,42 +234,47 @@ func gwPod(name, instance, podIP string) *corev1.Pod {
 				appKindLabelKey: siteRouterKind,
 				appNameLabelKey: instance,
 			},
+			Annotations: map[string]string{portSecurityAnnotation: portSecurityRelaxed},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: podIP},
 	}
 }
 
-// TestRelaxGatewayPortSecurity_TargetsOnlyGatewayPod encodes the T07 Acceptance
-// "the gateway VM pod has port_security=false; no other pod does": the
-// relaxation patch lands on the resolved gateway pod and nothing else in the
-// namespace.
-func TestRelaxGatewayPortSecurity_TargetsOnlyGatewayPod(t *testing.T) {
-	gateway := gwPod("virt-launcher-site-router-demo-abcde", "demo", "10.244.0.5")
-	bystander := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "tenant-workload-0", Namespace: "tenant-test"}}
-	r := newTestReconciler(t, gateway, bystander)
+// TestVerifyGatewayPortSecurityRelaxed encodes the R3 posture: the relaxation is
+// baked on the pod template at CREATE (kube-ovn v1.15.10 ignores a live flip), so
+// the controller VERIFIES it rather than patching. A gateway pod that carries the
+// baked annotation passes; one that does not requeues (PortSecurityRelaxationPending)
+// so the pod is recreated — the controller never patches a value with no OVN effect.
+func TestVerifyGatewayPortSecurityRelaxed(t *testing.T) {
+	t.Run("chart-baked annotation present — verify passes", func(t *testing.T) {
+		gateway := gwPod("virt-launcher-site-router-demo-abcde", "demo", "10.244.0.5")
+		r := newTestReconciler(t, gateway)
+		inst := &instance{name: "demo", namespace: "tenant-test", gatewayPod: gateway}
 
-	inst := &instance{
-		name:       "demo",
-		namespace:  "tenant-test",
-		gatewayPod: gateway,
-	}
-	if err := r.relaxGatewayPortSecurity(context.Background(), inst); err != nil {
-		t.Fatalf("relaxGatewayPortSecurity: %v", err)
-	}
+		if err := r.verifyGatewayPortSecurityRelaxed(context.Background(), inst); err != nil {
+			t.Fatalf("verifyGatewayPortSecurityRelaxed with the baked annotation present: %v", err)
+		}
+	})
 
-	got := &corev1.Pod{}
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-test", Name: gateway.Name}, got); err != nil {
-		t.Fatalf("get gateway pod: %v", err)
-	}
-	if got.Annotations[portSecurityAnnotation] != portSecurityRelaxed {
-		t.Errorf("gateway pod %s = %q, want %s=%q", gateway.Name, got.Annotations[portSecurityAnnotation], portSecurityAnnotation, portSecurityRelaxed)
-	}
+	t.Run("annotation absent — requeues for pod recreation, no live patch", func(t *testing.T) {
+		gateway := gwPod("virt-launcher-site-router-demo-abcde", "demo", "10.244.0.5")
+		delete(gateway.Annotations, portSecurityAnnotation) // legacy pod predating the template bake
+		r := newTestReconciler(t, gateway)
+		inst := &instance{name: "demo", namespace: "tenant-test", gatewayPod: gateway}
 
-	other := &corev1.Pod{}
-	if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-test", Name: bystander.Name}, other); err != nil {
-		t.Fatalf("get bystander pod: %v", err)
-	}
-	if _, set := other.Annotations[portSecurityAnnotation]; set {
-		t.Errorf("bystander pod must not carry %s, got %q", portSecurityAnnotation, other.Annotations[portSecurityAnnotation])
-	}
+		err := r.verifyGatewayPortSecurityRelaxed(context.Background(), inst)
+		var re *reconcileError
+		if !errors.As(err, &re) || re.reason != reasonPortSecurityPending || re.requeueAfter == 0 {
+			t.Fatalf("expected a %s requeue when the baked annotation is absent, got %v", reasonPortSecurityPending, err)
+		}
+
+		// The controller must NOT patch the live pod (the flip is a no-op on OVN).
+		got := &corev1.Pod{}
+		if err := r.Get(context.Background(), types.NamespacedName{Namespace: "tenant-test", Name: gateway.Name}, got); err != nil {
+			t.Fatalf("get gateway pod: %v", err)
+		}
+		if _, set := got.Annotations[portSecurityAnnotation]; set {
+			t.Errorf("verify must not patch port_security onto the live pod, got %q", got.Annotations[portSecurityAnnotation])
+		}
+	})
 }

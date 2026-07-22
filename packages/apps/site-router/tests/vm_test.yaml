@@ -51,6 +51,21 @@ tests:
           path: spec.template.spec.domain.devices.disks[0].disk.bus
           value: virtio
 
+  # R3 — kube-ovn v1.15.10 only reconciles the LSP port_security field at pod
+  # CREATE (a live annotation flip on an already-wired virt-launcher pod is a
+  # no-op, validated live), so the router's port_security=false relaxation is
+  # baked on the pod TEMPLATE here and the pod is born with it. The controller
+  # verifies (no longer patches) this annotation; the guest tunnel-ingress source
+  # filter is the sole compensating control (see docs/security-model.md).
+  - it: bakes port_security=false onto the gateway pod template (chart-baked relaxation)
+    documentSelector:
+      path: kind
+      value: VirtualMachine
+    asserts:
+      - equal:
+          path: spec.template.metadata.annotations["ovn.kubernetes.io/port_security"]
+          value: "false"
+
   - it: places the gateway on the default pod network via a bridge NIC
     documentSelector:
       path: kind

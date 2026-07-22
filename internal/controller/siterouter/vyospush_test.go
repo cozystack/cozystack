@@ -358,9 +358,14 @@ func TestReconcile_ConfigHashIdempotent(t *testing.T) {
 
 // TestReconcile_DegradedOnConfigureError encodes T06 "on failure → Degraded +
 // requeue 30s" (T12 "Degraded-on-Configure-error"): a failing POST /configure
-// records a ConfigureFailed event, requeues after the runtime-poll interval,
-// does NOT record the hash (so the next reconcile retries the push), and does
-// NOT relax port security (the guest is not known good).
+// records a ConfigureFailed event, requeues after the runtime-poll interval, and
+// does NOT record the hash (so the next reconcile retries the push).
+//
+// R3: port_security is baked off at pod CREATE (templates/vm.yaml), so the port
+// is relaxed regardless of the Degraded state — that is the accepted Phase-1
+// boot-window posture (see docs/security-model.md); the guest source filter is
+// the compensating control and simply is not confirmed here. The Degraded signal
+// is the requeue + event + un-recorded hash, asserted below.
 func TestReconcile_DegradedOnConfigureError(t *testing.T) {
 	fakeV := &fakeVyOS{configureErr: errors.New("vyos api timeout")}
 	objs := readyObjects(t, "demo", routedValues(), "10.244.0.5")
@@ -376,9 +381,6 @@ func TestReconcile_DegradedOnConfigureError(t *testing.T) {
 	}
 	if !hasEventReason(rec, reasonConfigureFailed) {
 		t.Errorf("expected a %s event on Configure failure, events: %v", reasonConfigureFailed, recordedEvents(rec))
-	}
-	if gatewayPortSecurityRelaxed(t, r, "virt-launcher-"+releasePrefix+"demo-abcde") {
-		t.Errorf("port security must NOT be relaxed while the guest is Degraded")
 	}
 
 	// Hash not recorded: the next reconcile re-attempts the push.
@@ -520,84 +522,94 @@ func TestReconcile_DriftReApplies(t *testing.T) {
 }
 
 // TestReconcile_ReadyGatedOnSourceFilter encodes T06 reconcile ordering
-// "push → confirm source filter active → relax port security" (D8; T12 "Ready
-// gated on source-filter-active"). Until the guest reports the tunnel-ingress
-// rule set live, port security must stay enforcing and the reconcile requeues.
+// "push → confirm source filter active → verify port_security relaxed" (D8; T12
+// "Ready gated on source-filter-active"). Until the guest reports the
+// tunnel-ingress rule set live, the controller does not treat the relaxation as
+// effective: it requeues (does not progress to Ready).
+//
+// R3: the OVN port is relaxed from boot (baked on the pod template), so the gate
+// is on the controller's Ready progression, not on physically holding the port
+// enforcing — the guest source filter is the compensating control. "filter
+// absent" therefore asserts the requeue, not an enforcing port.
 func TestReconcile_ReadyGatedOnSourceFilter(t *testing.T) {
 	podName := "virt-launcher-" + releasePrefix + "demo-abcde"
 
-	t.Run("filter absent — port security stays enforcing", func(t *testing.T) {
+	t.Run("filter absent — reconcile requeues (not treated as effective)", func(t *testing.T) {
 		fakeV := &fakeVyOS{retrieveResult: json.RawMessage(`null`)} // rule set not present yet
 		r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
 
 		res := reconcileInstance(t, r, "demo")
 
-		if gatewayPortSecurityRelaxed(t, r, podName) {
-			t.Errorf("port security must NOT be relaxed before the guest source filter is confirmed (D8)")
-		}
 		if res.RequeueAfter == 0 {
 			t.Errorf("expected a requeue while waiting for the source filter to come up, got none")
 		}
 	})
 
-	t.Run("filter present — port security relaxed", func(t *testing.T) {
+	t.Run("filter present — chart-baked relaxation verified", func(t *testing.T) {
 		fakeV := &fakeVyOS{retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"},"10":{"action":"accept"}}}`)}
 		r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
 
 		reconcileInstance(t, r, "demo")
 
 		if !gatewayPortSecurityRelaxed(t, r, podName) {
-			t.Errorf("port security should be relaxed once the guest source filter is confirmed active")
+			t.Errorf("gateway pod should carry the chart-baked port_security relaxation once the source filter is confirmed active")
 		}
 	})
 }
 
-// TestReconcile_ReenforcesPortSecurityWhenSourceFilterDropsAfterRelax encodes the
-// R2 fix (maintaining, not just establishing, the D8 invariant). Steady state:
-// the config is pushed, the source filter is confirmed, port security is relaxed.
-// Then the guest wipes the managed config so the filter drops: the next reconcile
-// must re-enforce port_security (the compensating guard is down) AND invalidate
-// the cached hash so the following reconcile re-pushes and re-stamps the filter,
-// after which the port is relaxed again.
-func TestReconcile_ReenforcesPortSecurityWhenSourceFilterDropsAfterRelax(t *testing.T) {
+// TestReconcile_ReestablishesSourceFilterWhenItDropsAfterRelax encodes the R3
+// maintenance behavior (maintaining, not just establishing, the D8 invariant).
+// Steady state: the config is pushed and the source filter is confirmed. Then the
+// guest wipes the managed config so the filter drops: the next reconcile must
+// invalidate the cached hash so the following reconcile re-pushes and RE-STAMPS
+// the filter — the sole compensating control.
+//
+// R3: the controller no longer flips port_security on a drop. The OVN port is
+// relaxed from boot (baked at pod CREATE) and kube-ovn v1.15.10 does not
+// reconcile the port from a live annotation flip, so "re-enforcing" it there
+// would have no OVN effect and could not be undone on recovery (verify no longer
+// re-adds the annotation). The maintenance action is to re-establish the guest
+// source filter via a re-push. The port stays baked-relaxed throughout — the
+// accepted Phase-1 posture (see docs/security-model.md).
+func TestReconcile_ReestablishesSourceFilterWhenItDropsAfterRelax(t *testing.T) {
 	podName := "virt-launcher-" + releasePrefix + "demo-abcde"
 	filterUp := json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`)
 	fakeV := &fakeVyOS{retrieveResult: filterUp}
 	r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
 
-	// 1) Steady state: push once, confirm filter, relax the port.
+	// 1) Steady state: push once, confirm filter; the baked relaxation verifies.
 	reconcileInstance(t, r, "demo")
 	if fakeV.Configures() != 1 {
 		t.Fatalf("expected exactly 1 Configure on first reconcile, got %d", fakeV.Configures())
 	}
 	if !gatewayPortSecurityRelaxed(t, r, podName) {
-		t.Fatalf("expected port_security relaxed once the source filter is confirmed")
+		t.Fatalf("expected the chart-baked port_security relaxation present once the source filter is confirmed")
 	}
 
 	// 2) The guest wipes the managed config: the source filter drops.
 	fakeV.setRetrieve(json.RawMessage(`null`))
 	res := reconcileInstance(t, r, "demo")
-	if gatewayPortSecurityRelaxed(t, r, podName) {
-		t.Errorf("port_security must be re-enforced while the source filter is down (D8)")
+	if !gatewayPortSecurityRelaxed(t, r, podName) {
+		t.Errorf("port_security stays baked-relaxed when the filter drops (R3): a live flip has no OVN effect; re-establishing the guest filter is the maintenance action")
 	}
 	if res.RequeueAfter == 0 {
 		t.Errorf("expected a requeue while the source filter is down, got none")
 	}
 	// The push is skipped on this reconcile (hash still cached at step start); the
-	// re-enforcement is what matters here.
+	// hash invalidation for the NEXT reconcile is what matters here.
 	if fakeV.Configures() != 1 {
 		t.Errorf("no re-push expected on the drop-detection reconcile itself, got %d", fakeV.Configures())
 	}
 
 	// 3) The filter recovers once re-stamped; the invalidated hash forces a
-	// re-push and the port is relaxed again.
+	// re-push and the relaxation verifies again.
 	fakeV.setRetrieve(filterUp)
 	reconcileInstance(t, r, "demo")
 	if fakeV.Configures() != 2 {
 		t.Errorf("expected the invalidated hash to force exactly one re-push after the drop, got %d Configure calls", fakeV.Configures())
 	}
 	if !gatewayPortSecurityRelaxed(t, r, podName) {
-		t.Errorf("expected port_security relaxed again once the filter is re-stamped")
+		t.Errorf("expected the chart-baked port_security relaxation still present once the filter is re-stamped")
 	}
 }
 
@@ -605,11 +617,14 @@ func TestReconcile_ReenforcesPortSecurityWhenSourceFilterDropsAfterRelax(t *test
 // tunnel-ingress named set being present is NOT sufficient — the source filter
 // only ENFORCES while the forward-chain ipsec-match jump into it also exists. A
 // guest that keeps the named set but drops the forward jump silently disables the
-// spoofing guard; confirmSourceFilterActive must report the filter DOWN, so
-// port_security is not relaxed and the cached hash is invalidated to force a
-// re-push that re-stamps the jump.
+// spoofing guard; confirmSourceFilterActive must report the filter DOWN, so the
+// reconcile requeues (not treated as effective) and the cached hash is
+// invalidated to force a re-push that re-stamps the jump.
+//
+// R3: the OVN port stays baked-relaxed throughout (a live flip has no effect);
+// the compensating control is the re-established guest filter, driven by the
+// hash invalidation and re-push asserted below.
 func TestReconcile_SourceFilterDownWhenForwardJumpAbsent(t *testing.T) {
-	podName := "virt-launcher-" + releasePrefix + "demo-abcde"
 	fakeV := &fakeVyOS{
 		// Named set present ...
 		retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`),
@@ -620,9 +635,6 @@ func TestReconcile_SourceFilterDownWhenForwardJumpAbsent(t *testing.T) {
 
 	// First reconcile: pushes once, then confirm finds the jump absent → down.
 	res := reconcileInstance(t, r, "demo")
-	if gatewayPortSecurityRelaxed(t, r, podName) {
-		t.Errorf("port_security must NOT be relaxed when the forward-chain jump to TUNNEL-INGRESS is absent, even though the named set is present (D8)")
-	}
 	if res.RequeueAfter == 0 {
 		t.Errorf("expected a requeue while the source filter is down, got none")
 	}
