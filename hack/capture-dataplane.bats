@@ -1,15 +1,21 @@
 #!/usr/bin/env bats
 # -----------------------------------------------------------------------------
 # Unit tests for the pure decision/parsing helpers in
-# hack/e2e-capture-dataplane.sh -- specifically the LoadBalancer-datapath
-# section, which fires for a Service type=LoadBalancer whose external IP is
-# unreachable while its backend stays Ready (the NotReady-pod path never sees
-# this case). Only the pure logic is unit-testable here:
+# hack/e2e-capture-dataplane.sh. Only the pure logic is unit-testable here:
 #
+# LoadBalancer-datapath section (fires for a Service type=LoadBalancer whose
+# external IP is unreachable while its backend stays Ready -- the NotReady-pod
+# path never sees this case):
 #   - lb_filter_services      -- keep only LoadBalancer rows with an ingress IP;
 #   - lb_first_ready_endpoint -- pick the first addressed, non-NotReady endpoint;
 #   - lb_announcer_node       -- the speaker node of the most recent announce;
 #   - lb_capture_decision     -- capture only when every probe failed.
+#
+# Baseline per-node capture (--baseline mode, invoked by cozyreport.sh):
+#   - _diag_prunable          -- drop only empty files and this script's own
+#                                "DIAG-SKIP:" absence markers, never a real
+#                                kubectl exec failure (a broken capture must stay
+#                                distinguishable from a node that lacked the tool).
 #
 # The kubectl exec / tcpdump capture itself is not unit-testable (it needs a
 # live cluster); these tests pin the derivations that decide WHICH node to
@@ -224,4 +230,64 @@ E2E_CAPTURE_DATAPLANE_LIB=1
 
   [ "$captured" -eq 2 ]
   [ "$dropped" -eq 1 ]
+}
+
+# --------------------------------------------------------------------------- #
+# _diag_prunable -- the baseline-capture pruning predicate. It must drop empty  #
+# files and this script's own "DIAG-SKIP:" absence markers, but KEEP a genuine  #
+# kubectl exec failure so a broken capture stays distinguishable from an absent  #
+# tool (PR review blocker B2). Mock inputs use real kubectl failure text.       #
+# --------------------------------------------------------------------------- #
+
+@test "diag prunable drops an empty capture file" {
+  f="$(mktemp)"
+  : > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; else rm -f "$f"; echo "FAIL: empty file must be prunable"; false; fi
+}
+
+@test "diag prunable drops a lone DIAG SKIP absence marker" {
+  f="$(mktemp)"
+  printf 'DIAG-SKIP: iptables-save not present in cni-server\n' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; else rm -f "$f"; echo "FAIL: DIAG-SKIP stub must be prunable"; false; fi
+}
+
+@test "diag prunable keeps a kubectl Error from server exec failure" {
+  f="$(mktemp)"
+  printf 'Error from server (BadRequest): pod does not have a host assigned\n' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; echo "FAIL: a capture failure must be kept, not pruned"; false; fi
+  rm -f "$f"
+}
+
+@test "diag prunable keeps a container not found OCI runtime exec failure" {
+  f="$(mktemp)"
+  printf 'error: unable to upgrade connection: container not found (cilium-agent)\n' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; echo "FAIL: an exec failure must be kept, not pruned"; false; fi
+  rm -f "$f"
+}
+
+@test "diag prunable keeps a real multi line capture" {
+  f="$(mktemp)"
+  printf 'Chain INPUT policy ACCEPT\ntarget prot source destination\nACCEPT all anywhere anywhere\n' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; echo "FAIL: a real capture must be kept"; false; fi
+  rm -f "$f"
+}
+
+@test "diag prunable keeps a legit one line capture that contains the word error" {
+  f="$(mktemp)"
+  printf 'flow verdict FORWARDED reason error none\n' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; echo "FAIL: a real one-line capture must be kept even if it contains the word error"; false; fi
+  rm -f "$f"
+}
+
+@test "diag prunable keeps a multi line file even when the first line is a DIAG SKIP" {
+  f="$(mktemp)"
+  printf 'DIAG-SKIP: header\nreal capture line follows\nand another\n' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; echo "FAIL: a multi-line file must be kept even if line 1 is DIAG-SKIP"; false; fi
+  rm -f "$f"
+}
+
+@test "diag prunable drops a DIAG SKIP marker that lacks a trailing newline" {
+  f="$(mktemp)"
+  printf 'DIAG-SKIP: iptables-save not present in cni-server' > "$f"
+  if _diag_prunable "$f"; then rm -f "$f"; else rm -f "$f"; echo "FAIL: a newline-less DIAG-SKIP marker must still be prunable"; false; fi
 }
