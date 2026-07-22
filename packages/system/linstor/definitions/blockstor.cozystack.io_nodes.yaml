@@ -1,0 +1,252 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: nodes.blockstor.cozystack.io
+spec:
+  group: blockstor.cozystack.io
+  names:
+    kind: Node
+    listKind: NodeList
+    plural: nodes
+    singular: node
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: Node is the Schema for the nodes API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of Node
+            properties:
+              drbdMinorRange:
+                description: |-
+                  drbdMinorRange is the inclusive [min, max] /dev/drbd<N> minor
+                  range the allocator picks from. Replaces
+                  `Props["DrbdOptions/MinorNrRange"]`. nil inherits the
+                  controller-wide default (20000–65535). Phase 10.3.
+                properties:
+                  max:
+                    description: max is the upper bound (inclusive). Must be ≥ Min.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  min:
+                    description: min is the lower bound (inclusive).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                required:
+                - max
+                - min
+                type: object
+              drbdPortRange:
+                description: |-
+                  drbdPortRange is the inclusive [min, max] TCP port range the
+                  allocator picks DRBD listen ports from for replicas placed on
+                  this node. Replaces `Props["DrbdOptions/TcpPortRange"]`. nil
+                  inherits the controller-wide default (20000–20999). Phase 10.3.
+                properties:
+                  max:
+                    description: max is the upper bound (inclusive). Must be ≥ Min.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  min:
+                    description: min is the lower bound (inclusive).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                required:
+                - max
+                - min
+                type: object
+              flags:
+                description: |-
+                  flags is the desired set of LINSTOR flags. Most node flags are
+                  observed (computed by the satellite); set via spec only those that
+                  are user-controlled.
+                items:
+                  type: string
+                type: array
+              netInterfaces:
+                description: |-
+                  netInterfaces is the desired list of advertised network interfaces.
+                  The first interface is treated as the satellite endpoint.
+                items:
+                  description: NodeNetInterface is one advertised endpoint of a satellite.
+                  properties:
+                    address:
+                      description: address is the IP address of the endpoint.
+                      type: string
+                    name:
+                      description: name is the user-facing identifier ("default",
+                        "drbd-net", etc.).
+                      type: string
+                    satelliteEncryptionType:
+                      description: satelliteEncryptionType is "PLAIN" or "SSL".
+                      enum:
+                      - PLAIN
+                      - SSL
+                      type: string
+                    satellitePort:
+                      description: satellitePort is the port the satellite listens
+                        on; 0 means default.
+                      format: int32
+                      type: integer
+                  required:
+                  - address
+                  - name
+                  type: object
+                type: array
+              props:
+                additionalProperties:
+                  type: string
+                description: |-
+                  props is the LINSTOR property map for this node. Keys are LINSTOR
+                  namespace paths (e.g. `Aux/foo`, `DrbdOptions/Net/...`).
+                type: object
+              satelliteEndpoint:
+                description: |-
+                  satelliteEndpoint is the controller→satellite gRPC endpoint
+                  (`host:port`). Phase 10.3: replaces `Props["SatelliteEndpoint"]`
+                  — the dispatcher reads this typed field first, falling back to
+                  the props bag for forward-compat with pre-migration data. The
+                  field becomes irrelevant once Phase 10.6 lands and the gRPC
+                  path is gone.
+                type: string
+              type:
+                description: |-
+                  type is the LINSTOR node role. Common values: SATELLITE, COMBINED,
+                  CONTROLLER, AUXILIARY.
+                enum:
+                - CONTROLLER
+                - SATELLITE
+                - COMBINED
+                - AUXILIARY
+                - REMOTE_SPDK
+                - OPENFLEX_TARGET
+                - EBS_TARGET
+                - EBS_INIT
+                type: string
+            required:
+            - type
+            type: object
+          status:
+            description: status defines the observed state of Node
+            properties:
+              conditions:
+                description: |-
+                  conditions represents the current state of the Node resource.
+                  The well-known `Ready` condition (status=True when the satellite
+                  is healthy, Unknown when its heartbeat is stale, False when the
+                  satellite reports a fatal state) is what consumers should look
+                  at. Other conditions may follow as we surface more invariants.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              connectionStatus:
+                description: |-
+                  connectionStatus is a coarse projection of the Ready condition
+                  (ONLINE when Ready=True, OFFLINE when False/Unknown) kept for
+                  kubectl-friendly columns + golinstor round-trip compatibility.
+                  Written by the controller-side heartbeat watchdog; do not hand-set.
+                type: string
+              flags:
+                description: flags computed by the satellite (e.g. EVICTED, EVACUATING).
+                items:
+                  type: string
+                type: array
+              lastHeartbeatTime:
+                description: |-
+                  lastHeartbeatTime is when this node's satellite last stamped the
+                  status (kubelet-style liveness). The controller-side watchdog
+                  flips the Ready condition to Unknown when this is older than the
+                  node-monitor grace period. Updated on every satellite reconcile
+                  tick regardless of state changes — the "did we hear from this
+                  satellite recently?" signal.
+                format: date-time
+                type: string
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

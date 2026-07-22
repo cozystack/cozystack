@@ -1,0 +1,112 @@
+---
+# cert-manager PKI for the blockstor apiserver's mutual-TLS endpoint.
+#
+# Chain (mirrors the previous linstor-api-tls pattern; chained from the
+# cozy-linstor ca-bootstrapper self-signed Issuer that the
+# piraeus-operator package creates in this namespace, so there is no
+# self-managed root here):
+#   ca-bootstrapper (Issuer, from piraeus-operator package)
+#     └─> blockstor-api-ca (CA Certificate, 10y)
+#           └─> blockstor-api-ca (CA Issuer)
+#                 ├─> blockstor-apiserver-server  (serving cert, Service DNS SANs)
+#                 └─> blockstor-apiserver-client   (client cert for in-cluster consumers)
+#
+# The apiserver's TLS listener (RequireAndVerifyClientCert) verifies
+# every client cert against ca.crt of the server Secret, and serves
+# tls.crt/tls.key. cert-manager rotates these in place; the apiserver
+# hot-reloads them from disk WITHOUT a restart — there are intentionally
+# NO reloader.stakater.com annotations. LinstorCluster.spec.apiTLS
+# references the blockstor-api-ca Issuer so linstor-csi gets client
+# certs chained to the same CA.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: blockstor-api-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  commonName: blockstor-api-ca
+  secretName: blockstor-api-ca
+  duration: 87600h # 10 years
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+  usages:
+    - signing
+    - key encipherment
+    - cert sign
+  issuerRef:
+    name: ca-bootstrapper
+    kind: Issuer
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: blockstor-api-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: blockstor-api-ca
+---
+# Serving certificate for the apiserver TLS listener. The dnsNames cover
+# the Service FQDN in-cluster clients dial:
+# blockstor-apiserver.cozy-linstor.svc(.cluster.local). MUST stay in
+# sync with LinstorCluster.spec.externalController.url in cluster.yaml.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: blockstor-apiserver-server
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: blockstor-apiserver-server-tls
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - server auth
+    - digital signature
+    - key encipherment
+  dnsNames:
+    - blockstor-apiserver
+    - blockstor-apiserver.cozy-linstor
+    - blockstor-apiserver.cozy-linstor.svc
+    - blockstor-apiserver.cozy-linstor.svc.cluster.local
+    # External-mode compat: the linstor-scheduler/gui packages dial the
+    # apiserver through the linstor-controller Service alias (see
+    # linstor-compat.yaml), so the serving cert must carry these SANs
+    # for their mTLS verification to pass.
+    - linstor-controller.cozy-linstor.svc
+    - linstor-controller.cozy-linstor.svc.cluster.local
+  issuerRef:
+    name: blockstor-api-ca
+    kind: Issuer
+---
+# Client certificate for in-cluster consumers (blockstor's own Go
+# clients, the `linstor` CLI). Mounted into the consuming pods and
+# presented to the apiserver's RequireAndVerifyClientCert listener.
+# linstor-csi gets its OWN client cert from the operator via
+# LinstorCluster.spec.apiTLS (issued from blockstor-api-ca) — this one
+# is for direct CLI / debug access.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: blockstor-apiserver-client
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: blockstor-apiserver-client-tls
+  commonName: blockstor-apiserver-client
+  duration: 2160h # 90 days
+  renewBefore: 360h # 15 days
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+    rotationPolicy: Always
+  usages:
+    - client auth
+    - digital signature
+    - key encipherment
+  issuerRef:
+    name: blockstor-api-ca
+    kind: Issuer

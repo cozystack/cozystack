@@ -1,4 +1,3 @@
-{{- if .Values.talos.enabled }}
 apiVersion: piraeus.io/v1
 kind: LinstorSatelliteConfiguration
 metadata:
@@ -42,4 +41,3 @@ spec:
               hostPath:
                 path: /var/etc/lvm/archive
                 type: DirectoryOrCreate
-{{- end }}

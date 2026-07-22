@@ -132,34 +132,32 @@ cozy_wait_linstor_pool_free() {
   _min_free_kib=$(( _min_free_gib * 1024 * 1024 ))
   _deadline=$(( $(date +%s) + _timeout ))
   while :; do
-    # jq lives inside the controller pod (Debian-bookworm base, `sh` is
-    # dash — keep the heredoc POSIX-safe). LINSTOR's `--machine-readable`
-    # output for `sp l` on LINSTOR 1.33.x is a one-element outer array
-    # whose sole element is a flat array of storage-pool objects; each
-    # pool object exposes free_capacity at the top level in KiB. Filter
-    # to ZFS variants (both `ZFS` and `ZFS_THIN`) so DISKLESS
-    # placeholders (whose free_capacity is a Long.MAX_VALUE sentinel)
-    # and any future non-ZFS driver are skipped. Also guard against
-    # OFFLINE satellites, whose pool objects omit free_capacity entirely
-    # (StoragePool schema marks it optional) — without the null guard
-    # `sort -n` would rank the string "null" ahead of real numbers and
-    # the loop would silently poll to timeout. Emit
-    # `<free_capacity_kib>:<node>` lines so a single sort yields the
-    # smallest pool and its owner in one round-trip.
-    _min_line=$(kubectl -n cozy-linstor exec deploy/linstor-controller -- sh -c '
-      linstor --machine-readable sp l 2>/dev/null |
-      jq -r "first | .[] | select((.provider_kind | test(\"^ZFS\")) and .free_capacity != null) | \"\(.free_capacity):\(.node_name)\"" |
-      sort -n | head -n 1
-    ' 2>/dev/null) || _min_line=""
+    # blockstor exposes each storage pool as a cluster-scoped StoragePool CR
+    # (blockstor.cozystack.io) whose status.freeCapacity is the KiB the
+    # satellite reports — the same figure LINSTOR's `sp l` free_capacity
+    # carried, so no controller exec is needed (external mode has no
+    # in-cluster linstor-controller). Filter to ZFS variants (both `ZFS` and
+    # `ZFS_THIN`) so DISKLESS placeholders and any future non-ZFS driver are
+    # skipped, and guard against pools that have not reported yet (freeCapacity
+    # absent on OFFLINE satellites; the schema marks it optional) — without the
+    # null guard `sort -n` would rank the string "null" ahead of real numbers
+    # and the loop would silently poll to timeout. Emit
+    # `<free_capacity_kib>:<node>` lines so a single sort yields the smallest
+    # pool and its owner in one round-trip.
+    _min_line=$(kubectl get storagepools.blockstor.cozystack.io -o json 2>/dev/null |
+      jq -r '.items[]
+        | select(((.spec.providerKind // "") | test("^ZFS")) and (.status.freeCapacity != null))
+        | "\(.status.freeCapacity):\(.spec.nodeName)"' 2>/dev/null |
+      sort -n | head -n 1) || _min_line=""
     _min_kib="${_min_line%%:*}"
     _min_node="${_min_line#*:}"
     if [ -n "$_min_kib" ] && [ "$_min_kib" -ge "$_min_free_kib" ] 2>/dev/null; then
-      echo "» LINSTOR ZFS pool free: smallest satellite ${_min_node} has $(( _min_kib / 1024 / 1024 )) GiB (>= ${_min_free_gib} GiB threshold)"
+      echo "» blockstor ZFS pool free: smallest satellite ${_min_node} has $(( _min_kib / 1024 / 1024 )) GiB (>= ${_min_free_gib} GiB threshold)"
       return 0
     fi
     if [ "$(date +%s)" -ge "$_deadline" ]; then
-      echo "» WARNING: LINSTOR ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown}); continuing (next test may face zfs create out-of-space)" >&2
-      kubectl -n cozy-linstor exec deploy/linstor-controller -- linstor --no-color sp l 2>&1 | sed 's/^/  linstor-pool: /' >&2 || true
+      echo "» WARNING: blockstor ZFS pool free did not reach ${_min_free_gib} GiB on every satellite within ${_timeout}s (smallest observed: ${_min_kib:-unknown} KiB on ${_min_node:-unknown}); continuing (next test may face zfs create out-of-space)" >&2
+      kubectl get storagepools.blockstor.cozystack.io -o wide 2>&1 | sed 's/^/  blockstor-pool: /' >&2 || true
       return 1
     fi
     sleep 5
