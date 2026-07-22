@@ -32,10 +32,13 @@ spec:
 {{- else }}
 # No Cilium CRD: fall back to a CNI-agnostic default-deny-ingress policy so the
 # socket is never offered without protection. This denies ingress from the pod
-# network (the injection path) while node-local host traffic keeps flowing, the
-# same way liveness/readiness probes from the node are not blocked by a
-# default-deny policy; the portmap hostPort path arrives as node-local host
-# traffic.
+# network (the injection path, whose source is a real pod IP). The node-local
+# push path (portmap SNATs the source to the node) keeps flowing on CNIs that
+# exempt node-local/health traffic from policy enforcement, as the mainstream
+# policy CNIs do; a CNI that instead enforces policy on node-local traffic would
+# also block this push path, so on such a CNI keep Cilium or open the port
+# explicitly. The only non-Cilium variant shipped today is noop, which does not
+# enforce NetworkPolicy at all, so this fallback is inert there.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
