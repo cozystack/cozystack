@@ -110,10 +110,17 @@ metadata:
   annotations:
     helm.sh/hook: pre-delete
     helm.sh/hook-weight: "0"
-    # before-hook-creation only (not hook-succeeded) so a failed run keeps its
-    # logs for debugging; a successful run is torn down with the release.
+    # before-hook-creation (not hook-succeeded) so a failed run keeps its logs
+    # for debugging. Helm does not track hook resources as release members, so
+    # after `helm uninstall` a finished hook Job is NOT torn down with the
+    # release and would leak into the tenant namespace, one per deleted pool.
+    # ttlSecondsAfterFinished (below) is what actually reaps it.
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
+  # Garbage-collect the finished Job and its pod: a succeeded run is reaped after
+  # a day, a failed run keeps its logs that long for debugging. Without this the
+  # hook Job leaks per deleted pool per namespace, since Helm never owns it.
+  ttlSecondsAfterFinished: 86400
   activeDeadlineSeconds: 300
   backoffLimit: 3
   template:

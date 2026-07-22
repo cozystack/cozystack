@@ -37,6 +37,11 @@ tests:
       - equal:
           path: spec.activeDeadlineSeconds
           value: 300
+      # Helm does not own hook resources, so the finished Job must self-reap or it
+      # leaks into the tenant namespace after every pool uninstall.
+      - equal:
+          path: spec.ttlSecondsAfterFinished
+          value: 86400
       - equal:
           path: spec.template.spec.serviceAccountName
           value: kubernetes-nodes-myk8s-md0-unpin
