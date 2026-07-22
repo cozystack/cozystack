@@ -716,8 +716,10 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 //     TUNNEL-INGRESS, so the source allow-list + its default-drop apply to
 //     decrypted-from-tunnel traffic ONLY.
 //
-// Requires a resolved TunnelDevice; the filter is version-specific and shares
-// the forwardFilterPath TODO(T13).
+// Requires a resolved TunnelDevice. The forward-filter + ipsec-match leaf syntax
+// is validated against VyOS 1.5-rolling and shared via the single-point
+// forwardFilterPath helper; it is VyOS-version-specific and centralized there so
+// a future image whose syntax differs is a one-place change.
 func renderForwardFilter(in Inputs) []vyos.Operation {
 	if in.TunnelDevice == "" {
 		return nil

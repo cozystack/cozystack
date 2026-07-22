@@ -321,11 +321,12 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 // port_security would stay relaxed with nothing enforcing the source constraint.
 // This confirm reads back BOTH: the named set path (unchanged) and the
 // forward-filter path; if EITHER is absent the filter is treated as down.
-// TODO(T13): the VyOS 1.5 forward-filter + ipsec-match syntax is provisional for
-// BOTH the named set and the jump check (see render.forwardFilterPath /
-// tunnelIngressForwardPath) and is live-validated by the T13 negative suite,
-// which must also prove a valid-source / world-destination packet is dropped
-// (see the destination-constraint TODO on render.renderTunnelIngressFilter).
+// The VyOS 1.5-rolling forward-filter + ipsec-match syntax read back here (for
+// BOTH the named set and the jump check, via render.forwardFilterPath /
+// tunnelIngressForwardPath) is validated against the live image. Those retrieve
+// paths are VyOS-version-specific and centralized in the single-point helpers, so
+// a future image whose syntax differs is a one-place change; keep this in lockstep
+// with render.
 //
 // The D8 invariant must be MAINTAINED, not merely established once: if the filter
 // is found absent AFTER it was already up (a guest-side wipe/drift, including a
