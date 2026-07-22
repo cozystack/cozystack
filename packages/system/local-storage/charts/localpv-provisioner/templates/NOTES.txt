@@ -1,0 +1,9 @@
+The OpenEBS Dynamic LocalPV Provisioner has been installed.
+Check its status by running:
+$ kubectl get pods -n {{ .Release.Namespace }}
+
+Get started with the Dynamic LocalPV Provisioner Quickstart guide at:
+https://github.com/openebs/dynamic-localpv-provisioner/blob/develop/docs/quickstart.md
+
+For more information, visit our Slack at https://kubernetes.slack.com/messages/openebs or view 
+the OpenEBS documentation online at https://openebs.io/docs
