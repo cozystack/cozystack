@@ -9,7 +9,8 @@ test:
 
 update:
 	ver=$$(curl -sSL "https://api.github.com/repos/vectordotdev/vector/releases" | jq -r '[.[] | select(.prerelease == false) | .tag_name | select(startswith("v0."))][0]' | sed 's/^v//') && \
-	$(SED_INPLACE) "/ARG VERSION/ s|=.*|=$${ver}-alpine|g" images/vector/Dockerfile
+	$(SED_INPLACE) "/ARG VERSION/ s|=.*|=$${ver}-alpine|g" images/vector/Dockerfile && \
+	VERSION="$${ver}" yq -i '.appVersion = strenv(VERSION)' Chart.yaml
 
 image:
 	docker buildx build images/vector \
