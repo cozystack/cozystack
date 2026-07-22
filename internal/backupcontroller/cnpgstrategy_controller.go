@@ -436,8 +436,9 @@ func (r *BackupJobReconciler) applyClusterPluginBackup(ctx context.Context, name
 		Controller: &controller,
 	}}
 	objStore.Spec = cnpgtypes.ObjectStoreSpec{
-		Configuration:   *buildBarmanObjectStore(t.BarmanObjectStore, ""),
-		RetentionPolicy: t.BarmanObjectStore.RetentionPolicy,
+		Configuration:                *buildBarmanObjectStore(t.BarmanObjectStore, ""),
+		RetentionPolicy:              t.BarmanObjectStore.RetentionPolicy,
+		InstanceSidecarConfiguration: barmanSidecarConfiguration(),
 	}
 	if err := r.Patch(ctx, objStore, client.Apply, client.FieldOwner(cnpgFieldManager), client.ForceOwnership); err != nil {
 		return "", fmt.Errorf("apply ObjectStore %s/%s: %w", namespace, objStoreName, err)
@@ -1388,6 +1389,24 @@ func buildBarmanPlugin(objectStoreName, serverName string) cnpgtypes.PluginConfi
 		Name:          cnpgtypes.PluginName,
 		IsWALArchiver: &isWALArchiver,
 		Parameters:    params,
+	}
+}
+
+// barmanSidecarConfiguration pins the barman-cloud sidecar's boto3 request
+// checksum policy to "when_required". Since botocore ~1.36 the default
+// (when_supported) attaches a flexible checksum to every PutObject, which
+// non-AWS S3-compatible backends (Ceph RGW, and the platform's own default
+// SeaweedFS system bucket) reject with "x-amz-content-sha256 must be
+// UNSIGNED-PAYLOAD, ...". Compute a checksum only when required; AWS S3
+// accepts that too, so it is a safe default everywhere. This mirrors the same
+// env set on the chart-rendered ObjectStores (packages/{apps/postgres,
+// system/keycloak}/templates/db.yaml) and the etcd-operator fix (#342).
+func barmanSidecarConfiguration() *cnpgtypes.InstanceSidecarConfiguration {
+	return &cnpgtypes.InstanceSidecarConfiguration{
+		Env: []cnpgtypes.EnvVar{{
+			Name:  "AWS_REQUEST_CHECKSUM_CALCULATION",
+			Value: "when_required",
+		}},
 	}
 }
 
