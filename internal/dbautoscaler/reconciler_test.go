@@ -126,6 +126,15 @@ type testEnv struct {
 	r        *Reconciler
 	dyn      *dynamicfake.FakeDynamicClient
 	recorder *record.FakeRecorder
+	vmValue  string
+	vmStatus int
+}
+
+// setVM mutates the metric value/status the test VM server returns on the next
+// query (used to simulate an outage then recovery).
+func (e *testEnv) setVM(value string, status int) {
+	e.vmValue = value
+	e.vmStatus = status
 }
 
 func newTestEnv(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler, app *unstructured.Unstructured, vmValue string, vmStatus int, objs ...runtime.Object) *testEnv {
@@ -144,14 +153,16 @@ func newTestEnv(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutosca
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme,
 		map[schema.GroupVersionResource]string{postgresGVR: "PostgresList"}, app)
 
+	env := &testEnv{dyn: dyn, vmValue: vmValue, vmStatus: vmStatus}
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if vmStatus != http.StatusOK {
-			w.WriteHeader(vmStatus)
+		if env.vmStatus != http.StatusOK {
+			w.WriteHeader(env.vmStatus)
 			return
 		}
 		// The lag and write-activity queries must report quiet so the lag brake
 		// does not trip; only the driver metric returns vmValue.
-		val := vmValue
+		val := env.vmValue
 		q := req.URL.Query().Get("query")
 		if strings.Contains(q, "replication_lag") || strings.Contains(q, "in_recovery") {
 			val = "0"
@@ -171,7 +182,9 @@ func newTestEnv(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutosca
 		Now:        func() time.Time { return time.Unix(10000, 0) },
 		BaseURLFor: func(context.Context, string) string { return srv.URL },
 	}
-	return &testEnv{r: r, dyn: dyn, recorder: rec}
+	env.r = r
+	env.recorder = rec
+	return env
 }
 
 func (e *testEnv) reconcile(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler) *autoscalingv1alpha1.DatabaseHorizontalAutoscaler {
@@ -289,5 +302,80 @@ func TestReconcileOwnershipConflict(t *testing.T) {
 	}
 	if r := env.appReplicas(t, "tenant", "db"); r != 5 {
 		t.Fatalf("must not fight competing writer; replicas = %d, want 5", r)
+	}
+}
+
+// TestLagBrakeSkippedWhenNoLagQuery guards the Redis fix: an adapter with an
+// empty ReplicationLagQuery must never trip the lag brake, even if the metric
+// backend would return a large value. Without the fix (non-empty byte-unit
+// query) the brake would trip and freeze scaling.
+func TestLagBrakeSkippedWhenNoLagQuery(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Everything (incl. a lag query) would look huge.
+		fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,"999999"]}]}}`)
+	}))
+	defer srv.Close()
+	r := &Reconciler{VM: NewVMClient(), BaseURLFor: func(context.Context, string) string { return srv.URL }}
+	dha := newDHA("db", "tenant", "Redis", false)
+	if r.lagBraked(context.TODO(), dha, RedisAdapter{}) {
+		t.Fatal("Redis (empty lag query) must not trip the lag brake")
+	}
+	// sanity: an adapter WITH a lag query and a huge value does brake
+	if !r.lagBraked(context.TODO(), dha, PostgresAdapter{}) {
+		t.Fatal("Postgres with huge lag + write activity should brake")
+	}
+}
+
+// TestMetricOutageDoesNotSuppressScaleUp guards the stabilization-history fix: a
+// cycle where the metric is unavailable must not record a 0 into the window, or
+// the next high-load cycle's scale-up is suppressed for the whole window.
+func TestMetricOutageDoesNotSuppressScaleUp(t *testing.T) {
+	dha := newDHA("db", "tenant", "Postgres", false)
+	app := newPostgresApp("db", "tenant", 3, 0)
+	env := newTestEnv(t, dha, app, "420", http.StatusOK, workloadMonitor("postgres-db", "tenant", 3, true))
+
+	// Cycle 1: vmselect down -> fail-safe freeze, must NOT poison history.
+	env.setVM("", http.StatusInternalServerError)
+	got := env.reconcile(t, dha)
+	if s, reason := condStatus(got, autoscalingv1alpha1.ConditionAbleToScale); s != string(metav1.ConditionFalse) || reason != autoscalingv1alpha1.ReasonMetricUnavailable {
+		t.Fatalf("cycle1 expected MetricUnavailable freeze, got %s/%s", s, reason)
+	}
+	// Cycle 2: metric back and high -> must scale up (would be pinned to 3 if the
+	// outage recorded a 0 in the up-window).
+	env.setVM("420", http.StatusOK)
+	got = env.reconcile(t, dha)
+	if got.Status.DesiredReplicas != 4 {
+		t.Fatalf("after outage recovery desired = %d, want 4 (history was poisoned by the outage)", got.Status.DesiredReplicas)
+	}
+	if r := env.appReplicas(t, "tenant", "db"); r != 4 {
+		t.Fatalf("after outage recovery app replicas = %d, want 4", r)
+	}
+}
+
+// TestReconcileInvalidTargetFreezes: a non-positive metric target yields a
+// distinct InvalidMetricTarget reason (not the misleading MetricUnavailable).
+func TestReconcileInvalidTargetFreezes(t *testing.T) {
+	min, max := int32(2), int32(6)
+	dha := &autoscalingv1alpha1.DatabaseHorizontalAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "tenant"},
+		Spec: autoscalingv1alpha1.DatabaseHorizontalAutoscalerSpec{
+			TargetRef:   autoscalingv1alpha1.TargetRef{Kind: "Postgres", Name: "db", APIGroup: "apps.cozystack.io"},
+			MinReplicas: &min,
+			MaxReplicas: &max,
+			Metrics: []autoscalingv1alpha1.MetricSpec{{
+				Type:   autoscalingv1alpha1.MetricReadConnections,
+				Target: autoscalingv1alpha1.MetricTarget{AverageValue: mustQuantity("0")},
+			}},
+		},
+	}
+	app := newPostgresApp("db", "tenant", 3, 0)
+	env := newTestEnv(t, dha, app, "420", http.StatusOK, workloadMonitor("postgres-db", "tenant", 3, true))
+	got := env.reconcile(t, dha)
+	s, reason := condStatus(got, autoscalingv1alpha1.ConditionAbleToScale)
+	if s != string(metav1.ConditionFalse) || reason != autoscalingv1alpha1.ReasonInvalidTarget {
+		t.Fatalf("AbleToScale = %s/%s, want False/InvalidMetricTarget", s, reason)
+	}
+	if r := env.appReplicas(t, "tenant", "db"); r != 3 {
+		t.Fatalf("invalid target must not patch; replicas = %d", r)
 	}
 }

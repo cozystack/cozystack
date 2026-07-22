@@ -155,8 +155,10 @@ spec:
                           - type: integer
                           - type: string
                           description: |-
-                            AverageValue is the target value per read-serving replica. Must be strictly
-                            positive; a zero or negative target is rejected by the controller.
+                            AverageValue is the target value per read-serving replica. It must be
+                            strictly positive; a zero or negative target makes the autoscaler freeze
+                            the DHA with condition AbleToScale=False, reason InvalidMetricTarget
+                            (the metric cannot be divided by a non-positive target).
                           pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                           x-kubernetes-int-or-string: true
                       required:
@@ -205,6 +207,9 @@ spec:
             - minReplicas
             - targetRef
             type: object
+            x-kubernetes-validations:
+            - message: maxReplicas must be greater than or equal to minReplicas
+              rule: self.maxReplicas >= self.minReplicas
           status:
             description: DatabaseHorizontalAutoscalerStatus defines the observed state.
             properties:

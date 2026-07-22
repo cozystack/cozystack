@@ -110,7 +110,8 @@ func TestEngineQueriesNamespaceScoped(t *testing.T) {
 		}
 		for i, q := range queries {
 			if q == "" {
-				t.Errorf("%s: query %d is empty", a.Kind(), i)
+				// An empty query is a deliberate "no signal" (e.g. Redis has no
+				// seconds-based replication-lag gauge); skip scope checks for it.
 				continue
 			}
 			if !strings.Contains(q, `namespace="tenant-acme"`) {
@@ -120,6 +121,21 @@ func TestEngineQueriesNamespaceScoped(t *testing.T) {
 			if !strings.Contains(q, a.ReleaseName("db")) {
 				t.Errorf("%s: query %d does not reference release %q: %s", a.Kind(), i, a.ReleaseName("db"), q)
 			}
+		}
+	}
+}
+
+// TestRedisLagBrakeDisabled: Redis exposes replication progress only in bytes,
+// which cannot be compared to a seconds threshold, so the lag query is empty and
+// the brake is off. The other engines keep a real seconds-based lag query.
+func TestRedisLagBrakeDisabled(t *testing.T) {
+	app := types.NamespacedName{Namespace: "tenant-acme", Name: "db"}
+	if q := (RedisAdapter{}).ReplicationLagQuery(app); q != "" {
+		t.Fatalf("Redis ReplicationLagQuery must be empty (byte-unit lag cannot gate a seconds threshold), got %q", q)
+	}
+	for _, a := range []TopologyAdapter{PostgresAdapter{}, MariaDBAdapter{}, MongoDBAdapter{}} {
+		if q := a.ReplicationLagQuery(app); q == "" {
+			t.Errorf("%s must keep a seconds-based replication-lag query", a.Kind())
 		}
 	}
 }

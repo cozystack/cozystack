@@ -43,6 +43,8 @@ Server-side-apply field-level ownership does **not** hold on the aggregated `app
 
 The webhook's `failurePolicy` is `Ignore` so an outage never blocks Flux reconciliation of unrelated HelmReleases; when it is unavailable, enforcement degrades to the controller's advisory marker plus convergence-based conflict detection (surfaced as a `ScalingLimited` condition). The full deterministic guarantee should be confirmed by a live-cluster spike (per the design proposal's Testing section) before relying on it.
 
+Because the webhook allows writes that flow through the apps-API extension server, a tenant's manual `kubectl edit <kind> … replicas` is not rejected — but the controller detects it (observed `replicas` differs from the value the autoscaler last wrote), surfaces `ScalingLimited=True(OwnershipConflict)`, and backs off rather than fighting. This back-off is **terminal**: a single manual replicas edit disables autoscaling for that target until the DHA is deleted and recreated. This is intentional ("do not enter a write war"), but worth knowing — recreate the DHA to resume autoscaling after a manual override.
+
 Deleting the DHA stops all autoscaling immediately and clears the marker, leaving the application at its current `replicas`.
 
 ## Example

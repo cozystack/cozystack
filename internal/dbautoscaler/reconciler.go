@@ -176,6 +176,21 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			fmt.Sprintf("replicas changed to %d by a competing writer (marker=%q); not entering a write war", currentReplicas, marker))
 	}
 
+	// Reject a non-positive metric target with a distinct reason, so a spec typo
+	// (averageValue: "0") is not silently reported as MetricUnavailable.
+	for _, m := range dha.Spec.Metrics {
+		if m.Target.AverageValue.AsApproximateFloat64() <= 0 {
+			apimeta.SetStatusCondition(&dha.Status.Conditions, metav1.Condition{
+				Type:               autoscalingv1alpha1.ConditionAbleToScale,
+				Status:             metav1.ConditionFalse,
+				Reason:             autoscalingv1alpha1.ReasonInvalidTarget,
+				Message:            fmt.Sprintf("metric %s has a non-positive target", m.Type),
+				ObservedGeneration: dha.Generation,
+			})
+			return r.finish(ctx, dha, ctrl.Result{RequeueAfter: requeueInterval})
+		}
+	}
+
 	// Metrics.
 	obs, metricAvailable := r.collectMetrics(ctx, dha, adapter, currentReplicas)
 	lagBraked := r.lagBraked(ctx, dha, adapter)
@@ -210,8 +225,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	decision := Decide(in)
 
-	// Record the raw recommendation for the stabilization window.
-	st.history = appendHistory(st.history, r.now(), decision.RawDesired, max(up.window, down.window))
+	// Record the raw recommendation for the stabilization window — but only when a
+	// metric was actually read. A metric outage yields RawDesired=0 (fail-safe),
+	// and recording that 0 would drag the scale-up window's minimum down and
+	// suppress scale-up for the whole window after recovery.
+	if metricAvailable {
+		st.history = appendHistory(st.history, r.now(), decision.RawDesired, max(up.window, down.window))
+	}
 
 	r.applyDecisionToStatus(dha, in, decision, obs, ownershipConflict)
 	exportMetrics(dha.Namespace, dha.Name, in, decision, ownershipConflict)
@@ -325,7 +345,13 @@ func (r *Reconciler) lagBraked(ctx context.Context, dha *autoscalingv1alpha1.Dat
 		return false
 	}
 	app := types.NamespacedName{Namespace: dha.Namespace, Name: dha.Spec.TargetRef.Name}
-	lag, ok, _ := r.VM.QueryScalar(ctx, baseURL, adapter.ReplicationLagQuery(app))
+	lagQuery := adapter.ReplicationLagQuery(app)
+	if lagQuery == "" {
+		// Adapter provides no replication-lag signal (e.g. Redis has no seconds
+		// gauge) — do not brake on lag.
+		return false
+	}
+	lag, ok, _ := r.VM.QueryScalar(ctx, baseURL, lagQuery)
 	if !ok || lag <= float64(threshold) {
 		return false
 	}

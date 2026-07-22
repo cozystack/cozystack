@@ -70,13 +70,15 @@ func (a RedisAdapter) DriverQuery(app types.NamespacedName, metric autoscalingv1
 	}
 }
 
+// ReplicationLagQuery is empty for Redis: the only replication-progress signal
+// redis_exporter exposes is the master/replica offset in BYTES, which cannot be
+// compared against the seconds-based maxReplicationLagSeconds threshold (a replica
+// a few bytes behind under write load would falsely trip the brake and freeze
+// scaling in both directions). Returning "" disables the lag brake for Redis;
+// the reconciler treats an empty query as "no lag signal". Redis replication is
+// asynchronous and typically sub-second, so the brake adds little here.
 func (a RedisAdapter) ReplicationLagQuery(app types.NamespacedName) string {
-	// Replica lag in bytes: master offset minus each slave's replica offset,
-	// restricted to this app's slave pods.
-	return fmt.Sprintf(
-		`max(redis_master_repl_offset{namespace=%q} - on() group_right()`+
-			` (redis_slave_repl_offset{namespace=%q}%s))`,
-		app.Namespace, app.Namespace, a.slaveJoin(app))
+	return ""
 }
 
 func (a RedisAdapter) WriteActivityQuery(app types.NamespacedName) string {

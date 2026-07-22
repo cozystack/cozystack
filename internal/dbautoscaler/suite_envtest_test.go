@@ -136,6 +136,32 @@ func TestEnvtestDHASchemaRejectsMinReplicasBelowTwo(t *testing.T) {
 	}
 }
 
+func TestEnvtestDHASchemaRejectsMaxBelowMin(t *testing.T) {
+	cfg, stop := startEnvtest(t)
+	defer stop()
+	_, c, _ := newEnvtestReconciler(t, cfg, "")
+	ctx := context.Background()
+	mkNamespace(t, ctx, c, "tenant-c")
+
+	min, max := int32(6), int32(2) // max < min violates the CEL rule
+	dha := &autoscalingv1alpha1.DatabaseHorizontalAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "tenant-c"},
+		Spec: autoscalingv1alpha1.DatabaseHorizontalAutoscalerSpec{
+			TargetRef:   autoscalingv1alpha1.TargetRef{Kind: "Postgres", Name: "db"},
+			MinReplicas: &min,
+			MaxReplicas: &max,
+			Metrics: []autoscalingv1alpha1.MetricSpec{{
+				Type:   autoscalingv1alpha1.MetricReadConnections,
+				Target: autoscalingv1alpha1.MetricTarget{AverageValue: mustQuantity("150")},
+			}},
+		},
+	}
+	err := c.Create(ctx, dha)
+	if err == nil || !apierrors.IsInvalid(err) {
+		t.Fatalf("expected the apiserver to reject maxReplicas<minReplicas with Invalid, got %v", err)
+	}
+}
+
 func TestEnvtestReconcilePatchesReplicas(t *testing.T) {
 	cfg, stop := startEnvtest(t)
 	defer stop()

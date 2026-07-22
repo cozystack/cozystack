@@ -63,6 +63,7 @@ const (
 	ReasonQuotaExceeded      = "QuotaExceeded"
 	ReasonQuorumExceedsQuota = "QuorumExceedsQuota"
 	ReasonOwnershipConflict  = "OwnershipConflict"
+	ReasonInvalidTarget      = "InvalidMetricTarget"
 )
 
 // MetricType is the fixed, safe set of driver metrics the autoscaler understands.
@@ -95,8 +96,10 @@ type TargetRef struct {
 
 // MetricTarget is the per-read-serving-replica goal for a metric.
 type MetricTarget struct {
-	// AverageValue is the target value per read-serving replica. Must be strictly
-	// positive; a zero or negative target is rejected by the controller.
+	// AverageValue is the target value per read-serving replica. It must be
+	// strictly positive; a zero or negative target makes the autoscaler freeze
+	// the DHA with condition AbleToScale=False, reason InvalidMetricTarget
+	// (the metric cannot be divided by a non-positive target).
 	// +required
 	AverageValue resource.Quantity `json:"averageValue"`
 }
@@ -165,6 +168,7 @@ type Constraints struct {
 }
 
 // DatabaseHorizontalAutoscalerSpec defines the desired state.
+// +kubebuilder:validation:XValidation:rule="self.maxReplicas >= self.minReplicas",message="maxReplicas must be greater than or equal to minReplicas"
 type DatabaseHorizontalAutoscalerSpec struct {
 	// TargetRef is the managed database Application to scale.
 	// +required
