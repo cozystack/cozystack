@@ -1,6 +1,7 @@
 # Cozystack-managed S3 bucket for storing MariaDB backups. The Bucket
-# controller provisions a Secret named "<bucket>-<username>" per user; the
-# MariaDB strategy below references the "backup" user's Secret.
+# controller provisions a Secret named "bucket-<bucket>-<username>" per
+# user (the bucket app carries the "bucket-" release prefix); the MariaDB
+# strategy below references the "backup" user's Secret.
 ---
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Bucket
