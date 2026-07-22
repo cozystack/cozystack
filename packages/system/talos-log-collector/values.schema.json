@@ -5,12 +5,21 @@
     "logLevel": {
       "description": "Vector log verbosity (trace, debug, info, warn, error).",
       "type": "string",
-      "default": "warn"
+      "default": "warn",
+      "enum": [
+        "trace",
+        "debug",
+        "info",
+        "warn",
+        "error"
+      ]
     },
     "listenPort": {
       "description": "TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs.",
       "type": "integer",
-      "default": 5170
+      "default": 5170,
+      "maximum": 65535,
+      "minimum": 1
     },
     "image": {
       "description": "Vector container image.",
@@ -40,7 +49,7 @@
       "default": {},
       "properties": {
         "cpu": {
-          "description": "CPU request and limit.",
+          "description": "CPU request.",
           "default": "100m",
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
