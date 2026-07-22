@@ -19,7 +19,7 @@ Consumption is via CDI, matching how every other OS image in the catalog is cons
 - The image is registered as a golden image in `packages/system/vm-default-images` (namespace `cozy-public`). Each entry there becomes a CDI `DataVolume`/PVC named `vm-default-images-<name>`.
 - The `site-router` VM disk clones that golden image by name, the same way `vm-disk` clones any other `vm-default-images-<name>` PVC.
 
-The `vm-default-images` entry is committed **disabled (commented out)** until the artifact is published, because the chart renders every list entry unconditionally as an HTTP import — a live entry pointing at a not-yet-published URL would create a perpetually-failing DataVolume for anyone who opts into the (opt-in) golden-image collection.
+The `vm-default-images` entry is committed **enabled**, consuming the in-repo-built appliance as a digest-pinned OCI containerDisk via CDI's registry importer (`source.registry`, `docker://…@sha256:…`). The digest lives in `packages/system/vm-default-images/images/vyos-router-disk.tag`, stamped by the image build (the `build-vyos` CI job) — mirroring how the Talos build stamps `bootbox/images/matchbox.tag`. `vm-default-images` is an **opt-in** bundle package (rendered only when listed in `bundles.enabledPackages`), and a not-yet-published or placeholder-digest import is a background CDI retry rather than a HelmRelease failure, so committing the entry enabled is safe even before the first CI publish. A registry containerDisk (rather than an HTTP qcow2) is what makes the boot disk pinnable by digest — CDI's HTTP importer cannot verify a `sha256`.
 
 ## How an update propagates
 
@@ -33,11 +33,15 @@ Because the boot image and its first-boot cloud-init are a matched pair (see the
 
 ## Provenance and the no-internal-infra rule
 
-The prebuilt appliance originated outside this repository, but the committed default here must be a **cozystack-owned** artifact so the OSS base has no dependency on private infrastructure. No internal or third-party hosting URL for the appliance appears anywhere in this repository; the committed URL is a cozystack-owned placeholder under the `cozystack/cozystack` GitHub releases namespace that the maintainer populates at publish time.
+The appliance is now built reproducibly in-repo (see the section below), so the committed default is a **cozystack-owned** artifact with no dependency on private infrastructure. No internal or third-party hosting URL for the appliance appears anywhere in this repository; the committed reference is a cozystack-owned OCI containerDisk under the `cozystack/cozystack` GHCR namespace, pinned by digest in `vyos-router-disk.tag`, which the `build-vyos` CI job publishes and stamps.
 
-## T14 follow-up — reproducible in-repo build
+## T14 — reproducible in-repo build (pipeline landed)
 
-Publishing the cozystack-owned artifact is a **maintainer action**, tracked as the T14 follow-up. It covers: pin a specific VyOS rolling snapshot, build the qcow2 reproducibly in-repo (via `vyos-build`, mirroring the in-repo Talos disk pipeline), publish it under cozystack ownership, and then uncomment the `vyos-router` entry in `vm-default-images/values.yaml` with the exact snapshot URL and a `@sha256` digest pin. Until T14 lands, the entry stays disabled.
+The reproducible in-repo build is implemented in `packages/system/vyos-router-image`: a pinned `vyos-build` flavor (`flavors/vyos-router.toml`) produces the qcow2, `hack/build-qcow2.sh` drives the pinned build container, and the `Makefile` `image` target packages the qcow2 as a KubeVirt containerDisk, pushes it, and stamps the digest into `vm-default-images/images/vyos-router-disk.tag`. The `build-vyos` job in `.github/workflows/pull-requests.yaml` runs it in CI (mirroring `build-talos`) and carries the stamped digest into the installer artifact via the patch-fragment mechanism.
+
+The flavor bakes the four conformance fixes the reused (stripped) appliance lacked — cloud-init that processes `vyos_config_commands` (the `vyos_userdata` module, enabled by default in a proper VyOS build), the HTTPS REST API server, `/var/log/nginx`, and eth0-over-DHCP as an image default — plus a baked `config.boot.default` (the cloud-init VyOS module aborts without one; vyos.dev/T7206). The pins are the `vyos-build` container digest and git ref plus the snapshot version label; the upstream rolling apt mirror floats, so the build is pinned-inputs / best-effort-reproducible, not bit-identical.
+
+Two things remain a **maintainer action**, both requiring a CI run (a push, gated to the maintainer): (1) let `build-vyos` publish the containerDisk to GHCR and stamp the real digest — the committed `.tag` carries a placeholder until then; (2) the empirical boot-conformance proof (cloud-init applies the seed, the HTTPS `/configure` REST answers, eth0 has a DHCP address, nginx serves :443, the firewall seed is applied), which the deferred site-router e2e performs once the image is published.
 
 ## Invariant — image and cloud-init advance atomically
 

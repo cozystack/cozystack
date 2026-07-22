@@ -4,8 +4,8 @@ This is the consolidated list of work surfaced during the Phase-1 `site-router` 
 
 ## Image and build
 
-- **Publish the cozystack-owned VyOS golden image.** The `vyos-router` entry in `packages/system/vm-default-images/values.yaml` is committed disabled (commented out) and points at a cozystack-owned placeholder URL that does not exist yet. Publishing the artifact under cozystack ownership unblocks the default install (the app can clone the golden image instead of requiring `image.enabled=true` + a manual `image.url`) and unblocks the empirical / e2e run against a real gateway. This is a maintainer action (release-asset upload). See `docs/image-lifecycle.md`.
-- **Reproducible in-repo VyOS build.** Pin a specific VyOS 1.5-rolling snapshot and build the qcow2 reproducibly in-repo via `vyos-build`, mirroring the in-repo Talos disk pipeline (a dedicated build job, a digest `.tag`, published like the Talos image). Then uncomment the `vyos-router` entry with the exact snapshot URL and a `@sha256` digest pin. Reference the Talos build as the template. This is the fuller version of the item above — the placeholder is the interim, the reproducible build is the destination.
+- **Reproducible in-repo VyOS build (landed).** The pipeline is implemented in `packages/system/vyos-router-image` (pinned `vyos-build` flavor + containerDisk Makefile), wired into CI as the `build-vyos` job, and consumed by the now-enabled `vyos-router` entry in `packages/system/vm-default-images/values.yaml` (a digest-pinned OCI containerDisk via CDI's registry importer, digest stamped into `images/vyos-router-disk.tag`). See `docs/image-lifecycle.md`.
+- **Publish + validate the golden image (maintainer action).** Two things still require a CI run (a gated push): letting `build-vyos` publish the containerDisk to GHCR and stamp the real digest into the committed placeholder `.tag`, and the empirical boot-conformance proof against a real gateway (cloud-init applies the seed, the HTTPS `/configure` REST answers, eth0 DHCPs, nginx serves :443, the firewall seed applies) — the deferred site-router e2e covers the latter once the image is published.
 
 ## Security hardening
 
