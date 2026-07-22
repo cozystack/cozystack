@@ -25,6 +25,11 @@ spec:
       # socket into the pod via portmap. This keeps the receiver off the host
       # network (no node-wide pod exposure, no host-DNS handling) while still
       # accepting node-loopback traffic.
+      # The loopback hostPort relies on the portmap CNI plugin (chained ahead of
+      # Cilium on the kubeovn-cilium* variants). Cilium's own eBPF hostPort
+      # implementation cannot bind a hostPort to 127.0.0.1, so on the plain
+      # cilium/cilium-generic/cilium-kilo variants (not selected by any bundle
+      # today) this receiver would silently stop receiving.
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534
@@ -37,6 +42,11 @@ spec:
         image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
         imagePullPolicy: {{ .Values.image.pullPolicy }}
         args: ["--config", "/etc/vector/vector.yaml"]
+        livenessProbe:
+          tcpSocket:
+            port: talos
+          initialDelaySeconds: 10
+          periodSeconds: 30
         env:
         - name: VECTOR_SELF_NODE_NAME
           valueFrom:
