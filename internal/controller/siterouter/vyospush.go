@@ -267,7 +267,12 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 		// both before the error reaches an Event, a condition message or a log,
 		// so a tenant-readable surface never leaks the secret. The pushed op batch
 		// itself is never included (only the client's error string is).
-		msg := redactSecrets("VyOS Configure failed: "+truncErr(err), psk, token)
+		//
+		// Redact the FULL error string BEFORE truncating: a secret straddling the
+		// 256-byte truncation boundary would otherwise have its prefix survive the
+		// cut (redaction can no longer match the whole value) and leak into the
+		// tenant-readable Event. Redact first, then cap the length.
+		msg := truncMsg(redactSecrets("VyOS Configure failed: "+err.Error(), psk, token))
 		r.recordConfigApplyError(inst) // T10: advance site_router_config_apply_errors_total
 		if r.Recorder != nil {
 			r.Recorder.Event(inst.hr, corev1.EventTypeWarning, reasonConfigureFailed, msg)
@@ -684,8 +689,16 @@ func redactSecrets(s string, secrets ...string) string {
 // suitable for a Kubernetes Event/condition. VyOS API errors can be long
 // multi-line dumps. Ported from the reference implementation.
 func truncErr(err error) string {
+	return truncMsg(err.Error())
+}
+
+// truncMsg is truncErr for an already-assembled message string. It exists so a
+// message can be REDACTED before it is truncated: truncating first would let a
+// secret straddling the length boundary keep its prefix past the cut (redaction
+// can no longer match the whole value), leaking it into a tenant-readable Event.
+func truncMsg(s string) string {
 	const maxLen = 256
-	msg := strings.ReplaceAll(err.Error(), "\n", " ")
+	msg := strings.ReplaceAll(s, "\n", " ")
 	if len(msg) <= maxLen {
 		return msg
 	}

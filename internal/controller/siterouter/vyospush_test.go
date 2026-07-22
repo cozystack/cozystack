@@ -399,6 +399,62 @@ func TestReconcile_ConfigureErrorRedactsSecrets(t *testing.T) {
 	}
 }
 
+// TestReconcile_ConfigureErrorRedactsSecretStraddlingTruncateBoundary encodes the
+// F2 fix: redaction must run on the FULL error string BEFORE truncation. A PSK
+// positioned so it straddles the 256-byte truncation boundary would, under the
+// old truncate-then-redact order, have its cut fall mid-secret — redaction could
+// no longer match the whole value, so the surviving prefix leaked into the
+// tenant-readable ConfigureFailed Event. Redact-first replaces the whole secret
+// before the length cap, so nothing leaks.
+func TestReconcile_ConfigureErrorRedactsSecretStraddlingTruncateBoundary(t *testing.T) {
+	// A distinctive PSK so a leaked fragment is unambiguous.
+	const psk = "PSK-STRADDLE-0123456789abcdef"
+	const token = "api-token-xyz"
+	const podName = "virt-launcher-" + releasePrefix + "demo-abcde"
+
+	// The message redacted is "VyOS Configure failed: " (23 bytes) + err. 220
+	// bytes of padding place the PSK across byte 256 of that string, so a cut at
+	// 256 falls inside the PSK.
+	errBody := strings.Repeat("x", 220) + psk + " (near set command)"
+	fakeV := &fakeVyOS{configureErr: errors.New(errBody)}
+	objs := []client.Object{
+		siteRouterHRWithValues(t, "demo", routedValues()),
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "tenant-test"}},
+		cozystackConfigMap(),
+		gwPod(podName, "demo", "10.244.0.5"),
+		pskSecret("demo", psk),
+		apiKeySecret("demo", token),
+	}
+	r, rec := newVyOSReconciler(t, fakeV, objs...)
+
+	res := reconcileInstance(t, r, "demo")
+	if res.RequeueAfter != runtimePollInterval {
+		t.Fatalf("expected a Degraded requeue on Configure failure, got %s", res.RequeueAfter)
+	}
+
+	events := recordedEvents(rec)
+	if len(events) == 0 {
+		t.Fatalf("expected a ConfigureFailed event")
+	}
+	foundRedacted := false
+	for _, e := range events {
+		if strings.Contains(e, psk) {
+			t.Errorf("ConfigureFailed event must not echo the full PSK, got %q", e)
+		}
+		// The exact leak the old truncate-then-redact order produced: the PSK
+		// prefix that survived the cut. Not even a fragment may appear.
+		if strings.Contains(e, "PSK-STRADDLE-") {
+			t.Errorf("ConfigureFailed event leaked a PSK prefix straddling the truncation boundary, got %q", e)
+		}
+		if strings.Contains(e, "[redacted]") {
+			foundRedacted = true
+		}
+	}
+	if !foundRedacted {
+		t.Errorf("expected the redaction placeholder in the ConfigureFailed event, events: %v", events)
+	}
+}
+
 // TestReconcile_DriftReApplies encodes T06 Acceptance "editing
 // remoteCIDRs/staticRoutes/peer triggers a live POST /configure" (T12 "drift
 // re-apply"): after a steady-state apply, changing spec.values re-renders a
