@@ -54,13 +54,18 @@ func (MongoDBAdapter) ReleaseName(appName string) string { return "mongodb-" + a
 // keeps the set serving reads, and operators keep an odd member count.
 func (MongoDBAdapter) QuorumFloor(appValues map[string]any) int32 { return 1 }
 
-// Scalable: only replica-set mode is scalable; a sharded cluster is not (adding
-// shards is an orchestrated data-rebalancing procedure, out of scope by design).
+// Scalable: NOT yet. A sharded cluster is inherently non-scalable (shard
+// addition requires data rebalancing). A replica set is topologically scalable,
+// but cozystack ships the Percona PMM/mongodb_exporter DISABLED, so there is no
+// metric source, and the driver PromQL here is uncalibrated best-effort — scaling
+// on it would risk acting on wrong data. Report not-scalable until the exporter
+// is enabled by default and the queries are calibrated on a live cluster
+// (tracked as a follow-up).
 func (MongoDBAdapter) Scalable(appValues map[string]any) (bool, string) {
 	if nestedBool(appValues, false, "sharding") {
 		return false, "sharded MongoDB is not horizontally scalable (shard addition requires data rebalancing)"
 	}
-	return true, ""
+	return false, "MongoDB autoscaling needs the (currently disabled) exporter and calibrated queries; not yet enabled"
 }
 
 // secondaryScope restricts a per-pod mongodb_exporter metric to this app's

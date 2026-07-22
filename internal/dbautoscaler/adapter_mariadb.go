@@ -47,9 +47,15 @@ func (MariaDBAdapter) ReleaseName(appName string) string { return "mariadb-" + a
 // single primary.
 func (MariaDBAdapter) QuorumFloor(appValues map[string]any) int32 { return 1 }
 
-// Scalable: cozystack mariadb is always single-primary async replication (no
-// sharding), so it is always horizontally scalable.
-func (MariaDBAdapter) Scalable(appValues map[string]any) (bool, string) { return true, "" }
+// Scalable: NOT yet. The cozystack mariadb chart does not set
+// spec.replication.replica.bootstrapFrom, so the mariadb-operator rejects
+// on-the-fly scale-out with MariaDBScaleOutError (confirmed on a live cluster).
+// Reporting Scalable=false avoids a perpetual patch->stuck->rollback thrash;
+// horizontal autoscaling for MariaDB is unblocked once the chart gains scale-out
+// support (tracked as a follow-up in the mariadb package).
+func (MariaDBAdapter) Scalable(appValues map[string]any) (bool, string) {
+	return false, "the cozystack mariadb chart does not support on-the-fly scale-out (replication.replica.bootstrapFrom unset)"
+}
 
 // metricsJob is the mysqld_exporter scrape job for this app.
 func (a MariaDBAdapter) metricsJob(app types.NamespacedName) string {

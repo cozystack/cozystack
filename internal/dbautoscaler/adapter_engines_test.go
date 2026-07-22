@@ -58,31 +58,32 @@ func TestAdapterForAllEngines(t *testing.T) {
 	}
 }
 
-func TestMongoDBShardingNotScalable(t *testing.T) {
+func TestMongoDBNotScalable(t *testing.T) {
 	a := MongoDBAdapter{}
-	// replica-set mode (default) is scalable
-	if ok, _ := a.Scalable(map[string]any{}); !ok {
-		t.Fatalf("non-sharded MongoDB should be scalable")
-	}
-	if ok, _ := a.Scalable(map[string]any{"sharding": false}); !ok {
-		t.Fatalf("sharding:false MongoDB should be scalable")
-	}
-	// sharded mode is NOT scalable
+	// Sharded mode: not scalable (data rebalancing).
 	ok, reason := a.Scalable(map[string]any{"sharding": true})
-	if ok {
-		t.Fatalf("sharded MongoDB must not be scalable")
+	if ok || reason == "" {
+		t.Fatalf("sharded MongoDB must be not-scalable with a reason, got ok=%v reason=%q", ok, reason)
 	}
-	if reason == "" {
-		t.Fatalf("non-scalable must carry a reason")
+	// Replica-set mode: also not-scalable yet (exporter disabled / uncalibrated).
+	ok, reason = a.Scalable(map[string]any{})
+	if ok || reason == "" {
+		t.Fatalf("replica-set MongoDB must be not-scalable-yet with a reason, got ok=%v reason=%q", ok, reason)
 	}
 }
 
-func TestMariaDBRedisAlwaysScalable(t *testing.T) {
-	if ok, _ := (MariaDBAdapter{}).Scalable(map[string]any{}); !ok {
-		t.Errorf("mariadb should be scalable")
-	}
+func TestRedisScalableMariaDBNotYet(t *testing.T) {
 	if ok, _ := (RedisAdapter{}).Scalable(map[string]any{}); !ok {
 		t.Errorf("redis should be scalable")
+	}
+	// MariaDB is not scalable until the chart supports on-the-fly scale-out
+	// (bootstrapFrom); otherwise it thrashes patch->stuck->rollback.
+	ok, reason := (MariaDBAdapter{}).Scalable(map[string]any{})
+	if ok {
+		t.Errorf("mariadb must report not-scalable until the chart supports scale-out")
+	}
+	if reason == "" {
+		t.Errorf("mariadb not-scalable must carry a reason")
 	}
 }
 

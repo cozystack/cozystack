@@ -58,6 +58,20 @@ func resolveBehavior(dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler) (up,
 	return up, down
 }
 
+// backoffDuration is the wait before re-attempting a scale-up size that failed
+// to converge: the convergence deadline, doubled per consecutive failure, capped
+// at 8x.
+func backoffDuration(base time.Duration, count int) time.Duration {
+	if count < 1 {
+		count = 1
+	}
+	d := base
+	for i := 1; i < count && i < 4; i++ {
+		d *= 2
+	}
+	return d
+}
+
 func resolveConvergenceDeadline(dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler) time.Duration {
 	if dha.Spec.Behavior != nil && dha.Spec.Behavior.ConvergenceDeadlineSeconds != nil {
 		return time.Duration(*dha.Spec.Behavior.ConvergenceDeadlineSeconds) * time.Second

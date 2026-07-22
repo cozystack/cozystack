@@ -61,6 +61,12 @@ type targetState struct {
 	// a competing writer that changed replicas out from under us.
 	lastWritten   *int32
 	lastConverged *int32
+	// failedTarget is a scale-up size that did not converge and was rolled back;
+	// re-attempting it is deferred until backoffUntil (exponential per repeat) so
+	// a persistently unschedulable target does not thrash patch->stuck->rollback.
+	failedTarget *int32
+	backoffUntil *time.Time
+	backoffCount int
 }
 
 // Reconciler reconciles DatabaseHorizontalAutoscaler objects.
@@ -145,7 +151,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	if ok, reason := adapter.Scalable(appValues); !ok {
-		r.setScalingActive(dha, false, autoscalingv1alpha1.ReasonSharded, reason)
+		r.setScalingActive(dha, false, autoscalingv1alpha1.ReasonNotScalable, reason)
 		return r.finish(ctx, dha, ctrl.Result{})
 	}
 	r.setScalingActive(dha, true, autoscalingv1alpha1.ReasonReady, "target is scalable")
@@ -245,6 +251,28 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	r.applyDecisionToStatus(dha, in, decision, obs, ownershipConflict)
 	exportMetrics(dha.Namespace, dha.Name, in, decision, ownershipConflict)
 
+	// Clear the backoff once load no longer wants the failed (larger) size.
+	if st.failedTarget != nil && decision.Desired < *st.failedTarget {
+		st.failedTarget = nil
+		st.backoffUntil = nil
+		st.backoffCount = 0
+	}
+
+	// Backoff: if a scale-up targets the size that just failed to converge and we
+	// are still within the backoff window, do not re-attempt — hold at StuckScaling
+	// so a persistently unschedulable target does not thrash patch->stuck->rollback.
+	if decision.Kind == DecisionScale && st.failedTarget != nil && decision.Desired == *st.failedTarget &&
+		st.backoffUntil != nil && r.now().Before(*st.backoffUntil) {
+		apimeta.SetStatusCondition(&dha.Status.Conditions, metav1.Condition{
+			Type:               autoscalingv1alpha1.ConditionAbleToScale,
+			Status:             metav1.ConditionFalse,
+			Reason:             autoscalingv1alpha1.ReasonStuckScaling,
+			Message:            fmt.Sprintf("backing off re-attempt of %d replicas until %s", decision.Desired, st.backoffUntil.Format(time.RFC3339)),
+			ObservedGeneration: dha.Generation,
+		})
+		return r.finish(ctx, dha, ctrl.Result{RequeueAfter: requeueInterval})
+	}
+
 	// Apply the patch when the decision calls for it and we are not in dryRun and
 	// there is no competing writer to fight.
 	if (decision.Kind == DecisionScale || decision.Kind == DecisionRollback) && !dha.Spec.DryRun && !ownershipConflict {
@@ -263,6 +291,17 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		verb := "scaled"
 		if decision.Kind == DecisionRollback {
 			verb = "rolled back"
+			// Record the size that failed to converge and set an exponential backoff
+			// before it may be re-attempted.
+			failed := currentReplicas
+			if st.failedTarget != nil && *st.failedTarget == failed {
+				st.backoffCount++
+			} else {
+				st.backoffCount = 1
+			}
+			st.failedTarget = &failed
+			until := now.Add(backoffDuration(resolveConvergenceDeadline(dha), st.backoffCount))
+			st.backoffUntil = &until
 		}
 		r.recordEvent(dha, corev1.EventTypeNormal, "Scaled",
 			fmt.Sprintf("%s %s/%s replicas %d -> %d", verb, dha.Spec.TargetRef.Kind, dha.Spec.TargetRef.Name, currentReplicas, decision.Desired))

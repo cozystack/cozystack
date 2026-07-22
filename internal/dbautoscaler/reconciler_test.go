@@ -452,4 +452,15 @@ func TestReconcileStuckScalingRollback(t *testing.T) {
 	if r := env.appReplicas(t, "tenant", "db"); r != 3 {
 		t.Fatalf("cycle3 expected rollback to 3, app replicas = %d", r)
 	}
+
+	// Cycle 4: load still high so the decision again wants 4 (the failed size),
+	// but the backoff must suppress the re-attempt — replicas stay at 3, no thrash.
+	env.advance(30 * time.Second) // within backoff window
+	got = env.reconcile(t, dha)
+	if r := env.appReplicas(t, "tenant", "db"); r != 3 {
+		t.Fatalf("cycle4 backoff should suppress re-attempt; app replicas = %d, want 3", r)
+	}
+	if s, reason := condStatus(got, autoscalingv1alpha1.ConditionAbleToScale); s != string(metav1.ConditionFalse) || reason != autoscalingv1alpha1.ReasonStuckScaling {
+		t.Fatalf("cycle4 expected StuckScaling (backoff), got %s/%s", s, reason)
+	}
 }
