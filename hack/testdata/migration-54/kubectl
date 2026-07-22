@@ -44,6 +44,14 @@ case "$verb" in
   apply)
     payload=$(cat)
     if printf '%s' "$payload" | grep -q 'HelmRelease'; then
+      # Reject an RFC-1123-invalid metadata.name the way the real apiserver would,
+      # so the migration's name-validity guard is exercised: without it the script
+      # would reach this apply and exit non-zero, deadlocking the upgrade.
+      hrname=$(printf '%s' "$payload" | jq -r '.metadata.name // ""' 2>/dev/null)
+      if ! printf '%s' "$hrname" | grep -qE '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'; then
+        echo "The HelmRelease \"$hrname\" is invalid: metadata.name: Invalid value: \"$hrname\": a lowercase RFC 1123 label is required" >&2
+        exit 1
+      fi
       printf '%s' "$payload" > "$FAKE_CHILD_HR"; log "APPLY-HR"
     elif printf '%s' "$payload" | grep -q 'ConfigMap'; then
       log "STAMP"

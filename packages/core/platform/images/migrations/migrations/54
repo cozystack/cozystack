@@ -115,6 +115,24 @@ pin_keep() {
   fi
 }
 
+# pin_pool_objects <cluster> <group> <namespace> -- pin every worker object of a
+# pool we cannot adopt (name overflow, or a name that is not a valid HelmRelease
+# metadata.name) so the parent's control-plane-only re-render cannot prune them.
+# The pool keeps running unmanaged until the operator recreates it with a legal
+# name. Existence-checked inside pin_keep, so it is a safe no-op when the objects
+# are absent (a pool that never rendered under a bad name).
+pin_pool_objects() {
+  cluster=$1; group=$2; ns=$3
+  pin_keep "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns"
+  pin_keep "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns"
+  pin_keep "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns"
+  for kmt in $(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
+                 -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+               grep -E "^kubernetes-${cluster}-${group}-[0-9a-f]{6}$" || true); do
+    pin_keep "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns"
+  done
+}
+
 kubectl get helmrelease --all-namespaces \
   -l apps.cozystack.io/application.kind=Kubernetes -o json |
   jq -c '.items[] | {ns: .metadata.namespace, name: .metadata.name, values: (.spec.values // {})}' |
@@ -140,6 +158,26 @@ kubectl get helmrelease --all-namespaces \
       app_name="${cluster}-${group}"
       grp=$(printf '%s' "$groups_json" | jq -c --arg g "$group" '.[$g]')
 
+      # A HelmRelease metadata.name must be a valid RFC-1123 label. The old
+      # nodeGroups map key was never schema-constrained (map[string]NodeGroup,
+      # no propertyNames pattern), so a stored parent HR can carry a key like
+      # "My_Pool" — added via kubectl/dashboard, whose own render then failed at
+      # apply time, leaving the HR stuck on an older revision with the bad key
+      # persisted. child_name would then be RFC-1123-invalid, `kubectl apply`
+      # rejects it, and under set -e the script exits 1 — deadlocking the
+      # platform pre-upgrade hook for EVERY tenant, exactly the failure the
+      # overflow branch below was built to avoid. Route it through the same
+      # warn + pin + skip path (a pool that never rendered under a bad name has
+      # no objects, so pin_pool_objects is a safe no-op — the warning is the
+      # point).
+      if ! printf '%s' "$child_name" | grep -qE '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'; then
+        echo "  WARNING: child release name '$child_name' (nodeGroup key '$group') is not a valid RFC-1123 label" >&2
+        echo "  WARNING: pinning pool '$cluster'/'$group' objects with resource-policy=keep and skipping adoption" >&2
+        echo "  WARNING: remedy: recreate the pool with an RFC-1123 name (lowercase alphanumeric and '-', must start and end alphanumeric)" >&2
+        pin_pool_objects "$cluster" "$group" "$ns"
+        continue
+      fi
+
       # Helm refuses release names longer than 53 characters. A legal long
       # cluster name (up to 42 chars per rest.go) plus the longer
       # kubernetes-nodes- prefix can overflow. Do NOT fail the whole migration
@@ -153,14 +191,7 @@ kubectl get helmrelease --all-namespaces \
         echo "  WARNING: child release name '$child_name' (${#child_name} chars) exceeds Helm's 53-char limit" >&2
         echo "  WARNING: pinning pool '$cluster'/'$group' objects with resource-policy=keep and skipping adoption" >&2
         echo "  WARNING: remedy: recreate the cluster with a shorter name (cluster+pool must fit in 36 chars)" >&2
-        pin_keep "machinedeployment.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns"
-        pin_keep "machinehealthcheck.cluster.x-k8s.io" "kubernetes-${cluster}-${group}" "$ns"
-        pin_keep "workloadmonitor.cozystack.io" "kubernetes-${cluster}-${group}" "$ns"
-        for kmt in $(kubectl get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io -n "$ns" \
-                       -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
-                     grep -E "^kubernetes-${cluster}-${group}-[0-9a-f]{6}$" || true); do
-          pin_keep "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io" "$kmt" "$ns"
-        done
+        pin_pool_objects "$cluster" "$group" "$ns"
         continue
       fi
 

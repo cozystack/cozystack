@@ -91,3 +91,25 @@ OBJS
   grep -qi 'refusing' "$WORK/out"
   rm -rf "$WORK"
 }
+
+@test "an RFC-1123-invalid nodeGroup key is pinned and skipped, not applied (no upgrade deadlock)" {
+  prep
+  # The old nodeGroups map key was never schema-constrained, so a parent HR can
+  # carry a key like 'My_Pool' that yields the RFC-1123-invalid child HR name
+  # kubernetes-nodes-test3-My_Pool. Without the guard the create path reaches
+  # `kubectl apply`, the fake apiserver rejects the name, and the migration exits
+  # 1 -- deadlocking every tenant's platform pre-upgrade hook. The guard must
+  # warn, pin the (absent) pool objects as a no-op, skip adoption, and continue.
+  cat > "$FAKE_HR_LIST" <<'JSON'
+{"items":[{"metadata":{"namespace":"tenant-test","name":"kubernetes-test3"},"spec":{"values":{"nodeGroups":{"My_Pool":{"minReplicas":1,"roles":["ingress-nginx"]}}}}}]}
+JSON
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  # Guard caught it: the run succeeds instead of deadlocking.
+  [ "$rc" -eq 0 ]
+  grep -qiE 'not a valid RFC-1123 label' "$WORK/out"
+  # The invalid child HelmRelease is never applied.
+  ! grep -q 'APPLY-HR' "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
