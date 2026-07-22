@@ -22,11 +22,13 @@ data:
         source: |
           .log_source = "talos_system"
           .node = get_env_var("VECTOR_SELF_NODE_NAME") ?? "unknown"
+          .tenant = "{{ .Values.global.target | default "tenant-root" }}"
+          .cluster = "root-cluster"
     sinks:
       victorialogs:
         type: http
         inputs: [tag]
-        uri: "http://vlinsert-generic.{{ .Values.global.target }}.svc:9481/insert/jsonline?_stream_fields=node,log_source,talos-service,facility&_msg_field=msg&_time_field=talos-time"
+        uri: "http://vlinsert-generic.{{ .Values.global.target | default "tenant-root" }}.svc:9481/insert/jsonline?_stream_fields=node,log_source,talos-service,facility,tenant,cluster&_msg_field=msg&_time_field=talos-time"
         method: post
         compression: gzip
         encoding:
