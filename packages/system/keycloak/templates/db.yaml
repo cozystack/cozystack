@@ -51,6 +51,15 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
+  # Ceph RGW and other non-AWS S3-compatible backends reject botocore's default
+  # flexible request checksum (the x-amz-content-sha256 that barman-cloud's
+  # boto3 sends on every upload) with "InvalidArgument: x-amz-content-sha256
+  # must be UNSIGNED-PAYLOAD, ...". Compute a checksum only when the operation
+  # requires one; AWS S3 accepts this too, so it is a safe default everywhere.
+  instanceSidecarConfiguration:
+    env:
+      - name: AWS_REQUEST_CHECKSUM_CALCULATION
+        value: when_required
   configuration:
     destinationPath: {{ .Values.backup.destinationPath | quote }}
     {{- with .Values.backup.endpointURL }}
