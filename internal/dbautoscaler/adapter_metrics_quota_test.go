@@ -21,6 +21,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -170,5 +172,49 @@ func TestMaxReplicasWithinQuota(t *testing.T) {
 	// No quota => unbounded (nil).
 	if got := MaxReplicasWithinQuota(nil, 2, resource.MustParse("1"), resource.MustParse("1Gi")); got != nil {
 		t.Fatalf("no quota should be unbounded, got %v", *got)
+	}
+}
+
+// TestPresetLadderInSyncWithCozyLib guards against drift between the compiled
+// presetLadder and cozy-lib's _resourcepresets.tpl (the source of truth). If
+// upstream presets change, this fails until presetLadder is updated.
+func TestPresetLadderInSyncWithCozyLib(t *testing.T) {
+	data, err := os.ReadFile("../../packages/library/cozy-lib/templates/_resourcepresets.tpl")
+	if err != nil {
+		t.Fatalf("read presets tpl: %v", err)
+	}
+	// Match:  "t1.nano"  (dict "cpu" "250m" "memory" "128Mi" ...)
+	re := regexp.MustCompile(`"([a-z0-9.]+)"\s+\(dict\s+"cpu"\s+"([^"]+)"\s+"memory"\s+"([^"]+)"`)
+	tpl := map[string][2]string{}
+	for _, m := range re.FindAllStringSubmatch(string(data), -1) {
+		tpl[m[1]] = [2]string{m[2], m[3]}
+	}
+	if len(tpl) < len(presetLadder) {
+		t.Fatalf("parsed only %d presets from tpl, presetLadder has %d", len(tpl), len(presetLadder))
+	}
+	for name, want := range presetLadder {
+		got, ok := tpl[name]
+		if !ok {
+			t.Errorf("preset %q in presetLadder but not in cozy-lib tpl", name)
+			continue
+		}
+		if got != want {
+			t.Errorf("preset %q drift: presetLadder=%v tpl=%v", name, want, got)
+		}
+	}
+}
+
+func TestMaxReplicasWithinQuotaLimitsScoped(t *testing.T) {
+	// A quota that bounds only limits.cpu must still cap the count.
+	rq := corev1.ResourceQuota{
+		ObjectMeta: metav1.ObjectMeta{Name: "q", Namespace: "tenant"},
+		Status: corev1.ResourceQuotaStatus{
+			Hard: corev1.ResourceList{corev1.ResourceLimitsCPU: resource.MustParse("4")},
+			Used: corev1.ResourceList{corev1.ResourceLimitsCPU: resource.MustParse("1")},
+		},
+	}
+	got := MaxReplicasWithinQuota([]corev1.ResourceQuota{rq}, 2, resource.MustParse("1"), resource.MustParse("1Gi"))
+	if got == nil || *got != 5 {
+		t.Fatalf("limits.cpu-scoped quota: MaxReplicasWithinQuota = %v, want 5", got)
 	}
 }

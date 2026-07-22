@@ -31,9 +31,11 @@ import (
 //
 // Pods carry the label redisfailovers-role=master|slave, surfaced by
 // kube-state-metrics as label_redisfailovers_role, which the PromQL joins on to
-// select read-serving slaves. Metrics come from the redis_exporter sidecar.
-// The namespace matcher is mandatory (tenant isolation); the exact expressions
-// are calibrated on a live cluster in a follow-up.
+// select read-serving slaves. Metrics come from the redis_exporter sidecar,
+// which the cozystack redis chart ships ENABLED by default — so unlike MongoDB
+// there is a real metric source. These expressions were calibrated and the full
+// scale up/down flow validated on a live cozystack cluster. The namespace matcher
+// is mandatory (tenant isolation).
 type RedisAdapter struct{}
 
 func (RedisAdapter) Kind() string                      { return "Redis" }

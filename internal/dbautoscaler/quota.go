@@ -106,12 +106,15 @@ func MaxReplicasWithinQuota(quotas []corev1.ResourceQuota, current int32, cpuPer
 		}
 	}
 
-	// A quota may bound either the request-scoped name (requests.cpu) or the bare
-	// compute name (cpu); check both.
+	// A quota may bound the request-scoped name (requests.cpu), the bare compute
+	// name (cpu), or the limits-scoped name (limits.cpu); check all three, since a
+	// pod's request and limit for a preset are equal here.
 	consider(corev1.ResourceRequestsCPU, corev1.ResourceRequestsCPU, cpuPerPod)
 	consider(corev1.ResourceCPU, corev1.ResourceCPU, cpuPerPod)
+	consider(corev1.ResourceLimitsCPU, corev1.ResourceLimitsCPU, cpuPerPod)
 	consider(corev1.ResourceRequestsMemory, corev1.ResourceRequestsMemory, memPerPod)
 	consider(corev1.ResourceMemory, corev1.ResourceMemory, memPerPod)
+	consider(corev1.ResourceLimitsMemory, corev1.ResourceLimitsMemory, memPerPod)
 
 	if !bounded {
 		return nil
