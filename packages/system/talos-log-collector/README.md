@@ -55,6 +55,10 @@ url: "tcp://127.0.0.1:5170/"
 > Omitting the `KmsgLogConfig` document collects service logs only; kernel
 > (kmsg) logs, including the DRBD messages, will silently never arrive.
 
+> Kernel (kmsg) records carry no wall-clock timestamp (only a monotonic
+> clock), so VictoriaLogs stamps them with the ingest time rather than the
+> `talos-time` used for service logs.
+
 > Early-boot kernel panics, before the network is up, are not captured by any
 > in-cluster collector. Use the node BMC serial console for those.
 
@@ -89,8 +93,8 @@ url: "tcp://127.0.0.1:5170/"
 
 ### VictoriaLogs destination
 
-| Name            | Description                                                                  | Type     | Value         |
-| --------------- | ---------------------------------------------------------------------------- | -------- | ------------- |
-| `global`        | Platform-injected global values.                                             | `object` | `{}`          |
-| `global.target` | Tenant whose VictoriaLogs (vlinsert-generic.<target>.svc) receives the logs. | `string` | `tenant-root` |
+| Name            | Description                                                                                                                       | Type     | Value         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------- | ------------- |
+| `global`        | Global values block; `target` selects the destination tenant.                                                                     | `object` | `{}`          |
+| `global.target` | Tenant whose VictoriaLogs (vlinsert-generic.<target>.svc) receives the logs. Defaults to tenant-root; override via bundle values. | `string` | `tenant-root` |
 

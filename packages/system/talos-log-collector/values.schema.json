@@ -79,12 +79,12 @@
       }
     },
     "global": {
-      "description": "Platform-injected global values.",
+      "description": "Global values block; `target` selects the destination tenant.",
       "type": "object",
       "default": {},
       "properties": {
         "target": {
-          "description": "Tenant whose VictoriaLogs (vlinsert-generic.\u003ctarget\u003e.svc) receives the logs.",
+          "description": "Tenant whose VictoriaLogs (vlinsert-generic.\u003ctarget\u003e.svc) receives the logs. Defaults to tenant-root; override via bundle values.",
           "type": "string",
           "default": "tenant-root"
         }
