@@ -283,7 +283,18 @@ jobs:
           TAG: ${{ steps.parse.outputs.tag }}
         run: |
           BRANCH="release-$LINE"
-          EXISTING="$(git ls-remote --heads origin "refs/heads/$BRANCH" | cut -f1)"
+          # Same absent-vs-broken distinction the three guards above make: a
+          # transport/auth failure must not read as "branch not found" and send
+          # us into the create path.
+          set +e
+          existing_ls="$(git ls-remote --heads origin "refs/heads/$BRANCH")"
+          rc=$?
+          set -e
+          if [ "$rc" -ne 0 ]; then
+            echo "::error::Could not query origin for '$BRANCH' (git ls-remote exit $rc) — refusing to proceed."
+            exit 1
+          fi
+          EXISTING="$(printf '%s' "$existing_ls" | cut -f1)"
           if [ -n "$EXISTING" ]; then
             echo "✅ $BRANCH already exists at $EXISTING; leaving it untouched."
             exit 0
