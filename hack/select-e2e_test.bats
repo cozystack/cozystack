@@ -170,3 +170,30 @@
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
     [ -z "$output" ]
 }
+
+@test "no-app-descendant package change still escalates alongside a per-suite edit" {
+    # A system package whose PackageSource graph resolves to no runnable
+    # *-application suite (monitoring-application ships no Chainsaw suite)
+    # escalates to the full suite on its own via the safety net. Editing one
+    # unrelated suite's tests in the same PR must NOT defeat that escalation:
+    # keying the safety net off the combined selection let the lone edited suite
+    # mask it, so the same change selected the full suite alone but exactly one
+    # suite alongside a suite edit (#3330).
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+
+    # Baseline: the package alone triggers the full suite. This also anchors the
+    # test: if the graph ever grows an app descendant for this package, this
+    # assertion fails loudly instead of the regression check passing vacuously.
+    echo "packages/system/monitoring/values.yaml" > "$tmp/alone"
+    alone=$(hack/select-e2e.sh "$tmp/alone" "$tmp/sources")
+    [ "$(echo "$alone" | wc -w)" -gt 5 ]
+
+    # Regression: the same change plus an unrelated per-suite edit must still run
+    # the full suite, not collapse to just the edited suite.
+    echo "packages/system/monitoring/values.yaml" > "$tmp/both"
+    echo "hack/e2e-chainsaw/redis/chainsaw-test.yaml" >> "$tmp/both"
+    both=$(hack/select-e2e.sh "$tmp/both" "$tmp/sources")
+    [ "$(echo "$both" | wc -w)" -gt 5 ]
+}
