@@ -194,7 +194,6 @@
         "certManager",
         "cilium",
         "coredns",
-        "fluxcd",
         "gatewayAPI",
         "gpuOperator",
         "hami",
@@ -251,28 +250,6 @@
             "valuesOverride"
           ],
           "properties": {
-            "valuesOverride": {
-              "description": "Custom Helm values overrides.",
-              "type": "object",
-              "default": {},
-              "x-kubernetes-preserve-unknown-fields": true
-            }
-          }
-        },
-        "fluxcd": {
-          "description": "FluxCD GitOps operator.",
-          "type": "object",
-          "default": {},
-          "required": [
-            "enabled",
-            "valuesOverride"
-          ],
-          "properties": {
-            "enabled": {
-              "description": "Enable FluxCD.",
-              "type": "boolean",
-              "default": false
-            },
             "valuesOverride": {
               "description": "Custom Helm values overrides.",
               "type": "object",

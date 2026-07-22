@@ -44,10 +44,6 @@ spec:
           path: system/coredns
         - name: kubernetes-cert-manager
           path: system/cert-manager
-        - name: kubernetes-fluxcd-operator
-          path: system/fluxcd-operator
-        - name: kubernetes-fluxcd
-          path: system/fluxcd
         - name: kubernetes-monitoring-agents
           path: system/monitoring-agents
         - name: kubernetes-cilium
