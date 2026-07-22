@@ -282,8 +282,8 @@ The matching Talos node image is `ghcr.io/cozystack/cozystack/cozystack-nocloud:
 
 | Label | Target branch |
 |-------|---------------|
-| `backport` | `release-X.Y` (current latest minor) |
-| `backport-previous` | `release-X.(Y-1)` |
+| `kind/backport` | `release-X.Y` (current latest minor) |
+| `kind/backport-previous` | `release-X.(Y-1)` |
 
 Resolution is dynamic via `getLatestRelease` at run time — no need to hardcode branch names.
 
@@ -309,7 +309,7 @@ git push origin release-X.Y  # or push to a new branch and open a PR
 To find the bot's failed comments across a batch of PRs:
 
 ```bash
-for n in $(gh pr list --search "label:backport label:backport-previous merged:>=2026-01-01" --json number --jq '.[].number'); do
+for n in $(gh pr list --search "label:kind/backport label:kind/backport-previous merged:>=2026-01-01" --json number --jq '.[].number'); do
   echo "=== #$n ==="
   gh pr view $n --json comments --jq '.comments[] | select(.author.login == "github-actions" or (.author.login | contains("backport"))) | .body' | head -20
 done
@@ -321,8 +321,8 @@ A patch release includes bugfixes for code that shipped in the corresponding min
 
 ```bash
 # 1. Inventory PRs already labeled for backport (merged but not yet on release-X.Y)
-gh pr list --search "is:merged label:backport" --limit 100
-gh pr list --search "is:merged label:backport-previous" --limit 100
+gh pr list --search "is:merged label:kind/backport" --limit 100
+gh pr list --search "is:merged label:kind/backport-previous" --limit 100
 
 # 2. List commits on main since the release branch diverged that are NOT yet on release-X.Y
 git merge-base origin/main origin/release-X.Y

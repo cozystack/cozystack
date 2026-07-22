@@ -19,9 +19,9 @@ jobs:
       github.event.pull_request.merged == true &&
       github.event.pull_request.base.ref == 'main' &&
       (
-        contains(github.event.pull_request.labels.*.name, 'backport') ||
-        contains(github.event.pull_request.labels.*.name, 'backport-previous') ||
-        (github.event.action == 'labeled' && (github.event.label.name == 'backport' || github.event.label.name == 'backport-previous'))
+        contains(github.event.pull_request.labels.*.name, 'kind/backport') ||
+        contains(github.event.pull_request.labels.*.name, 'kind/backport-previous') ||
+        (github.event.action == 'labeled' && (github.event.label.name == 'kind/backport' || github.event.label.name == 'kind/backport-previous'))
       )
     # GitHub API calls only — no docker, no repo toolchain: GitHub-hosted.
     runs-on: ubuntu-latest
@@ -40,8 +40,8 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const labels = pr.labels.map(l => l.name);
-            const isBackport = labels.includes('backport');
-            const isBackportPrevious = labels.includes('backport-previous');
+            const isBackport = labels.includes('kind/backport');
+            const isBackportPrevious = labels.includes('kind/backport-previous');
             
             core.setOutput('backport', isBackport ? 'true' : 'false');
             core.setOutput('backport_previous', isBackportPrevious ? 'true' : 'false');

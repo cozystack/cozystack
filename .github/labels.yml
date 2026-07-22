@@ -78,6 +78,18 @@
   color: 'e11d21'
   description: Indicates the change introduces a breaking API or behaviour change
 
+# kind/backport-previous has no upstream Kubernetes equivalent (k8s has no
+# two-release-line model); it stays under kind/ per the file convention.
+- name: kind/backport
+  color: 'fbca04'
+  description: Categorizes issue or PR as requiring a backport to the current release line
+  aliases: ['backport']
+
+- name: kind/backport-previous
+  color: 'fbd876'
+  description: Categorizes issue or PR as requiring a backport to the previous release line
+  aliases: ['backport-previous']
+
 # ──────────────────────────────────────────────
 # priority/ — urgency
 # ──────────────────────────────────────────────
@@ -277,14 +289,6 @@
 - name: upstream-issue
   color: 'aaaaaa'
   description: Requires resolving an issue in an upstream project
-
-- name: backport
-  color: 'fbca04'
-  description: Should change be backported on previous release
-
-- name: backport-previous
-  color: 'fbd876'
-  description: Backport target — previous release line
 
 - name: release
   color: 'aaaaaa'
