@@ -23,13 +23,15 @@ spec:
       restartPolicy: Never
       containers:
         - name: ch-backup-client
-          # platform-migrations is the pre-built, digested image release
-          # CI maintains in packages/core/platform/values.yaml. It bundles
-          # curl + jq + kubectl + helm + ca-certificates on alpine, so the
-          # strategy Pod does not depend on dl-cdn.alpinelinux.org at run
-          # time — works on air-gapped clusters. The image is reused
-          # rather than a single-purpose ch-backup-client to avoid a
-          # second tag that release CI would have to re-digest each cut.
+          # WORKAROUND: this resolves to platform-migrations, which bundles
+          # curl + jq + ca-certificates on alpine — so the Pod needs no
+          # `apk add` and works air-gapped. That is the only reason it is
+          # here. It is a 349 MB migration image standing in for a curl+jq
+          # runner, and its own ENTRYPOINT is run-migrations.sh, so the
+          # `command:` override below is load-bearing: drop it and this Pod
+          # runs platform migrations with kubectl and helm on the PATH.
+          # Replace with a dedicated ch-backup-client image owned by this
+          # package; see the TODO in ../values.yaml.
           image: "{{ .Values.backupStrategyController.chBackupClientImage }}"
           imagePullPolicy: IfNotPresent
           # The clickhouse-backup HTTP API on :7171 enforces basic auth;

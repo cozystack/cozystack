@@ -43,14 +43,18 @@ image-migrations:
 		$(BUILDX_ARGS)
 	rm -rf images/migrations/etcd-operator-crds
 	# Stamp BOTH consumers of this image. backupstrategy-controller renders it
-	# into the Altinity strategy Pod as a curl+jq runner, deliberately reusing
-	# this image rather than shipping a second one-binary tag that release CI
-	# would have to re-digest every cut. That reuse only holds if the two pins
-	# move together: the second copy had no producer, so it silently froze at
-	# v1.4.0-rc.2 while this one advanced, and a promotion then tried to retag
-	# two different digests to the same stable tag — which the write-once guard
-	# in hack/promote-retag.sh turns into a failed release. hack/image-pin-
-	# consistency.bats keeps them in lockstep.
+	# into the Altinity strategy Pod as a curl+jq runner — a WORKAROUND, not a
+	# design: that Pod needs only curl/jq/sleep/date but gets 349 MB including
+	# kubectl, helm and etcd-migrate, and this image's ENTRYPOINT is the
+	# migration runner itself. It should get a dedicated ~23 MB image owned by
+	# its own package, which would delete this cross-package stamp; see the TODO
+	# in ../../system/backupstrategy-controller/values.yaml.
+	#
+	# Until then the two pins MUST move together. The second copy had no
+	# producer, so it silently froze at v1.4.0-rc.2 while this one advanced, and
+	# a promotion then tried to retag two different digests to the same stable
+	# tag — which the write-once guard in hack/promote-retag.sh turns into a
+	# failed release. hack/image-pin-consistency.bats keeps them in lockstep.
 	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
 		yq --inplace '.migrations.image = strenv(IMAGE)' values.yaml
 	IMAGE="$(REGISTRY)/platform-migrations:$(IMAGE_TAG)@$$(yq -e -o json -r '.["containerimage.digest"]' images/migrations.json)" \
