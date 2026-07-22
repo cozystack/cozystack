@@ -25,5 +25,10 @@ spec:
   storage:
     resources:
       requests:
-        storage: 10Gi
+        # 12Gi, not the 10Gi virtual size of the VyOS qcow2: CDI's
+        # filesystem-import scratch needs the decompressed image plus ~5.5%
+        # filesystem overhead, so a request equal to the virtual size fails the
+        # import with "virtual image size larger than reported available
+        # storage" (validated live on VyOS 1.5-rolling). The headroom absorbs it.
+        storage: 12Gi
     storageClassName: replicated

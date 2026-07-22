@@ -53,6 +53,19 @@ tests:
           path: spec.storage.storageClassName
           value: replicated
 
+  # R1 — the request is 12Gi, not the 10Gi virtual size of the VyOS qcow2: CDI's
+  # filesystem-import scratch (decompressed image + ~5.5% fs overhead) overflows a
+  # request equal to the virtual size ("virtual image size larger than reported
+  # available storage"), which fails the boot-disk import live on VyOS 1.5-rolling.
+  - it: requests 12Gi to fit the CDI filesystem-import scratch over the 10Gi image
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 12Gi
+
   - it: http override sources the boot disk from image.url
     set:
       image:
