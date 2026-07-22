@@ -110,25 +110,26 @@ reachable with allowOpenManagement=true) no firewall is stamped.
 {{- $lines = append $lines (printf "  - set service https api keys id site-router-controller key '%s'" $token) -}}
 {{- $lines = append $lines "  - set service https listen-address 0.0.0.0" -}}
 {{- if $ctx.Values.managementCIDR -}}
-{{/* TODO(T06): VyOS 1.4 'firewall input' syntax — validate/port to 1.5-rolling 'firewall ipv4 input filter' against the live image before the golden-image entry is uncommented; a silent first-boot firewall failure with listen-address 0.0.0.0 would leave the API exposed. */}}
-{{- $lines = append $lines "  - set firewall input rule 5 action accept" -}}
-{{- $lines = append $lines "  - set firewall input rule 5 state established 'enable'" -}}
-{{- $lines = append $lines "  - set firewall input rule 5 state related 'enable'" -}}
-{{- $lines = append $lines "  - set firewall input rule 10 action accept" -}}
-{{- $lines = append $lines (printf "  - set firewall input rule 10 source address '%s'" $ctx.Values.managementCIDR) -}}
-{{- $lines = append $lines "  - set firewall input rule 10 protocol tcp" -}}
-{{- $lines = append $lines "  - set firewall input rule 10 destination port '22,443'" -}}
-{{- $lines = append $lines "  - set firewall input default-action drop" -}}
-{{/* T08 guest security guards, seeded fail-closed from first boot BEFORE the controller can reach the router (it re-stamps the full set on its first reconcile). Grouped inside the managementCIDR block so the open-management escape hatch stays "no firewall at all". Boundary A: drop the management ports for IPsec-decrypted traffic — a packet decrypted by VyOS and addressed to the guest's own API does not cross the pod veth where Cilium enforces. §3: forward-chain default-deny (routed mode advertises specific remotes, never a default route out the tunnel). TODO(T13): the `ipsec match-ipsec`/`match-none` and `firewall forward` 1.5 syntax is PROVISIONAL — validate against the shipped image; keep in lockstep with internal/vyos/render. */}}
-{{- $lines = append $lines "  - set firewall input rule 1 ipsec match-ipsec" -}}
-{{- $lines = append $lines "  - set firewall input rule 1 destination port '22,443'" -}}
-{{- $lines = append $lines "  - set firewall input rule 1 action drop" -}}
-{{- $lines = append $lines "  - set firewall forward default-action drop" -}}
-{{- $lines = append $lines "  - set firewall forward rule 5 action accept" -}}
-{{- $lines = append $lines "  - set firewall forward rule 5 state established 'enable'" -}}
-{{- $lines = append $lines "  - set firewall forward rule 5 state related 'enable'" -}}
-{{- $lines = append $lines "  - set firewall forward rule 10 ipsec match-none" -}}
-{{- $lines = append $lines "  - set firewall forward rule 10 action accept" -}}
+{{/* VyOS 1.5-rolling nftables firewall (validated live against the 2026.05.13-0044-rolling image): the management ACL lives under 'firewall ipv4 input filter', firewall 'state' is a multi-value leaf ('state established' / 'state related', not the old 'state established enable'), and a rule that sets a destination port must also set a protocol. Kept in lockstep with internal/vyos/render. */}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 5 action accept" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 5 state established" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 5 state related" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 action accept" -}}
+{{- $lines = append $lines (printf "  - set firewall ipv4 input filter rule 10 source address '%s'" $ctx.Values.managementCIDR) -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 protocol tcp" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 destination port '22,443'" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter default-action drop" -}}
+{{/* T08 guest security guards, seeded fail-closed from first boot BEFORE the controller can reach the router (it re-stamps the full set on its first reconcile). Grouped inside the managementCIDR block so the open-management escape hatch stays "no firewall at all". Boundary A: drop the management ports for IPsec-decrypted traffic — a packet decrypted by VyOS and addressed to the guest's own API does not cross the pod veth where Cilium enforces. §3: forward-chain default-deny (routed mode advertises specific remotes, never a default route out the tunnel). VyOS 1.5: the inbound ipsec matchers are 'match-ipsec-in'/'match-none-in' (bare 'match-ipsec'/'match-none' are ambiguous prefixes) and the drop rule needs an explicit protocol alongside its port; validated live and kept in lockstep with internal/vyos/render. */}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 ipsec match-ipsec-in" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 protocol tcp" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 destination port '22,443'" -}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 action drop" -}}
+{{- $lines = append $lines "  - set firewall ipv4 forward filter default-action drop" -}}
+{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 5 action accept" -}}
+{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 5 state established" -}}
+{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 5 state related" -}}
+{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 10 ipsec match-none-in" -}}
+{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 10 action accept" -}}
 {{- end -}}
 {{- join "\n" $lines -}}
 {{- end -}}
