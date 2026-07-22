@@ -68,6 +68,8 @@ type targetState struct {
 	failedTarget *int32
 	backoffUntil *time.Time
 	backoffCount int
+	// conflictReported avoids re-emitting the ownership-conflict event every cycle.
+	conflictReported bool
 }
 
 // Reconciler reconciles DatabaseHorizontalAutoscaler objects.
@@ -206,15 +208,22 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Ownership: detect a competing writer that changed replicas out from under us.
 	ownershipConflict := st.lastWritten != nil && currentReplicas != *st.lastWritten
 	if ownershipConflict {
-		marker := appAnnotations[autoscalingv1alpha1.ManagedByAnnotation]
-		r.recordEvent(dha, corev1.EventTypeWarning, autoscalingv1alpha1.ReasonOwnershipConflict,
-			fmt.Sprintf("replicas changed to %d by a competing writer (marker=%q); not entering a write war", currentReplicas, marker))
+		// Emit the event only on the transition into conflict, not every cycle.
+		if !st.conflictReported {
+			marker := appAnnotations[autoscalingv1alpha1.ManagedByAnnotation]
+			r.recordEvent(dha, corev1.EventTypeWarning, autoscalingv1alpha1.ReasonOwnershipConflict,
+				fmt.Sprintf("replicas changed to %d by a competing writer (marker=%q); not entering a write war", currentReplicas, marker))
+			st.conflictReported = true
+		}
+	} else {
+		st.conflictReported = false
 	}
 
 	// Reject a non-positive metric target with a distinct reason, so a spec typo
 	// (averageValue: "0") is not silently reported as MetricUnavailable.
 	for _, m := range dha.Spec.Metrics {
 		if metricTargetValue(m) <= 0 {
+			dha.Status.CurrentReplicas = currentReplicas
 			apimeta.SetStatusCondition(&dha.Status.Conditions, metav1.Condition{
 				Type:               autoscalingv1alpha1.ConditionAbleToScale,
 				Status:             metav1.ConditionFalse,

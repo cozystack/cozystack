@@ -139,7 +139,8 @@ func (r *Reconciler) applyDecisionToStatus(
 		if o.Type == string(autoscalingv1alpha1.MetricReadCPUUtilization) {
 			q = *resource.NewMilliQuantity(int64(o.AveragePerReplica), resource.DecimalSI)
 		} else {
-			q = *resource.NewMilliQuantity(int64(o.AveragePerReplica*1000), resource.DecimalSI)
+			// Plain counts render as a whole integer (avoid "75500m" for 75.5).
+			q = *resource.NewQuantity(int64(o.AveragePerReplica+0.5), resource.DecimalSI)
 		}
 		dha.Status.CurrentMetrics = append(dha.Status.CurrentMetrics, autoscalingv1alpha1.MetricStatus{
 			Type:         autoscalingv1alpha1.MetricType(o.Type),

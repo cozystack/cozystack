@@ -259,6 +259,10 @@ func TestReconcileScalesUp(t *testing.T) {
 	if s, _ := condStatus(got, autoscalingv1alpha1.ConditionScalingActive); s != string(metav1.ConditionTrue) {
 		t.Fatalf("ScalingActive = %s, want True", s)
 	}
+	// A ReadConnections average renders as a whole integer, not a milli-quantity.
+	if v := got.Status.CurrentMetrics[0].AverageValue.String(); v != "210" {
+		t.Fatalf("connections currentMetric should render as integer 210, got %q", v)
+	}
 }
 
 func TestReconcileShardedNotScalable(t *testing.T) {
@@ -306,6 +310,12 @@ func TestReconcileOwnershipConflict(t *testing.T) {
 	}
 	if r := env.appReplicas(t, "tenant", "db"); r != 5 {
 		t.Fatalf("must not fight competing writer; replicas = %d, want 5", r)
+	}
+	// Reconcile again: the ownership-conflict event must NOT be re-emitted every
+	// cycle (only on the transition into conflict).
+	env.reconcile(t, dha)
+	if n := len(env.recorder.Events); n != 1 {
+		t.Fatalf("ownership conflict should emit exactly one event across two reconciles, got %d", n)
 	}
 }
 
@@ -381,6 +391,10 @@ func TestReconcileInvalidTargetFreezes(t *testing.T) {
 	}
 	if r := env.appReplicas(t, "tenant", "db"); r != 3 {
 		t.Fatalf("invalid target must not patch; replicas = %d", r)
+	}
+	// status is still refreshed (not left stale) on the invalid-target early return.
+	if got.Status.CurrentReplicas != 3 {
+		t.Fatalf("invalid target: currentReplicas = %d, want 3", got.Status.CurrentReplicas)
 	}
 }
 
