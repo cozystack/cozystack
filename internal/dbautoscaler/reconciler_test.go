@@ -128,6 +128,7 @@ type testEnv struct {
 	recorder *record.FakeRecorder
 	vmValue  string
 	vmStatus int
+	now      time.Time
 }
 
 // setVM mutates the metric value/status the test VM server returns on the next
@@ -136,6 +137,9 @@ func (e *testEnv) setVM(value string, status int) {
 	e.vmValue = value
 	e.vmStatus = status
 }
+
+// advance moves the injected clock forward (used to cross the convergence deadline).
+func (e *testEnv) advance(d time.Duration) { e.now = e.now.Add(d) }
 
 func newTestEnv(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler, app *unstructured.Unstructured, vmValue string, vmStatus int, objs ...runtime.Object) *testEnv {
 	t.Helper()
@@ -153,7 +157,7 @@ func newTestEnv(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutosca
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(dynScheme,
 		map[schema.GroupVersionResource]string{postgresGVR: "PostgresList"}, app)
 
-	env := &testEnv{dyn: dyn, vmValue: vmValue, vmStatus: vmStatus}
+	env := &testEnv{dyn: dyn, vmValue: vmValue, vmStatus: vmStatus, now: time.Unix(10000, 0)}
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if env.vmStatus != http.StatusOK {
@@ -179,7 +183,7 @@ func newTestEnv(t *testing.T, dha *autoscalingv1alpha1.DatabaseHorizontalAutosca
 		Scheme:     scheme,
 		Recorder:   rec,
 		VM:         NewVMClient(),
-		Now:        func() time.Time { return time.Unix(10000, 0) },
+		Now:        func() time.Time { return env.now },
 		BaseURLFor: func(context.Context, string) string { return srv.URL },
 	}
 	env.r = r
@@ -409,5 +413,43 @@ func TestOwnershipBackoffSurvivesRestart(t *testing.T) {
 	}
 	if r := env.appReplicas(t, "tenant", "db"); r != 5 {
 		t.Fatalf("must not clobber competing writer after restart; replicas = %d, want 5", r)
+	}
+}
+
+// TestReconcileStuckScalingRollback drives the full stuck-scaling flow end to
+// end: scale-up patch -> never converges (availableReplicas stays behind) ->
+// past the convergence deadline the operator rolls replicas back to the last
+// converged count and surfaces StuckScaling.
+func TestReconcileStuckScalingRollback(t *testing.T) {
+	dha := newDHA("db", "tenant", "Postgres", false)
+	dl := int32(900)
+	dha.Spec.Behavior = &autoscalingv1alpha1.Behavior{ConvergenceDeadlineSeconds: &dl}
+	app := newPostgresApp("db", "tenant", 3, 0)
+	// WorkloadMonitor is stuck reporting available=3 (the new standby never comes up).
+	env := newTestEnv(t, dha, app, "420", http.StatusOK, workloadMonitor("postgres-db", "tenant", 3, true))
+
+	// Cycle 1: converged at 3, high load -> scale up to 4.
+	got := env.reconcile(t, dha)
+	if got.Status.DesiredReplicas != 4 || env.appReplicas(t, "tenant", "db") != 4 {
+		t.Fatalf("cycle1 expected scale-up to 4, desired=%d app=%d", got.Status.DesiredReplicas, env.appReplicas(t, "tenant", "db"))
+	}
+
+	// Cycle 2 (immediately): replicas=4 but available=3 -> single-flight freeze.
+	got = env.reconcile(t, dha)
+	if s, reason := condStatus(got, autoscalingv1alpha1.ConditionAbleToScale); s != string(metav1.ConditionFalse) || reason != autoscalingv1alpha1.ReasonScaleInFlight {
+		t.Fatalf("cycle2 expected ScaleInFlight freeze, got %s/%s", s, reason)
+	}
+	if env.appReplicas(t, "tenant", "db") != 4 {
+		t.Fatalf("cycle2 must not change replicas")
+	}
+
+	// Cycle 3: past the convergence deadline -> roll back to lastConverged (3).
+	env.advance(1000 * time.Second)
+	got = env.reconcile(t, dha)
+	if s, reason := condStatus(got, autoscalingv1alpha1.ConditionAbleToScale); s != string(metav1.ConditionFalse) || reason != autoscalingv1alpha1.ReasonStuckScaling {
+		t.Fatalf("cycle3 expected StuckScaling, got %s/%s", s, reason)
+	}
+	if r := env.appReplicas(t, "tenant", "db"); r != 3 {
+		t.Fatalf("cycle3 expected rollback to 3, app replicas = %d", r)
 	}
 }
