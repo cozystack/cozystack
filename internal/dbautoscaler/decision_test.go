@@ -115,6 +115,7 @@ func baseInput() ScaleInput {
 		Max:             6,
 		QuorumFloor:     2,
 		MetricAvailable: true,
+		RespectQuorum:   true,
 		Operational:     true,
 		ScaleInFlight:   false,
 		ScaleUpStep:     1,
@@ -196,6 +197,53 @@ func TestDecideQuorumFloorJumpsUpBypassingStep(t *testing.T) {
 	d := Decide(in)
 	if d.Desired != 5 || !d.Limited || d.LimitedReason != autoscalingv1alpha1.ReasonQuorumFloor {
 		t.Fatalf("quorum up-jump: desired=%d limited=%v reason=%s, want 5/true/QuorumFloor", d.Desired, d.Limited, d.LimitedReason)
+	}
+}
+
+func TestDecideRespectQuorumHonored(t *testing.T) {
+	// metric wants to shrink hard; floor 4, min 2.
+	base := func() ScaleInput {
+		in := baseInput()
+		in.Current = 5
+		in.QuorumFloor = 4
+		in.Min = 2
+		in.ScaleDownStep = 5
+		in.Metrics = []MetricObservation{{Type: "ReadConnections", AveragePerReplica: 1, Target: 150}}
+		return in
+	}
+	// respectQuorum=true (default): clamped up to the floor.
+	if d := Decide(base()); d.Desired != 4 {
+		t.Fatalf("respectQuorum=true: desired=%d, want 4 (floor)", d.Desired)
+	}
+	// respectQuorum=false: allowed to fall to min, below the sync floor.
+	in := base()
+	in.RespectQuorum = false
+	if d := Decide(in); d.Desired != 2 {
+		t.Fatalf("respectQuorum=false: desired=%d, want 2 (min, floor not enforced)", d.Desired)
+	}
+}
+
+func TestDecideRespectQuorumFalseDisablesQuorumExceedsQuota(t *testing.T) {
+	in := baseInput()
+	in.QuorumFloor = 4
+	in.QuotaMaxReplicas = ptr(int32(3))
+	in.RespectQuorum = false
+	// With the floor not enforced, quorum>quota must NOT freeze.
+	if d := Decide(in); d.Kind == DecisionFreeze && d.UnableReason == autoscalingv1alpha1.ReasonQuorumExceedsQuota {
+		t.Fatalf("respectQuorum=false must not trigger QuorumExceedsQuota freeze")
+	}
+}
+
+// TestCPUTargetIsMillicores pins the ReadCPUUtilization unit contract: the
+// target is millicores as a plain number, and the "m" suffix is a footgun.
+func TestCPUTargetIsMillicores(t *testing.T) {
+	plain := mustQuantity("250")
+	if v := plain.AsApproximateFloat64(); v != 250 {
+		t.Fatalf(`"250" target = %v, want 250 (millicores)`, v)
+	}
+	suffixed := mustQuantity("250m")
+	if v := suffixed.AsApproximateFloat64(); v != 0.25 {
+		t.Fatalf(`"250m" parses as %v (the documented footgun); expected 0.25`, v)
 	}
 }
 

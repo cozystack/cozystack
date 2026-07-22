@@ -25,12 +25,12 @@ import (
 // safeRollbackTarget returns the replica count to roll a stuck scale-up back to,
 // and whether such a target is safe. The target is LastConverged re-validated
 // against the current quorum floor and tenant quota (§5, stuck scaling).
-func safeRollbackTarget(in ScaleInput) (int32, bool) {
+func safeRollbackTarget(in ScaleInput, qfloor int32) (int32, bool) {
 	if in.LastConverged == nil {
 		return 0, false
 	}
 	target := *in.LastConverged
-	if target < in.QuorumFloor {
+	if target < qfloor {
 		return 0, false
 	}
 	if in.QuotaMaxReplicas != nil && target > *in.QuotaMaxReplicas {
@@ -58,9 +58,16 @@ func Decide(in ScaleInput) Decision {
 
 	raw := desiredFromMetrics(in.Current, in.PrimaryCount, in.Metrics)
 
+	// Effective quorum floor: enforced only when the tenant opts in via
+	// RespectQuorum (default true). Opted out => no floor beyond the min bound.
+	qfloor := in.QuorumFloor
+	if !in.RespectQuorum {
+		qfloor = 1
+	}
+
 	// Quota is a hard ceiling. If even the quorum floor does not fit the quota,
 	// we must neither exceed quota nor violate quorum: freeze.
-	if in.QuotaMaxReplicas != nil && in.QuorumFloor > *in.QuotaMaxReplicas {
+	if in.QuotaMaxReplicas != nil && qfloor > *in.QuotaMaxReplicas {
 		return Decision{
 			Kind:          DecisionFreeze,
 			Desired:       in.Current,
@@ -70,7 +77,7 @@ func Decide(in ScaleInput) Decision {
 			Limited:       true,
 			LimitedReason: autoscalingv1alpha1.ReasonQuorumExceedsQuota,
 			Message: fmt.Sprintf("quorum floor %d exceeds tenant quota ceiling %d",
-				in.QuorumFloor, *in.QuotaMaxReplicas),
+				qfloor, *in.QuotaMaxReplicas),
 		}
 	}
 
@@ -80,7 +87,7 @@ func Decide(in ScaleInput) Decision {
 			in.Now.Sub(*in.InFlightSince) > in.ConvergenceDeadline {
 			// A patched scale never converged. Roll back if we have a safe target,
 			// releasing single-flight so a relieving scale-down can proceed.
-			if target, ok := safeRollbackTarget(in); ok && target != in.Current {
+			if target, ok := safeRollbackTarget(in, qfloor); ok && target != in.Current {
 				return Decision{
 					Kind:         DecisionRollback,
 					Desired:      target,
@@ -149,9 +156,10 @@ func Decide(in ScaleInput) Decision {
 		d.LimitedReason = autoscalingv1alpha1.ReasonAtLimit
 	}
 
-	// Quorum floor overrides min/max: clamp UP to the floor even above max.
-	if natural < in.QuorumFloor {
-		natural = in.QuorumFloor
+	// Quorum floor overrides min/max: clamp UP to the floor even above max
+	// (skipped when the tenant opted out via RespectQuorum: qfloor is then 1).
+	if natural < qfloor {
+		natural = qfloor
 		d.Limited = true
 		d.LimitedReason = autoscalingv1alpha1.ReasonQuorumFloor
 	}
@@ -169,10 +177,10 @@ func Decide(in ScaleInput) Decision {
 	// binding constraint (natural clamped to it), jump straight to it in one
 	// decision; a safe quorum must never wait on the step limit.
 	var desired int32
-	if natural == in.QuorumFloor && natural != in.Current {
+	if natural == qfloor && natural != in.Current {
 		desired = natural
 	} else {
-		desired = applyStep(in.Current, natural, in.ScaleUpStep, in.ScaleDownStep, in.QuorumFloor)
+		desired = applyStep(in.Current, natural, in.ScaleUpStep, in.ScaleDownStep, qfloor)
 	}
 
 	d.Desired = desired

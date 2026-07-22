@@ -111,12 +111,6 @@ spec:
               constraints:
                 description: Constraints are the safety knobs.
                 properties:
-                  gracefulScaleDown:
-                    default: true
-                    description: |-
-                      GracefulScaleDown leaves backend termination to the engine operator; the
-                      DHA never terminates backends itself.
-                    type: boolean
                   maxReplicationLagSeconds:
                     description: |-
                       MaxReplicationLagSeconds is the lag threshold above which scaling is braked

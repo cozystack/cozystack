@@ -53,6 +53,10 @@ type ScaleInput struct {
 	Max          int32
 	QuorumFloor  int32 // e.g. CNPG maxSyncReplicas+1
 
+	// RespectQuorum enforces the quorum floor. When false, the tenant has opted
+	// out and the count may fall to Min even below the engine's sync floor.
+	RespectQuorum bool
+
 	// QuotaMaxReplicas is the largest total instance count that fits the tenant
 	// quota. nil means unknown/unbounded (advisory pre-check could not run).
 	QuotaMaxReplicas *int32

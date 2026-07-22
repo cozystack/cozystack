@@ -206,6 +206,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		Min:                 *dha.Spec.MinReplicas,
 		Max:                 *dha.Spec.MaxReplicas,
 		QuorumFloor:         adapter.QuorumFloor(appValues),
+		RespectQuorum:       dha.Spec.Constraints == nil || dha.Spec.Constraints.RespectQuorum,
 		QuotaMaxReplicas:    quotaMax,
 		Metrics:             obs,
 		MetricAvailable:     metricAvailable,

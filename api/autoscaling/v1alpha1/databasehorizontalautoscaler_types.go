@@ -74,7 +74,10 @@ const (
 	// MetricReadConnections drives on the number of client connections served by
 	// the read-serving replicas.
 	MetricReadConnections MetricType = "ReadConnections"
-	// MetricReadCPUUtilization drives on CPU utilisation of the read-serving replicas.
+	// MetricReadCPUUtilization drives on CPU usage of the read-serving replicas.
+	// The target is expressed in MILLICORES as a plain number (e.g. "250" = 250m
+	// per replica). Do NOT use the "m" suffix: "250m" parses as the quantity 0.25
+	// and would drive an immediate jump to maxReplicas.
 	MetricReadCPUUtilization MetricType = "ReadCPUUtilization"
 )
 
@@ -159,12 +162,6 @@ type Constraints struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MaxReplicationLagSeconds *int32 `json:"maxReplicationLagSeconds,omitempty"`
-
-	// GracefulScaleDown leaves backend termination to the engine operator; the
-	// DHA never terminates backends itself.
-	// +kubebuilder:default=true
-	// +optional
-	GracefulScaleDown bool `json:"gracefulScaleDown,omitempty"`
 }
 
 // DatabaseHorizontalAutoscalerSpec defines the desired state.

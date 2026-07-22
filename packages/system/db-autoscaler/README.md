@@ -60,15 +60,16 @@ spec:
   minReplicas: 2   # TOTAL instances (primary + standbys); >= 2 to serve reads
   maxReplicas: 6
   metrics:
-    - type: ReadConnections
-      target: { averageValue: "150" }   # per read-serving replica
+    - type: ReadConnections           # ReadCPUUtilization target is millicores as a plain number, e.g. "250"; no "m" suffix
+      target: { averageValue: "150" } # per read-serving replica
   behavior:
     scaleUp:   { stabilizationWindowSeconds: 300,  step: 1 }
     scaleDown: { stabilizationWindowSeconds: 1800, step: 1 }
     convergenceDeadlineSeconds: 900
   constraints:
-    respectQuorum: true
+    respectQuorum: true               # false lets the count fall to minReplicas below the sync floor
     maxReplicationLagSeconds: 30
-    gracefulScaleDown: true
   dryRun: false
 ```
+
+Scale-down is always graceful — the autoscaler only patches `replicas` and never terminates backends; the engine operator removes the highest-ordinal standby.
