@@ -107,7 +107,10 @@ reachable with allowOpenManagement=true) no firewall is stamped.
 {{- $token := .token -}}
 {{- $lines := list "#cloud-config" "vyos_config_commands:" -}}
 {{- $lines = append $lines (printf "  - set system host-name '%s'" $ctx.Release.Name) -}}
+{{/* R2: bring eth0 up over DHCP and start the HTTPS API /configure REST endpoints. Without an eth0 address the guest has no IP/routes and is unreachable, and `service https api keys` alone does NOT start the REST endpoints — `service https api rest` is required for the controller's /configure + /retrieve calls to answer. Both are validated as required on a cloud-init-capable VyOS image. NOTE: on the currently-referenced image cloud-init IGNORES vyos_config_commands, so these (and the whole seed) are inert there — the conformant-image swap is the T14 image follow-up — but they are mandatory for any image that honours the seed. Kept in lockstep with the base config above. */}}
+{{- $lines = append $lines "  - set interfaces ethernet eth0 address dhcp" -}}
 {{- $lines = append $lines (printf "  - set service https api keys id site-router-controller key '%s'" $token) -}}
+{{- $lines = append $lines "  - set service https api rest" -}}
 {{- $lines = append $lines "  - set service https listen-address 0.0.0.0" -}}
 {{- if $ctx.Values.managementCIDR -}}
 {{/* VyOS 1.5-rolling nftables firewall (validated live against the 2026.05.13-0044-rolling image): the management ACL lives under 'firewall ipv4 input filter', firewall 'state' is a multi-value leaf ('state established' / 'state related', not the old 'state established enable'), and a rule that sets a destination port must also set a protocol. Kept in lockstep with internal/vyos/render. */}}
