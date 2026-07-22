@@ -107,6 +107,43 @@ tests:
           value: false
         documentIndex: 3
 
+  ###################################################
+  # CA Secret carries trust-anchor publish labels   #
+  ###################################################
+
+  - it: CA certificate publishes ca.crt to tenants via secretTemplate labels
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+          value: "true"
+        documentIndex: 1
+      - equal:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert-release"]
+          value: test-qdrant
+        documentIndex: 1
+
+  - it: leaf certificate does NOT carry publish-ca-cert labels
+    release:
+      name: test-qdrant
+      namespace: tenant-test
+    set:
+      tls:
+        enabled: true
+      _cluster:
+        cluster-domain: cozy.local
+    asserts:
+      - notExists:
+          path: spec.secretTemplate.labels["internal.cozystack.io/publish-ca-cert"]
+        documentIndex: 3
+
   - it: leaf cert has server auth and client auth EKU
     release:
       name: test-qdrant

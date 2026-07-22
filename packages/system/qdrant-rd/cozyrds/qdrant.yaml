@@ -33,6 +33,8 @@ spec:
     include:
       - resourceNames:
           - qdrant-{{ .name }}-apikey
+      - matchLabels:
+          internal.cozystack.io/tenant-ca: "true"
   services:
     exclude: []
     include:
