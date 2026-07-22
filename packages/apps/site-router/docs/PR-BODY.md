@@ -34,7 +34,7 @@ Status legend: **done** = implemented and unit-tested in this PR; **deferred-to-
 | 6 | Security guards: source allow-list, Cilium `egressDeny` (169.254 + mgmt), forward default-deny, two-boundary API isolation, api-key not tenant-readable | done (unit-tested) / follow-up (Boundary-B additive-ingress residual; VyOS 1.5 syntax live-validation) |
 | 7 | Tunnel-state observability (SA up/down, rekey, counters) | done (up/down + BGP gauges) / follow-up (byte + rekey counters need a guest-command + parser change) |
 | 8 | Negative-security acceptance suite passes (undeclared source / other tenant / node / API / metadata / mgmt-API / world dropped; declared source → tenant dest passes, source preserved) | deferred-to-empirical (the e2e gate; blocked on the published golden image for a live run) |
-| 9 | helm-unittest + Go unit + Chainsaw e2e (two-VM) green in CI | done (helm-unittest + Go unit) / in progress (Chainsaw e2e, concurrent) + deferred-to-empirical (live two-VM run) |
+| 9 | helm-unittest + Go unit + Chainsaw e2e (two-VM) green in CI | done (helm-unittest + Go unit) / deferred-to-empirical (Chainsaw e2e suite committed but deferred from CI until the VyOS golden image ships; live two-VM run) |
 
 The negative-security suite (item 8) is the Phase-1 acceptance gate and is authored as a Chainsaw e2e; its **live** run against a real two-VM topology is blocked on the published cozystack-owned VyOS golden image (see follow-ups). The VyOS-version-specific firewall leaf syntax is carried behind single-point helpers with `TODO(T13)` markers and is flipped in lockstep once validated live.
 
