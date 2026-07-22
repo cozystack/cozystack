@@ -191,8 +191,11 @@ lb_capture_decision() {
 # the capture branch, so reachable/skipped LBs never consume it and a broken LB
 # enumerated after many reachable ones is still characterised. The cap bounds
 # WORK, not wall-clock: at >=2 unreachable LBs (each heavy capture takes tens of
-# seconds) the real wall-clock bound is the outer `timeout -k 30 600` backstop at
-# the call site, not this cap.
+# seconds) the real wall-clock bound is the outer `timeout -k 30 <n>` backstop at
+# the call site, not this cap. That budget differs per caller -- the cozytest.sh
+# EXIT trap runs with no containing operation and allows 600s, while the Chainsaw
+# global catch shares an op envelope with the crust-gather snapshot and allows
+# 300s -- so do not hard-code either number here.
 lb_budget_ok() {
   if [ "$1" -lt "$2" ]; then echo yes; else echo no; fi
 }
@@ -226,8 +229,10 @@ GENEVE_IFACE="${COZY_GENEVE_IFACE:-genev_sys_6081}"
 # Cap how many UNREACHABLE LBs get the heavy datapath capture; reachable/skipped
 # LBs never count toward it (see the captured-budget gate in capture_lb_datapath).
 # This bounds WORK, not wall-clock: at >=2 unreachable LBs the real wall-clock
-# bound is the outer `timeout -k 30 600` backstop at the call site (truncate +
-# hard-kill), since each heavy capture itself takes tens of seconds.
+# bound is the outer `timeout -k 30 <n>` backstop at the call site (truncate +
+# hard-kill), since each heavy capture itself takes tens of seconds. That budget
+# is per-caller (600s from the cozytest.sh EXIT trap, 300s from the Chainsaw
+# global catch, which shares an op envelope with the snapshot leg).
 MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 
 command -v kubectl >/dev/null 2>&1 || exit 0

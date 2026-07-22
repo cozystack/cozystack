@@ -1,13 +1,40 @@
 backupStrategyController:
   image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.0@sha256:e8bf0521d1d1d8b90ebe66e9013010887033ba2653901799d57f2df47c9d879e"
   # chBackupClientImage is the image rendered into the Altinity strategy
-  # Pod: it drives clickhouse-backup's HTTP API via curl + jq. We reuse
-  # platform-migrations (already pre-built and digested by release CI in
-  # packages/core/platform/values.yaml) because it bundles curl + jq +
-  # ca-certificates — avoids shipping a one-binary tiny image whose tag
-  # would have to be re-digested on every release. Bumping the
-  # platform-migrations version requires updating BOTH this value and
-  # packages/core/platform/values.yaml so they remain in lockstep.
+  # Pod: it drives clickhouse-backup's HTTP API via curl + jq.
+  #
+  # WORKAROUND — platform-migrations is the wrong image for this job and
+  # should be replaced by a dedicated one (see the TODO below). It is
+  # reused here only because it happens to bundle curl + jq, and this
+  # release could not absorb a new image. What that reuse actually costs:
+  #   - the strategy script needs exactly curl, jq, sleep and date, yet
+  #     this image is 349 MB carrying kubectl, helm, git, cozyhr and the
+  #     etcd-migrate binary into a tenant-adjacent backup Pod;
+  #   - its ENTRYPOINT is run-migrations.sh, so only the `command:`
+  #     override in strategy-altinity-default.yaml stands between this Pod
+  #     and running platform migrations with kubectl and helm on the PATH;
+  #   - it couples the backup client to migrations: bumping
+  #     ETCD_OPERATOR_VERSION or editing any migration script re-digests
+  #     this image, forcing this pin to move for reasons that have nothing
+  #     to do with backups. That coupling is what broke — see below.
+  #
+  # TODO: replace with a dedicated ch-backup-client image built by THIS
+  # package's own Makefile (alpine + curl + jq + ca-certificates measures
+  # 23 MB, 15x smaller). That also removes the cross-package stamp
+  # entirely, because the pin would then be produced by the package that
+  # owns it. The often-cited objection — "a second tag release CI must
+  # re-digest each cut" — is not the real cost: every other first-party
+  # image already pays it, automatically. The real defect was a pin with
+  # NO producer, which a package-owned image cannot reproduce.
+  #
+  # DO NOT hand-edit: packages/core/platform/Makefile stamps this key with
+  # the same ref it writes to .migrations.image there, so the two stay in
+  # lockstep by construction. They previously did not — this key had no
+  # producer at all and froze at v1.4.0-rc.2 while the other advanced to
+  # v1.5.0. Two digests under one repository means a promotion tries to
+  # retag both to the same stable tag, and the write-once guard in
+  # hack/promote-retag.sh fails the release. hack/image-pin-consistency.bats
+  # asserts no repository is pinned at more than one digest.
   chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
   replicas: 2
   debug: false

@@ -21,6 +21,9 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 )
 
 // HelmInstallTimeoutAnnotation is the ApplicationDefinition metadata
@@ -48,6 +51,11 @@ const HelmUpgradeTimeoutAnnotation = "release.cozystack.io/helm-upgrade-timeout"
 // becoming Ready, which cannot happen during install, so the release never
 // settles. DisableWait lets it settle while the addon HelmReleases and the
 // reconcile Job converge asynchronously.
+//
+// This takes precedence over spec.release.healthCheckExprs: upstream evaluates
+// CEL health expressions only when the Helm action has wait enabled, so a kind
+// setting both gets no health gating at all, silently. Prefer dropping this
+// annotation over adding expressions that will never run.
 const HelmInstallDisableWaitAnnotation = "release.cozystack.io/helm-install-disable-wait"
 
 // helmTimeoutPattern mirrors the CRD validation pattern used by Flux
@@ -186,6 +194,38 @@ type ReleaseConfig struct {
 	// from the release.cozystack.io/helm-install-disable-wait
 	// annotation on the ApplicationDefinition at start-up.
 	HelmInstallDisableWait bool `yaml:"helmInstallDisableWait,omitempty"`
+	// WaitStrategy sets HelmReleaseSpec.WaitStrategy.Name (poller|legacy) for
+	// this Application kind. Populated from spec.release.waitStrategy on the
+	// ApplicationDefinition at start-up. Empty leaves the flux default, unless
+	// HealthCheckExprs is set (see ResolveWaitStrategy).
+	WaitStrategy string `yaml:"waitStrategy,omitempty"`
+	// HealthCheckExprs sets HelmReleaseSpec.HealthCheckExprs — CEL health
+	// expressions evaluated (under the poller strategy) against the custom
+	// resource(s) this Application renders. Populated from
+	// spec.release.healthCheckExprs on the ApplicationDefinition at start-up.
+	// json-tagged via kustomize.CustomHealthCheck; ReleaseConfig is
+	// json.Marshalled (never yaml round-tripped), so the json tags are honored.
+	HealthCheckExprs []kustomize.CustomHealthCheck `yaml:"healthCheckExprs,omitempty"`
+}
+
+// ResolveWaitStrategy builds the HelmReleaseSpec.WaitStrategy value shared by
+// both HelmRelease-generating paths (cozystack-api and cozystack-operator).
+// It maps the scalar waitStrategy string onto the upstream {name} object and
+// couples the default: healthCheckExprs are only evaluated under the poller
+// strategy, so when expressions are present and no strategy was set we default
+// to poller. This makes a package that sets only healthCheckExprs
+// self-contained and removes the "must also set waitStrategy: poller" footgun,
+// independent of the controller's global default. Returns nil (leave unset,
+// flux default applies) when neither a strategy nor expressions are given.
+func ResolveWaitStrategy(waitStrategy string, hasHealthCheckExprs bool) *helmv2.WaitStrategy {
+	name := waitStrategy
+	if name == "" {
+		if !hasHealthCheckExprs {
+			return nil
+		}
+		name = string(helmv2.WaitStrategyPoller)
+	}
+	return &helmv2.WaitStrategy{Name: helmv2.WaitStrategyName(name)}
 }
 
 // ChartRefConfig references a Flux source artifact for the Helm chart.

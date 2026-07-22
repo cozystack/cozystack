@@ -31,10 +31,12 @@ const (
 
 // CNPG defines a backup strategy that delegates execution to the
 // CloudNativePG operator (postgresql.cnpg.io). The strategy carries a
-// templated barmanObjectStore configuration that the driver injects into
-// the live cnpg.io Cluster of the application; backup runs are produced as
-// postgresql.cnpg.io/Backup objects and surfaced as Cozystack Backup
-// artifacts.
+// templated barman configuration that the driver applies to the live
+// application Cluster through the barman-cloud plugin: it renders an
+// ObjectStore CR (barmancloud.cnpg.io) and wires the Cluster's spec.plugins
+// to it (native spec.backup.barmanObjectStore is deprecated in CNPG 1.27 and
+// removed in 1.29). Backup runs are produced as postgresql.cnpg.io/Backup
+// objects with spec.method=plugin and surfaced as Cozystack Backup artifacts.
 type CNPG struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -69,9 +71,11 @@ type CNPGSpec struct {
 
 // CNPGTemplate describes the templated CNPG-specific configuration.
 type CNPGTemplate struct {
-	// BarmanObjectStore is the templated CloudNativePG barmanObjectStore
-	// configuration. Field semantics mirror
-	// postgresql.cnpg.io/v1.BarmanObjectStoreConfiguration.
+	// BarmanObjectStore is the templated barman configuration. Field semantics
+	// mirror postgresql.cnpg.io/v1.BarmanObjectStoreConfiguration; the driver
+	// projects it into a barmancloud.cnpg.io ObjectStore.spec.configuration
+	// (plus spec.retentionPolicy) and references it from the Cluster via the
+	// barman-cloud plugin. The field name is retained for API stability.
 	BarmanObjectStore BarmanObjectStoreTemplate `json:"barmanObjectStore"`
 
 	// ServerName overrides the Barman server name used as the storage path

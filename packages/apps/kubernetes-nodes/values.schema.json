@@ -1,0 +1,212 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "cluster": {
+      "description": "Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-\u003ccluster\u003e`; the KubernetesNodes CR must be named `\u003ccluster\u003e-\u003cpool\u003e`. The pool name (the part after `\u003ccluster\u003e-`) must not collide with a nodeGroup still managed by the parent kubernetes chart (e.g. the default `md0`), or the render fails on ownership conflict.",
+      "type": "string",
+      "default": ""
+    },
+    "storageClass": {
+      "description": "StorageClass for the worker node system disk. When empty, the cluster default applies. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so prefer a replicated/DRBD class.",
+      "type": "string",
+      "default": "replicated",
+      "x-cozystack-options": {
+        "source": "storageclass"
+      }
+    },
+    "minReplicas": {
+      "description": "Minimum number of replicas in this pool. Used as the cluster-autoscaler floor.",
+      "type": "integer",
+      "default": 0
+    },
+    "maxReplicas": {
+      "description": "Maximum number of replicas in this pool. Used as the cluster-autoscaler ceiling.",
+      "type": "integer",
+      "default": 10
+    },
+    "instanceType": {
+      "description": "Virtual machine instance type.",
+      "type": "string",
+      "default": "u1.medium",
+      "x-cozystack-options": {
+        "source": "instancetype"
+      }
+    },
+    "diskSize": {
+      "description": "System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs.",
+      "default": "20Gi",
+      "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+      "anyOf": [
+        {
+          "type": "integer"
+        },
+        {
+          "type": "string"
+        }
+      ],
+      "x-kubernetes-int-or-string": true
+    },
+    "roles": {
+      "description": "List of node roles. Each role `r` labels nodes with `node-role.kubernetes.io/\u003cr\u003e`. Use `[ingress-nginx]` for a pool that hosts the tenant ingress-nginx controller.",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "string"
+      }
+    },
+    "resources": {
+      "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Optional: when omitted, the node is sized by `instanceType`. When both `cpu` and `memory` are set, they take precedence and `instanceType` is ignored (the instancetype is omitted from the VM, since KubeVirt cannot override an instancetype's CPU/memory). Set both `cpu` and `memory` together or neither; setting only one is rejected at render time.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "cpu": {
+          "description": "CPU available.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
+        "memory": {
+          "description": "Memory (RAM) available.",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
+    "gpus": {
+      "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
+      "type": "array",
+      "default": [],
+      "items": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\".",
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "gpu"
+            }
+          }
+        }
+      }
+    },
+    "kubelet": {
+      "description": "Kubelet resource reservations for this pool.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "evictionHardMemory": {
+          "description": "Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).",
+          "type": "string",
+          "default": "7%"
+        },
+        "evictionSoftMemory": {
+          "description": "Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).",
+          "type": "string",
+          "default": "10%"
+        },
+        "kubeReservedCpu": {
+          "description": "CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+          "type": "string"
+        },
+        "kubeReservedMemory": {
+          "description": "Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+          "type": "string"
+        },
+        "systemReservedCpu": {
+          "description": "CPU reserved for host OS. Auto-computed from instanceType if empty.",
+          "type": "string"
+        },
+        "systemReservedMemory": {
+          "description": "Memory reserved for host OS. Auto-computed from instanceType if empty.",
+          "type": "string"
+        }
+      }
+    },
+    "maxUnhealthy": {
+      "description": "Maximum number of unhealthy nodes tolerated in this pool before remediation is paused. The MachineHealthCheck admission webhook accepts either a bare integer (\"0\", \"1\", ...) or a percentage (\"0%\", \"50%\"); bare numeric strings are rejected, so the safer default is a percentage. Drop to \"0%\" once the pool is stable.",
+      "type": "string",
+      "default": "50%"
+    },
+    "nodeStartupTimeout": {
+      "description": "Maximum time a Machine is allowed to spend reaching the Ready condition before it is remediated. Raise for slow first boots (Talos image fetch from factory.talos.dev or a busy storage class on the kubevirt-csi PVC populator).",
+      "type": "string",
+      "default": "10m"
+    },
+    "version": {
+      "description": "Kubernetes major.minor version the pool joins. Must match the parent cluster's version and satisfy the Talos\u003c-\u003eKubernetes support matrix against `talos.version`.",
+      "type": "string",
+      "default": "v1.35",
+      "enum": [
+        "v1.35",
+        "v1.34",
+        "v1.33",
+        "v1.32",
+        "v1.31"
+      ]
+    },
+    "talos": {
+      "description": "Talos worker image configuration. Keep in sync with the parent cluster's `talos`.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "imageFactoryURL",
+        "installerRepository",
+        "schematicID",
+        "version"
+      ],
+      "properties": {
+        "imageFactoryURL": {
+          "description": "Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.",
+          "type": "string",
+          "default": "https://factory.talos.dev"
+        },
+        "installerRepository": {
+          "description": "OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `\u003cinstallerRepository\u003e/\u003cschematicID\u003e:\u003cversion\u003e`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.",
+          "type": "string",
+          "default": "factory.talos.dev/installer"
+        },
+        "schematicID": {
+          "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
+          "type": "string",
+          "default": "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
+        },
+        "version": {
+          "description": "Talos release used for worker OS image and installer. Must satisfy the chart's Talos\u003c-\u003eKubernetes support matrix against the chosen `version`.",
+          "type": "string",
+          "default": "v1.13.6"
+        }
+      }
+    },
+    "images": {
+      "description": "Optional image overrides for air-gapped or rate-limited registries.",
+      "type": "object",
+      "default": {},
+      "properties": {
+        "kubectl": {
+          "description": "Image used by the talos-reconcile Job (kubectl). Empty falls back to images/kubectl.tag.",
+          "type": "string",
+          "default": ""
+        }
+      }
+    }
+  }
+}

@@ -175,20 +175,14 @@ jobs:
           git config user.email "274107086+cozystack-ci[bot]@users.noreply.github.com"
           git remote set-url origin https://x-access-token:${APP_TOKEN}@github.com/${GITHUB_REPOSITORY}
           # Rewrite the rc version substring -> stable in vendored image tags.
-          # The exact "X.Y.Z-rc.N" string only appears on cozystack-built images,
-          # so a global replace cannot touch component (e.g. cilium) tags. Escape
-          # regex metacharacters (the dots) in the rc version so sed matches the
-          # literal string, not "any character".
-          RC_ESC=$(printf '%s' "$RC_VERSION" | sed -e 's/[][\\.^$*/]/\\&/g')
-          # Scope to the files the build actually stamps the version into: the
-          # depth-2 package values.yaml (same glob nightly-mirror.sh uses) plus
-          # the kubernetes app's image .tag files, which also carry the cozystack
-          # version. A blanket `find -name values.yaml` could rewrite a deeper
-          # values.yaml the build never touched.
-          for f in packages/*/*/values.yaml packages/apps/kubernetes/images/*.tag; do
-            [ -f "$f" ] || continue
-            sed -i "s/${RC_ESC}/${STABLE_VERSION}/g" "$f"
-          done
+          # The logic lives in a script, not inline here, so that
+          # hack/promote-rewrite-tags_test.bats can round-trip it against the
+          # real tree: this step's previous inline glob covered the depth-2
+          # values.yaml plus packages/apps/kubernetes/images/*.tag alone and
+          # silently left nine other .tag files and one stamped template on the
+          # rc version, which was only observable by cutting a release.
+          # The script fails if any rc reference survives it.
+          hack/promote-rewrite-tags.sh "$RC_VERSION" "$STABLE_VERSION"
           # -B resets the local branch so a re-dispatch starts clean.
           git checkout -B "${STABLE_BRANCH}"
           git add -A
@@ -265,7 +259,18 @@ jobs:
             BASE="release-${LINE}"
           fi
           BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit."
-          if gh pr view "${STABLE_BRANCH}" >/dev/null 2>&1; then
+          # Reuse an OPEN pr, create one otherwise. `gh pr view <branch>` was
+          # wrong here: it resolves a pr by head branch in any state, so a
+          # closed one satisfied the guard and creation was skipped while the
+          # step still exited 0 — a promotion that reports success and leaves
+          # nothing to merge. That wedges the two paths this workflow is built
+          # to support, because STABLE_BRANCH is derived from the stable
+          # version and is therefore shared by every rc promoted to it:
+          # re-dispatching the same rc, and promoting a newer rc to the same
+          # version. Neither can recover by reopening, since the force-push
+          # below makes the old pr's head unreachable and GitHub then refuses
+          # the reopen outright ("branch was force-pushed or recreated").
+          if [ -n "$(gh pr list --head "${STABLE_BRANCH}" --state open --json number --jq '.[0].number')" ]; then
             echo "PR already open for ${STABLE_BRANCH}"
           else
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \

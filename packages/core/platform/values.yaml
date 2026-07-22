@@ -425,6 +425,18 @@ monitoring:
   # here is true only to preserve the historical always-create behaviour;
   # operators MUST set it to match their actual Tenant/root spec.monitoring.
   rootEnabled: true
+# Backup storage overrides for the platform-managed cozy-default BackupClass.
+# Everything set here is forwarded verbatim into the emitted
+# cozystack.backupstrategy-controller Package CR as
+# components.backupstrategy-controller.values.backupStorage, so it lands on the
+# backupstrategy-controller HelmRelease and deep-merges over that chart's own
+# backupStorage defaults (packages/system/backupstrategy-controller/values.yaml
+# documents every knob: provisionBucket, bucketName, endpoint, region,
+# forcePathStyle, systemSecretName, systemNamespaces, …). Admins set this via
+# spec.components.platform.values.backupStorage on the
+# cozystack.cozystack-platform Package — see docs/operations/backup-classes.md.
+# Empty (the default) forwards nothing and keeps the child chart defaults.
+backupStorage: {}
 # Pod scheduling configuration
 scheduling:
   globalAppTopologySpreadConstraints: ""

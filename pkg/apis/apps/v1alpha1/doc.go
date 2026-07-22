@@ -15,6 +15,7 @@ limitations under the License.
 */
 
 // +k8s:openapi-gen=true
+// +k8s:openapi-model-package=com.github.cozystack.cozystack.pkg.apis.apps.v1alpha1
 // +k8s:deepcopy-gen=package
 // +k8s:conversion-gen=github.com/cozystack/cozystack/pkg/apis/apps
 // +k8s:conversion-gen=k8s.io/apiextensions-apiserver/pkg/apis/apiextensions

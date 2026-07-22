@@ -32,8 +32,8 @@ spec:
         # so deploy a per-app Secret named "<app>-mariadb-backup-creds"
         # holding AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY extracted from
         # BucketInfo (extract the access key id / secret access key from
-        # the BucketInfo JSON and project them under those two keys; a
-        # bats e2e harness lands in a follow-up PR).
+        # the BucketInfo JSON and project them under those two keys;
+        # run-all.sh in this directory does this automatically).
         accessKeyIdSecretKeyRef:
           name: "{{ .Application.metadata.name }}-mariadb-backup-creds"
           key: "AWS_ACCESS_KEY_ID"

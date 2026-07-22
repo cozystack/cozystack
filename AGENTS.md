@@ -18,6 +18,10 @@ This file provides structured guidance for AI coding assistants and agents worki
   - Read: [`releasing.md`](./docs/agents/releasing.md)
   - Action: Read the file and follow the referenced release process in `docs/release.md`
 
+- **Image references, tags and digests** (e.g., "why is this image tagged rc", "add an image to a package", "change how an image is stamped", "promotion/nightly missed an image", "where do image refs live")
+  - Read: [`image-refs.md`](./docs/agents/image-refs.md)
+  - Action: Read the entire file. Image refs live in three storage shapes and carry three classes of tag; a tool that knows only one shape skips images silently rather than failing. `hack/lib/image-refs.sh` is the enumeration shared by the promote, retag and mirror tooling — extend it there rather than teaching an individual script a new path. Note `hack/overlay-main-images.sh` is a fourth consumer that still walks the tree itself and does not source the library
+
 - **Project structure, conventions, code layout** (e.g., "where should I put X", "what's the convention for Y", "how is the project organized")
   - Read: [`overview.md`](./docs/agents/overview.md)
   - Action: Read relevant sections to understand project structure and conventions

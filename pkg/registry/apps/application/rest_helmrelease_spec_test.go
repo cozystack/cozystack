@@ -21,6 +21,7 @@ import (
 	"time"
 
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
@@ -131,6 +132,52 @@ func TestConvertApplicationToHelmRelease_BuildsSpecFromConfig(t *testing.T) {
 // conversion — i.e. is set as a non-nil pointer to 0 rather than dropped or
 // replaced with a default. Mirrors the operator-side
 // TestBuildHelmReleaseSpecZeroMaxHistory.
+// convertApplicationToHelmRelease threads the kstatus readiness knobs from the
+// per-kind ReleaseConfig (populated from ApplicationDefinition spec.release) onto
+// the generated HelmRelease (issue #2642), coupling the poller default when
+// healthCheckExprs are present but no wait strategy was set — the api-side mirror
+// of the operator's TestBuildHelmReleaseSpecHealthCheckExprs.
+func TestConvertApplicationToHelmRelease_HealthCheckExprs(t *testing.T) {
+	exprs := []kustomize.CustomHealthCheck{{
+		APIVersion: "postgresql.cnpg.io/v1",
+		Kind:       "Cluster",
+	}}
+	r := &REST{
+		kindName: "Postgres",
+		releaseConfig: config.ReleaseConfig{
+			Prefix:           "postgres-",
+			ChartRef:         config.ChartRefConfig{Kind: "HelmChart", Name: "postgres", Namespace: "cozy-system"},
+			HealthCheckExprs: exprs,
+			// WaitStrategy intentionally unset: healthCheckExprs must couple poller.
+		},
+	}
+	app := &appsv1alpha1.Application{ObjectMeta: metav1.ObjectMeta{Name: "example", Namespace: "tenant-root"}}
+
+	hr, err := r.convertApplicationToHelmRelease(app)
+	if err != nil {
+		t.Fatalf("convertApplicationToHelmRelease returned error: %v", err)
+	}
+	if len(hr.Spec.HealthCheckExprs) != 1 || hr.Spec.HealthCheckExprs[0].Kind != "Cluster" {
+		t.Fatalf("HealthCheckExprs not threaded: %+v", hr.Spec.HealthCheckExprs)
+	}
+	if hr.Spec.WaitStrategy == nil || hr.Spec.WaitStrategy.Name != helmv2.WaitStrategyPoller {
+		t.Errorf("WaitStrategy = %+v, want poller (coupled default)", hr.Spec.WaitStrategy)
+	}
+
+	// No exprs and no strategy -> unset (flux default).
+	rNone := &REST{
+		kindName:      "Postgres",
+		releaseConfig: config.ReleaseConfig{Prefix: "postgres-", ChartRef: r.releaseConfig.ChartRef},
+	}
+	hrNone, err := rNone.convertApplicationToHelmRelease(app)
+	if err != nil {
+		t.Fatalf("convertApplicationToHelmRelease returned error: %v", err)
+	}
+	if hrNone.Spec.WaitStrategy != nil {
+		t.Errorf("WaitStrategy = %+v, want nil", hrNone.Spec.WaitStrategy)
+	}
+}
+
 func TestConvertApplicationToHelmRelease_ZeroMaxHistory(t *testing.T) {
 	r := &REST{
 		kindName: "Postgres",

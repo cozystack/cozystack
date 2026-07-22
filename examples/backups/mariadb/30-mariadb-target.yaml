@@ -12,11 +12,11 @@
 # mariadb-src; replicate this whenever you want to verify a restore
 # under non-root credentials.
 #
-# Same-namespace to-copy flows are smoke-testable manually by applying
-# this manifest alongside mariadb-src. Cross-tenant restores (target in
-# tenant-test, source's seaweedfs in tenant-root) are blocked by the
-# per-tenant Cilium egress policy and stay a manual / dev-cluster flow.
-# A dedicated bats e2e harness will land in a follow-up PR.
+# Same-namespace to-copy flows are exercised by run-all.sh in this
+# directory (and by the mariadb-2-backup-roundtrip Chainsaw suite).
+# Cross-tenant restores (target in tenant-test, source's seaweedfs in
+# tenant-root) are blocked by the per-tenant Cilium egress policy and
+# stay a manual / dev-cluster flow.
 ---
 apiVersion: apps.cozystack.io/v1alpha1
 kind: MariaDB
