@@ -98,6 +98,32 @@ _cozy_on_exit() {
   if [ "$_rc" -ne 0 ]; then
     _snap="$COZY_REPORT_DIR/snapshots/$(basename "$TEST_FILE" .bats)"
     mkdir -p "$_snap" 2>/dev/null || true
+    # Previous-instance container logs for anything that crash-looped. `kubectl
+    # logs` shows only the current instance, so for a crash-looping pod the
+    # decisive evidence — the immediately preceding run — is reachable only via
+    # `--previous` and is lost once the kubelet garbage-collects that container.
+    # FIRST, ahead of both captures below: it is the cheapest leg and the only
+    # one whose subject is perishable. The kubelet retains one dead container
+    # per pod by default, so each further restart of a still-looping pod drops
+    # the instance we are here to read — and the snapshot leg alone can hold the
+    # trap for 390s. The other two captures read state that keeps.
+    if command -v kubectl >/dev/null 2>&1 && [ -x "$(dirname "$0")/e2e-capture-previous-logs.sh" ]; then
+      _prev_rc=0
+      timeout -k 30 300 "$(dirname "$0")/e2e-capture-previous-logs.sh" \
+        "$_snap/previous-logs" "${COZY_TEST_NAMESPACE:-tenant-test}" 2>&1 || _prev_rc=$?
+      # A backstop that fires must say so, matching the crust-gather leg below.
+      # 300s sits above the ~270s worst case inside (a ~30s pod list plus up to
+      # 12 × 20s log reads), so it should not fire; if it does, a silently cut
+      # capture would read as a complete one listing fewer crash-loops than
+      # actually occurred. This handler's whole worst case is ~1350s (330 + 390
+      # + 630, each leg including its 30s kill grace) against a job capped at
+      # 180 minutes with no per-step timeout —
+      # deliberate, for the same reason recorded in hack/e2e-chainsaw/.chainsaw.yaml:
+      # a bounded, honest wait beats a kill that collects nothing.
+      if [ "$_prev_rc" -ne 0 ]; then
+        echo "» previous-instance capture INCOMPLETE (exit $_prev_rc); kept what landed in $_snap/previous-logs"
+      fi
+    fi
     if command -v crust-gather >/dev/null 2>&1; then
       echo "» capturing crust-gather snapshot of failed $(basename "$TEST_FILE") -> $_snap"
       # Bound with a timeout: crust-gather collect has hung indefinitely on a
@@ -106,7 +132,26 @@ _cozy_on_exit() {
       # ample for a host snapshot; a partial capture (timeout exits 124, swallowed
       # by `|| true`) still beats a multi-hour hang. -k 30 hard-kills if a blocked
       # collect ignores the SIGTERM.
-      timeout -k 30 300 crust-gather collect --exclude-kind Secret -f "$_snap/host" >/dev/null 2>&1 || true
+      # --duration is crust-gather's own budget for the collection phase and
+      # defaults to 60s, which silently truncates a snapshot of a cluster this
+      # size: on elapse it abandons the collection and skips its finish step,
+      # leaving a partial tree with no indication that the rest is missing. Set
+      # it explicitly. The outer wall-clock must exceed it because crust-gather
+      # runs API discovery BEFORE that timer starts and that phase is unbounded
+      # — with an unhealthy aggregated APIService (the state a failed run is
+      # usually in) discovery alone can eat the whole budget before a single
+      # object is written.
+      # Output goes to a log inside the snapshot instead of /dev/null so
+      # "is this snapshot complete or truncated?" is answerable from the
+      # uploaded artifact rather than guessed, matching the Chainsaw catch.
+      _cg_rc=0
+      timeout -k 30 360 crust-gather collect --duration 180s \
+        --exclude-kind Secret -f "$_snap/host" >"$_snap/crust-gather.log" 2>&1 || _cg_rc=$?
+      case "$_cg_rc" in
+        0) echo "» crust-gather host snapshot complete" ;;
+        124 | 137) echo "» crust-gather host snapshot TRUNCATED (wall-clock $_cg_rc); partial state kept, see $_snap/crust-gather.log" ;;
+        *) echo "» crust-gather host snapshot FAILED (exit $_cg_rc); see $_snap/crust-gather.log" ;;
+      esac
     fi
     # Diagnostic-only: capture the host->pod CNI data-plane state for any
     # NotReady pod so the recurrent host->local-pod "connection refused"
