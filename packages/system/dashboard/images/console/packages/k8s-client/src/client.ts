@@ -1,6 +1,13 @@
 export interface K8sClientConfig {
   baseUrl?: string
   getToken?: () => Promise<string>
+  onUnauthorized?: () => void
+}
+
+function defaultOnUnauthorized(): void {
+  if (typeof window === "undefined") return
+  const rd = window.location.pathname + window.location.search + window.location.hash
+  window.location.assign(`/oauth2/start?rd=${encodeURIComponent(rd)}`)
 }
 
 export class K8sApiError extends Error {
@@ -24,10 +31,19 @@ export class K8sApiError extends Error {
 export class K8sClient {
   private baseUrl: string
   private getToken?: () => Promise<string>
+  private onUnauthorized: () => void
+  private unauthorizedHandled = false
 
   constructor(config: K8sClientConfig = {}) {
     this.baseUrl = config.baseUrl ?? ""
     this.getToken = config.getToken
+    this.onUnauthorized = config.onUnauthorized ?? defaultOnUnauthorized
+  }
+
+  private handleUnauthorized(): void {
+    if (this.unauthorizedHandled) return
+    this.unauthorizedHandled = true
+    this.onUnauthorized()
   }
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -63,6 +79,7 @@ export class K8sClient {
       } catch {
         body = `Server returned ${res.status} ${res.statusText}`
       }
+      if (res.status === 401) this.handleUnauthorized()
       throw new K8sApiError(res.status, body)
     }
 
@@ -256,6 +273,7 @@ export class K8sClient {
         })
 
         if (!res.ok) {
+          if (res.status === 401) this.handleUnauthorized()
           throw new K8sApiError(
             res.status,
             await res.json().catch(() => res.statusText),
