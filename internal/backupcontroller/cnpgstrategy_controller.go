@@ -910,17 +910,56 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 	}
 
-	// The restore deadline is the sole authority for "this restore is stuck".
-	// A recovery that CAN converge does so well within the deadline and reaches
-	// the healthy check below; only a genuinely wedged restore (most often a
-	// recoveryTime past the latest archived WAL) burns the whole window. We do
-	// NOT try to fail earlier off the recovery pod's FATAL: a valid near-now
-	// target hits the same "recovery ended before ... target ... reached" FATAL
-	// transiently - and repeatedly, for many attempts, on a slow archiver -
-	// before it converges, so any earlier trip wrongly rejects a recoverable
-	// restore (observed twice in CI). Instead we use that FATAL only to explain
-	// the failure precisely once the deadline has already elapsed. Tenants who
-	// want a fast rejection set a short spec.options.restoreTimeoutSeconds.
+	// Health wins unconditionally, and is checked BEFORE the deadline. A
+	// recovery that has reached a healthy Cluster is a success no matter how
+	// late the reconcile observes it: a reconcile gap longer than
+	// restoreTimeoutSeconds (a controller restart or a stalled workqueue that
+	// spans the window) must not flip an already-converged restore to Failed.
+	// Getting the order wrong is not just a cosmetic mislabel - a false Failed
+	// can be resubmitted, and the next RestoreJob's purge guard would then
+	// delete the already-recovered Cluster + PVCs to start over.
+	if hasRecovery {
+		healthy, herr := r.cnpgClusterHealthy(ctx, target.Namespace, clusterName)
+		if herr != nil {
+			return ctrl.Result{}, herr
+		}
+		if healthy {
+			now := metav1.Now()
+			restoreJob.Status.CompletedAt = &now
+			restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
+			// RecoveryConverged=True for symmetry with the False the
+			// unreachable-target path records, so .status.conditions tells the
+			// whole story rather than only ever showing the condition on failure.
+			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+				Type:    restoreCondRecoveryConverged,
+				Status:  metav1.ConditionTrue,
+				Reason:  "RecoveryConverged",
+				Message: fmt.Sprintf("target cnpg.io Cluster %s/%s reached a healthy state", target.Namespace, clusterName),
+			})
+			apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
+				Type:    "Ready",
+				Status:  metav1.ConditionTrue,
+				Reason:  "RestoreCompleted",
+				Message: "target cnpg.io Cluster reached healthy state",
+			})
+			if err := r.Status().Update(ctx, restoreJob); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{}, nil
+		}
+	}
+
+	// Not (yet) healthy. Now the restore deadline is the authority for "this
+	// restore is stuck". A recovery that CAN converge does so within the
+	// deadline and is caught by the health check above; only a genuinely wedged
+	// restore (most often a recoveryTime past the latest archived WAL) burns the
+	// whole window. We do NOT fail earlier off the recovery pod's FATAL: a valid
+	// near-now target hits that same "recovery ended before ... target ...
+	// reached" FATAL transiently - and repeatedly, on a slow archiver - before
+	// it converges, so an earlier trip would wrongly reject a recoverable
+	// restore. The FATAL is used only to explain a failure the deadline has
+	// already declared. Tenants who want a fast rejection set a short
+	// spec.options.restoreTimeoutSeconds.
 	deadline := options.effectiveRestoreDeadline()
 	if restoreJob.Status.StartedAt != nil && time.Since(restoreJob.Status.StartedAt.Time) > deadline {
 		classificationForbidden := false
@@ -963,44 +1002,9 @@ func (r *RestoreJobReconciler) reconcileCNPGRestore(ctx context.Context, restore
 		return r.markRestoreJobFailed(ctx, restoreJob, msg)
 	}
 
-	if !hasRecovery {
-		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
-	}
-
-	// Recovery converged wins: mark success as soon as the Cluster is healthy,
-	// regardless of how many bootstrap-recovery pods crashed and were retried
-	// on the way (a slow archiver makes several transient failures normal).
-	healthy, err := r.cnpgClusterHealthy(ctx, target.Namespace, clusterName)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !healthy {
-		// Still recovering. Keep waiting; the deadline above is the backstop.
-		return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
-	}
-
-	now := metav1.Now()
-	restoreJob.Status.CompletedAt = &now
-	restoreJob.Status.Phase = backupsv1alpha1.RestoreJobPhaseSucceeded
-	// Set RecoveryConverged=True for symmetry with the False the unreachable-
-	// target path records, so .status.conditions tells the whole story rather
-	// than only ever showing the condition on failure.
-	apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-		Type:    restoreCondRecoveryConverged,
-		Status:  metav1.ConditionTrue,
-		Reason:  "RecoveryConverged",
-		Message: fmt.Sprintf("target cnpg.io Cluster %s/%s reached a healthy state", target.Namespace, clusterName),
-	})
-	apimeta.SetStatusCondition(&restoreJob.Status.Conditions, metav1.Condition{
-		Type:    "Ready",
-		Status:  metav1.ConditionTrue,
-		Reason:  "RestoreCompleted",
-		Message: "target cnpg.io Cluster reached healthy state",
-	})
-	if err := r.Status().Update(ctx, restoreJob); err != nil {
-		return ctrl.Result{}, err
-	}
-	return ctrl.Result{}, nil
+	// Within the deadline and not yet healthy (or the recovery Cluster is not
+	// chart-rendered yet): keep waiting.
+	return ctrl.Result{RequeueAfter: cnpgPollInterval}, nil
 }
 
 // cnpgRestoreTarget captures the resolved target for a CNPG restore. The
@@ -1482,7 +1486,7 @@ func (r *RestoreJobReconciler) readPodContainerLog(ctx context.Context, namespac
 	if err != nil {
 		return "", err
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }() // read-only log stream; nothing depends on the close error
 	data, err := io.ReadAll(stream)
 	if err != nil {
 		return "", err

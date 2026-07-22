@@ -2199,6 +2199,109 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	}
 }
 
+// TestReconcileCNPGRestore_HealthyPastDeadlineSucceeds is the regression guard
+// for the health-before-deadline ordering: a recovery that has reached a
+// healthy Cluster must be reported Succeeded even when the reconcile observing
+// it lands AFTER the restore deadline has elapsed (e.g. a controller restart
+// spanning the window). StartedAt is 72h in the past (well past the 30m default
+// deadline) and a recoveryTime is set, so if the deadline branch ran first it
+// would classify the restore Failed/RecoveryTargetUnreachable - a wrong verdict
+// that can escalate to data loss on resubmit. The injected readPodLog fails the
+// test if the classification path is entered at all, proving health short-circuits.
+func TestReconcileCNPGRestore_HealthyPastDeadlineSucceeds(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+		cnpgBkName  = "cnpgbk"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+	// Far past the 30m default deadline: this is the reconcile-gap case.
+	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	backup := &backupsv1alpha1.Backup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+		Spec: backupsv1alpha1.BackupSpec{
+			ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+			StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+			DriverMetadata: map[string]string{
+				cnpgServerNameKey:      appName,
+				cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				cnpgBackupNameKey:      cnpgBkName,
+			},
+		},
+		Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	healthyCluster := &cnpgtypes.Cluster{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+		Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		Status:     cnpgtypes.ClusterStatus{Phase: cnpgClusterHealthyPhase},
+	}
+	sa := startedAt
+	restoreJob := &backupsv1alpha1.RestoreJob{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+		Spec: backupsv1alpha1.RestoreJobSpec{
+			BackupRef: corev1.LocalObjectReference{Name: "bk"},
+			// recoveryTime set so the (wrongly-ordered) deadline branch would classify.
+			Options: &runtime.RawExtension{Raw: []byte(`{"recoveryTime":"2026-01-01T00:00:00Z"}`)},
+		},
+		Status: backupsv1alpha1.RestoreJobStatus{
+			StartedAt: &sa,
+			Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+			Conditions: []metav1.Condition{{
+				Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged",
+				LastTransitionTime: startedAt, Message: "purged",
+			}},
+		},
+	}
+
+	c := newCNPGStrategyTestClient(t, backup, restoreJob, strategy, newPostgresApp(appName, ns), healthyCluster)
+	r := &RestoreJobReconciler{
+		Client:    c,
+		Interface: dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)),
+		// If the deadline/classification branch runs before the health check,
+		// it reaches the log reader - which must never happen for a healthy cluster.
+		readPodLog: func(context.Context, string, string, string) (string, error) {
+			t.Fatalf("classification (log read) ran for an already-healthy Cluster: health check must precede the deadline branch")
+			return "", nil
+		},
+	}
+
+	rj := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+		t.Fatalf("get seeded RestoreJob: %v", err)
+	}
+	if _, err := r.reconcileCNPGRestore(ctx, rj, backup); err != nil {
+		t.Fatalf("reconcileCNPGRestore: %v", err)
+	}
+
+	got := &backupsv1alpha1.RestoreJob{}
+	if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+		t.Fatalf("get RestoreJob after reconcile: %v", err)
+	}
+	if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseSucceeded {
+		t.Fatalf("expected phase Succeeded (healthy cluster past deadline), got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+	}
+	if cond := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("expected Ready=True, got %+v", cond)
+	}
+	if cond := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); cond == nil || cond.Status != metav1.ConditionTrue {
+		t.Fatalf("expected RecoveryConverged=True, got %+v", cond)
+	}
+}
+
 // TestReconcileCNPGRestore_DeadlineClassifiesRecoveryTargetUnreachable drives the
 // full reconcileCNPGRestore deadline branch (the classification call site), which
 // the pure-helper tests (TestRecoveryTargetUnreachable_*) do not exercise:
