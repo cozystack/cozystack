@@ -1,0 +1,62 @@
+# Remote-site B — a second VyOS VM standing in for the external site. It is a
+# PLAIN vm-instance (NOT a site-router): the product forbids remoteCIDRs that
+# overlap the cluster networks (deny-set), but B must route the cluster-side
+# backend address into the tunnel toward A, so B cannot be a managed SiteRouter.
+# A plain VM carries a free-form static config instead.
+#
+# B's role in the topology:
+#   - IPsec INITIATOR: dials in to A's tunnel LB on UDP 500 / NAT-T 4500 with the
+#     shared PSK (cozystack-e2e-site-router-psk), forced UDP encapsulation.
+#   - Source of the remote site: a dummy/loopback interface in 192.0.2.0/24 (one
+#     of A's remoteCIDRs) is the client source for the inbound + negative probes.
+#   - Probe host: the reachability, MSS and negative-security scripts drive
+#     ping/curl/nc from B's guest, sourced from the 192.0.2.x dummy, into the
+#     tunnel.
+#
+# B boots the same VyOS golden image as A (cloned by name — no image URL
+# committed). The exact VyOS 1.5 static config (initiator params matching A's
+# render, the dummy interface, forced UDP encap, probe tooling) is finalized
+# against the live image in the empirical run.
+#
+# TODO(T13): validate B against the live image:
+#   - the generic vm-instance chart may not set the DRBD 4Kn blockSize the
+#     site-router chart uses for VyOS; if VyOS will not boot this way, model B
+#     via a raw VirtualMachine (as packages/apps/site-router/templates/vm.yaml
+#     does) or fall back to a Linux + strongSwan initiator.
+#   - confirm a VyOS instanceProfile / cloudInit path that applies the static
+#     config on first boot.
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMDisk
+metadata:
+  name: remote-site-b
+spec:
+  source:
+    image:
+      name: vyos-router
+  optical: false
+  storage: 10Gi
+  storageClass: replicated
+---
+apiVersion: apps.cozystack.io/v1alpha1
+kind: VMInstance
+metadata:
+  name: remote-site-b
+spec:
+  running: true
+  instanceType: "u1.medium"
+  # TODO(T13): confirm the VyOS instanceProfile against the live image.
+  instanceProfile: vyos
+  disks:
+    - name: remote-site-b
+  cloudInit: |
+    #cloud-config
+    # TODO(T13): VyOS 1.5 static remote-site config, finalized live:
+    #   - vpn ipsec site-to-site peer <A tunnel LB> — pre-shared-secret
+    #     cozystack-e2e-site-router-psk, ike-group/esp-group matching A's
+    #     render defaults (ikev2 aes256/sha256 dh14, esp aes256/sha256 pfs14),
+    #     force-encapsulation enable, tunnel local 192.0.2.0/24 remote <cluster
+    #     backend net>.
+    #   - interfaces dummy dum0 address 192.0.2.1/24 (the remote client source).
+    #   - probe tooling (ping/curl/nc) available in the guest.
+  cloudInitSeed: ""
