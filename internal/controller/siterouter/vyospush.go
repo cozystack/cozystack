@@ -139,6 +139,20 @@ func tunnelIngressRulesetPath() []string {
 	return []string{"firewall", "name", render.TunnelIngressRuleSet}
 }
 
+// tunnelIngressForwardPath is the config path confirmSourceFilterActive reads to
+// verify the forward-chain ipsec-match jump INTO the tunnel-ingress source filter
+// is live (render.renderForwardFilter emits `firewall forward rule 20 jump-target
+// TUNNEL-INGRESS`). The named set is only ACTIVE while this jump exists: deleting
+// the jump but leaving the named set silently disables the source filter, so both
+// must be confirmed (D8). It mirrors render's forwardFilterPath.
+// TODO(T13): the forward-filter base path + jump-target leaf syntax is
+// PROVISIONAL — VyOS 1.5-rolling moves this under `firewall ipv4 forward filter`
+// and may spell the jump differently. Validate live and flip in lockstep with
+// tunnelIngressRulesetPath and the render's version-specific paths.
+func tunnelIngressForwardPath() []string {
+	return []string{"firewall", "forward"}
+}
+
 // configHash returns the canonical, schema-versioned hash of a rendered op slice
 // (v<N>:sha256:<hex>). JSON is a stable byte stream here: Op and Path are
 // deterministic and Value is a plain string, so an unchanged desired state hashes
@@ -300,19 +314,25 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 //
 // Post-M2 redesign (T08) the source filter is applied via a `firewall forward`
 // ipsec-match jump (render.renderForwardFilter), NOT the old pod-NIC-inbound
-// binding, so it no longer catches locally-originated cluster→remote egress.
-// This confirm reads back the named rule set (TUNNEL-INGRESS), whose path is
-// unchanged; the forward jump is re-stamped in the same push, so a present
-// named set is a sufficient proxy that the guard is live.
-// TODO(T13): the VyOS 1.5 forward-filter + ipsec-match syntax is provisional
-// (see render.forwardFilterPath) and is live-validated by the T13 negative
-// suite, which must also prove a valid-source / world-destination packet is
-// dropped (see the destination-constraint TODO on render.renderTunnelIngressFilter).
+// binding, so it no longer catches locally-originated cluster→remote egress. The
+// filter is therefore only ACTIVE when TWO things hold: the named rule set
+// (TUNNEL-INGRESS) exists AND the forward-chain ipsec-match jump into it exists.
+// Confirming only the named set is too shallow — deleting the jump while leaving
+// the named set would report the filter active with the spoofing guard down, so
+// port_security would stay relaxed with nothing enforcing the source constraint.
+// This confirm reads back BOTH: the named set path (unchanged) and the
+// forward-filter path; if EITHER is absent the filter is treated as down.
+// TODO(T13): the VyOS 1.5 forward-filter + ipsec-match syntax is provisional for
+// BOTH the named set and the jump check (see render.forwardFilterPath /
+// tunnelIngressForwardPath) and is live-validated by the T13 negative suite,
+// which must also prove a valid-source / world-destination packet is dropped
+// (see the destination-constraint TODO on render.renderTunnelIngressFilter).
 //
 // The D8 invariant must be MAINTAINED, not merely established once: if the filter
-// is found absent AFTER it was already up (a guest-side wipe/drift), the port must
-// not be left relaxed while the guard is down, and the managed config must be
-// re-stamped. sourceFilterDown handles both before requeueing.
+// is found absent AFTER it was already up (a guest-side wipe/drift, including a
+// deleted forward jump), the port must not be left relaxed while the guard is
+// down, and the managed config must be re-stamped. sourceFilterDown handles both
+// before requeueing.
 func (r *SiteRouterReconciler) confirmSourceFilterActive(ctx context.Context, inst *instance) error {
 	if inst.vc == nil {
 		// Reached only if the push step did not build a client — treat as a wait.
@@ -325,6 +345,16 @@ func (r *SiteRouterReconciler) confirmSourceFilterActive(ctx context.Context, in
 	}
 	if !ruleSetPresent(raw) {
 		return r.sourceFilterDown(ctx, inst, "guest tunnel-ingress source filter not active yet")
+	}
+
+	// The named set exists, but it only ENFORCES anything while the forward-chain
+	// jump routes decrypted traffic into it. Confirm the jump too (D8).
+	fwd, err := inst.vc.Retrieve(ctx, tunnelIngressForwardPath())
+	if err != nil {
+		return r.sourceFilterDown(ctx, inst, "querying the guest forward-chain source-filter jump failed: "+truncErr(err))
+	}
+	if !forwardJumpPresent(fwd) {
+		return r.sourceFilterDown(ctx, inst, "guest forward-chain jump into the tunnel-ingress source filter not active yet")
 	}
 	return nil
 }
@@ -373,6 +403,48 @@ func ruleSetPresent(raw json.RawMessage) bool {
 	default:
 		return true
 	}
+}
+
+// forwardJumpPresent reports whether a /retrieve of the guest forward-chain
+// filter carries the ipsec-match jump INTO the tunnel-ingress source allow-list.
+// render.renderForwardFilter emits a `firewall forward` rule whose jump-target is
+// render.TunnelIngressRuleSet ("TUNNEL-INGRESS"); the named set only enforces
+// while that jump routes decrypted traffic into it (D8). It scans the retrieved
+// subtree for the jump-target name as a string leaf, so it is robust to the exact
+// rule numbering and to the version-sensitive leaf key (see the TODO on
+// tunnelIngressForwardPath). An absent/null/empty subtree reports not-present.
+func forwardJumpPresent(raw json.RawMessage) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "", "null", "{}", "[]":
+		return false
+	}
+	var v interface{}
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return false
+	}
+	return jsonHasStringValue(v, render.TunnelIngressRuleSet)
+}
+
+// jsonHasStringValue reports whether target appears as a string leaf value
+// anywhere in a decoded JSON value tree.
+func jsonHasStringValue(v interface{}, target string) bool {
+	switch t := v.(type) {
+	case string:
+		return t == target
+	case []interface{}:
+		for i := range t {
+			if jsonHasStringValue(t[i], target) {
+				return true
+			}
+		}
+	case map[string]interface{}:
+		for k := range t {
+			if jsonHasStringValue(t[k], target) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // pollRuntimeState queries the guest for IPsec SA and BGP session state and

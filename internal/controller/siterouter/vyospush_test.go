@@ -52,8 +52,17 @@ type fakeVyOS struct {
 
 	// retrieveResult / retrieveErr back confirmSourceFilterActive's guest query.
 	// A nil/`null` result means the tunnel-ingress rule set is not present yet.
+	// retrieveResult answers the named-set path (firewall/name/TUNNEL-INGRESS).
 	retrieveResult json.RawMessage
 	retrieveErr    error
+
+	// forwardResult answers the forward-filter path (firewall/forward), the second
+	// query confirmSourceFilterActive now makes (F3: the named set only enforces
+	// while the forward-chain jump into it exists). When a test leaves it nil the
+	// fake synthesises a subtree that MIRRORS the named set's presence — a real
+	// push writes both in one batch, so absence tracks together unless a test
+	// deliberately diverges them (named set present, jump gone).
+	forwardResult json.RawMessage
 }
 
 func (f *fakeVyOS) Configure(_ context.Context, ops []vyos.Operation) error {
@@ -87,10 +96,27 @@ func (f *fakeVyOS) ShowInterfacesDetail(_ context.Context) ([]vyos.EthernetObser
 	return f.ethObservations, f.ethErr
 }
 
-func (f *fakeVyOS) Retrieve(_ context.Context, _ []string) (json.RawMessage, error) {
+func (f *fakeVyOS) Retrieve(_ context.Context, path []string) (json.RawMessage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.retrieveResult, f.retrieveErr
+	if f.retrieveErr != nil {
+		return nil, f.retrieveErr
+	}
+	// Path-aware: confirmSourceFilterActive reads the named set
+	// (firewall/name/TUNNEL-INGRESS) and the forward-chain jump (firewall/forward)
+	// separately (F3). The named-set query returns retrieveResult; the forward
+	// query returns forwardResult, or — when unset — a subtree mirroring the named
+	// set's presence so tests that only wire retrieveResult keep the jump present.
+	if len(path) >= 2 && path[0] == "firewall" && path[1] == "forward" {
+		if f.forwardResult != nil {
+			return f.forwardResult, nil
+		}
+		if ruleSetPresent(f.retrieveResult) {
+			return json.RawMessage(`{"rule":{"20":{"ipsec":{"match-ipsec":{}},"action":"jump","jump-target":"` + render.TunnelIngressRuleSet + `"}}}`), nil
+		}
+		return f.retrieveResult, nil
+	}
+	return f.retrieveResult, nil
 }
 
 // setRetrieve swaps the canned /retrieve result mid-test, standing in for the
@@ -571,6 +597,43 @@ func TestReconcile_ReenforcesPortSecurityWhenSourceFilterDropsAfterRelax(t *test
 	}
 	if !gatewayPortSecurityRelaxed(t, r, podName) {
 		t.Errorf("expected port_security relaxed again once the filter is re-stamped")
+	}
+}
+
+// TestReconcile_SourceFilterDownWhenForwardJumpAbsent encodes the F3/D8 fix: the
+// tunnel-ingress named set being present is NOT sufficient — the source filter
+// only ENFORCES while the forward-chain ipsec-match jump into it also exists. A
+// guest that keeps the named set but drops the forward jump silently disables the
+// spoofing guard; confirmSourceFilterActive must report the filter DOWN, so
+// port_security is not relaxed and the cached hash is invalidated to force a
+// re-push that re-stamps the jump.
+func TestReconcile_SourceFilterDownWhenForwardJumpAbsent(t *testing.T) {
+	podName := "virt-launcher-" + releasePrefix + "demo-abcde"
+	fakeV := &fakeVyOS{
+		// Named set present ...
+		retrieveResult: json.RawMessage(`{"rule":{"5":{"action":"accept"}}}`),
+		// ... but the forward-chain subtree carries NO jump to TUNNEL-INGRESS.
+		forwardResult: json.RawMessage(`{"default-action":"drop","rule":{"5":{"action":"accept"}}}`),
+	}
+	r, _ := newVyOSReconciler(t, fakeV, readyObjects(t, "demo", routedValues(), "10.244.0.5")...)
+
+	// First reconcile: pushes once, then confirm finds the jump absent → down.
+	res := reconcileInstance(t, r, "demo")
+	if gatewayPortSecurityRelaxed(t, r, podName) {
+		t.Errorf("port_security must NOT be relaxed when the forward-chain jump to TUNNEL-INGRESS is absent, even though the named set is present (D8)")
+	}
+	if res.RequeueAfter == 0 {
+		t.Errorf("expected a requeue while the source filter is down, got none")
+	}
+	if fakeV.Configures() != 1 {
+		t.Fatalf("expected exactly the initial push, got %d Configure calls", fakeV.Configures())
+	}
+
+	// The down path invalidated the cached hash: the next reconcile re-pushes to
+	// re-stamp the missing forward jump.
+	reconcileInstance(t, r, "demo")
+	if fakeV.Configures() != 2 {
+		t.Errorf("expected the invalidated hash to force a re-push (re-stamping the jump), got %d Configure calls", fakeV.Configures())
 	}
 }
 
