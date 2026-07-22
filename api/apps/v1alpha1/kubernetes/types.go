@@ -268,6 +268,8 @@ type NodeGroup struct {
 	DiskSize resource.Quantity `json:"diskSize"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	Gpus []GPU `json:"gpus,omitempty"`
+	// Worker OS image source for this node group. Default (omitted): import over HTTP from the cluster-wide talos.* Image Factory. Set `image.builtin` to clone a golden from the opt-in worker image catalog instead. Editing this on an existing group re-images that group.
+	Image WorkerImage `json:"image,omitempty"`
 	// Virtual machine instance type.
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
@@ -387,6 +389,29 @@ type VerticalPodAutoscalerAddon struct {
 	// Custom Helm values overrides.
 	// +kubebuilder:default:={}
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
+}
+
+type WorkerImage struct {
+	// Clone a golden image from the worker image catalog.
+	Builtin *WorkerImageBuiltin `json:"builtin,omitempty"`
+	// Import from an Image Factory / mirror (default).
+	Factory *WorkerImageFactory `json:"factory,omitempty"`
+}
+
+type WorkerImageBuiltin struct {
+	// Talos schematic ID of the golden to clone. Defaults to the cluster-wide talos.schematicID.
+	SchematicID string `json:"schematicID,omitempty"`
+	// Talos version of the golden to clone. Defaults to the cluster-wide talos.version.
+	Version string `json:"version,omitempty"`
+}
+
+type WorkerImageFactory struct {
+	// Base URL of the Image Factory serving the boot raw image. Defaults to the cluster-wide talos.imageFactoryURL. No trailing slash. NOTE: this redirects only the worker boot-disk import; the in-guest upgrade installer image is always sourced from the cluster-wide talos.installerRepository, so an air-gapped node group must also have talos.installerRepository pointed at a reachable registry.
+	ImageFactoryURL string `json:"imageFactoryURL,omitempty"`
+	// Talos schematic ID. Defaults to the cluster-wide talos.schematicID.
+	SchematicID string `json:"schematicID,omitempty"`
+	// Talos version. Defaults to the cluster-wide talos.version.
+	Version string `json:"version,omitempty"`
 }
 
 // +kubebuilder:validation:Enum="Proxied";"LoadBalancer"

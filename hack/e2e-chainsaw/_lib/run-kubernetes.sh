@@ -1,7 +1,6 @@
 # shellcheck shell=bash
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
-. hack/e2e-chainsaw/_lib/talos-image-cache.sh
 
 # kubectl_wait_retry: wraps `kubectl wait` with retries against transient
 # management-cluster apiserver/etcd errors.
@@ -253,11 +252,26 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos image cache when it
-  # is up (falls back to the public factory otherwise). Emitted right under spec:
-  # as `talos: { imageFactoryURL: ... }`, or an empty line when the default applies.
-  local talos_block
-  talos_block=$(talos_image_factory_spec_block)
+  # The kubernetes-worker-image catalog imports the golden Talos worker image into
+  # cozy-public once; the md0 nodeGroup below clones it (spec.nodeGroups.md0.image.
+  # builtin). This single factory import is the one #3231 exposure left after the
+  # per-worker talos-image-cache was dropped, so wait for it to finish importing
+  # here — a factory stall surfaces as a clear, self-contained failure instead of an
+  # opaque node-join timeout downstream, and the Kubernetes render (which fails when
+  # the golden is absent) is guaranteed a created source. The catalog HR is already
+  # Ready (install gate), so this waits only for the import phase to reach Succeeded.
+  echo "--- waiting for the golden Talos worker image(s) in cozy-public to import ---"
+  # Capture the DataVolume list inside the until condition and reuse it for the
+  # wait, so a transient get between "exists" and "wait" cannot skip the import
+  # check with an empty list.
+  timeout 12m sh -ec '
+    until dvs=$(kubectl -n cozy-public get datavolume -o name 2>/dev/null | grep talos-worker-); [ -n "$dvs" ]; do
+      echo "golden DataVolume not created yet; waiting..."; sleep 5
+    done
+    for dv in $dvs; do
+      echo "waiting for $dv import (phase=Succeeded)..."
+      kubectl -n cozy-public wait "$dv" --for=jsonpath="{.status.phase}"=Succeeded --timeout=10m
+    done'
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -266,7 +280,6 @@ metadata:
   name: "${test_name}"
   namespace: tenant-test
 spec:
-${talos_block}
   addons:
     certManager:
       enabled: false
@@ -318,6 +331,12 @@ ${ouroboros_addon}
     md0:
       diskSize: 20Gi
       gpus: []
+      # Boot workers by CDI-cloning the shared golden Talos image in cozy-public
+      # (kubernetes-worker-image catalog, enabled in e2e-install-cozystack.bats)
+      # instead of a per-worker HTTP import — this exercises the clone path and the
+      # #3231 mitigation. builtin: {} clones the cluster talos.* default golden.
+      image:
+        builtin: {}
       instanceType: u1.medium
       maxReplicas: 10
       minReplicas: 2
@@ -461,27 +480,27 @@ EOF
     kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
     kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
 
-    # (a2) Worker DataVolume IMPORT stage. A VM stuck "Provisioning" whose
-    # DataVolume is ImportInProgress at N/A progress with the importer pod
-    # looping on an HTTP error is a distinct sub-mode of 2a that the VM/VMI
-    # state alone does not show: the OS image never finishes importing, so the
-    # VM never boots. This is what took out PR #2826's CI — the CDI importer
-    # could not reach the talos-image-cache ClusterIP (`dial tcp <svc>:80: i/o
-    # timeout`) even though the cache pod was healthy. Show the DataVolume/PVC
-    # phases and the importer pod logs, then re-probe the cache ClusterIP from a
-    # throwaway pod (talos_image_cache_diagnose) to tell "cache path went dead
-    # mid-run" apart from "upstream factory slow/flaky".
-    echo "=== (a2) tenant worker DataVolume import stage (management cluster, ns tenant-test) ==="
+    # (a2) Worker DataVolume boot-disk stage. A VM stuck "Provisioning" whose
+    # disk-system DataVolume never reaches Succeeded is a distinct sub-mode of 2a
+    # the VM/VMI state alone does not show: the OS disk never populates, so the VM
+    # never boots. New node groups CLONE the shared golden Talos image in
+    # cozy-public (packages/system/kubernetes-worker-image), so the usual culprit
+    # is a clone blocked on a golden that has not finished importing; a cluster
+    # that fell back to the HTTP import instead shows an importer-* pod looping on
+    # a factory error. Dump the worker DataVolume/PVC phases, the golden source
+    # DataVolume, and any importer-pod logs.
+    echo "=== (a2) tenant worker DataVolume boot-disk stage (management cluster) ==="
+    echo "--- worker disk-system DataVolume/PVC (ns tenant-test) ---"
     kubectl -n tenant-test get datavolume,pvc -o wide 2>&1 | grep -E 'NAME|md0|disk' || true
     kubectl -n tenant-test describe datavolume 2>&1 | grep -Ei 'Name:|Phase:|Progress:|Restart|Reason:|Message:|Running Condition|Bound Condition' || true
+    echo "--- golden Talos worker image (clone source, ns cozy-public) ---"
+    kubectl -n cozy-public get datavolume,pvc -o wide 2>&1 | grep -E 'NAME|talos-worker' || true
     for _p in $(kubectl -n tenant-test get pods -o name 2>/dev/null | grep -E '^pod/importer-'); do
       echo "--- logs ${_p} (current) ---"
       kubectl -n tenant-test logs "${_p}" --tail=40 2>&1 || true
       echo "--- logs ${_p} (previous) ---"
       kubectl -n tenant-test logs "${_p}" --previous --tail=40 2>&1 || true
     done
-    echo "--- re-probe talos-image-cache ClusterIP + cacher debug bundle ---"
-    talos_image_cache_diagnose || true
 
     # (c) Tenant kubelet CSRs + the talos-csr-signer sidecar log. A mode-2b node
     # boots but blocks on a kubelet-serving/-client CSR that is never submitted

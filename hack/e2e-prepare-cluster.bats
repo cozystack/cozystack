@@ -82,7 +82,17 @@ EOF
   for i in 1 2 3; do
     cp nocloud-amd64.raw srv${i}/system.img
     qemu-img resize srv${i}/system.img 50G
-    qemu-img create srv${i}/data.img 200G
+    # 300G (sparse) for the per-node LINSTOR/ZFS data pool. The kubernetes
+    # suites now boot workers by CDI-cloning the golden Talos image in
+    # cozy-public and resizing the clone up to the worker diskSize; that
+    # clone+grow needs transient headroom (the golden itself, a temp clone
+    # PVC, and the grown target) on top of the full suite's other PVCs.
+    # At 200G the pool ran right at its limit — the resize-grow then failed
+    # with "storage pool does not have enough free space", stalling worker
+    # boot until the kubernetes suites hit their node-ready timeouts and the
+    # whole run blew past the 180m budget. The extra 100G is sparse, so it
+    # costs host disk only as the pool actually fills.
+    qemu-img create srv${i}/data.img 300G
   done
 }
 
