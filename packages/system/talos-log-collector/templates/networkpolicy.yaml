@@ -1,11 +1,16 @@
+# Vector binds 0.0.0.0:<listenPort> inside the pod netns and exposes it as a
+# containerPort, so the pod IP is reachable from every pod in the cluster. Any
+# workload could open <podIP>:<listenPort> and inject forged JSON lines that the
+# pipeline stamps with log_source=talos_system and the real node name, straight
+# into VictoriaLogs. This policy is load-bearing, not defence-in-depth: it is
+# the only thing restricting the receiver to the node-local push path (Talos
+# reaches it on 127.0.0.1:<listenPort>; portmap DNATs to the pod and SNATs the
+# source to the node, so legitimate traffic arrives as the host). A CNI that
+# does not enforce NetworkPolicy (e.g. the noop networking variant, or a BYO CNI
+# without policy support) leaves the socket unprotected regardless.
 {{- if .Capabilities.APIVersions.Has "cilium.io/v2/CiliumNetworkPolicy" }}
----
-# Talos reaches the receiver on 127.0.0.1:<listenPort>; portmap DNATs that to
-# the pod and SNATs the source to the node, so legitimate traffic arrives as
-# the "host" entity. Restrict ingress on the listen port to host only, so other
-# pods on the pod network cannot inject spoofed talos_system log lines.
-# Defense-in-depth and Cilium-only: even without this policy the loopback
-# hostPort is not reachable from the pod network, so its absence is safe.
+# Cilium is present: restrict ingress on the listen port to the host entity, so
+# only the node-local push path is allowed and other pods are denied.
 apiVersion: cilium.io/v2
 kind: CiliumNetworkPolicy
 metadata:
@@ -24,4 +29,25 @@ spec:
     - ports:
       - port: "{{ .Values.listenPort }}"
         protocol: TCP
+{{- else }}
+# No Cilium CRD: fall back to a CNI-agnostic default-deny-ingress policy so the
+# socket is never offered without protection. This denies ingress from the pod
+# network (the injection path) while node-local host traffic keeps flowing, the
+# same way liveness/readiness probes from the node are not blocked by a
+# default-deny policy; the portmap hostPort path arrives as node-local host
+# traffic.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: talos-log-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "talos-log-collector.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: talos-log-collector
+  policyTypes:
+  - Ingress
+  ingress: []
 {{- end }}
