@@ -1,5 +1,5 @@
 backupStrategyController:
-  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.0-rc.4@sha256:e8bf0521d1d1d8b90ebe66e9013010887033ba2653901799d57f2df47c9d879e"
+  image: "ghcr.io/cozystack/cozystack/backupstrategy-controller:v1.6.0@sha256:e8bf0521d1d1d8b90ebe66e9013010887033ba2653901799d57f2df47c9d879e"
   # chBackupClientImage is the image rendered into the Altinity strategy
   # Pod: it drives clickhouse-backup's HTTP API via curl + jq. We reuse
   # platform-migrations (already pre-built and digested by release CI in
@@ -8,7 +8,7 @@ backupStrategyController:
   # would have to be re-digested on every release. Bumping the
   # platform-migrations version requires updating BOTH this value and
   # packages/core/platform/values.yaml so they remain in lockstep.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0-rc.4@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
   replicas: 2
   debug: false
   metrics:
