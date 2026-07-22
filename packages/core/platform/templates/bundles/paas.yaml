@@ -1,6 +1,16 @@
 {{- if and .Values.bundles.paas.enabled (not (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") (eq .Values.bundles.system.variant "isp-hosted"))) }}
 {{- fail "bundles.paas.enabled can only be true when bundles.system.variant is 'isp-full', 'isp-full-generic', or 'isp-hosted'" }}
 {{- end }}
+{{- /* The variant check above is not sufficient: bundles.system.variant keeps its
+       value when bundles.system.enabled is false, so a preset could select a valid
+       variant and still skip the whole system bundle. Every package below depends on
+       the system bundle's control-plane body, so that combination renders an app
+       catalog whose entire dependency closure is absent — each Package then sits in
+       DependenciesNotReady forever and the cozystack-platform HelmRelease never goes
+       Ready, with no error pointing at the cause. Fail the render instead. */ -}}
+{{- if and .Values.bundles.paas.enabled (not .Values.bundles.system.enabled) }}
+{{- fail "bundles.paas.enabled requires bundles.system.enabled: the paas catalog depends on packages emitted by the system bundle (cozystack.cozystack-engine, which ships the ApplicationDefinition CRD, plus cozystack.networking, cozystack.cert-manager, cozystack.prometheus-operator-crds, cozystack.postgres-operator and cozystack.objectstorage-controller). To run a hosted platform where the host provides CNI, storage and virtualisation, keep bundles.system.enabled: true and set bundles.system.variant: isp-hosted (which selects a noop networking Package) with bundles.iaas.enabled: false — do not disable the system bundle." }}
+{{- end }}
 {{- if and .Values.bundles.paas.enabled (or (eq .Values.bundles.system.variant "isp-full") (eq .Values.bundles.system.variant "isp-full-generic") (eq .Values.bundles.system.variant "isp-hosted")) }}
 {{include "cozystack.platform.package.default" (list "cozystack.mariadb-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.kafka-operator" $) }}

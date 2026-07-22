@@ -247,6 +247,17 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.default" (list "cozystack.etcd-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.postgres-operator" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.objectstorage-controller" $) }}
+{{- /* bucket-application belongs to the system bundle, not iaas: its own
+       dependsOn closure is cozystack.networking + cozystack.objectstorage-controller
+       + cozystack.cozystack-engine, all emitted here, and nothing in it needs
+       KubeVirt or CAPI. It sat in the iaas bundle while cozystack.backupstrategy-controller
+       — a *default* package of this bundle — hard-depends on it, so every
+       system-on/iaas-off configuration (i.e. isp-hosted) left
+       backupstrategy-controller permanently DependenciesNotReady. Both isp-full
+       presets masked that by enabling iaas. Same reasoning as the velero comment
+       above: a hard dependency of a default package must itself be emitted
+       wherever that default package is. */ -}}
+{{include "cozystack.platform.package.default" (list "cozystack.bucket-application" $) }}
 
 # Optional System Packages (controlled via bundles.enabledPackages)
 {{include "cozystack.platform.package.optional.default" (list "cozystack.nfs-driver" $) }}
