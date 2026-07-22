@@ -333,10 +333,11 @@ func (r *SiteRouterReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 // reconcileDelete tears down the controller's kube-ovn mediation in reverse
-// order of how Reconcile establishes it, then drops the finalizer. Both steps
-// are no-op stubs until T07; the ordering (restore port security, then remove
-// routes) and the fail-hard error handling are the contract T07 implements
-// against.
+// order of how Reconcile establishes it, then drops the finalizer. The ordering
+// is restore port security, then remove routes. port_security restore is
+// best-effort (vestigial cleanup — see restorePortSecurity); route withdrawal is
+// fail-hard, so a stuck withdrawal never drops the finalizer while stale routes
+// linger.
 func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instance) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(inst.hr, finalizer) {
 		return ctrl.Result{}, nil
@@ -361,9 +362,7 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	}
 	inst.gatewayPod = pod
 
-	if err := r.restorePortSecurity(ctx, inst); err != nil { // T07: revert port_security relax
-		return ctrl.Result{}, err
-	}
+	r.restorePortSecurity(ctx, inst) // T07: best-effort revert of the port_security relax (vestigial; see func doc)
 	if err := r.removeNamespaceRoutes(ctx, inst); err != nil { // T07: withdraw kube-ovn routes
 		return ctrl.Result{}, err
 	}
@@ -513,26 +512,30 @@ func (r *SiteRouterReconciler) verifyGatewayPortSecurityRelaxed(ctx context.Cont
 
 // updateStatus surfaces the instance's status. It lives in status.go (T09).
 
-// restorePortSecurity reverts the port_security relaxation on delete by removing
-// the annotation the controller added (its absence restores OVN's default
-// enforcing behaviour), with a single-key merge patch on the gateway pod only. A
-// missing pod or an absent annotation is a clean no-op — the state is already
-// restored. Errors are returned, never masked: leaving a stuck restore to drop
-// the finalizer would strand a relaxed port.
-func (r *SiteRouterReconciler) restorePortSecurity(ctx context.Context, inst *instance) error {
+// restorePortSecurity is a BEST-EFFORT revert of the port_security relaxation on
+// delete: it removes the annotation the controller/chart added (its absence
+// restores OVN's default enforcing behaviour) with a single-key merge patch on
+// the gateway pod. It deliberately does NOT block finalizer removal on failure,
+// because it is vestigial cleanup. The relaxation is baked at pod creation and a
+// live annotation flip does not reconcile the OVN port on kube-ovn v1.15.10 (so
+// the patch has no OVN effect either way), and on delete the gateway pod — and
+// with it the OVN logical-switch-port — is being torn down regardless. A failed
+// patch therefore strands nothing. A missing pod or absent annotation is a clean
+// no-op.
+func (r *SiteRouterReconciler) restorePortSecurity(ctx context.Context, inst *instance) {
 	if inst.gatewayPod == nil {
-		return nil
+		return
 	}
 	pod := inst.gatewayPod
 	if _, set := pod.Annotations[portSecurityAnnotation]; !set {
-		return nil
+		return
 	}
 	patch := client.MergeFrom(pod.DeepCopy())
 	delete(pod.Annotations, portSecurityAnnotation)
 	if err := r.Patch(ctx, pod, patch); err != nil {
-		return fmt.Errorf("restore port_security on gateway pod %s/%s: %w", pod.Namespace, pod.Name, err)
+		log.FromContext(ctx).Error(err, "best-effort port_security restore failed on delete; continuing (the gateway pod and its OVN port are being torn down)",
+			"pod", pod.Name, "namespace", pod.Namespace)
 	}
-	return nil
 }
 
 // removeNamespaceRoutes withdraws this instance's route entries from the tenant
