@@ -188,6 +188,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		w := *dha.Status.LastAppliedReplicas
 		st.lastWritten = &w
 	}
+	// Likewise restore lastConverged, so a restart mid-stuck-scale can still roll
+	// back to the last known-good count instead of freezing (it would otherwise
+	// initialize to the stuck current count and make rollback a no-op).
+	if st.lastConverged == nil && dha.Status.LastConvergedReplicas != nil {
+		c := *dha.Status.LastConvergedReplicas
+		st.lastConverged = &c
+	}
 
 	// WorkloadMonitor: operational + convergence signal.
 	operational, availableReplicas := r.loadWorkloadMonitor(ctx, dha.Namespace, adapter.ReleaseName(dha.Spec.TargetRef.Name), currentReplicas)
@@ -203,6 +210,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		// Initialise from the observed count when the DHA first adopts a target.
 		conv := currentReplicas
 		st.lastConverged = &conv
+	}
+	// A restart also loses the in-flight anchor. When a scale is still in flight,
+	// reconstruct it from the persisted last-scale time so the convergence deadline
+	// (and a stuck-scale rollback) is measured across the failover, instead of
+	// resetting the clock on every reconcile and freezing a stuck scale forever.
+	if st.inFlightSince == nil && scaleInFlight && dha.Status.LastScaleTime != nil {
+		t := dha.Status.LastScaleTime.Time
+		st.inFlightSince = &t
 	}
 
 	// Ownership: detect a competing writer that changed replicas out from under us.

@@ -478,3 +478,42 @@ func TestReconcileStuckScalingRollback(t *testing.T) {
 		t.Fatalf("cycle4 expected StuckScaling (backoff), got %s/%s", s, reason)
 	}
 }
+
+// TestStuckScalingRollbackSurvivesRestart guards the restart-durability of the
+// stuck-scaling rollback: a fresh controller (empty in-memory state) landing
+// mid-stuck-scale must still roll back to the last converged count, not freeze.
+// It reconstructs lastConverged from status.lastConvergedReplicas and the
+// in-flight anchor from status.lastScaleTime; without either restore the
+// rollback degrades to a permanent StuckScaling freeze at the stuck count.
+func TestStuckScalingRollbackSurvivesRestart(t *testing.T) {
+	dha := newDHA("db", "tenant", "Postgres", false)
+	dl := int32(900)
+	dha.Spec.Behavior = &autoscalingv1alpha1.Behavior{ConvergenceDeadlineSeconds: &dl}
+	app := newPostgresApp("db", "tenant", 4, 0) // operator had scaled up to 4...
+	// ...but the new standby never came up: available stays at 3 (stuck in flight).
+	env := newTestEnv(t, dha, app, "420", http.StatusOK, workloadMonitor("postgres-db", "tenant", 3, true))
+
+	// Seed the persisted status a restart would have left behind: last converged at
+	// 3, last wrote 4, and the scale-up patch happened well past the deadline ago.
+	three, four := int32(3), int32(4)
+	cur := &autoscalingv1alpha1.DatabaseHorizontalAutoscaler{}
+	if err := env.r.Get(context.TODO(), types.NamespacedName{Namespace: "tenant", Name: "db"}, cur); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	cur.Status.LastConvergedReplicas = &three
+	cur.Status.LastAppliedReplicas = &four
+	cur.Status.LastScaleTime = &metav1.Time{Time: env.now.Add(-1000 * time.Second)}
+	if err := env.r.Status().Update(context.TODO(), cur); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+
+	// Fresh state map (new leader): no in-memory lastConverged/inFlightSince.
+	env.r.state = nil
+	got := env.reconcile(t, dha)
+	if s, reason := condStatus(got, autoscalingv1alpha1.ConditionAbleToScale); s != string(metav1.ConditionFalse) || reason != autoscalingv1alpha1.ReasonStuckScaling {
+		t.Fatalf("expected StuckScaling after restart, got %s/%s", s, reason)
+	}
+	if r := env.appReplicas(t, "tenant", "db"); r != 3 {
+		t.Fatalf("expected rollback to last converged (3) after restart, app replicas = %d", r)
+	}
+}
