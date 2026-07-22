@@ -10,6 +10,7 @@
 #   - lb_first_ready_endpoint -- pick the first addressed, non-NotReady endpoint;
 #   - lb_announcer_node       -- the speaker node of the most recent announce;
 #   - lb_capture_decision     -- capture only when every probe failed.
+#   - pod_filter_affected     -- retain scheduled NotReady pods even without IPs.
 #
 # The kubectl exec / tcpdump capture itself is not unit-testable (it needs a
 # live cluster); these tests pin the derivations that decide WHICH node to
@@ -40,6 +41,47 @@ SCRIPT="$HACK_DIR/e2e-capture-dataplane.sh"
 E2E_CAPTURE_DATAPLANE_LIB=1
 # shellcheck source=/dev/null
 . "$SCRIPT"
+
+@test "pod_filter_affected keeps a scheduled NotReady pod without a podIP" {
+  rows="$(printf '%s\n' \
+    'tenant|no-ip||node-a|False|Pending' \
+    'tenant|with-ip|192.0.2.80|node-b|False|Running')"
+
+  out="$(printf '%s\n' "$rows" | pod_filter_affected)"
+
+  [ "$(printf '%s\n' "$out" | rg -c .)" -eq 2 ]
+  printf '%s\n' "$out" | rg -q '^tenant\|no-ip\|\|node-a\|False\|Pending$'
+}
+
+@test "pod_filter_affected drops Ready unscheduled and terminal pods" {
+  rows="$(printf '%s\n' \
+    'tenant|ready|192.0.2.81|node-a|True|Running' \
+    'tenant|unscheduled|||False|Pending' \
+    'tenant|succeeded|192.0.2.82|node-b|False|Succeeded' \
+    'tenant|failed|192.0.2.83|node-b|False|Failed')"
+
+  [ -z "$(printf '%s\n' "$rows" | pod_filter_affected)" ]
+}
+
+@test "runtime checks LoadBalancers when there are no affected pods" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  calls="$tmp/kubectl.calls"
+  mkdir -p "$tmp/bin"
+  cat > "$tmp/bin/kubectl" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$MOCK_KUBECTL_CALLS"
+exit 0
+EOF
+  chmod +x "$tmp/bin/kubectl"
+
+  MOCK_KUBECTL_CALLS="$calls" PATH="$tmp/bin:$PATH" \
+    "$SCRIPT" "$tmp/out" > "$tmp/stdout" 2>&1
+
+  rg -q '^get svc -A ' "$calls"
+  rg -q 'checking LoadBalancers independently' "$tmp/stdout"
+  rg -q 'no Service type=LoadBalancer' "$tmp/stdout"
+}
 
 @test "lb_filter_services keeps only LoadBalancer rows that have an ingress IP" {
   rows="$(printf '%s\n' \
