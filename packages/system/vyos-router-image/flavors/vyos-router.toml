@@ -46,16 +46,28 @@ disk_size = 10
 # by the flavor rather than assumed from the base package set.
 packages = ["cloud-init"]
 
-# D4 + T7206: the baked-in default configuration. Derived verbatim from the VyOS
-# canonical default (vyos-1x data/config.boot.default) — including the well-known
-# `vyos` / `vyos` login the reference appliances ship with, whose exposure the
-# site-router first-boot management firewall (SSH/443 restricted to
-# managementCIDR) is the compensating control for — with three appliance
-# additions: eth0 over DHCP (D4), the SSH service, and a serial console so the
-# KubeVirt/qemu serial console is usable. The HTTPS API is intentionally NOT baked
-# here: the chart's cloud-init seed owns it (it carries the controller api key),
-# keeping the image and its first-boot config a matched pair
-# (docs/image-lifecycle.md). vyos_config_commands re-applies these idempotently.
+# D4 + T7206: the baked-in default configuration. Derived from the VyOS canonical
+# default (vyos-1x data/config.boot.default) with the appliance hardening the
+# site-router security model requires (S2):
+#
+#   - NO SSH service. The reference appliances open SSH on all interfaces; on this
+#     appliance the pod-network NIC is reachable by any same-namespace tenant
+#     workload, and the management firewall opens 22 from the whole pod CIDR — so
+#     a baked SSH service + the well-known `vyos`/`vyos` login would let any tenant
+#     SSH in and reconfigure the gateway outside the controller. The SSH service is
+#     therefore not enabled here, and the management firewall opens ONLY the HTTPS
+#     API (443). The controller drives the router solely over that API.
+#   - The baked `vyos` login is LOCKED (encrypted-password "*", an invalid hash),
+#     so the well-known credential authenticates on no surface. Debug access is via
+#     `virtctl console` (the KubeVirt serial console, gated by cluster RBAC — never
+#     the pod network); a break-glass credential is injected out of band, there is
+#     no shared secret baked into the image.
+#
+# Two appliance additions remain: eth0 over DHCP (D4) and a serial console so the
+# KubeVirt/qemu console is usable. The HTTPS API is intentionally NOT baked here:
+# the chart's cloud-init seed owns it (it carries the controller api key), keeping
+# the image and its first-boot config a matched pair (docs/image-lifecycle.md).
+# vyos_config_commands re-applies these idempotently.
 default_config = """
 interfaces {
     ethernet eth0 {
@@ -84,9 +96,6 @@ service {
         server time3.vyos.net {
         }
     }
-    ssh {
-        port 22
-    }
 }
 system {
     config-management {
@@ -106,8 +115,13 @@ system {
         }
         user vyos {
             authentication {
-                encrypted-password "$6$QxPS.uk6mfo$9QBSo8u1FkH16gMyAVhus6fU3LOzvLR9Z9.82m3tiHFAxTtIkhaZSWssSgzt4v4dGAL8rhVQxTg0oAG9/q11h/"
-                plaintext-password ""
+                # Locked: "*" is an invalid crypt hash, so no password authenticates
+                # this account on any surface (there is no SSH service, and the
+                # serial console login prompt rejects it too). The well-known
+                # `vyos`/`vyos` credential the reference appliance shipped is gone.
+                # Break-glass console debug uses an out-of-band credential; nothing
+                # is baked into the image.
+                encrypted-password "*"
             }
         }
     }

@@ -133,9 +133,11 @@ Takes a dict {ctx, token} so the token
 is resolved once by the caller and shared with the api-key Secret.
 
 listen-address is 0.0.0.0 because the pod IP is unknown at render time; the
-management firewall (only managementCIDR reaches tcp 22/443, default-action
-drop) is the compensating control (D6). When managementCIDR is empty (only
-reachable with allowOpenManagement=true) no firewall is stamped.
+management firewall (only managementCIDR reaches tcp 443 — the HTTPS API;
+default-action drop) is the compensating control (D6). SSH (22) is NOT opened:
+the appliance ships with no SSH service and the baked login locked, so the pod
+network cannot reach a shell. When managementCIDR is empty (only reachable with
+allowOpenManagement=true) no firewall is stamped.
 */}}
 {{- define "site-router.cloudInitUserData" -}}
 {{- $ctx := .ctx -}}
@@ -156,7 +158,8 @@ reachable with allowOpenManagement=true) no firewall is stamped.
 {{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 action accept" -}}
 {{- $lines = append $lines (printf "  - set firewall ipv4 input filter rule 10 source address '%s'" $ctx.Values.managementCIDR) -}}
 {{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 protocol tcp" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 destination port '22,443'" -}}
+{{/* HTTPS API (443) only — SSH (22) is not opened (no SSH service on the image, baked login locked); it stays behind the default-action drop. */}}
+{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 destination port '443'" -}}
 {{- $lines = append $lines "  - set firewall ipv4 input filter default-action drop" -}}
 {{/* T08 guest security guards, seeded fail-closed from first boot BEFORE the controller can reach the router (it re-stamps the full set on its first reconcile). Grouped inside the managementCIDR block so the open-management escape hatch stays "no firewall at all". Boundary A: drop the management ports for IPsec-decrypted traffic — a packet decrypted by VyOS and addressed to the guest's own API does not cross the pod veth where Cilium enforces. §3: forward-chain default-deny (routed mode advertises specific remotes, never a default route out the tunnel). VyOS 1.5: the inbound ipsec matchers are 'match-ipsec-in'/'match-none-in' (bare 'match-ipsec'/'match-none' are ambiguous prefixes) and the drop rule needs an explicit protocol alongside its port; validated live and kept in lockstep with internal/vyos/render. */}}
 {{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 ipsec match-ipsec-in" -}}

@@ -171,8 +171,18 @@ func TestRenderManagementFirewall_AppliedWhenCIDRSet(t *testing.T) {
 		t.Errorf("expected source/address to be the management CIDR")
 	}
 
-	if !containsSet(ops, "firewall/ipv4/input/filter/rule/10/destination/port", "22,443") {
-		t.Errorf("expected port 22,443")
+	// S2: only the HTTPS API (443) is opened from managementCIDR. SSH (22) is
+	// NOT opened — the appliance disables SSH and locks the baked login, so 22
+	// must stay behind the default-action drop.
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/10/destination/port", "443") {
+		t.Errorf("expected port 443 (HTTPS API only)")
+	}
+	for _, op := range ops {
+		if op.Op == vyos.OpSet &&
+			strings.Join(op.Path, "/") == "firewall/ipv4/input/filter/rule/10/destination/port" &&
+			strings.Contains(op.Value, "22") {
+			t.Errorf("management ACL rule 10 must not open SSH (22), got port %q", op.Value)
+		}
 	}
 
 	if !containsSet(ops, "firewall/ipv4/input/filter/default-action", "drop") {

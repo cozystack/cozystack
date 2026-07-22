@@ -186,8 +186,8 @@ type Inputs struct {
 	ExternalIP string
 
 	// ManagementCIDR is the CIDR the controller reaches VyOS from. The
-	// renderer emits firewall input rules accepting SSH/HTTPS only from
-	// this CIDR; everything else is dropped. Empty disables the firewall
+	// renderer emits firewall input rules accepting the HTTPS API (443) only
+	// from this CIDR; everything else is dropped. Empty disables the firewall
 	// block — only safe in test environments (fail-closed at the flag).
 	ManagementCIDR string
 
@@ -472,8 +472,9 @@ func cidrMaskSuffix(cidr string) string {
 // renderManagementFirewall emits VyOS firewall rules that:
 //
 //  1. Accept established/related return traffic (rule 5).
-//  2. Accept SSH (22) and HTTPS API (443) from Inputs.ManagementCIDR
-//     (rule 10).
+//  2. Accept the HTTPS API (443) from Inputs.ManagementCIDR (rule 10). SSH
+//     (22) is deliberately NOT opened — the appliance disables SSH and locks
+//     the baked login, so the pod network cannot reach a shell.
 //  3. Accept IKE (UDP 500, NAT-T UDP 4500) and ESP (IP protocol 50)
 //     when Tunnels is non-empty (rules 20/21/22).
 //  4. Accept BGP (TCP 179) from every configured BGP peer
@@ -506,12 +507,16 @@ func renderManagementFirewall(in Inputs) []vyos.Operation {
 		set(inputFilterPath("rule", "5", "state"), "related"),
 	)
 
-	// Rule 10: management-CIDR allow rule for SSH and HTTPS API.
+	// Rule 10: management-CIDR allow rule for the HTTPS API (443) only. SSH (22)
+	// is NOT opened: the appliance ships with no SSH service and the well-known
+	// vyos login locked, and the controller drives the router solely over the
+	// HTTPS API — so 22 stays behind the default-action drop. Console debug is via
+	// `virtctl console` (cluster-RBAC-gated), never the pod network.
 	ops = append(ops,
 		set(inputFilterPath("rule", "10", "action"), "accept"),
 		set(inputFilterPath("rule", "10", "source", "address"), in.ManagementCIDR),
 		set(inputFilterPath("rule", "10", "protocol"), "tcp"),
-		set(inputFilterPath("rule", "10", "destination", "port"), "22,443"),
+		set(inputFilterPath("rule", "10", "destination", "port"), "443"),
 	)
 
 	ops = append(ops, renderIPSecFirewallAccept(in)...)

@@ -143,7 +143,7 @@ type SiteRouterReconciler struct {
 	APIReader client.Reader
 
 	// ManagementCIDR is the source CIDR allowed to reach the VyOS management API
-	// (SSH 22 / HTTPS 443). It MUST agree with the chart's managementCIDR value
+	// (HTTPS 443; SSH is not exposed). It MUST agree with the chart's managementCIDR value
 	// (both default to the cluster pod CIDR 10.244.0.0/16): the chart seeds the
 	// first-boot management firewall from its value, and the controller re-stamps
 	// the same rule over the VyOS API from this one. A drift between the two
@@ -780,7 +780,7 @@ func ValidateManagementCIDR(managementCIDR string, allowOpenManagement bool) err
 		if allowOpenManagement {
 			return nil
 		}
-		return errors.New("--management-cidr is required: the VyOS management API (SSH 22, HTTPS 443) " +
+		return errors.New("--management-cidr is required: the VyOS management API (HTTPS 443) " +
 			"is otherwise reachable from anything that can route to the gateway VM; " +
 			"pass --allow-open-management to opt out in a test environment")
 	}
