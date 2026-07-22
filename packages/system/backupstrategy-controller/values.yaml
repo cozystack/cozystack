@@ -8,7 +8,7 @@ backupStrategyController:
   # would have to be re-digested on every release. Bumping the
   # platform-migrations version requires updating BOTH this value and
   # packages/core/platform/values.yaml so they remain in lockstep.
-  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.4.0-rc.2@sha256:17390197a9b11d76a8dd1b24c6d1512adb7d3226b28b5bcba8551b14b1ec4be0"
+  chBackupClientImage: "ghcr.io/cozystack/cozystack/platform-migrations:v1.6.0-rc.4@sha256:6777042e3e9c6bad76e7d96fb64baa115061975f39061cb3ede84e21d0e2213f"
   replicas: 2
   debug: false
   metrics:
