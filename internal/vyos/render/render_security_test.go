@@ -28,22 +28,23 @@ limitations under the License.
 // remoteCIDRs. The redesign filters ONLY IPsec-decrypted ingress by source:
 //
 //   - the source allow-list stays in the named rule set TUNNEL-INGRESS
-//     (`firewall name TUNNEL-INGRESS`), so the controller's
+//     (`firewall ipv4 name TUNNEL-INGRESS`), so the controller's
 //     confirmSourceFilterActive Retrieve path is unchanged;
-//   - it is reached via a `firewall forward` rule that matches IPsec-decrypted
-//     packets (`ipsec match-ipsec`) and jumps to the named set — so the
-//     source allow-list + default-drop apply to decrypted-from-tunnel traffic
-//     ONLY;
+//   - it is reached via a `firewall ipv4 forward filter` rule that matches
+//     IPsec-decrypted packets (`ipsec match-ipsec-in`) and jumps to the named
+//     set — so the source allow-list + default-drop apply to decrypted-from-tunnel
+//     traffic ONLY;
 //   - locally-originated (non-IPsec) forward traffic matches a separate
-//     `ipsec match-none` accept and is NOT subject to the source-filter drop;
+//     `ipsec match-none-in` accept and is NOT subject to the source-filter drop;
 //   - the pod-NIC-inbound binding is gone.
 //
-// TODO(T13): the exact VyOS 1.5 forward-filter + ipsec-match leaf syntax is
-// PROVISIONAL — validate `firewall (ipv4) forward (filter) rule N ipsec
-// match-ipsec|match-none`, `action jump`, `jump-target`, and the whole
-// `firewall input`/`firewall name` family against the shipped image live. The
-// render keeps all version-specific paths behind single helpers so the syntax
-// swaps in one place.
+// The VyOS 1.5-rolling forward-filter + ipsec-match leaf syntax below is the
+// validated form (confirmed live against the 2026.05.13-0044-rolling image): the
+// firewall family is `firewall ipv4 {forward filter,input filter,name <NAME>}`,
+// the inbound ipsec matchers are `ipsec match-ipsec-in` / `ipsec match-none-in`,
+// and the jump uses `action jump` + `jump-target`. The render keeps all
+// version-specific paths behind single helpers so a future image whose syntax
+// differs is a one-place change.
 package render_test
 
 import (
@@ -54,8 +55,8 @@ import (
 	"github.com/cozystack/cozystack/internal/vyos/render"
 )
 
-// forwardFilterBase is the provisional base path of the platform-owned guest
-// forward-chain filter (TODO(T13): validate the VyOS 1.5 leaf path).
+// forwardFilterBase is the (validated) VyOS 1.5 base path of the platform-owned
+// guest forward-chain filter.
 const forwardFilterBase = "firewall/ipv4/forward/filter"
 
 // ipsecMatchForwardRule scans ops for a `firewall forward` rule that carries the
