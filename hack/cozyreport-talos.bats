@@ -26,8 +26,8 @@ talosctl() {
   [ "$(sed -n '1p' "$calls")" = "--talosconfig /workspace/talosconfig -e 192.0.2.11 -n 192.0.2.11 dmesg" ]
   [ "$(sed -n '2p' "$calls")" = "--talosconfig /workspace/talosconfig -e 192.0.2.11 -n 192.0.2.11 logs kubelet --tail=500" ]
   [ "$(sed -n '3p' "$calls")" = "--talosconfig /workspace/talosconfig -e 192.0.2.11 -n 192.0.2.11 logs containerd --tail=500" ]
-  if sed -n '1p' "$calls" | rg -q -- '--tail'; then
+  case "$(sed -n '1p' "$calls")" in *--tail*)
     echo "dmesg must not receive the boolean --tail flag" >&2
     false
-  fi
+  esac
 }

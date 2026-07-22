@@ -49,8 +49,8 @@ E2E_CAPTURE_DATAPLANE_LIB=1
 
   out="$(printf '%s\n' "$rows" | pod_filter_affected)"
 
-  [ "$(printf '%s\n' "$out" | rg -c .)" -eq 2 ]
-  printf '%s\n' "$out" | rg -q '^tenant\|no-ip\|\|node-a\|False\|Pending$'
+  [ "$(printf '%s\n' "$out" | awk 'END { print NR }')" -eq 2 ]
+  printf '%s\n' "$out" | awk '$0 == "tenant|no-ip||node-a|False|Pending" { found = 1 } END { exit !found }'
 }
 
 @test "pod_filter_affected drops Ready unscheduled and terminal pods" {
@@ -78,9 +78,9 @@ EOF
   MOCK_KUBECTL_CALLS="$calls" PATH="$tmp/bin:$PATH" \
     "$SCRIPT" "$tmp/out" > "$tmp/stdout" 2>&1
 
-  rg -q '^get svc -A ' "$calls"
-  rg -q 'checking LoadBalancers independently' "$tmp/stdout"
-  rg -q 'no Service type=LoadBalancer' "$tmp/stdout"
+  awk '$0 ~ /^get svc -A / { found = 1 } END { exit !found }' "$calls"
+  awk 'index($0, "checking LoadBalancers independently") { found = 1 } END { exit !found }' "$tmp/stdout"
+  awk 'index($0, "no Service type=LoadBalancer") { found = 1 } END { exit !found }' "$tmp/stdout"
 }
 
 @test "lb_filter_services keeps only LoadBalancer rows that have an ingress IP" {
