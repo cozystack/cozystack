@@ -33,6 +33,7 @@ jobs:
       matrix: ${{ steps.p.outputs.matrix }}
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
+      vyos: ${{ steps.p.outputs.vyos }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -48,6 +49,17 @@ jobs:
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          # build-vyos runs a ~60-min privileged VyOS live-build whose image is
+          # not consumed by the general test path (vm-default-images is an opt-in
+          # bundle package), and a floating apt-repo failure in it would otherwise
+          # block every unrelated PR. Gate it to the VyOS image pipeline and its
+          # consumers (mirrors the docs-only `code` gate above: git-diff + grep);
+          # finalize tolerates it being skipped.
+          if grep -qE '^(packages/system/vyos-router-image/|packages/apps/site-router/|packages/system/vm-default-images/|\.github/workflows/pull-requests\.yaml$)' /tmp/changed.txt; then
+            echo "vyos=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "vyos=false" >> "$GITHUB_OUTPUT"
           fi
           # docs/agents/contributing.md carries the downstream trigger map, which
           # hack/downstream-trigger-map.bats asserts against: every path the map
@@ -303,11 +315,19 @@ jobs:
   # into the installer artifact (the deferred site-router e2e resolves it from
   # there). vm-default-images is an opt-in bundle package, so a non-opted-in e2e is
   # unaffected either way.
+  #
+  # Path-scoped (plan.outputs.vyos): this heavy, privileged build only runs when
+  # the VyOS image pipeline or its consumers change (vyos-router-image /
+  # site-router / vm-default-images / this workflow) — otherwise its image is never
+  # consumed by the run and a floating apt-repo failure would needlessly block
+  # unrelated PRs. When skipped it must not fail the gate: finalize accepts a
+  # skipped result (see its `if`).
   build-vyos:
     name: Build VyOS
     needs: ["plan"]
     if: |
       needs.plan.outputs.code == 'true'
+      && needs.plan.outputs.vyos == 'true'
       && !contains(github.event.pull_request.labels.*.name, 'release')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 60
@@ -388,7 +408,7 @@ jobs:
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && needs.build-talos.result == 'success'
-      && needs.build-vyos.result == 'success'
+      && (needs.build-vyos.result == 'success' || needs.build-vyos.result == 'skipped')
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
