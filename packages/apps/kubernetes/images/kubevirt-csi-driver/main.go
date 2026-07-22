@@ -37,6 +37,17 @@ var (
 
 	runNodeService       = flag.Bool("run-node-service", true, "Specifies rather or not to run the node service, the default is true")
 	runControllerService = flag.Bool("run-controller-service", true, "Specifies rather or not to run the controller service, the default is true")
+
+	kubeAPIQPS   = flag.Float64("kube-api-qps", defaultKubeAPIQPS, "QPS limit for the infra- and tenant-cluster Kubernetes API clients. client-go defaults to 5, which starves the once-per-second infra PVC-bound poll in the NFS ControllerPublishVolume path under a burst of concurrent attaches.")
+	kubeAPIBurst = flag.Int("kube-api-burst", defaultKubeAPIBurst, "Burst limit for the infra- and tenant-cluster Kubernetes API clients (client-go default is 10).")
+)
+
+// Chosen well above the client-go defaults (5 QPS / 10 burst) so a scale-out
+// burst of PVC attaches does not starve the bound poll, while staying well
+// within the infra API server's capacity.
+const (
+	defaultKubeAPIQPS   = 100
+	defaultKubeAPIBurst = 200
 )
 
 func init() {
@@ -65,6 +76,9 @@ func handle() {
 	if volumePrefix == nil || *volumePrefix == "" {
 		klog.Fatal("volume-prefix must be set")
 	}
+	if err := validateRateLimitFlags(*kubeAPIQPS, *kubeAPIBurst); err != nil {
+		klog.Fatal(err)
+	}
 
 	inClusterConfig, err := rest.InClusterConfig()
 	if err != nil {
@@ -88,6 +102,9 @@ func handle() {
 	} else {
 		infraRestConfig = inClusterConfig
 	}
+
+	applyKubeAPIRateLimits(tenantRestConfig, *kubeAPIQPS, *kubeAPIBurst)
+	applyKubeAPIRateLimits(infraRestConfig, *kubeAPIQPS, *kubeAPIBurst)
 
 	tenantClientSet, err := kubernetes.NewForConfig(tenantRestConfig)
 	if err != nil {
@@ -182,6 +199,32 @@ func handle() {
 	s := service.NewNonBlockingGRPCServer()
 	s.Start(*endpoint, upstreamDriver.IdentityService, cs, ns)
 	s.Wait()
+}
+
+// validateRateLimitFlags rejects non-positive limits. client-go treats QPS == 0
+// as "use the 5 QPS default" and QPS < 0 as "no rate limiting at all", so an
+// operator passing 0 expecting "unlimited" would silently get the starving
+// default this fix exists to avoid; refuse both rather than surprise them.
+func validateRateLimitFlags(qps float64, burst int) error {
+	if qps <= 0 {
+		return fmt.Errorf("kube-api-qps must be positive, got %v", qps)
+	}
+	if burst <= 0 {
+		return fmt.Errorf("kube-api-burst must be positive, got %d", burst)
+	}
+	return nil
+}
+
+// applyKubeAPIRateLimits raises a rest.Config's client-side rate limiter above
+// the client-go default of 5 QPS / 10 burst. The NFS-volume ControllerPublishVolume
+// path polls the infra PersistentVolumeClaim once per second for up to two minutes;
+// when a tenant scales out and several volumes attach at once, the default limiter
+// starves and the poll fails with "client rate limiter Wait returned an error:
+// context deadline exceeded", which the tenant kubelet surfaces as
+// FailedAttachVolume.
+func applyKubeAPIRateLimits(cfg *rest.Config, qps float64, burst int) {
+	cfg.QPS = float32(qps)
+	cfg.Burst = burst
 }
 
 func configureStorageClassEnforcement(infraStorageClassEnforcement string) util.StorageClassEnforcement {
