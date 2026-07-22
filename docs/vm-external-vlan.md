@@ -23,7 +23,7 @@ Three pieces cooperate:
 ## Prerequisites
 
 - The `multus` package is enabled (it provides the `NetworkAttachmentDefinition` CRD and the secondary-network plumbing).
-- The `bridge` CNI plugin is present in `/opt/cni/bin` on every node. This binary comes from the node's CNI-plugins bundle, not from a Cozystack chart: on Talos it ships with the node image, while k3s keeps its copy under `/var/lib/rancher/k3s/data/current/bin` and leaves `/opt/cni/bin` (where Multus and Cilium install) without it. Verify with `ls /opt/cni/bin/bridge`; a missing binary makes the NAD fail with `failed to find plugin "bridge" in path [/opt/cni/bin]`. If it is absent, stage the upstream reference plugins (`bridge`, `macvlan`, `ipvlan`, …) into `/opt/cni/bin` as part of node provisioning.
+- The `bridge` CNI plugin is present in `/opt/cni/bin` on every node. The `multus` package stages the upstream reference plugins (`bridge`, `macvlan`, `ipvlan`, …) into `/opt/cni/bin` itself, so enabling it is enough — including on distributions that do not otherwise put them there, such as k3s, which keeps its own copies under `/var/lib/rancher/k3s/data/current/bin` and leaves `/opt/cni/bin` (where Multus and Cilium install) without them. Verify with `ls /opt/cni/bin/bridge`; a missing binary makes the NAD fail with `failed to find plugin "bridge" in path [/opt/cni/bin]`.
 - There is no IPAM plugin in this path — addresses are assigned inside the guest, not by the CNI. Plan static addresses per VM.
 
 ## Step 1 — Linux bridge on the node
