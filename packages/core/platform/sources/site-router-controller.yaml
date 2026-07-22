@@ -15,6 +15,11 @@ spec:
     # kube-ovn + Cilium: the controller patches the tenant namespace routes and
     # the gateway pod's port_security, which only exist once networking is up.
     - cozystack.networking
+    # VictoriaMetrics operator: the chart unconditionally creates a VMPodScrape
+    # (operator.victoriametrics.com/v1beta1). Without the operator's CRD
+    # established first, Helm fails resource mapping on a fresh install. Mirrors
+    # how other scrape-creating charts (linstor, monitoring-agents) declare it.
+    - cozystack.victoria-metrics-operator
     components:
     - name: site-router-controller
       path: system/site-router-controller
