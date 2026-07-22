@@ -362,7 +362,8 @@ func (r *SiteRouterReconciler) reconcileDelete(ctx context.Context, inst *instan
 	}
 	inst.gatewayPod = pod
 
-	r.restorePortSecurity(ctx, inst) // T07: best-effort revert of the port_security relax (vestigial; see func doc)
+	// T07: best-effort revert of the port_security relax (vestigial; see func doc).
+	r.restorePortSecurity(ctx, inst)
 	if err := r.removeNamespaceRoutes(ctx, inst); err != nil { // T07: withdraw kube-ovn routes
 		return ctrl.Result{}, err
 	}
