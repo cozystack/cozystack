@@ -1,0 +1,175 @@
+{{- /* Migration 54 adopts pre-split worker objects into this release and pins
+       them with helm.sh/resource-policy=keep so the parent kubernetes chart's
+       control-plane-only re-render does not prune them during the transition.
+       That keep annotation is required only for the transition window; left in
+       place it makes an adopted pool leak its MachineDeployment / MachineHealth-
+       Check / WorkloadMonitor / KubevirtMachineTemplates on uninstall (Helm
+       skips keep-annotated resources), an asymmetry vs a natively-created pool.
+
+       This pre-delete hook strips the annotation from this release's own worker
+       objects just before uninstall, so Helm then deletes them cleanly. It runs
+       ONLY on delete (never on upgrade), so it cannot race the parent's first
+       control-plane-only re-render. For a natively-created pool (no keep
+       annotation) the annotate-remove is a harmless no-op. */}}
+{{- $clusterName := include "kubernetes-nodes.clusterName" . }}
+{{- $groupName := include "kubernetes-nodes.groupName" . }}
+{{- $base := printf "%s-%s" $clusterName $groupName }}
+{{- $kubectlImage := default ($.Files.Get "images/kubectl.tag" | trim) $.Values.images.kubectl }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-unpin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-unpin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+rules:
+  # MD/MHC/WorkloadMonitor names are known at render time ({{ $base }}), so the
+  # hook can only touch this pool's own objects, not sibling pools or other
+  # clusters sharing the tenant namespace.
+  - apiGroups: ["cluster.x-k8s.io"]
+    resources: ["machinedeployments", "machinehealthchecks"]
+    resourceNames: ["{{ $base }}"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["cozystack.io"]
+    resources: ["workloadmonitors"]
+    resourceNames: ["{{ $base }}"]
+    verbs: ["get", "patch"]
+  # KubevirtMachineTemplates are hash-suffixed, so their names are not known at
+  # render time; list is needed to discover them and cannot be resourceName-scoped.
+  - apiGroups: ["infrastructure.cluster.x-k8s.io"]
+    resources: ["kubevirtmachinetemplates"]
+    verbs: ["get", "list", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-unpin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-unpin
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-unpin
+    namespace: {{ .Release.Namespace }}
+---
+{{- /* The tenant-root chart installs a default-deny egress policy on every pod
+       in the tenant namespace; allow this Job to reach the management-cluster
+       apiserver (in-cluster API, IP-based, no DNS needed). Additive to the
+       tenant default-deny, scoped to the unpin pod label only. */}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-unpin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "-5"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  endpointSelector:
+    matchLabels:
+      cozystack.io/kubernetes-nodes-unpin: "{{ .Release.Name }}"
+  egress:
+    - toEntities:
+        - kube-apiserver
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-unpin
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubernetes.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-delete
+    helm.sh/hook-weight: "0"
+    # before-hook-creation only (not hook-succeeded) so a failed run keeps its
+    # logs for debugging; a successful run is torn down with the release.
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  activeDeadlineSeconds: 300
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        {{- include "kubernetes.labels" . | nindent 8 }}
+        cozystack.io/kubernetes-nodes-unpin: "{{ .Release.Name }}"
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Release.Name }}-unpin
+      containers:
+        - name: unpin
+          image: "{{ $kubectlImage }}"
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              NS="{{ .Release.Namespace }}"
+              BASE="{{ $base }}"
+              echo "removing helm.sh/resource-policy from adopted worker objects for ${BASE}"
+              # unpin <resource> — remove the keep annotation only if present, so a
+              # natively-created pool (no annotation) is a no-op while a real
+              # annotate failure (RBAC/apiserver) propagates: set -e fails the Job,
+              # backoffLimit/activeDeadlineSeconds bound the retries, and the failed
+              # Job keeps its logs. Failures are NOT swallowed.
+              unpin() {
+                r=$1
+                kubectl -n "${NS}" get "${r}" >/dev/null 2>&1 || return 0
+                pol=$(kubectl -n "${NS}" get "${r}" \
+                  -o jsonpath='{.metadata.annotations.helm\.sh/resource-policy}')
+                [ -n "${pol}" ] || return 0
+                kubectl -n "${NS}" annotate "${r}" "helm.sh/resource-policy-"
+              }
+              unpin "machinedeployment.cluster.x-k8s.io/${BASE}"
+              unpin "machinehealthcheck.cluster.x-k8s.io/${BASE}"
+              unpin "workloadmonitor.cozystack.io/${BASE}"
+              for kmt in $(kubectl -n "${NS}" get kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io \
+                             -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null |
+                           grep -E "^${BASE}-[0-9a-f]{6}$" || true); do
+                unpin "kubevirtmachinetemplate.infrastructure.cluster.x-k8s.io/${kmt}"
+              done
+              echo "unpin done"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65532
+            seccompProfile:
+              type: RuntimeDefault
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi

@@ -1,0 +1,68 @@
+suite: control-plane-only cluster.yaml render (worker pools moved to kubernetes-nodes)
+
+# Phase 2 moved the worker node pools (KubevirtMachineTemplate, MachineDeployment,
+# MachineHealthCheck, worker WorkloadMonitor) and the per-pool talos-reconcile Job
+# into the separate kubernetes-nodes chart. cluster.yaml now renders the control
+# plane only, in source order: Cluster (0), KamajiControlPlane (1), the
+# control-plane WorkloadMonitor (2), KubevirtCluster (3). This suite pins that
+# surface so a regression that re-introduces pool objects into the parent chart
+# (double-render / name collision) is caught.
+
+templates:
+  - templates/cluster.yaml
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  - it: renders exactly the four control-plane objects in order
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: Cluster
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-k8s
+        documentIndex: 0
+      - isKind:
+          of: KamajiControlPlane
+        documentIndex: 1
+      - isKind:
+          of: WorkloadMonitor
+        documentIndex: 2
+      - equal:
+          path: spec.type
+          value: control-plane
+        documentIndex: 2
+      - isKind:
+          of: KubevirtCluster
+        documentIndex: 3
+
+  - it: emits no worker-pool objects
+    asserts:
+      - containsDocument:
+          apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineDeployment
+        not: true
+        documentIndex: -1
+      - containsDocument:
+          apiVersion: infrastructure.cluster.x-k8s.io/v1alpha1
+          kind: KubevirtMachineTemplate
+        not: true
+        documentIndex: -1
+      - containsDocument:
+          apiVersion: cluster.x-k8s.io/v1beta1
+          kind: MachineHealthCheck
+        not: true
+        documentIndex: -1
+      - containsDocument:
+          apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
+          kind: TalosConfigTemplate
+        not: true
+        documentIndex: -1

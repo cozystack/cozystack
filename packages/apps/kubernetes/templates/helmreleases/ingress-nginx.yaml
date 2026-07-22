@@ -21,6 +21,14 @@ ingress-nginx:
 {{- end }}
 
 {{- if and .Values.addons.ingressNginx.enabled .Values._namespace.etcd }}
+{{- /* The ingress-nginx controller DaemonSet pins itself to nodes labelled
+       node-role.kubernetes.io/ingress-nginx (see cozystack.defaultIngressValues
+       nodeSelector). Since Phase 2 moved worker pools into the separate
+       kubernetes-nodes chart, that label is produced by a KubernetesNodes pool
+       with roles: [ingress-nginx]. If no such pool exists the DaemonSet simply
+       schedules nothing (degraded, not failed) — the requirement is documented
+       in NOTES.txt and the release note rather than enforced at render time, so
+       an existing cluster is never flipped from Ready to Failed on upgrade. */}}
 apiVersion: helm.toolkit.fluxcd.io/v2
 kind: HelmRelease
 metadata:

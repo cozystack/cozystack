@@ -19,9 +19,11 @@ type Config struct {
 type ConfigSpec struct {
 	// Name of the parent Kubernetes cluster (the `Kubernetes` CR) in the same namespace this node pool attaches to. Required. The pool's CAPI objects are wired to the parent cluster `kubernetes-<cluster>`; the KubernetesNodes CR must be named `<cluster>-<pool>`. The pool name (the part after `<cluster>-`) must not collide with a nodeGroup still managed by the parent kubernetes chart (e.g. the default `md0`), or the render fails on ownership conflict.
 	// +kubebuilder:default:=""
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="cluster is immutable"
 	Cluster string `json:"cluster"`
 	// StorageClass for the worker node system disk. When empty, the cluster default applies. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so prefer a replicated/DRBD class.
 	// +kubebuilder:default:="replicated"
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
 	// Minimum number of replicas in this pool. Used as the cluster-autoscaler floor.
 	// +kubebuilder:default:=0

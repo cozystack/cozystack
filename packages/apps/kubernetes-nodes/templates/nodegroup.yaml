@@ -30,6 +30,7 @@
 {{- $clusterName := include "kubernetes-nodes.clusterName" . }}
 {{- $groupName := include "kubernetes-nodes.groupName" . }}
 {{- include "kubernetes-nodes.assertNoForeignPool" . }}
+{{- include "kubernetes-nodes.assertParentVersion" . }}
 {{- $kubevirtmachinetemplateNames := list }}
 {{- $group := dict
       "minReplicas" .Values.minReplicas
@@ -106,6 +107,11 @@ spec:
           annotations:
             kubevirt.io/allow-pod-bridge-network-live-migration: "true"
           labels:
+            {{- /* The VM pod is intentionally attributed to the parent Kubernetes
+                   application (kind Kubernetes, name <cluster>), not to this
+                   KubernetesNodes release: these labels are part of the byte-identical
+                   render the adoption migration relies on, and lineage/quota accounting
+                   for worker VMs stays under the cluster they belong to. */}}
             apps.cozystack.io/application.group: apps.cozystack.io
             apps.cozystack.io/application.kind: Kubernetes
             apps.cozystack.io/application.name: {{ .clusterName | trimPrefix "kubernetes-" | quote }}

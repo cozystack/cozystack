@@ -21,18 +21,6 @@ controlPlane:
     server:
       resources: {}
       resourcesPreset: "micro"
-nodeGroups:
-  md0:
-    minReplicas: 0
-    maxReplicas: 10
-    instanceType: ""
-    diskSize: 20Gi
-    roles:
-      - worker
-    resources:
-      cpu: 2
-      memory: 4Gi
-    gpus: []
 oidc:
   mode: "System"
   customConfig:

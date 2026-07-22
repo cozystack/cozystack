@@ -6,4 +6,3 @@ _namespace:
   host: ""
 _cluster:
   cluster-domain: cozy.local
-nodeGroups: null
