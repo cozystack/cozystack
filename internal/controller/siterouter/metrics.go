@@ -87,8 +87,22 @@ func snapshotEqual(a, b metricSnapshot) bool {
 // disappeared (no label-cardinality leak).
 func (r *SiteRouterReconciler) updateMetrics(inst *instance) bool {
 	next := metricSnapshot{
-		tunnels: make(map[string]float64, len(inst.ipsecObservations)),
-		bgp:     make(map[string]float64, len(inst.bgpObservations)),
+		tunnels: make(map[string]float64, len(inst.configuredTunnelPeers)+len(inst.ipsecObservations)),
+		bgp:     make(map[string]float64, len(inst.configuredBGPPeers)+len(inst.bgpObservations)),
+	}
+	// Seed every configured peer at 0 (Down) FIRST, so a configured peer with no
+	// active SA is a present "down" series rather than a dropped one — an alert can
+	// then distinguish "down" from "gone". The active observations below overlay
+	// these, so an up peer resolves to 1 on the same series (no duplicate).
+	for _, name := range inst.configuredTunnelPeers {
+		if name != "" {
+			next.tunnels[name] = 0
+		}
+	}
+	for _, addr := range inst.configuredBGPPeers {
+		if addr != "" {
+			next.bgp[addr] = 0
+		}
 	}
 	for _, o := range inst.ipsecObservations {
 		if o.PeerName == "" {

@@ -114,6 +114,55 @@ func TestUpdateMetrics_BGPSessionUp(t *testing.T) {
 	}
 }
 
+// TestUpdateMetrics_ConfiguredDownPeerSeededZero encodes the S7 fix: a configured
+// IPsec tunnel / BGP neighbor with no active observation must appear as a "down"
+// series at 0, not be absent — otherwise an alert cannot tell a down tunnel from a
+// removed one. When the SA later comes up the observation overlays the seeded 0 on
+// the SAME series (no duplicate), because render.PeerName == the observation's
+// PeerName.
+func TestUpdateMetrics_ConfiguredDownPeerSeededZero(t *testing.T) {
+	const inst = "metrics-configured-down"
+	r := newTestReconciler(t)
+
+	i := &instance{
+		hr:                    siteRouterHR(inst),
+		name:                  inst,
+		namespace:             "tenant-test",
+		configuredTunnelPeers: []string{"peer-down"},
+		configuredBGPPeers:    []string{"203.0.113.9"},
+		// No observations: the tunnel/neighbor is configured but not yet up.
+	}
+	if !r.updateMetrics(i) {
+		t.Fatalf("first updateMetrics should report a change")
+	}
+	if series := gaugeSeriesFor(t, "site_router_tunnel_up", "tenant-test", inst); series["peer-down"] != 0 {
+		if _, ok := series["peer-down"]; !ok {
+			t.Errorf("a configured-but-down tunnel must be a present 0 series, was absent: %v", series)
+		} else {
+			t.Errorf("configured-but-down tunnel should be 0, got %v", series["peer-down"])
+		}
+	}
+	if series := gaugeSeriesFor(t, "site_router_bgp_session_up", "tenant-test", inst); series["203.0.113.9"] != 0 {
+		if _, ok := series["203.0.113.9"]; !ok {
+			t.Errorf("a configured-but-down BGP neighbor must be a present 0 series, was absent: %v", series)
+		} else {
+			t.Errorf("configured-but-down BGP neighbor should be 0, got %v", series["203.0.113.9"])
+		}
+	}
+
+	// The SA comes up: the observation overlays the seeded 0 to 1 on the same series.
+	i.ipsecObservations = []vyos.IPSecObservation{{PeerName: "peer-down", State: vyos.IPSecTunnelStateUp}}
+	if !r.updateMetrics(i) {
+		t.Fatalf("the tunnel coming up should report a change")
+	}
+	if got := tunnelUpValue(t, "tenant-test", inst, "peer-down"); got != 1 {
+		t.Errorf("configured peer should overlay to 1 when its SA is up, got %v", got)
+	}
+	if series := gaugeSeriesFor(t, "site_router_tunnel_up", "tenant-test", inst); len(series) != 1 {
+		t.Errorf("the up observation must overlay the seed, not add a duplicate series, got %v", series)
+	}
+}
+
 // TestUpdateMetrics_NoChurnWhenUnchanged encodes the T10 risk "do not emit metric
 // churn on every poll when state is unchanged (bump on change)": a second call
 // with identical observations must report no change and touch nothing.

@@ -204,6 +204,15 @@ type instance struct {
 	// to consume; this task builds neither conditions nor metrics (D9).
 	ipsecObservations []vyos.IPSecObservation
 	bgpObservations   []vyos.BGPObservation
+
+	// configuredTunnelPeers / configuredBGPPeers are the metric peer labels of the
+	// tunnels / BGP neighbors the resolved render inputs declare (set by
+	// pushVyOSConfig). updateMetrics seeds each at 0 (Down) before overlaying the
+	// runtime observations, so a configured peer with no active SA is a distinct
+	// "down" series rather than a missing one — an alert can tell "down" from
+	// "gone".
+	configuredTunnelPeers []string
+	configuredBGPPeers    []string
 }
 
 // +kubebuilder:rbac:groups=helm.toolkit.fluxcd.io,resources=helmreleases,verbs=get;list;watch;patch

@@ -267,6 +267,11 @@ func (r *SiteRouterReconciler) pushVyOSConfig(ctx context.Context, inst *instanc
 	}
 
 	inputs := r.resolveInputs(ctx, inst, psk, device)
+	// Record the configured peers so updateMetrics can seed a 0 (Down) gauge for a
+	// tunnel/neighbor that has no active observation yet — a configured-but-down
+	// series, distinct from an absent one.
+	inst.configuredTunnelPeers = configuredTunnelPeers(inputs)
+	inst.configuredBGPPeers = configuredBGPPeers(inputs)
 	ops := render.Render(inputs)
 
 	hash, err := configHash(ops)
@@ -565,6 +570,34 @@ func (r *SiteRouterReconciler) resolveInputs(ctx context.Context, inst *instance
 	}
 
 	return in
+}
+
+// configuredTunnelPeers returns the metric peer labels for every configured IPsec
+// tunnel in the resolved inputs. render.PeerName is exactly the identity the SA
+// observation reports (vyos.IPSecObservation.PeerName), so updateMetrics can seed
+// a 0 gauge for a configured tunnel with no active SA and have a later up
+// observation overlay the same series rather than create a duplicate.
+func configuredTunnelPeers(in render.Inputs) []string {
+	out := make([]string, 0, len(in.Tunnels))
+	for i := range in.Tunnels {
+		out = append(out, render.PeerName(in.Tunnels[i].Description, i))
+	}
+	return out
+}
+
+// configuredBGPPeers returns the neighbor addresses (the BGP metric label) of the
+// configured BGP peers in the resolved inputs, skipping any with an empty address.
+func configuredBGPPeers(in render.Inputs) []string {
+	if in.BGP == nil {
+		return nil
+	}
+	out := make([]string, 0, len(in.BGP.Peers))
+	for i := range in.BGP.Peers {
+		if in.BGP.Peers[i].PeerAddress != "" {
+			out = append(out, in.BGP.Peers[i].PeerAddress)
+		}
+	}
+	return out
 }
 
 // validASN reports whether n is a valid, nonzero autonomous-system number

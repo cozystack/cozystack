@@ -1016,6 +1016,14 @@ func normaliseESP(p *ESPParams) ESPParams {
 	return out
 }
 
+// PeerName returns the VyOS site-to-site peer connection name that Render emits
+// for the tunnel at index idx with the given description. It is the identity the
+// runtime SA observation reports (vyos.IPSecObservation.PeerName), so a caller
+// seeding a configured-but-down tunnel gauge uses it to match the live-up series.
+func PeerName(description string, idx int) string {
+	return sanitisePeerName(description, idx)
+}
+
 // sanitisePeerName turns a tunnel description into a valid VyOS 1.5 site-to-site
 // peer name: alphanumerics, hyphen and underscore only (VyOS rejects a peer key
 // with dots — e.g. an IP address — as "Peer connection name must be
