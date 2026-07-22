@@ -18,6 +18,11 @@ spec:
         - cozystack.kubevirt
         # CDI provisions the boot DataVolume (templates/dv.yaml).
         - cozystack.kubevirt-cdi
+        # vm-default-images creates the cozy-public/vm-default-images-vyos-router PVC
+        # the default SiteRouter boot DataVolume clones (templates/dv.yaml); without
+        # it the clone source is absent and the VM never boots. No cycle:
+        # vm-default-images depends only on networking + kubevirt-cdi.
+        - cozystack.vm-default-images
         # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
         - cozystack.cozystack-engine
         # site-router-controller mediates kube-ovn routing/port-security and pushes
