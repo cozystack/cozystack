@@ -14,8 +14,9 @@ CRDS = etcdclusters etcdmembers etcdsnapshots
 update:
 	rm -rf templates
 	mkdir templates
-	@for c in $(CRDS); do \
-	  curl -fsSL "https://raw.githubusercontent.com/cozystack/etcd-operator/$(ETCD_OPERATOR_REF)/charts/etcd-operator/crd-bases/etcd-operator.cozystack.io_$$c.yaml" \
-	    | awk '/^    controller-gen.kubebuilder.io\/version:/{print; print "    helm.sh/resource-policy: keep"; next} {print}' \
-	    > templates/$$c.yaml; \
+	@set -e; for c in $(CRDS); do \
+	  src=$$(mktemp); \
+	  curl -fsSL "https://raw.githubusercontent.com/cozystack/etcd-operator/$(ETCD_OPERATOR_REF)/charts/etcd-operator/crd-bases/etcd-operator.cozystack.io_$$c.yaml" -o "$$src"; \
+	  awk '/^    controller-gen.kubebuilder.io\/version:/{print; print "    helm.sh/resource-policy: keep"; next} {print}' "$$src" > templates/$$c.yaml; \
+	  rm -f "$$src"; \
 	done
