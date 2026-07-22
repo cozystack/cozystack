@@ -38,6 +38,7 @@ build: build-deps
 	make -C packages/system/grafana-operator image
 	make -C packages/core/testing image
 	make -C packages/core/talos image
+	make -C packages/system/vyos-router-image image
 	make -C packages/core/platform image
 	make -C packages/core/installer image
 	make manifests

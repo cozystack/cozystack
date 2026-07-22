@@ -292,6 +292,83 @@ jobs:
           path: _out/assets/nocloud-amd64.raw.xz
           if-no-files-found: error
 
+  # VyOS is its own leg for the same reason Talos is: `make -C
+  # packages/system/vyos-router-image image` runs a full VyOS live-build
+  # (debootstrap + apt + squashfs) in a privileged container, far heavier than a
+  # normal package image build, so it does not belong in the parallel matrix
+  # (build-matrix.sh excludes it). It builds the qcow2, packages it as a
+  # digest-pinned KubeVirt containerDisk pushed to the registry, and stamps the
+  # ref@digest into packages/system/vm-default-images/images/vyos-router-disk.tag.
+  # That stamp is captured as a patch fragment so finalize bundles the real digest
+  # into the installer artifact (the deferred site-router e2e resolves it from
+  # there). vm-default-images is an opt-in bundle package, so a non-opted-in e2e is
+  # unaffected either way.
+  build-vyos:
+    name: Build VyOS
+    needs: ["plan"]
+    if: |
+      needs.plan.outputs.code == 'true'
+      && !contains(github.event.pull_request.labels.*.name, 'release')
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Set up Docker config
+        run: |
+          if [ -d ~/.docker ]; then
+            cp -r ~/.docker "${{ runner.temp }}/.docker"
+          fi
+      - name: Login to GitHub Container Registry
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.OCIR_USER }}
+          password: ${{ secrets.OCIR_TOKEN }}
+          registry: iad.ocir.io
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      # buildkitd-config routes docker.io base-image pulls through mirror.gcr.io
+      # (hack/buildkitd.toml); see the build job for the full rationale. The
+      # docker-container builder is used for the containerDisk buildx push; the
+      # heavy VyOS live-build itself runs as a privileged `docker run` on the
+      # runner's default docker daemon (it needs --privileged + /dev for the
+      # loop/kpartx disk operations, exactly like the Talos imager).
+      - name: Set up Buildx (docker-container driver, docker.io mirror)
+        id: buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        with:
+          driver: docker-container
+          buildkitd-config: hack/buildkitd.toml
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+      - name: Build VyOS router image (qcow2 + containerDisk)
+        run: make -C packages/system/vyos-router-image image
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          BUILDER: ${{ steps.buildx.outputs.name }}
+          IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          PUBLISH_VERSIONED: '0'
+          PUBLISH_FLOATING: '0'
+      - name: Capture VyOS patch fragment
+        run: |
+          mkdir -p _out/fragments
+          # Captures the stamped vm-default-images/images/vyos-router-disk.tag.
+          git diff --binary HEAD > _out/fragments/vyos.patch
+          echo "VyOS fragment:"; git --no-pager diff --stat HEAD
+      - name: Upload VyOS patch fragment
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-patch-fragment-vyos
+          path: _out/fragments/vyos.patch
+          if-no-files-found: error
+
   # Reassemble the unified pr.patch from every fragment, then build the installer
   # LAST: `make -C packages/core/installer image` runs `flux push artifact
   # --path=packages`, which bundles the WHOLE digest-patched tree into the OCI
@@ -303,7 +380,7 @@ jobs:
     # to e2e (which needs finalize), so a red unit test skips the expensive
     # install+e2e path instead of wasting ~1h on it. Restores the gating the old
     # in-build-job tests gave, without re-coupling the cheap parallel builds.
-    needs: ["plan", "checks", "build", "build-talos"]
+    needs: ["plan", "checks", "build", "build-talos", "build-vyos"]
     if: |
       always()
       && needs.plan.outputs.code == 'true'
@@ -311,6 +388,7 @@ jobs:
       && needs.checks.result == 'success'
       && (needs.build.result == 'success' || needs.build.result == 'skipped')
       && needs.build-talos.result == 'success'
+      && needs.build-vyos.result == 'success'
     runs-on: oracle-vm-4cpu-16gb-x86-64
     timeout-minutes: 30
     permissions:
