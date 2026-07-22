@@ -1,7 +1,14 @@
-# external-dns probe SA/RBAC + two single-shot probe Pods, each with a distinct
+# external-dns probe SA/RBAC + two single-shot probe Jobs, each with a distinct
 # --annotation-prefix (the upstream Split Horizon DNS pattern). external-dns
 # 0.20 initialises its informer cache cluster-wide before applying --namespace,
 # so the probe needs a ClusterRole, not a namespaced Role.
+#
+# The probes are Jobs, not bare Pods, on purpose. When the Cilium host-scope
+# IPAM + Gateway API restore-window race hands a probe the per-node
+# reserved:ingress IP (cilium/cilium#46799), the sandbox is rejected with
+# "IP already in use" and the e2e leak-healer deletes the wedged pod, expecting
+# a controller to reschedule it onto a free IP. A bare Pod has no controller, so
+# that delete was terminal and the probe never returned; the Job re-creates it.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -33,50 +40,62 @@ roleRef:
   kind: ClusterRole
   name: kuberture-e2e-edns-probe
 ---
-apiVersion: v1
-kind: Pod
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: kuberture-e2e-edns-public
   namespace: cozy-kuberture
 spec:
-  serviceAccountName: kuberture-e2e-edns-probe
-  restartPolicy: Never
-  containers:
-    - name: edns
-      image: registry.k8s.io/external-dns/external-dns:v0.20.0
-      args:
-        - --source=service
-        - --namespace=cozy-kuberture
-        - --provider=inmemory
-        - --inmemory-zone=cozystack.test
-        - --registry=noop
-        - --once
-        - --interval=10s
-        - --annotation-prefix=external-dns.alpha.kubernetes.io/
-        - --domain-filter=cozystack.test
-        - --log-level=info
-        - --log-format=text
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuberture-e2e-edns-probe
+    spec:
+      serviceAccountName: kuberture-e2e-edns-probe
+      restartPolicy: Never
+      containers:
+        - name: edns
+          image: registry.k8s.io/external-dns/external-dns:v0.20.0
+          args:
+            - --source=service
+            - --namespace=cozy-kuberture
+            - --provider=inmemory
+            - --inmemory-zone=cozystack.test
+            - --registry=noop
+            - --once
+            - --interval=10s
+            - --annotation-prefix=external-dns.alpha.kubernetes.io/
+            - --domain-filter=cozystack.test
+            - --log-level=info
+            - --log-format=text
 ---
-apiVersion: v1
-kind: Pod
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: kuberture-e2e-edns-internal
   namespace: cozy-kuberture
 spec:
-  serviceAccountName: kuberture-e2e-edns-probe
-  restartPolicy: Never
-  containers:
-    - name: edns
-      image: registry.k8s.io/external-dns/external-dns:v0.20.0
-      args:
-        - --source=service
-        - --namespace=cozy-kuberture
-        - --provider=inmemory
-        - --inmemory-zone=cozystack.test
-        - --registry=noop
-        - --once
-        - --interval=10s
-        - --annotation-prefix=kuberture-e2e-internal-dns.io/
-        - --domain-filter=cozystack.test
-        - --log-level=info
-        - --log-format=text
+  backoffLimit: 6
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuberture-e2e-edns-probe
+    spec:
+      serviceAccountName: kuberture-e2e-edns-probe
+      restartPolicy: Never
+      containers:
+        - name: edns
+          image: registry.k8s.io/external-dns/external-dns:v0.20.0
+          args:
+            - --source=service
+            - --namespace=cozy-kuberture
+            - --provider=inmemory
+            - --inmemory-zone=cozystack.test
+            - --registry=noop
+            - --once
+            - --interval=10s
+            - --annotation-prefix=kuberture-e2e-internal-dns.io/
+            - --domain-filter=cozystack.test
+            - --log-level=info
+            - --log-format=text
