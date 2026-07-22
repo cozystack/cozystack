@@ -105,7 +105,7 @@ git commit --signoff -m "docs(contributing): add installation guide"
 
 **Special handling:**
 
-- `[Backport release-1.x]` prefix is stripped before parsing; `area/release` and `backport` labels are added.
+- `[Backport release-1.x]` prefix is stripped before parsing; the `area/release` label is added.
 - Composite scope (`feat(platform, system, apps): ...`) — each comma-separated part is mapped independently.
 - `!` after type or `BREAKING CHANGE:` footer in the body → `kind/breaking-change`.
 - Unmapped scope or non-conventional title → `area/uncategorized` (signals the PR needs manual area selection).

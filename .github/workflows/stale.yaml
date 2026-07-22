@@ -39,7 +39,7 @@ jobs:
             triage/accepted,kind/regression
           exempt-pr-labels: >-
             lifecycle/frozen,do-not-merge/hold,
-            backport,backport-previous
+            kind/backport,kind/backport-previous
           days-before-stale: 60
           days-before-close: 14
           operations-per-run: 100
