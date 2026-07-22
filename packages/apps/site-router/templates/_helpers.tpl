@@ -88,6 +88,41 @@ the api-key Secret and the cloud-init seed never diverge on first install.
 {{- end -}}
 
 {{/*
+Fail-fast validation of the tenant-settable values that flow into VyOS `set`
+commands, so a value with an embedded quote/newline/space cannot terminate a
+command and inject arbitrary VyOS config (e.g. an attacker's own API key). Run
+BEFORE any tenant value is interpolated into a config line.
+
+  - managementCIDR (when non-empty) must be a strict IPv4 CIDR `a.b.c.d/prefix`.
+    Go's regexp `$` is end-of-text (not before a trailing newline), so any
+    embedded OR trailing newline, and any quote/space, fails the match.
+  - peer.address (when non-empty) must be a bare IPv4/IPv6 address or hostname —
+    letters, digits, dots, colons, hyphens only. It is NOT interpolated into the
+    chart's seed (the controller renders it as a structured op, never a shell
+    string), so this is a defence-in-depth reject of a hostile value at the
+    earliest point (chart render / apply time).
+
+Empty values are allowed (the fail-closed managementCIDR check and the
+peer-not-yet-configured state live elsewhere); this guard only rejects a
+present-but-malformed value.
+*/}}
+{{- define "site-router.assertSafeVyOSInputs" -}}
+{{- $mgmt := .Values.managementCIDR | toString -}}
+{{- if $mgmt -}}
+{{-   if not (regexMatch `^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$` $mgmt) -}}
+{{-     fail (printf "managementCIDR %q is not a strict IPv4 CIDR (a.b.c.d/prefix); refusing to interpolate it into the VyOS config (command-injection guard)" $mgmt) -}}
+{{-   end -}}
+{{- end -}}
+{{- $peer := "" -}}
+{{- if .Values.peer -}}{{- $peer = .Values.peer.address | default "" | toString -}}{{- end -}}
+{{- if $peer -}}
+{{-   if not (regexMatch `^[A-Za-z0-9.:-]+$` $peer) -}}
+{{-     fail (printf "peer.address %q must be a bare IP address or hostname (letters, digits, dots, colons, hyphens only); refusing a value with whitespace/quotes/newlines (command-injection guard)" $peer) -}}
+{{-   end -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 First-boot cloud-init userdata (VyOS `vyos_config_commands`). Ported from
 the upstream VyOS-router reference implementation's buildCloudInitUserData:
 hostname, HTTPS API key, listen-address, and the fail-closed management
@@ -105,6 +140,7 @@ reachable with allowOpenManagement=true) no firewall is stamped.
 {{- define "site-router.cloudInitUserData" -}}
 {{- $ctx := .ctx -}}
 {{- $token := .token -}}
+{{- include "site-router.assertSafeVyOSInputs" $ctx -}}
 {{- $lines := list "#cloud-config" "vyos_config_commands:" -}}
 {{- $lines = append $lines (printf "  - set system host-name '%s'" $ctx.Release.Name) -}}
 {{/* R2: bring eth0 up over DHCP and start the HTTPS API /configure REST endpoints. Without an eth0 address the guest has no IP/routes and is unreachable, and `service https api keys` alone does NOT start the REST endpoints — `service https api rest` is required for the controller's /configure + /retrieve calls to answer. Both are validated as required on a cloud-init-capable VyOS image. NOTE: on the currently-referenced image cloud-init IGNORES vyos_config_commands, so these (and the whole seed) are inert there — the conformant-image swap is the T14 image follow-up — but they are mandatory for any image that honours the seed. Kept in lockstep with the base config above. */}}
