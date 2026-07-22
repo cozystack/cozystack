@@ -8,7 +8,7 @@
 # spec.values from the parent kubernetes HR values with a jq helper:
 #
 #     def pick($o; ks): reduce ks[] as $k ({}; if ($o | has($k)) ...);
-#     ... + pick(.; ["version","talos","images"])
+#     ... + pick(.; ["version","talos"])   # images is narrowed to {kubectl} separately
 #
 # A subtle regression is to write `def pick(o; ks)` with a filter-parameter:
 # inside `reduce ks[] as $k ({}; ...)` the `.` context is the accumulator, so
@@ -101,5 +101,26 @@ JSON
   [ "$rc" -eq 0 ]
   # The stamp ran (so "values present" above is a real signal, not a no-op run).
   grep -qF -- "STAMP" "$FAKE_CMDLOG"
+  rm -rf "$WORK"
+}
+
+@test "implicit md0: an empty nodeGroups materialises the default ingress-nginx pool" {
+  prep
+  # A parent cluster whose spec.values carries no nodeGroups relied on the chart's
+  # implicit md0 default. Migration 54 must materialise DEFAULT_MD0 and create the
+  # child HR kubernetes-nodes-<cluster>-md0 with minReplicas 0 and the
+  # ingress-nginx role, so a cluster that never set nodeGroups keeps its pool.
+  cat > "$FAKE_HR_LIST" <<'JSON'
+{"items":[{"metadata":{"namespace":"tenant-test","name":"kubernetes-test3"},"spec":{"values":{}}}]}
+JSON
+  rc=0
+  bash "$MIG" >"$WORK/out" 2>&1 || rc=$?
+  cat "$WORK/out"
+  [ "$rc" -eq 0 ]
+  grep -qF -- "materialising implicit md0 default" "$WORK/out"
+  grep -qF -- "APPLY-HR" "$FAKE_CMDLOG"
+  [ "$(jq -r '.metadata.name' "$FAKE_CHILD_HR")" = "kubernetes-nodes-test3-md0" ]
+  [ "$(jq -r '.spec.values.minReplicas' "$FAKE_CHILD_HR")" = "0" ]
+  [ "$(jq -r '.spec.values.roles[0]' "$FAKE_CHILD_HR")" = "ingress-nginx" ]
   rm -rf "$WORK"
 }
