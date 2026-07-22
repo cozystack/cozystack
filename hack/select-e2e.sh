@@ -173,7 +173,7 @@ done | paste -sd ' ' -)
 # Safety net: a selected packages/* component that resolves into the graph but
 # has no *-application descendant would otherwise silently skip E2E. The signal
 # is the source-derived selection being empty, and it must be read ONLY from the
-# graph — never from the combined result. A PR that also edits one unrelated
+# graph, never from the combined result. A PR that also edits one unrelated
 # suite's tests contributes that suite via $selected_apps, and keying the
 # escalation off the combined result let that lone suite mask it (the same
 # system-package change selected the full suite alone but exactly one suite
@@ -193,7 +193,7 @@ final_apps=$(printf '%s %s' "$sources_apps" "$selected_apps" | tr ' ' '\n' | sor
 done | paste -sd ' ' -)
 
 # Original catch-all: something was selected (trigger_any) yet nothing runnable
-# resolved — e.g. a per-suite edit on a directory that has no chainsaw-test.yaml
+# resolved, e.g. a per-suite edit on a directory that has no chainsaw-test.yaml
 # yet. Escalate rather than silently skip.
 if [ -z "$final_apps" ]; then
   echo "$all_apps" | paste -sd ' ' -
