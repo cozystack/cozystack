@@ -348,6 +348,27 @@ if [ -f /workspace/talosconfig ]; then
   done
 fi
 
+# -- per-node network diagnostics
+#
+# Baseline host-side + CNI data-plane state (iptables, kernel conntrack, OVS
+# flows, cilium endpoints + drop events) for every node, captured on every
+# report. cozyreport otherwise carries only pod-scoped state (CiliumEndpoint,
+# listener log, CNI ADD trace), which cannot prove or disprove a host-side
+# kubelet->local-pod "connection refused" transient (stale conntrack on a reused
+# podIP, a policy drop, or a kube-ovn OVS flow race). Delegated to
+# hack/e2e-capture-dataplane.sh --baseline so the CNI topology knowledge
+# (namespaces, DaemonSet selectors, container names, the conntrack CLI->/proc
+# fallback) has a single source of truth shared with the failure-triggered
+# capture cozytest.sh runs, rather than a divergent second copy here.
+#
+# Diagnostic-only: never mutates the cluster, best-effort (|| true). The whole
+# capture is wrapped in an aggregate `timeout -k` so a wedged API server or agent
+# cannot cost the entire cozyreport artefact -- matching the wrapper cozytest.sh
+# puts around the same script (5 bounded execs x N nodes has no aggregate bound
+# otherwise).
+echo "Collecting per-node network diagnostics..."
+timeout -k 30 300 "$SCRIPT_DIR/e2e-capture-dataplane.sh" --baseline "$REPORT_DIR/net-diag" || true
+
 # -- finalization
 
 echo "Generating summary..."

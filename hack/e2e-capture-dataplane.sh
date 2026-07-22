@@ -200,6 +200,30 @@ lb_budget_ok() {
   if [ "$1" -lt "$2" ]; then echo yes; else echo no; fi
 }
 
+# _diag_prunable <file> -- true (exit 0) when <file> holds no real capture and
+# should be dropped from the artefact tree: it is empty, OR its only content is a
+# single "DIAG-SKIP: ..." absence marker this script emits for an expected-missing
+# tool/feature. A genuine capture is kept (one line or many), and a kubectl exec
+# FAILURE ("Error from server", "OCI runtime", "command terminated", "container
+# not found") is ALSO kept -- those are never DIAG-SKIP lines, so a broken capture
+# stays distinguishable from a node that simply lacked the tool. Pure (reads only
+# the file); unit-tested in hack/capture-dataplane.bats.
+_diag_prunable() {
+  _dp_f="$1"
+  [ -s "$_dp_f" ] || return 0
+  _dp_lines=$(wc -l < "$_dp_f" 2>/dev/null | tr -d ' ')
+  [ "${_dp_lines:-0}" -le 1 ] || return 1
+  # `read` returns non-zero on a final line without a trailing newline but still
+  # assigns the partial line, so do NOT blank _dp_line on that non-zero exit --
+  # else a newline-less "DIAG-SKIP:" marker would be kept instead of pruned.
+  _dp_line=""
+  IFS= read -r _dp_line < "$_dp_f" 2>/dev/null || true
+  case "$_dp_line" in
+    "DIAG-SKIP: "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 # Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
 # sources this file purely to reach the helpers above; return before touching $1
 # or running any capture so the unit test never needs a cluster. The script's
@@ -209,7 +233,18 @@ if [ -n "${E2E_CAPTURE_DATAPLANE_LIB:-}" ]; then
   return 0 2>/dev/null
 fi
 
-OUT="${1:?Usage: e2e-capture-dataplane.sh <output-dir>}"
+# --baseline: capture a per-node BASELINE snapshot for EVERY node on EVERY
+# cozyreport (not just the failed-pod / unreachable-LB paths below). cozyreport.sh
+# invokes this mode so the host-side + CNI data-plane knowledge (namespaces,
+# DaemonSet selectors, container names, the conntrack CLI->/proc fallback) lives
+# here once instead of being forked into a second script.
+BASELINE=0
+if [ "${1:-}" = "--baseline" ]; then
+  BASELINE=1
+  shift
+fi
+
+OUT="${1:?Usage: e2e-capture-dataplane.sh [--baseline] <output-dir>}"
 
 CILIUM_NS="${COZY_CILIUM_NS:-cozy-cilium}"
 KUBEOVN_NS="${COZY_KUBEOVN_NS:-cozy-kubeovn}"
@@ -239,6 +274,92 @@ command -v kubectl >/dev/null 2>&1 || exit 0
 mkdir -p "$OUT" 2>/dev/null || exit 0
 
 log() { echo "[capture-dataplane] $*"; }
+
+# pod_on_node <ns> <label> <node> -> first matching pod name (empty if none).
+# Defined up here (ahead of the NotReady-pod / LB paths that also use it) so the
+# --baseline dispatch below can reach it.
+pod_on_node() {
+  kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
+}
+
+# _diag_prune <file> -- acting wrapper around the pure _diag_prunable predicate:
+# drop <file> when it carries no real capture.
+_diag_prune() { if _diag_prunable "$1"; then rm -f "$1"; fi; }
+
+# capture_baseline -- per-node BASELINE host-side + CNI data-plane snapshot for
+# EVERY node, run on EVERY cozyreport. The failed-pod / unreachable-LB paths
+# below only fire on an already-broken cluster, so a self-healing host->local-pod
+# transient that recovers before the report leaves no host-side trace otherwise.
+# One file per (node, capture); each is pruned by _diag_prune iff empty or a lone
+# "DIAG-SKIP:" absence marker -- a genuine kubectl exec FAILURE is never a
+# DIAG-SKIP line, so it is always kept (a missing capture must stay
+# distinguishable from a broken one). Every exec is timeout-bounded; the
+# aggregate wall-clock bound is the `timeout -k` wrapper at the cozyreport.sh
+# call site.
+capture_baseline() {
+  for _bn in $(kubectl get nodes \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+    [ -n "$_bn" ] || continue
+    _cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$_bn")
+    _ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$_bn")
+    _agent=$(pod_on_node "$CILIUM_NS" k8s-app=cilium "$_bn")
+
+    if [ -n "$_cni" ]; then
+      # iptables-save: every table (filter/nat/mangle/raw) in one blob -- the
+      # only capture genuinely new vs the failed-pod path.
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cni" -c cni-server -- \
+        sh -c 'command -v iptables-save >/dev/null 2>&1 && iptables-save || echo "DIAG-SKIP: iptables-save not present in cni-server"' \
+        > "$OUT/$_bn-iptables.txt" 2>&1 || true
+      _diag_prune "$OUT/$_bn-iptables.txt"
+
+      # Kernel conntrack table (bounded). Prefer the conntrack CLI; fall back to
+      # /proc/net/nf_conntrack when the image lacks it (the same fallback the
+      # failed-pod path carries), and DIAG-SKIP only when BOTH are absent.
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_cni" -c cni-server -- \
+        sh -c 'if command -v conntrack >/dev/null 2>&1; then conntrack -L 2>/dev/null | head -n 5000; elif [ -r /proc/net/nf_conntrack ]; then head -n 5000 /proc/net/nf_conntrack; else echo "DIAG-SKIP: no conntrack CLI and no /proc/net/nf_conntrack in cni-server"; fi' \
+        > "$OUT/$_bn-conntrack.txt" 2>&1 || true
+      _diag_prune "$OUT/$_bn-conntrack.txt"
+    fi
+
+    if [ -n "$_ovs" ]; then
+      # OVS side of the kube-ovn datapath -- a CNI ADD that finished vs an
+      # ovn-controller that has not programmed the pod's flow into OVS yet.
+      timeout 25 kubectl exec -n "$KUBEOVN_NS" "$_ovs" -c openvswitch -- \
+        ovs-ofctl dump-flows br-int > "$OUT/$_bn-ovs-flows.txt" 2>&1 || true
+      _diag_prune "$OUT/$_bn-ovs-flows.txt"
+    fi
+
+    if [ -n "$_agent" ]; then
+      # Per-endpoint policy state (identity, policy, controllers).
+      timeout 25 kubectl exec -n "$CILIUM_NS" "$_agent" -c cilium-agent -- \
+        cilium-dbg endpoint list > "$OUT/$_bn-cilium-endpoints.txt" 2>&1 || true
+      _diag_prune "$OUT/$_bn-cilium-endpoints.txt"
+
+      # Bounded drop-event capture. Replaces a hubble capture that can never
+      # produce output on cozystack (hubble.enabled:false in packages/system/
+      # cilium/values.yaml, so /var/run/cilium/hubble.sock is never created);
+      # `cilium-dbg monitor --type drop` needs no Hubble. Nested timeouts: inner
+      # `timeout 8` self-terminates the stream if the agent ships coreutils, the
+      # outer `timeout 12` on the exec is the hard backstop if it does not.
+      timeout 12 kubectl exec -n "$CILIUM_NS" "$_agent" -c cilium-agent -- \
+        sh -c 'timeout 8 cilium-dbg monitor --type drop 2>&1 || true' \
+        > "$OUT/$_bn-cilium-drops.txt" 2>&1 || true
+      _diag_prune "$OUT/$_bn-cilium-drops.txt"
+    fi
+  done
+
+  # Drop the parent dir if nothing real landed (neither kube-ovn nor cilium
+  # present, or every capture pruned).
+  [ -n "$(ls -A "$OUT" 2>/dev/null)" ] || rmdir "$OUT" 2>/dev/null || true
+}
+
+# --baseline short-circuits the failed-pod / LB paths below.
+if [ "$BASELINE" = "1" ]; then
+  log "capturing per-node baseline network diagnostics -> $OUT"
+  capture_baseline
+  exit 0
+fi
 
 # Affected = scheduled (has nodeName), has a podIP (so an endpoint exists to
 # inspect), Ready!=True, and not already terminal. That is the superset of the
@@ -274,12 +395,6 @@ if [ -n "$central" ]; then
 else
   log "no ovn-central pod in $KUBEOVN_NS -- skipping OVN logical-flow dump"
 fi
-
-# pod_on_node <ns> <label> <node> -> first matching pod name (empty if none).
-pod_on_node() {
-  kubectl get pod -n "$1" -l "$2" --field-selector "spec.nodeName=$3" \
-    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null
-}
 
 # Per-node captures are node-global (every pod on a node shares one cilium-agent
 # / ovs / cni-server), so run them once per node and reuse across that node's
