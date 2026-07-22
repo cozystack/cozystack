@@ -13,6 +13,15 @@
 {{- if .Values.networking.kubeovn.MASTER_NODES -}}
 {{- $_ := set $kubeovnDict "MASTER_NODES" .Values.networking.kubeovn.MASTER_NODES -}}
 {{- end -}}
+{{- /* Opt-in east-west encryption (networking.encryption.enabled): on the
+       default kubeovn-cilium datapath the overlay is KubeOVN's Geneve
+       tunnel, so encrypting it means turning on KubeOVN IPsec. KubeOVN's
+       own controller provisions the IPsec CA and per-node certs through
+       the Kubernetes CSR API — no cert-manager wiring needed here. Off by
+       default; complements (does not replace) application-level TLS. */ -}}
+{{- if dig "encryption" "enabled" false .Values.networking -}}
+{{- $_ := set $kubeovnDict "func" (dict "ENABLE_OVN_IPSEC" true) -}}
+{{- end -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* For Talos (isp-full): use KubePrism endpoint and disable cgroup autoMount */ -}}
@@ -79,6 +88,12 @@
 {{- end -}}
 {{- /* For generic k8s (k3s), control-plane label has value "true" */ -}}
 {{- $_ := set $kubeovnDict "MASTER_NODES_LABEL" "node-role.kubernetes.io/control-plane=true" -}}
+{{- /* Opt-in east-west encryption (networking.encryption.enabled): same
+       KubeOVN Geneve-overlay IPsec path as isp-full. See the isp-full
+       branch above for the mechanism notes. */ -}}
+{{- if dig "encryption" "enabled" false .Values.networking -}}
+{{- $_ := set $kubeovnDict "func" (dict "ENABLE_OVN_IPSEC" true) -}}
+{{- end -}}
 {{- $kubeovnValues := dict "kube-ovn" $kubeovnDict -}}
 {{- $_ := set $networkingComponents "kubeovn" (dict "values" $kubeovnValues) -}}
 {{- /* Cilium configuration - for generic k8s, always enable cgroup autoMount */ -}}
