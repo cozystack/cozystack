@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/dynamic"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	clientfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -1551,8 +1552,10 @@ func TestRecoveryTargetUnreachable_ClassifiesFromLogs(t *testing.T) {
 
 	t.Run("no FATAL -> not unreachable", func(t *testing.T) {
 		r := &RestoreJobReconciler{
-			Client:     newCNPGStrategyTestClient(t, seed()...),
-			readPodLog: func(context.Context, string, string, string) (string, error) { return "LOG: consistent recovery state reached", nil },
+			Client: newCNPGStrategyTestClient(t, seed()...),
+			readPodLog: func(context.Context, string, string, string) (string, error) {
+				return "LOG: consistent recovery state reached", nil
+			},
 		}
 		un, _, forb, err := r.recoveryTargetUnreachable(context.Background(), ns, cluster)
 		if err != nil {
@@ -2194,6 +2197,191 @@ func TestReconcileCNPGRestore_HealthyClusterSucceeds(t *testing.T) {
 	if c := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); c == nil || c.Status != metav1.ConditionTrue {
 		t.Fatalf("expected RecoveryConverged=True, got %+v", c)
 	}
+}
+
+// TestReconcileCNPGRestore_DeadlineClassifiesRecoveryTargetUnreachable drives the
+// full reconcileCNPGRestore deadline branch (the classification call site), which
+// the pure-helper tests (TestRecoveryTargetUnreachable_*) do not exercise:
+// swapping the RecoveryTargetUnreachable reason back to the generic RestoreFailed
+// at that call site leaves them green. Each sub-case backdates StartedAt past the
+// restore deadline with a recoveryTime set (so classification runs) and asserts
+// the three outcomes the branch distinguishes: FATAL found, FATAL absent, and a
+// Forbidden log read (missing pods/log RBAC).
+func TestReconcileCNPGRestore_DeadlineClassifiesRecoveryTargetUnreachable(t *testing.T) {
+	const (
+		ns          = "tenant"
+		appName     = "app"
+		clusterName = "postgres-app"
+	)
+	apiGroup := backupsv1alpha1.DefaultApplicationAPIGroup
+	strategyGroup := strategyv1alpha1.GroupVersion.Group
+	ctx := context.Background()
+
+	// StartedAt far past cnpgDefaultRestoreDeadline (30m) so the first reconcile
+	// enters the deadline-classification branch.
+	startedAt := metav1.NewTime(time.Now().Add(-72 * time.Hour))
+
+	snap, err := marshalCNPGBackupSnapshot(newPostgresApp(appName, ns), nil)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+	mkBackup := func() *backupsv1alpha1.Backup {
+		return &backupsv1alpha1.Backup{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "bk"},
+			Spec: backupsv1alpha1.BackupSpec{
+				ApplicationRef: corev1.TypedLocalObjectReference{APIGroup: &apiGroup, Kind: postgresAppKind, Name: appName},
+				StrategyRef:    corev1.TypedLocalObjectReference{APIGroup: &strategyGroup, Kind: strategyv1alpha1.CNPGStrategyKind, Name: "cnpg-strategy"},
+				DriverMetadata: map[string]string{
+					cnpgServerNameKey:      appName,
+					cnpgDestinationPathKey: "s3://bucket/" + appName + "/",
+				},
+			},
+			Status: backupsv1alpha1.BackupStatus{UnderlyingResources: snap},
+		}
+	}
+	strategy := &strategyv1alpha1.CNPG{
+		ObjectMeta: metav1.ObjectMeta{Name: "cnpg-strategy"},
+		Spec: strategyv1alpha1.CNPGSpec{Template: strategyv1alpha1.CNPGTemplate{
+			BarmanObjectStore: strategyv1alpha1.BarmanObjectStoreTemplate{DestinationPath: "s3://bucket/"},
+		}},
+	}
+	// Recovery Cluster created after StartedAt (this restore's own -> not
+	// re-purged), so the reconcile flows past the purge block to the deadline
+	// check. Phase left empty (still wedged): the deadline check precedes the
+	// healthy check, so it fires regardless.
+	mkCluster := func() *cnpgtypes.Cluster {
+		return &cnpgtypes.Cluster{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: clusterName, CreationTimestamp: metav1.NewTime(startedAt.Add(time.Minute))},
+			Spec:       cnpgtypes.ClusterSpec{Bootstrap: &cnpgtypes.BootstrapConfiguration{Recovery: &cnpgtypes.RecoverySource{Source: appName}}},
+		}
+	}
+	// A bootstrap-recovery pod for the cluster; recoveryTargetUnreachable lists
+	// these and reads each through the readPodLog seam.
+	mkPod := func() *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:         ns,
+				Name:              clusterName + "-full-recovery-abcde",
+				Labels:            map[string]string{cnpgClusterLabel: clusterName},
+				CreationTimestamp: metav1.NewTime(startedAt.Add(2 * time.Minute)),
+			},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: cnpgRecoveryContainerName}}},
+		}
+	}
+	mkRestoreJob := func() *backupsv1alpha1.RestoreJob {
+		sa := startedAt
+		return &backupsv1alpha1.RestoreJob{
+			ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: "rj"},
+			Spec: backupsv1alpha1.RestoreJobSpec{
+				BackupRef: corev1.LocalObjectReference{Name: "bk"},
+				// recoveryTime present -> the reconcile runs the classification.
+				Options: &runtime.RawExtension{Raw: []byte(`{"recoveryTime":"2026-01-01T00:00:00Z"}`)},
+			},
+			Status: backupsv1alpha1.RestoreJobStatus{
+				StartedAt: &sa,
+				Phase:     backupsv1alpha1.RestoreJobPhaseRunning,
+				// Purge already done -> reconcile reaches the deadline check.
+				Conditions: []metav1.Condition{{
+					Type: restoreCondTargetPurged, Status: metav1.ConditionTrue, Reason: "ClusterPurged",
+					LastTransitionTime: startedAt, Message: "purged",
+				}},
+			},
+		}
+	}
+
+	fatalLog := "LOG:  redo done\nFATAL:  " + cnpgRecoveryTargetUnreachableLog
+
+	newReconciler := func(c client.Client, readLog func(context.Context, string, string, string) (string, error)) *RestoreJobReconciler {
+		return &RestoreJobReconciler{
+			Client:     c,
+			Interface:  dynamicfake.NewSimpleDynamicClient(testCNPGScheme(t)),
+			Recorder:   record.NewFakeRecorder(10),
+			readPodLog: readLog,
+		}
+	}
+	reconcileToFailed := func(t *testing.T, r *RestoreJobReconciler, c client.Client, backup *backupsv1alpha1.Backup) *backupsv1alpha1.RestoreJob {
+		t.Helper()
+		rj := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, rj); err != nil {
+			t.Fatalf("get seeded RestoreJob: %v", err)
+		}
+		res, err := r.reconcileCNPGRestore(ctx, rj, backup)
+		if err != nil {
+			t.Fatalf("reconcileCNPGRestore: %v", err)
+		}
+		if res.RequeueAfter != 0 {
+			t.Fatalf("terminal deadline failure must not requeue, got %+v", res)
+		}
+		got := &backupsv1alpha1.RestoreJob{}
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: "rj"}, got); err != nil {
+			t.Fatalf("get RestoreJob after reconcile: %v", err)
+		}
+		if got.Status.Phase != backupsv1alpha1.RestoreJobPhaseFailed {
+			t.Fatalf("expected Phase=Failed after deadline, got %q (msg=%q)", got.Status.Phase, got.Status.Message)
+		}
+		return got
+	}
+
+	t.Run("recovery-target-unreachable FATAL -> RecoveryTargetUnreachable reason", func(t *testing.T) {
+		backup := mkBackup()
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, newPostgresApp(appName, ns), mkCluster(), mkPod())
+		r := newReconciler(c, func(context.Context, string, string, string) (string, error) { return fatalLog, nil })
+
+		got := reconcileToFailed(t, r, c, backup)
+
+		// The mutation the review flagged: the call site must set reason
+		// RecoveryTargetUnreachable, not the generic RestoreFailed.
+		conv := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged)
+		if conv == nil || conv.Status != metav1.ConditionFalse || conv.Reason != "RecoveryTargetUnreachable" {
+			t.Fatalf("expected RecoveryConverged=False reason=RecoveryTargetUnreachable, got %+v", conv)
+		}
+		if ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); ready == nil || ready.Reason != "RecoveryTargetUnreachable" {
+			t.Fatalf("expected Ready reason=RecoveryTargetUnreachable, got %+v", ready)
+		}
+		if !strings.Contains(got.Status.Message, "past the latest WAL archived") {
+			t.Errorf("message should explain the unreachable target, got %q", got.Status.Message)
+		}
+	})
+
+	t.Run("no FATAL -> generic deadline failure, not RecoveryTargetUnreachable", func(t *testing.T) {
+		backup := mkBackup()
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, newPostgresApp(appName, ns), mkCluster(), mkPod())
+		r := newReconciler(c, func(context.Context, string, string, string) (string, error) {
+			return "LOG:  consistent recovery state reached", nil
+		})
+
+		got := reconcileToFailed(t, r, c, backup)
+
+		if conv := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); conv != nil {
+			t.Fatalf("did not expect a RecoveryConverged condition on a generic timeout, got %+v", conv)
+		}
+		if ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready"); ready != nil && ready.Reason == "RecoveryTargetUnreachable" {
+			t.Fatalf("generic timeout must NOT be classified RecoveryTargetUnreachable, got %+v", ready)
+		}
+		if !strings.Contains(got.Status.Message, "deadline") {
+			t.Errorf("message should mention the deadline, got %q", got.Status.Message)
+		}
+		if strings.Contains(got.Status.Message, "pods/log RBAC") {
+			t.Errorf("a readable log must not report a Forbidden RBAC note, got %q", got.Status.Message)
+		}
+	})
+
+	t.Run("Forbidden log read -> generic failure with missing-RBAC note", func(t *testing.T) {
+		backup := mkBackup()
+		c := newCNPGStrategyTestClient(t, backup, mkRestoreJob(), strategy, newPostgresApp(appName, ns), mkCluster(), mkPod())
+		r := newReconciler(c, func(context.Context, string, string, string) (string, error) {
+			return "", apierrors.NewForbidden(schema.GroupResource{Resource: "pods"}, "rec", fmt.Errorf("pods/log grant missing"))
+		})
+
+		got := reconcileToFailed(t, r, c, backup)
+
+		if conv := apimeta.FindStatusCondition(got.Status.Conditions, restoreCondRecoveryConverged); conv != nil && conv.Reason == "RecoveryTargetUnreachable" {
+			t.Fatalf("a Forbidden log read must not yield a RecoveryTargetUnreachable classification, got %+v", conv)
+		}
+		if !strings.Contains(got.Status.Message, "pods/log RBAC") {
+			t.Errorf("Forbidden classification should surface the missing pods/log RBAC grant, got %q", got.Status.Message)
+		}
+	})
 }
 
 // newCNPGStrategyTestClient returns a fake client.Client wired up with
