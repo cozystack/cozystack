@@ -1,0 +1,136 @@
+# VyOS 1.5-rolling "site-router" appliance flavor.
+#
+# Consumed by vyos-build's build-vyos-image (github.com/vyos/vyos-build, rolling
+# branch) via `--architecture amd64 vyos-router`. hack/build-qcow2.sh copies this
+# file into the pinned vyos-build checkout's data/build-flavors/ before the build,
+# so the positional flavor argument resolves to "vyos-router".
+#
+# This flavor bakes the four conformance fixes the reused (stripped) prebuilt
+# appliance lacked, so the site-router chart's cloud-init seed
+# (packages/apps/site-router/templates/_helpers.tpl :: cloudInitUserData) actually
+# applies at first boot:
+#
+#   D1  cloud-init that processes VyOS `vyos_config_commands`. A proper vyos-build
+#       image ships cloud-init with the `vyos_userdata` + `write_files` config
+#       modules enabled by default (docs.vyos.io/en/latest/automation/cloud-init),
+#       so the seed's `vyos_config_commands` are honoured. `cloud-init` is pulled
+#       explicitly below as a belt-and-suspenders (it is already in the VyOS base;
+#       re-listing it is a no-op, never a downgrade).
+#   D2  the HTTPS REST API server. The VyOS base ships the https-api service; the
+#       seed enables it with `set service https api rest` + the controller key.
+#       The image only has to CARRY the server, which a proper build does.
+#   D3  /var/log/nginx must exist or nginx (the :443 API listener) fails to start.
+#       Created below via [[includes_chroot]]; the stripped appliance omitted it.
+#   D4  eth0 must DHCP so the guest gets an address/routes and is reachable. Baked
+#       as an image default in `default_config` below (the seed also sets it, so
+#       the guest is reachable even before cloud-init runs).
+#
+# Plus the T7206 gotcha (vyos.dev/T7206): the cloud-init VyOS module aborts if
+# /opt/vyatta/etc/config.boot.default is missing. `default_config` below is
+# written there by build-vyos-image, so the module has its base to load.
+#
+# NOTE: all top-level keys must precede the [[includes_chroot]] array-of-tables
+# header below — in TOML, keys after a table header belong to that table.
+
+# Produce a qcow2 disk (build-vyos-image runs `qemu-img convert -f raw -O qcow2`).
+image_format = ["qcow2"]
+
+# Virtual disk size (GiB). Matches the 12Gi CDI import headroom the site-router
+# boot DataVolume requests (packages/apps/site-router/templates/dv.yaml) and the
+# vm-default-images vyos-router entry — a qcow2 is sparse, so the on-registry
+# artifact stays ~1 GiB regardless.
+disk_size = 10
+
+# cloud-init: already in the VyOS base (the vyos_userdata module is what runs the
+# chart's `vyos_config_commands`); listed explicitly so the dependency is pinned
+# by the flavor rather than assumed from the base package set.
+packages = ["cloud-init"]
+
+# D4 + T7206: the baked-in default configuration. Derived verbatim from the VyOS
+# canonical default (vyos-1x data/config.boot.default) — including the well-known
+# `vyos` / `vyos` login the reference appliances ship with, whose exposure the
+# site-router first-boot management firewall (SSH/443 restricted to
+# managementCIDR) is the compensating control for — with three appliance
+# additions: eth0 over DHCP (D4), the SSH service, and a serial console so the
+# KubeVirt/qemu serial console is usable. The HTTPS API is intentionally NOT baked
+# here: the chart's cloud-init seed owns it (it carries the controller api key),
+# keeping the image and its first-boot config a matched pair
+# (docs/image-lifecycle.md). vyos_config_commands re-applies these idempotently.
+default_config = """
+interfaces {
+    ethernet eth0 {
+        address dhcp
+        description "site-router uplink (pod network); managed by cloud-init and the site-router controller"
+    }
+    loopback lo {
+    }
+}
+service {
+    ntp {
+        allow-client {
+            address "127.0.0.0/8"
+            address "169.254.0.0/16"
+            address "10.0.0.0/8"
+            address "172.16.0.0/12"
+            address "192.168.0.0/16"
+            address "::1/128"
+            address "fe80::/10"
+            address "fc00::/7"
+        }
+        server time1.vyos.net {
+        }
+        server time2.vyos.net {
+        }
+        server time3.vyos.net {
+        }
+    }
+    ssh {
+        port 22
+    }
+}
+system {
+    config-management {
+        commit-revisions "100"
+    }
+    console {
+        device ttyS0 {
+            speed 115200
+        }
+    }
+    host-name "vyos"
+    login {
+        operator-group default {
+            command-policy {
+                allow "*"
+            }
+        }
+        user vyos {
+            authentication {
+                encrypted-password "$6$QxPS.uk6mfo$9QBSo8u1FkH16gMyAVhus6fU3LOzvLR9Z9.82m3tiHFAxTtIkhaZSWssSgzt4v4dGAL8rhVQxTg0oAG9/q11h/"
+                plaintext-password ""
+            }
+        }
+    }
+    option {
+        reboot-on-upgrade-failure 5
+    }
+    syslog {
+        local {
+            facility all {
+                level "info"
+            }
+            facility local7 {
+                level "debug"
+            }
+        }
+    }
+}
+"""
+
+# D3: guarantee the nginx log directory exists so the HTTPS API listener starts.
+# includes_chroot writes files into the rootfs; an empty .keep materialises the
+# directory. nginx opens its logs as root before dropping privileges, so a
+# root-owned directory is sufficient. Keep this LAST — see the TOML note above.
+[[includes_chroot]]
+path = "var/log/nginx/.keep"
+data = ""
