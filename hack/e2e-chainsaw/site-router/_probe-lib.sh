@@ -80,7 +80,13 @@ assert_dropped() {
     echo "FAIL [$desc]: B reached $dst:$port — expected DROP" >&2
     return 1
   fi
-  if ! sh -c "$guard"; then
+  # Run the guard with `eval`, NOT `sh -c`: the guard is a shell FUNCTION
+  # (guest_counter_incremented / hubble_dropped) defined in this sourced lib, so
+  # a child `sh -c` cannot see it (it would always exit 127 — command not found —
+  # even once the probes are implemented). `eval` runs it in the current shell
+  # where the functions live. The fail-loud property is preserved: an
+  # unimplemented stub returns non-zero, so the gate still fails.
+  if ! eval "$guard"; then
     echo "FAIL [$desc]: $dst was unreachable but the drop was NOT attributed to the expected guard ($guard)" >&2
     return 1
   fi
