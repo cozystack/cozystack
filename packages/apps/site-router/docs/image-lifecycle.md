@@ -21,6 +21,16 @@ Consumption is via CDI, matching how every other OS image in the catalog is cons
 
 The `vm-default-images` entry is committed **disabled (commented out)** until the artifact is published, because the chart renders every list entry unconditionally as an HTTP import — a live entry pointing at a not-yet-published URL would create a perpetually-failing DataVolume for anyone who opts into the (opt-in) golden-image collection.
 
+## How an update propagates
+
+Two kinds of change reach a running gateway, and only one of them drops the tunnel.
+
+**Day-2 configuration changes do not restart the VM and do not drop the tunnel.** The controller pushes the rendered VyOS configuration over the live HTTPS management API (`POST /configure`) as a single atomic transaction, so a change to `remoteCIDRs`, static routes, BGP or the tunnel parameters is applied in place; a no-op reconcile (config hash unchanged) makes no HTTP call at all. Established IPsec SAs survive a configuration push.
+
+**An image change restarts the VM, which is the one routine tunnel-dropping operation.** Bumping the boot image means re-materializing the VM disk from the new golden image and restarting the gateway VM. A VM restart tears down every running IPsec SA, so the tunnel is down from the moment the VM stops until it reboots, cloud-init re-seeds the base configuration, the controller re-pushes the live configuration, and the remote peer re-establishes (the gateway is the responder, so the remote peer must re-dial). No day-2 configuration change causes this — only an image (or VM template) change does. Plan an image bump as a maintenance window for the affected tunnels.
+
+Because the boot image and its first-boot cloud-init are a matched pair (see the invariant below), an image bump also re-runs first-boot cloud-init. The `cloudInitSeed` value is mixed into the VM firmware UUID: change it to force a first-boot cloud-init re-run, or clear it to preserve an existing VM's UUID (and skip the re-run) across a re-render that does not intend to reconfigure from scratch.
+
 ## Provenance and the no-internal-infra rule
 
 The prebuilt appliance originated outside this repository, but the committed default here must be a **cozystack-owned** artifact so the OSS base has no dependency on private infrastructure. No internal or third-party hosting URL for the appliance appears anywhere in this repository; the committed URL is a cozystack-owned placeholder under the `cozystack/cozystack` GitHub releases namespace that the maintainer populates at publish time.
