@@ -20,6 +20,9 @@ tests:
           content: cozystack.networking
       - contains:
           path: spec.variants[0].dependsOn
+          content: cozystack.cert-manager
+      - contains:
+          path: spec.variants[0].dependsOn
           content: cozystack.monitoring-agents
       - contains:
           path: spec.variants[0].dependsOn

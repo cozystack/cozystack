@@ -57,24 +57,38 @@ func TestDesiredFromMetricsMax(t *testing.T) {
 
 func TestApplyStep(t *testing.T) {
 	tests := []struct {
-		name                                    string
-		current, desired, up, down, floor, want int32
+		name                             string
+		current, desired, up, down, want int32
 	}{
-		{"up within step", 3, 4, 1, 1, 2, 4},
-		{"up capped by step", 3, 6, 1, 1, 2, 4},
-		{"down within step", 6, 5, 1, 1, 2, 5},
-		{"down capped by step", 6, 3, 1, 1, 0, 5},
-		{"quorum jump overrides step", 6, 2, 1, 1, 4, 4},
-		{"down to exactly floor jumps", 6, 4, 1, 1, 4, 4},
-		{"no change", 4, 4, 1, 1, 2, 4},
+		{"up within step", 3, 4, 1, 1, 4},
+		{"up capped by step", 3, 6, 1, 1, 4},
+		{"down within step", 6, 5, 1, 1, 5},
+		{"down capped by step", 6, 3, 1, 1, 5},
+		{"down capped even toward a low target", 10, 2, 1, 1, 9},
+		{"no change", 4, 4, 1, 1, 4},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := applyStep(tt.current, tt.desired, tt.up, tt.down, tt.floor); got != tt.want {
-				t.Errorf("applyStep(%d,%d,up=%d,down=%d,floor=%d) = %d, want %d",
-					tt.current, tt.desired, tt.up, tt.down, tt.floor, got, tt.want)
+			if got := applyStep(tt.current, tt.desired, tt.up, tt.down); got != tt.want {
+				t.Errorf("applyStep(%d,%d,up=%d,down=%d) = %d, want %d",
+					tt.current, tt.desired, tt.up, tt.down, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestDecideScaleDownToFloorRespectsStep: scaling DOWN toward the quorum floor
+// must NOT bypass scaleDownStep (only the upward jump is exempt).
+func TestDecideScaleDownToFloorRespectsStep(t *testing.T) {
+	in := baseInput()
+	in.Current = 10
+	in.Max = 12
+	in.QuorumFloor = 2
+	in.ScaleDownStep = 1
+	in.Metrics = []MetricObservation{{Type: "ReadConnections", AveragePerReplica: 1, Target: 150}}
+	d := Decide(in)
+	if d.Desired != 9 {
+		t.Fatalf("scale-down toward floor should step by 1 (10->9), got %d", d.Desired)
 	}
 }
 

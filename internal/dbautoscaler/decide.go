@@ -172,15 +172,16 @@ func Decide(in ScaleInput) Decision {
 		d.LimitedReason = autoscalingv1alpha1.ReasonQuotaExceeded
 	}
 
-	// Rate-limit the current->natural transition, EXCEPT that reaching the quorum
-	// floor is never rate-limited — in either direction. When the floor is the
-	// binding constraint (natural clamped to it), jump straight to it in one
-	// decision; a safe quorum must never wait on the step limit.
+	// Rate-limit the current->natural transition. Reaching the quorum floor is
+	// exempt from the step limit only on the way UP: urgently climbing to a safe
+	// quorum must not be rate-limited. Scaling DOWN always respects scaleDownStep
+	// (shedding many standbys at once is not a safety need), gated additionally by
+	// the scale-down stabilization window.
 	var desired int32
-	if natural == qfloor && natural != in.Current {
+	if natural == qfloor && natural > in.Current {
 		desired = natural
 	} else {
-		desired = applyStep(in.Current, natural, in.ScaleUpStep, in.ScaleDownStep, qfloor)
+		desired = applyStep(in.Current, natural, in.ScaleUpStep, in.ScaleDownStep)
 	}
 
 	d.Desired = desired

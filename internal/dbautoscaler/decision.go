@@ -207,11 +207,11 @@ func stabilize(now time.Time, current, raw int32, upWindow, downWindow time.Dura
 	return current
 }
 
-// applyStep limits the change to at most step replicas per decision, EXCEPT that
-// reaching the quorum floor overrides the step limit (a safe quorum is never
-// rate-limited): a target at or below the floor may jump straight to the floor
-// in a single decision. Returns the step-limited desired count.
-func applyStep(current, desired, upStep, downStep, quorumFloor int32) int32 {
+// applyStep limits the change to at most step replicas per decision. The
+// quorum-floor exemption (jumping straight to the floor) is NOT applied here —
+// Decide handles it, and only for the upward direction (urgently reaching a
+// safe quorum). Scale-down always respects downStep.
+func applyStep(current, desired, upStep, downStep int32) int32 {
 	switch {
 	case desired > current:
 		capped := current + upStep
@@ -220,11 +220,6 @@ func applyStep(current, desired, upStep, downStep, quorumFloor int32) int32 {
 		}
 		return desired
 	case desired < current:
-		// Quorum-jump exception: a recommendation at/below the floor is not
-		// rate-limited — go straight to the floor.
-		if desired <= quorumFloor {
-			return quorumFloor
-		}
 		floored := current - downStep
 		if desired < floored {
 			return floored

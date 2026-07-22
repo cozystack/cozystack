@@ -33,7 +33,7 @@ bundles:
     - cozystack.db-autoscaler
 ```
 
-It declares a `dependsOn` on the monitoring stack (VictoriaMetrics / `WorkloadMonitor`), which the decision loop requires.
+It declares a `dependsOn` on the monitoring stack (VictoriaMetrics / `WorkloadMonitor`), which the decision loop requires, and on cert-manager, which issues the webhook serving certificate.
 
 ## Ownership enforcement
 

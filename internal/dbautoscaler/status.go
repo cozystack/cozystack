@@ -116,9 +116,20 @@ func (r *Reconciler) applyDecisionToStatus(
 
 	dha.Status.CurrentMetrics = make([]autoscalingv1alpha1.MetricStatus, 0, len(obs))
 	for _, o := range obs {
+		// Render each observed value in the same unit as its target. CPU averages
+		// are already millicores (the driver query yields millicores), so wrap them
+		// directly as a milli-quantity ("250" millicores => "250m"). Plain-count
+		// metrics (ReadConnections) are scaled by 1000 so the milli-quantity renders
+		// the whole number ("150" => "150").
+		var q resource.Quantity
+		if o.Type == string(autoscalingv1alpha1.MetricReadCPUUtilization) {
+			q = *resource.NewMilliQuantity(int64(o.AveragePerReplica), resource.DecimalSI)
+		} else {
+			q = *resource.NewMilliQuantity(int64(o.AveragePerReplica*1000), resource.DecimalSI)
+		}
 		dha.Status.CurrentMetrics = append(dha.Status.CurrentMetrics, autoscalingv1alpha1.MetricStatus{
 			Type:         autoscalingv1alpha1.MetricType(o.Type),
-			AverageValue: *resource.NewMilliQuantity(int64(o.AveragePerReplica*1000), resource.DecimalSI),
+			AverageValue: q,
 		})
 	}
 
