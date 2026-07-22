@@ -234,16 +234,30 @@ func TestDecideRespectQuorumFalseDisablesQuorumExceedsQuota(t *testing.T) {
 	}
 }
 
-// TestCPUTargetIsMillicores pins the ReadCPUUtilization unit contract: the
-// target is millicores as a plain number, and the "m" suffix is a footgun.
+// TestCPUTargetIsMillicores pins the ReadCPUUtilization unit contract: the CPU
+// target is read as a Kubernetes CPU quantity in millicores, so both "250m"
+// (250 millicores) and "1" (1000 millicores) resolve as an operator expects,
+// while a non-CPU metric keeps its plain-number interpretation.
 func TestCPUTargetIsMillicores(t *testing.T) {
-	plain := mustQuantity("250")
-	if v := plain.AsApproximateFloat64(); v != 250 {
-		t.Fatalf(`"250" target = %v, want 250 (millicores)`, v)
+	cpu := func(q string) float64 {
+		return metricTargetValue(autoscalingv1alpha1.MetricSpec{
+			Type:   autoscalingv1alpha1.MetricReadCPUUtilization,
+			Target: autoscalingv1alpha1.MetricTarget{AverageValue: mustQuantity(q)},
+		})
 	}
-	suffixed := mustQuantity("250m")
-	if v := suffixed.AsApproximateFloat64(); v != 0.25 {
-		t.Fatalf(`"250m" parses as %v (the documented footgun); expected 0.25`, v)
+	if v := cpu("250m"); v != 250 {
+		t.Fatalf(`CPU target "250m" = %v millicores, want 250`, v)
+	}
+	if v := cpu("1"); v != 1000 {
+		t.Fatalf(`CPU target "1" = %v millicores, want 1000`, v)
+	}
+	// A connections target stays a plain number.
+	conns := metricTargetValue(autoscalingv1alpha1.MetricSpec{
+		Type:   autoscalingv1alpha1.MetricReadConnections,
+		Target: autoscalingv1alpha1.MetricTarget{AverageValue: mustQuantity("150")},
+	})
+	if conns != 150 {
+		t.Fatalf(`ReadConnections target "150" = %v, want 150`, conns)
 	}
 }
 

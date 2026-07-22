@@ -74,10 +74,9 @@ const (
 	// MetricReadConnections drives on the number of client connections served by
 	// the read-serving replicas.
 	MetricReadConnections MetricType = "ReadConnections"
-	// MetricReadCPUUtilization drives on CPU usage of the read-serving replicas.
-	// The target is expressed in MILLICORES as a plain number (e.g. "250" = 250m
-	// per replica). Do NOT use the "m" suffix: "250m" parses as the quantity 0.25
-	// and would drive an immediate jump to maxReplicas.
+	// MetricReadCPUUtilization drives on CPU usage of the read-serving replicas,
+	// in millicores. The target is read as a Kubernetes CPU quantity, so both
+	// idioms work as expected: "250m" = 250 millicores, "1" = 1000 millicores.
 	MetricReadCPUUtilization MetricType = "ReadCPUUtilization"
 )
 
@@ -224,6 +223,12 @@ type DatabaseHorizontalAutoscalerStatus struct {
 	// LastConvergedReplicas is the last count that reached availableReplicas == replicas.
 	// +optional
 	LastConvergedReplicas *int32 `json:"lastConvergedReplicas,omitempty"`
+
+	// LastAppliedReplicas is the last replica count the autoscaler itself wrote.
+	// Persisted so the ownership back-off (detecting a competing writer) survives
+	// a controller restart or leader failover.
+	// +optional
+	LastAppliedReplicas *int32 `json:"lastAppliedReplicas,omitempty"`
 
 	// LastScaleTime is when the autoscaler last patched the target.
 	// +optional

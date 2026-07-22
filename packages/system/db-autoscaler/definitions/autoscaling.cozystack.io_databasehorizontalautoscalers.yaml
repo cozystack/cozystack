@@ -302,6 +302,13 @@ spec:
                   computed.
                 format: int32
                 type: integer
+              lastAppliedReplicas:
+                description: |-
+                  LastAppliedReplicas is the last replica count the autoscaler itself wrote.
+                  Persisted so the ownership back-off (detecting a competing writer) survives
+                  a controller restart or leader failover.
+                format: int32
+                type: integer
               lastConvergedReplicas:
                 description: LastConvergedReplicas is the last count that reached
                   availableReplicas == replicas.

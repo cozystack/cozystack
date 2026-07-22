@@ -379,3 +379,35 @@ func TestReconcileInvalidTargetFreezes(t *testing.T) {
 		t.Fatalf("invalid target must not patch; replicas = %d", r)
 	}
 }
+
+// TestOwnershipBackoffSurvivesRestart guards the durability fix: a fresh
+// controller (empty in-memory state) must reconstruct the ownership back-off
+// from status.lastAppliedReplicas, so a competing writer's value is not
+// silently clobbered after a restart/leader failover.
+func TestOwnershipBackoffSurvivesRestart(t *testing.T) {
+	dha := newDHA("db", "tenant", "Postgres", false)
+	three := int32(3)
+	dha.Status.LastAppliedReplicas = &three     // operator last wrote 3, before the restart
+	app := newPostgresApp("db", "tenant", 5, 0) // a competing writer set it to 5
+	env := newTestEnv(t, dha, app, "420", http.StatusOK, workloadMonitor("postgres-db", "tenant", 5, true))
+	// Persist the status (WithStatusSubresource ignores the initial status).
+	cur := &autoscalingv1alpha1.DatabaseHorizontalAutoscaler{}
+	if err := env.r.Get(context.TODO(), types.NamespacedName{Namespace: "tenant", Name: "db"}, cur); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	cur.Status.LastAppliedReplicas = &three
+	if err := env.r.Status().Update(context.TODO(), cur); err != nil {
+		t.Fatalf("seed status: %v", err)
+	}
+
+	// Fresh state map (simulating a new leader): no in-memory lastWritten.
+	env.r.state = nil
+	got := env.reconcile(t, dha)
+	s, reason := condStatus(got, autoscalingv1alpha1.ConditionScalingLimited)
+	if s != string(metav1.ConditionTrue) || reason != autoscalingv1alpha1.ReasonOwnershipConflict {
+		t.Fatalf("after restart ScalingLimited = %s/%s, want True/OwnershipConflict", s, reason)
+	}
+	if r := env.appReplicas(t, "tenant", "db"); r != 5 {
+		t.Fatalf("must not clobber competing writer after restart; replicas = %d, want 5", r)
+	}
+}

@@ -152,6 +152,14 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	st := r.stateFor(req.NamespacedName)
 
+	// Reconstruct the last-written count from persisted status after a restart or
+	// leader failover, so the ownership back-off survives (the in-memory state map
+	// starts empty on a new leader).
+	if st.lastWritten == nil && dha.Status.LastAppliedReplicas != nil {
+		w := *dha.Status.LastAppliedReplicas
+		st.lastWritten = &w
+	}
+
 	// WorkloadMonitor: operational + convergence signal.
 	operational, availableReplicas := r.loadWorkloadMonitor(ctx, dha.Namespace, adapter.ReleaseName(dha.Spec.TargetRef.Name), currentReplicas)
 	scaleInFlight := availableReplicas != currentReplicas
@@ -179,7 +187,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Reject a non-positive metric target with a distinct reason, so a spec typo
 	// (averageValue: "0") is not silently reported as MetricUnavailable.
 	for _, m := range dha.Spec.Metrics {
-		if m.Target.AverageValue.AsApproximateFloat64() <= 0 {
+		if metricTargetValue(m) <= 0 {
 			apimeta.SetStatusCondition(&dha.Status.Conditions, metav1.Condition{
 				Type:               autoscalingv1alpha1.ConditionAbleToScale,
 				Status:             metav1.ConditionFalse,
@@ -249,6 +257,8 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		st.inFlightSince = &now
 		written := decision.Desired
 		st.lastWritten = &written
+		// Persist the written count so the ownership back-off survives a restart.
+		dha.Status.LastAppliedReplicas = &written
 		dha.Status.LastScaleTime = &metav1.Time{Time: now}
 		verb := "scaled"
 		if decision.Kind == DecisionRollback {
@@ -300,6 +310,17 @@ func (r *Reconciler) loadWorkloadMonitor(ctx context.Context, namespace, name st
 	return operational, wm.Status.AvailableReplicas
 }
 
+// metricTargetValue interprets a metric target in the same unit as its driver
+// query. ReadCPUUtilization is millicores (the query yields millicores), so the
+// target is read as a Kubernetes CPU quantity — "250m" => 250, "1" => 1000 —
+// which matches how operators write CPU. Other metrics are plain numbers.
+func metricTargetValue(m autoscalingv1alpha1.MetricSpec) float64 {
+	if m.Type == autoscalingv1alpha1.MetricReadCPUUtilization {
+		return float64(m.Target.AverageValue.MilliValue())
+	}
+	return m.Target.AverageValue.AsApproximateFloat64()
+}
+
 // collectMetrics queries VictoriaMetrics for each driver metric, averaged over
 // the read-serving replicas. metricAvailable is false if any query fails.
 func (r *Reconciler) collectMetrics(ctx context.Context, dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler, adapter TopologyAdapter, currentReplicas int32) ([]MetricObservation, bool) {
@@ -314,7 +335,7 @@ func (r *Reconciler) collectMetrics(ctx context.Context, dha *autoscalingv1alpha
 	}
 	obs := make([]MetricObservation, 0, len(dha.Spec.Metrics))
 	for _, m := range dha.Spec.Metrics {
-		target := m.Target.AverageValue.AsApproximateFloat64()
+		target := metricTargetValue(m)
 		if target <= 0 {
 			// A non-positive target is rejected: treat as unavailable rather than
 			// dividing by it.

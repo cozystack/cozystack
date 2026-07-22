@@ -60,7 +60,7 @@ spec:
   minReplicas: 2   # TOTAL instances (primary + standbys); >= 2 to serve reads
   maxReplicas: 6
   metrics:
-    - type: ReadConnections           # ReadCPUUtilization target is millicores as a plain number, e.g. "250"; no "m" suffix
+    - type: ReadConnections           # for ReadCPUUtilization the target is a CPU quantity in millicores, e.g. "250m" or "1"
       target: { averageValue: "150" } # per read-serving replica
   behavior:
     scaleUp:   { stabilizationWindowSeconds: 300,  step: 1 }

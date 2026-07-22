@@ -185,6 +185,11 @@ func (in *DatabaseHorizontalAutoscalerStatus) DeepCopyInto(out *DatabaseHorizont
 		*out = new(int32)
 		**out = **in
 	}
+	if in.LastAppliedReplicas != nil {
+		in, out := &in.LastAppliedReplicas, &out.LastAppliedReplicas
+		*out = new(int32)
+		**out = **in
+	}
 	if in.LastScaleTime != nil {
 		in, out := &in.LastScaleTime, &out.LastScaleTime
 		*out = (*in).DeepCopy()
