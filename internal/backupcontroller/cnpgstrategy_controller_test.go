@@ -1464,6 +1464,17 @@ func TestApplyClusterPluginBackup_PatchesExistingCluster(t *testing.T) {
 	if store.Spec.RetentionPolicy != "30d" {
 		t.Errorf("ObjectStore retentionPolicy: got %q", store.Spec.RetentionPolicy)
 	}
+	// The ObjectStore must pin the barman-cloud sidecar's S3 request-checksum
+	// policy to when_required, or uploads to non-AWS S3 gateways (Ceph RGW, the
+	// platform's own SeaweedFS system bucket) fail with an x-amz-content-sha256
+	// InvalidArgument. The chart does not render this ObjectStore in the
+	// platform-managed useSystemBucket=true flow, so this Go path is the only
+	// place that sets it there.
+	sc := store.Spec.InstanceSidecarConfiguration
+	if sc == nil || len(sc.Env) != 1 ||
+		sc.Env[0].Name != "AWS_REQUEST_CHECKSUM_CALCULATION" || sc.Env[0].Value != "when_required" {
+		t.Errorf("ObjectStore instanceSidecarConfiguration.env: got %+v, want [AWS_REQUEST_CHECKSUM_CALCULATION=when_required]", sc)
+	}
 	// The ObjectStore must be owner-referenced to the Cluster so Kubernetes GC
 	// removes it when the Cluster is deleted (no orphan in the platform flow,
 	// where the chart does not render this ObjectStore).
