@@ -48,16 +48,21 @@ cp "${FLAVOR_FILE}" "${WORK_DIR}/data/build-flavors/vyos-router.toml"
 # passed for the same reason the Talos imager needs it. The checkout is bind-
 # mounted at /vyos (per the vyos-build docs) so its build/ scratch lands on the
 # host filesystem under _out/vyos-build.
+#
+# The container entrypoint gosu-drops to a build user whose UID it maps from the
+# bind-mount owner; build-vyos-image itself must run under `sudo` (its live-build
+# / losetup / kpartx steps assume root and it does not sudo them internally), so
+# every artifact it writes is root-owned. The trailing chown hands the tree back
+# to that mapped UID (== the invoking host/CI user) so the host-side mv below —
+# and any later `git clean` — can touch the outputs without root.
 docker run --rm -i \
   --privileged \
   -v /dev:/dev \
   -v "${WORK_DIR}:/vyos" \
   -w /vyos \
   "${VYOS_BUILD_IMAGE}" \
-  sudo --preserve-env ./build-vyos-image \
-    --architecture "${VYOS_ARCH}" \
-    --version "${VYOS_VERSION}" \
-    vyos-router
+  bash -c 'set -e; sudo ./build-vyos-image --architecture "$1" --version "$2" vyos-router; sudo chown -R "$(id -u):$(id -g)" .' \
+  -- "${VYOS_ARCH}" "${VYOS_VERSION}"
 
 # build-vyos-image names the artifact vyos-<version>-vyos-router-<arch>.qcow2;
 # glob for it rather than reconstructing the exact name (the version string can be
