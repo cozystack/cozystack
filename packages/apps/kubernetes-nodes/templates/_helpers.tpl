@@ -107,14 +107,19 @@ it reconciles.
 {{- end -}}
 
 {{- /*
-kubernetes-nodes.assertParentVersion fails the render when the pool's Kubernetes
-minor version does not match the parent cluster's. Workers must not run a kubelet
-ahead of the apiserver (unsupported skew), and the split removed the single
-`version` that used to feed both control plane and workers. Looks up the parent
+kubernetes-nodes.assertParentVersion fails the render only when the pool's
+Kubernetes minor version is AHEAD of the parent cluster's. Workers must not run a
+kubelet ahead of the apiserver (unsupported skew), but a worker minor lagging the
+control plane is supported (up to n-3 upstream) and is the normal state during a
+rolling upgrade — the parent Kubernetes CR is bumped first, then each pool. A
+symmetric equality check would flip every pool of a cluster to render-failure the
+moment the parent is bumped, blocking all pool operations until each pool is
+hand-edited, so the check is directional. The split removed the single `version`
+that used to feed both control plane and workers. Looks up the parent
 KamajiControlPlane (named like the reconstructed clusterName) and compares its
-spec.version major.minor against .Values.version. Skipped when the lookup is
-empty (helm template / unittest, or the parent not yet present) so it validates
-only against a real cluster and never blocks offline rendering.
+spec.version minor against .Values.version. Skipped when the lookup is empty
+(helm template / unittest, or the parent not yet present) so it validates only
+against a real cluster and never blocks offline rendering.
 */}}
 {{- define "kubernetes-nodes.assertParentVersion" -}}
 {{- $clusterName := include "kubernetes-nodes.clusterName" . -}}
@@ -124,8 +129,12 @@ only against a real cluster and never blocks offline rendering.
 {{- if $parentVer -}}
 {{- $parentMinor := regexFind "v?[0-9]+\\.[0-9]+" $parentVer -}}
 {{- $poolMinor := regexFind "v?[0-9]+\\.[0-9]+" (.Values.version | toString) -}}
-{{- if and $parentMinor $poolMinor (ne $parentMinor $poolMinor) -}}
-{{- fail (printf "kubernetes-nodes: pool version %q does not match parent cluster %q version %q — a worker kubelet may not run ahead of the apiserver. Set .version to the parent Kubernetes CR's version." (.Values.version | toString) $clusterName $parentVer) -}}
+{{- if and $parentMinor $poolMinor -}}
+{{- $parentNorm := printf "%s.0" (trimPrefix "v" $parentMinor) -}}
+{{- $poolNorm := printf "%s.0" (trimPrefix "v" $poolMinor) -}}
+{{- if semverCompare (printf "> %s" $parentNorm) $poolNorm -}}
+{{- fail (printf "kubernetes-nodes: pool version %q is ahead of parent cluster %q version %q — a worker kubelet may not run ahead of the apiserver. A worker minor may lag the control plane (rolling upgrade) but not lead it; set .version to at most the parent Kubernetes CR's minor." (.Values.version | toString) $clusterName $parentVer) -}}
+{{- end -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
