@@ -4,7 +4,7 @@ This is the contract for every container image reference cozystack vendors. Read
 
 ## The two things a reference carries
 
-Every first-party reference is a **tag plus a digest**: `ghcr.io/cozystack/cozystack/grafana:v1.6.0@sha256:e96e95…`.
+Every first-party reference is a **tag plus a digest**: `ghcr.io/cozystack/cozystack/cozystack-api:v1.5.0@sha256:ef50b1…`.
 
 The digest decides what actually runs. It is content-addressed and immutable, so a reference carrying one is reproducible no matter what happens to the tag afterwards. This is why a tag that reads `latest@sha256:…` is not a floating reference — the digest wins, and tag movement cannot change the bytes pulled.
 
@@ -18,7 +18,7 @@ Which tag an image carries depends on what versions it. Confusing these classes 
 
 | Class | Tag shape | Example | Moves at release? |
 | --- | --- | --- | --- |
-| **Version-line** | the cozystack version | `grafana:v1.6.0` | **Yes** — every release |
+| **Version-line** | the cozystack version | `cozystack-api:v1.5.0` | **Yes** — every release |
 | **Component-versioned** | upstream version + cozystack suffix | `cluster-api-control-plane-provider-kamaji:v0.19.0-cozystack.0` | No |
 | **Third-party pass-through** | whatever upstream publishes | `docker.io/library/busybox:1.37.0` | No |
 
@@ -44,7 +44,7 @@ If a package stamps a reference somewhere the two globs do not cover, add that f
 
 - **Every first-party reference is tag+digest.** A bare tag with no digest is not reproducible and must not be committed. `securitygroup-controller:v0.0.0` is a live violation.
 - **Exactly one producer stamps each reference.** A reference no `Makefile` writes will never be refreshed by anything, including release preparation — `chBackupClientImage` in `packages/system/backupstrategy-controller/values.yaml` is a live violation, still pinned to `platform-migrations:v1.4.0-rc.2`.
-- **A package that stamps a reference is in the root `Makefile` `build:` list.** `build-matrix.sh`, the main build and release preparation all iterate that one list, so a package outside it is never rebuilt by any path and its pin freezes permanently. `flux-plunger`, `keycloak-operator`, `kilo` and `redis-operator` are live violations (tracked in #3143).
+- **A package that stamps a reference is in the root `Makefile` `build:` list.** `build-matrix.sh`, the main build and release preparation all iterate that one list, so a package outside it is never rebuilt by any path and its pin freezes permanently. `flux-plunger`, `keycloak-operator`, `kilo` and `redis-operator` are live violations (tracked in #3416).
 - **Every consumer of references reads all three storage shapes**, via `hack/lib/image-refs.sh`.
 - **Scan wider than you rewrite.** A rewrite is deliberately narrow to avoid corrupting vendored defaults, so the check that follows it must not share that blind spot. `hack/promote-rewrite-tags.sh` rewrites the enumerated files, then greps the whole tree and fails if any reference to the release candidate survives.
 
@@ -65,7 +65,7 @@ If a package stamps a reference somewhere the two globs do not cover, add that f
 
 These are real, currently unfixed, and predate the shared enumeration. They are recorded here so nobody rediscovers them as surprises.
 
-**The nightly host rewrite cannot reach a split host.** It is a literal `<src-registry>/` substring replace, so it only rewrites a reference whose host sits contiguously in front of the repository. Two live layouts defeat it: `keycloak-operator` splits the host into a sibling `registry:` key, and `kubeovn` puts it in `global.registry.address` with no trailing slash. Both images *are* mirrored — collection understands those shapes — but the published tree keeps pointing at the build registry for them. Fixing it properly means structure-aware rewriting rather than a substring pass. This is a defect in the host dimension; the version dimension the promote rewrite handles is unaffected, because the version always lives in a `tag` key regardless of where the host is.
+**The nightly host rewrite cannot reach a split host.** It is a literal `<src-registry>/` substring replace, so it only rewrites a reference whose host sits contiguously in front of the repository. Two live layouts defeat it: `keycloak-operator` splits the host into a sibling `registry:` key, and `kubeovn` puts it in `global.registry.address` with no trailing slash. Collection understands both shapes — the host is rejoined, so a split-key ref carrying the source-registry host is still selected and mirrored. Today neither package's ref does: keycloak-operator is never rebuilt by any CI path (#3416), and kubeovn's image is built and pushed to the public registry by cozystack/kubeovn-chart, so both baked refs keep the committed public-registry host and the ownership filter skips them — stale, but resolvable. The gap turns live the moment either package flows through a CI build that stamps the build-registry host into those keys: the image would be mirrored, yet the host rewrite would miss it, and the published tree would keep pointing at the private build registry. Fixing it properly means structure-aware rewriting rather than a substring pass. This is a defect in the host dimension; the version dimension the promote rewrite handles is unaffected, because the version always lives in a `tag` key regardless of where the host is.
 
 **A reference inside a gzip is invisible.** `capi-providers-cpprovider` stamps its kamaji reference into `files/control-plane-components.yaml` and into the `files/components.gz` built from it, and the chart ships the `.gz`. Nothing enumerates either: declaring only the readable copy would rewrite what nothing consumes and diverge it from what does. Note the promote postcondition cannot catch this class at all — `grep -rIl` skips binary files — so it fails silently rather than loudly. No tag rewrite is owed (kamaji is component-versioned) and the image is still mirrored and retagged via its `.tag` file, so the residual is that a nightly's kamaji ConfigMap keeps the build-registry host. The fix is decompress, rewrite, recompress with `gzip -n` for reproducibility.
 
