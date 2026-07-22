@@ -5,6 +5,17 @@
 {{include "cozystack.platform.package.default" (list "cozystack.http-cache-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.tcp-balancer-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.vpn-application" $) }}
+{{- /*
+  site-router runs its VyOS gateway in a KubeVirt VM cloned from
+  vm-default-images, so it requires the IaaS bundle (KubeVirt + CDI +
+  vm-default-images). NaaS can be enabled on isp-hosted, where IaaS is not
+  available (iaas.yaml permits bundles.iaas.enabled only on isp-full /
+  isp-full-generic), so emitting site-router unconditionally would leave both
+  packages dependency-blocked forever there. Gate them on the IaaS bundle being
+  enabled — the same switch iaas.yaml uses to emit KubeVirt/CDI.
+*/ -}}
+{{- if .Values.bundles.iaas.enabled }}
 {{include "cozystack.platform.package.default" (list "cozystack.site-router-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.site-router-controller" $) }}
+{{- end }}
 {{- end }}
