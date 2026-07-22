@@ -3,10 +3,10 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: autoscaling.cozystack.io:db-autoscaler
 rules:
-# DHA: watch spec, write status.
+# DHA: watch spec, manage finalizer (update), write status.
 - apiGroups: ["autoscaling.cozystack.io"]
   resources: ["databasehorizontalautoscalers"]
-  verbs: ["get", "list", "watch"]
+  verbs: ["get", "list", "watch", "update", "patch"]
 - apiGroups: ["autoscaling.cozystack.io"]
   resources: ["databasehorizontalautoscalers/status"]
   verbs: ["get", "update", "patch"]

@@ -214,6 +214,23 @@ func TestDecideQuorumFloorJumpsUpBypassingStep(t *testing.T) {
 	}
 }
 
+// TestDecideNeverScalesBelowQuorumClimbing: when current is below the floor and
+// load demands MORE than the floor, the step limit must not leave the count
+// below a safe quorum — the decision jumps at least to the floor.
+func TestDecideNeverScalesBelowQuorumClimbing(t *testing.T) {
+	in := baseInput()
+	in.Current = 2
+	in.QuorumFloor = 5
+	in.Max = 10
+	in.ScaleUpStep = 1
+	// high load: metric far above target so natural wants > floor.
+	in.Metrics = []MetricObservation{{Type: "ReadConnections", AveragePerReplica: 900, Target: 150}}
+	d := Decide(in)
+	if d.Desired < 5 {
+		t.Fatalf("must not patch below the quorum floor while climbing: desired=%d, want >=5", d.Desired)
+	}
+}
+
 func TestDecideRespectQuorumHonored(t *testing.T) {
 	// metric wants to shrink hard; floor 4, min 2.
 	base := func() ScaleInput {

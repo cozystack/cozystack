@@ -244,3 +244,83 @@ func mkNamespace(t *testing.T, ctx context.Context, c client.Client, name string
 		t.Fatalf("create namespace: %v", err)
 	}
 }
+
+// TestEnvtestMarkerClearedOnDelete guards the finalizer: after a DHA that has
+// stamped the managed-by marker is deleted, the marker must be removed from the
+// target Application so ownership enforcement does not outlive the DHA.
+func TestEnvtestMarkerClearedOnDelete(t *testing.T) {
+	cfg, stop := startEnvtest(t)
+	defer stop()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		val := "420"
+		if q := req.URL.Query().Get("query"); strings.Contains(q, "replication_lag") || strings.Contains(q, "in_recovery") {
+			val = "0"
+		}
+		fmt.Fprintf(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1,%q]}]}}`, val)
+	}))
+	defer srv.Close()
+
+	r, c, dyn := newEnvtestReconciler(t, cfg, srv.URL)
+	ctx := context.Background()
+	mkNamespace(t, ctx, c, "tenant-d")
+
+	gvr := schema.GroupVersionResource{Group: "apps.cozystack.io", Version: "v1alpha1", Resource: "postgreses"}
+	app := &unstructured.Unstructured{}
+	app.SetGroupVersionKind(schema.GroupVersionKind{Group: "apps.cozystack.io", Version: "v1alpha1", Kind: "Postgres"})
+	app.SetName("db")
+	app.SetNamespace("tenant-d")
+	app.Object["spec"] = map[string]any{"replicas": int64(3), "resourcesPreset": "t1.micro"}
+	if _, err := dyn.Resource(gvr).Namespace("tenant-d").Create(ctx, app, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create app: %v", err)
+	}
+	if err := c.Create(ctx, workloadMonitor("postgres-db", "tenant-d", 3, true)); err != nil {
+		t.Fatalf("create wm: %v", err)
+	}
+	wm := &cozyv1alpha1.WorkloadMonitor{}
+	_ = c.Get(ctx, types.NamespacedName{Namespace: "tenant-d", Name: "postgres-db"}, wm)
+	op := true
+	wm.Status.Operational = &op
+	wm.Status.AvailableReplicas = 3
+	_ = c.Status().Update(ctx, wm)
+
+	min, max := int32(2), int32(6)
+	dha := &autoscalingv1alpha1.DatabaseHorizontalAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "tenant-d"},
+		Spec: autoscalingv1alpha1.DatabaseHorizontalAutoscalerSpec{
+			TargetRef:   autoscalingv1alpha1.TargetRef{Kind: "Postgres", Name: "db"},
+			MinReplicas: &min, MaxReplicas: &max,
+			Metrics: []autoscalingv1alpha1.MetricSpec{{
+				Type:   autoscalingv1alpha1.MetricReadConnections,
+				Target: autoscalingv1alpha1.MetricTarget{AverageValue: mustQuantity("150")},
+			}},
+		},
+	}
+	if err := c.Create(ctx, dha); err != nil {
+		t.Fatalf("create dha: %v", err)
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "tenant-d", Name: "db"}}
+	// Reconcile: adds finalizer + patches replicas + stamps marker.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile1: %v", err)
+	}
+	got, _ := dyn.Resource(gvr).Namespace("tenant-d").Get(ctx, "db", metav1.GetOptions{})
+	if got.GetAnnotations()[autoscalingv1alpha1.ManagedByAnnotation] == "" {
+		t.Fatalf("expected marker stamped after reconcile")
+	}
+
+	// Delete the DHA (finalizer keeps it around) then reconcile the deletion.
+	if err := c.Delete(ctx, dha); err != nil {
+		t.Fatalf("delete dha: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("reconcile-delete: %v", err)
+	}
+	got, err := dyn.Resource(gvr).Namespace("tenant-d").Get(ctx, "db", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get app after delete: %v", err)
+	}
+	if v := got.GetAnnotations()[autoscalingv1alpha1.ManagedByAnnotation]; v != "" {
+		t.Fatalf("marker must be cleared after DHA deletion, still %q", v)
+	}
+}

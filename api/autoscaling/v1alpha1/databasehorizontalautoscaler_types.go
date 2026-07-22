@@ -30,6 +30,11 @@ const (
 	// Application's replicas value.
 	FieldManager = "db-autoscaler"
 
+	// Finalizer ensures the operator clears the managed-by marker from the target
+	// Application before the DHA is removed, so ownership enforcement does not
+	// outlive the DHA.
+	Finalizer = "autoscaling.cozystack.io/finalizer"
+
 	// DefaultAPIGroup is the API group of the scale target when TargetRef.APIGroup
 	// is left empty.
 	DefaultAPIGroup = "apps.cozystack.io"

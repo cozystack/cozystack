@@ -54,6 +54,7 @@ spec:
         args:
         - --leader-elect
         - --operator-username=system:serviceaccount:{{ .Release.Namespace }}:db-autoscaler
+        - --apps-api-username=system:serviceaccount:{{ .Values.dbAutoscaler.appsApiNamespace }}:cozystack-api
         - --enable-webhook={{ .Values.dbAutoscaler.webhook.enabled }}
         {{- if .Values.dbAutoscaler.metrics.enabled }}
         - --metrics-bind-address={{ .Values.dbAutoscaler.metrics.bindAddress }}

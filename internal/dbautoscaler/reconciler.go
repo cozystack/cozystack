@@ -33,6 +33,7 @@ import (
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	autoscalingv1alpha1 "github.com/cozystack/cozystack/api/autoscaling/v1alpha1"
@@ -116,7 +117,7 @@ func (r *Reconciler) dropState(key types.NamespacedName) {
 	delete(r.state, key)
 }
 
-// +kubebuilder:rbac:groups=autoscaling.cozystack.io,resources=databasehorizontalautoscalers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=autoscaling.cozystack.io,resources=databasehorizontalautoscalers,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=autoscaling.cozystack.io,resources=databasehorizontalautoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=apps.cozystack.io,resources=*,verbs=get;list;watch;patch
 // +kubebuilder:rbac:groups=cozystack.io,resources=workloadmonitors,verbs=get;list;watch
@@ -134,6 +135,26 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	// Finalizer: on deletion, clear the managed-by marker from the target so the
+	// ownership webhook does not keep guarding it after the DHA is gone.
+	if !dha.DeletionTimestamp.IsZero() {
+		if controllerutil.ContainsFinalizer(dha, autoscalingv1alpha1.Finalizer) {
+			r.clearMarker(ctx, dha)
+			r.dropState(req.NamespacedName)
+			clearMetrics(dha.Namespace, dha.Name)
+			controllerutil.RemoveFinalizer(dha, autoscalingv1alpha1.Finalizer)
+			if err := r.Update(ctx, dha); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
+	}
+	if controllerutil.AddFinalizer(dha, autoscalingv1alpha1.Finalizer) {
+		if err := r.Update(ctx, dha); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	adapter := AdapterFor(dha.Spec.TargetRef.Kind)
@@ -472,6 +493,27 @@ func (r *Reconciler) patchReplicas(ctx context.Context, mapping *apimeta.RESTMap
 		ctx, dha.Spec.TargetRef.Name, types.MergePatchType, patch,
 		metav1.PatchOptions{FieldManager: autoscalingv1alpha1.FieldManager})
 	return err
+}
+
+// clearMarker removes the managed-by marker annotation from the target
+// Application (best-effort; tolerates an already-deleted target), so the
+// ownership webhook stops guarding it once the DHA is gone.
+func (r *Reconciler) clearMarker(ctx context.Context, dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler) {
+	group := dha.Spec.TargetRef.APIGroup
+	if group == "" {
+		group = autoscalingv1alpha1.DefaultAPIGroup
+	}
+	mapping, err := r.RESTMapping(schema.GroupKind{Group: group, Kind: dha.Spec.TargetRef.Kind})
+	if err != nil {
+		return
+	}
+	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:null}}}`, autoscalingv1alpha1.ManagedByAnnotation))
+	_, err = r.Resource(mapping.Resource).Namespace(dha.Namespace).Patch(
+		ctx, dha.Spec.TargetRef.Name, types.MergePatchType, patch,
+		metav1.PatchOptions{FieldManager: autoscalingv1alpha1.FieldManager})
+	if err != nil && !apierrors.IsNotFound(err) {
+		log.FromContext(ctx).Error(err, "clear managed-by marker", "target", dha.Spec.TargetRef.Name)
+	}
 }
 
 func (r *Reconciler) recordEvent(dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler, eventType, reason, msg string) {

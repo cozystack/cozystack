@@ -47,7 +47,7 @@ Operational note: the webhook matches every `helmreleases` UPDATE cluster-wide (
 
 Because the webhook allows writes that flow through the apps-API extension server, a tenant's manual `kubectl edit <kind> … replicas` is not rejected — but the controller detects it (observed `replicas` differs from the value the autoscaler last wrote), surfaces `ScalingLimited=True(OwnershipConflict)`, and backs off rather than fighting. This back-off is **terminal**: a single manual replicas edit disables autoscaling for that target until the DHA is deleted and recreated. This is intentional ("do not enter a write war"), but worth knowing — recreate the DHA to resume autoscaling after a manual override.
 
-Deleting the DHA stops all autoscaling immediately and clears the marker, leaving the application at its current `replicas`.
+Deleting the DHA stops all autoscaling immediately: a finalizer removes the managed-by marker annotation from the target Application (so the ownership webhook stops guarding its HelmRelease and manual/GitOps control is regained), leaving the application at its current `replicas`.
 
 ## Example
 

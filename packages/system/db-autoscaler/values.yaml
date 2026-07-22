@@ -1,6 +1,10 @@
 dbAutoscaler:
   image: "ghcr.io/cozystack/cozystack/db-autoscaler:v0.0.0"
   replicas: 2
+  # Namespace of the apps.cozystack.io extension server (cozystack-api). Its SA
+  # is allowed by the ownership webhook, since legitimate replicas writes through
+  # the apps API reach the HelmRelease as this identity.
+  appsApiNamespace: cozy-system
   debug: false
   webhook:
     # Register the replicas-ownership validating webhook. failurePolicy is Ignore

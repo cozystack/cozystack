@@ -173,15 +173,15 @@ func Decide(in ScaleInput) Decision {
 	}
 
 	// Rate-limit the current->natural transition. Reaching the quorum floor is
-	// exempt from the step limit only on the way UP: urgently climbing to a safe
-	// quorum must not be rate-limited. Scaling DOWN always respects scaleDownStep
-	// (shedding many standbys at once is not a safety need), gated additionally by
-	// the scale-down stabilization window.
-	var desired int32
-	if natural == qfloor && natural > in.Current {
-		desired = natural
-	} else {
-		desired = applyStep(in.Current, natural, in.ScaleUpStep, in.ScaleDownStep)
+	// exempt from the step limit on the way UP: urgently climbing to a safe quorum
+	// must not be rate-limited, and the step must never leave the count below the
+	// floor while climbing (whether the target lands on the floor or above it).
+	// Scaling DOWN always respects scaleDownStep (shedding many standbys at once is
+	// not a safety need), gated additionally by the scale-down stabilization window.
+	desired := applyStep(in.Current, natural, in.ScaleUpStep, in.ScaleDownStep)
+	if natural > in.Current && desired < qfloor {
+		// climbing but the step would leave us below a safe quorum — jump to the floor.
+		desired = qfloor
 	}
 
 	d.Desired = desired
