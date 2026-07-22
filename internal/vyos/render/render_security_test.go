@@ -56,7 +56,7 @@ import (
 
 // forwardFilterBase is the provisional base path of the platform-owned guest
 // forward-chain filter (TODO(T13): validate the VyOS 1.5 leaf path).
-const forwardFilterBase = "firewall/forward"
+const forwardFilterBase = "firewall/ipv4/forward/filter"
 
 // ipsecMatchForwardRule scans ops for a `firewall forward` rule that carries the
 // given ipsec match flag (match-ipsec or match-none) as a value-less leaf and
@@ -68,11 +68,11 @@ func ipsecMatchForwardRule(ops []vyos.Operation, matchFlag string) string {
 			continue
 		}
 		p := op.Path
-		// .../forward/rule/<N>/ipsec/<matchFlag>
-		if len(p) >= 6 &&
-			p[0] == "firewall" && p[1] == "forward" && p[2] == "rule" &&
+		// firewall/ipv4/forward/filter/rule/<N>/ipsec/<matchFlag> (VyOS 1.5)
+		if len(p) >= 8 &&
+			p[0] == "firewall" && p[1] == "ipv4" && p[2] == "forward" && p[3] == "filter" && p[4] == "rule" &&
 			p[len(p)-2] == "ipsec" && p[len(p)-1] == matchFlag {
-			return p[3]
+			return p[5]
 		}
 	}
 	return ""
@@ -102,7 +102,7 @@ func anyInterfaceInboundFirewall(ops []vyos.Operation) bool {
 // forward-chain default-drop. It scans by rule number so it does not pin a
 // specific numbering.
 func tunnelIngressAccepts(ops []vyos.Operation, ruleset string) (sources, dests map[string]bool, allConstrained bool) {
-	prefix := "firewall/name/" + ruleset + "/rule/"
+	prefix := "firewall/ipv4/name/" + ruleset + "/rule/"
 	srcByRule := map[string]string{}
 	dstByRule := map[string]string{}
 	for _, op := range ops {
@@ -153,7 +153,7 @@ func TestRenderTunnelIngress_FiltersDecryptedBySourceViaForwardFilter(t *testing
 
 	ops := render.Render(in)
 
-	rs := "firewall/name/" + render.TunnelIngressRuleSet
+	rs := "firewall/ipv4/name/" + render.TunnelIngressRuleSet
 
 	// (a) A source NOT in remoteCIDRs falls through to the named-set default
 	// drop. The allow-list lives in the named set (unchanged Retrieve path).
@@ -178,13 +178,13 @@ func TestRenderTunnelIngress_FiltersDecryptedBySourceViaForwardFilter(t *testing
 
 	// Established/related return traffic is accepted before any source match.
 	if !containsSet(ops, rs+"/rule/5/action", "accept") ||
-		!containsSet(ops, rs+"/rule/5/state/established", "enable") {
+		!containsSet(ops, rs+"/rule/5/state", "established") {
 		t.Errorf("expected established/related accept as the first named-set rule, ops: %+v", ops)
 	}
 
 	// (d) The guard reaches the named set via a forward-filter rule that matches
 	// IPsec-decrypted traffic (`ipsec match-ipsec`) and jumps to it.
-	n := ipsecMatchForwardRule(ops, "match-ipsec")
+	n := ipsecMatchForwardRule(ops, "match-ipsec-in")
 	if n == "" {
 		t.Fatalf("expected a `firewall forward` rule matching IPsec-decrypted traffic (ipsec match-ipsec), ops: %+v", ops)
 	}
@@ -218,7 +218,7 @@ func TestRenderTunnelIngress_NonTenantDestinationNotAccepted(t *testing.T) {
 	in.Tunnels = []render.IPSecTunnel{routedTunnel()}
 
 	ops := render.Render(in)
-	rs := "firewall/name/" + render.TunnelIngressRuleSet
+	rs := "firewall/ipv4/name/" + render.TunnelIngressRuleSet
 
 	sources, dests, allConstrained := tunnelIngressAccepts(ops, render.TunnelIngressRuleSet)
 	if !sources["172.31.0.0/16"] {
@@ -261,7 +261,7 @@ func TestRenderTunnelIngress_LocalEgressNotCaught(t *testing.T) {
 
 	// Non-IPsec forward traffic (the plaintext, pre-IPsec local egress) is
 	// explicitly accepted, so it is not subject to the source-filter drop.
-	n := ipsecMatchForwardRule(ops, "match-none")
+	n := ipsecMatchForwardRule(ops, "match-none-in")
 	if n == "" {
 		t.Fatalf("expected a `firewall forward` rule matching non-IPsec traffic (ipsec match-none) to admit local egress, ops: %+v", ops)
 	}
@@ -303,13 +303,13 @@ func TestRenderTunnelIngress_EmptyRemoteCIDRsFailsClosed(t *testing.T) {
 
 	ops := render.Render(in)
 
-	rs := "firewall/name/" + render.TunnelIngressRuleSet
+	rs := "firewall/ipv4/name/" + render.TunnelIngressRuleSet
 
 	if !containsSet(ops, rs+"/default-action", "drop") {
 		t.Errorf("expected fail-closed default-action=drop with empty RemoteCIDRs, ops: %+v", ops)
 	}
 	if !containsSet(ops, rs+"/rule/5/action", "accept") ||
-		!containsSet(ops, rs+"/rule/5/state/established", "enable") {
+		!containsSet(ops, rs+"/rule/5/state", "established") {
 		t.Errorf("expected established/related accept even with empty RemoteCIDRs, ops: %+v", ops)
 	}
 	if containsSet(ops, rs+"/rule/10/source/address", "*") {
@@ -317,7 +317,7 @@ func TestRenderTunnelIngress_EmptyRemoteCIDRsFailsClosed(t *testing.T) {
 	}
 	// The forward-filter ipsec-match jump is still emitted so the drop takes
 	// effect on decrypted traffic.
-	if ipsecMatchForwardRule(ops, "match-ipsec") == "" {
+	if ipsecMatchForwardRule(ops, "match-ipsec-in") == "" {
 		t.Errorf("expected the ipsec-match forward jump even with empty RemoteCIDRs (fail-closed), ops: %+v", ops)
 	}
 	if anyInterfaceInboundFirewall(ops) {
@@ -365,8 +365,8 @@ func TestRenderForwardFilter_AbsentWithoutTunnelDevice(t *testing.T) {
 	ops := render.Render(in)
 
 	for _, op := range ops {
-		if op.Op == vyos.OpSet && len(op.Path) >= 2 &&
-			op.Path[0] == "firewall" && op.Path[1] == "forward" {
+		if op.Op == vyos.OpSet && len(op.Path) >= 3 &&
+			op.Path[0] == "firewall" && op.Path[1] == "ipv4" && op.Path[2] == "forward" {
 			t.Errorf("expected no forward-filter ops without a resolved tunnel device, got %s", strings.Join(op.Path, "/"))
 		}
 	}
@@ -391,26 +391,31 @@ func TestRenderManagementAPIDrop_OnIPsecDecryptedInput(t *testing.T) {
 	ops := render.Render(in)
 
 	// Locate the input-filter rule that matches IPsec-decrypted traffic.
+	// VyOS 1.5: firewall/ipv4/input/filter/rule/<N>/ipsec/match-ipsec-in.
 	var ruleNum string
 	for _, op := range ops {
 		p := op.Path
-		if op.Op == vyos.OpSet && len(p) >= 6 &&
-			p[0] == "firewall" && p[1] == "input" && p[2] == "rule" &&
-			p[len(p)-2] == "ipsec" && p[len(p)-1] == "match-ipsec" {
-			ruleNum = p[3]
+		if op.Op == vyos.OpSet && len(p) >= 8 &&
+			p[0] == "firewall" && p[1] == "ipv4" && p[2] == "input" && p[3] == "filter" && p[4] == "rule" &&
+			p[len(p)-2] == "ipsec" && p[len(p)-1] == "match-ipsec-in" {
+			ruleNum = p[5]
 			break
 		}
 	}
 	if ruleNum == "" {
-		t.Fatalf("expected a `firewall input` rule matching IPsec-decrypted traffic (Boundary A), ops: %+v", ops)
+		t.Fatalf("expected a `firewall ipv4 input filter` rule matching IPsec-decrypted traffic (Boundary A), ops: %+v", ops)
 	}
 
-	base := "firewall/input/rule/" + ruleNum
+	base := "firewall/ipv4/input/filter/rule/" + ruleNum
 	if !containsSet(ops, base+"/action", "drop") {
 		t.Errorf("expected the IPsec-decrypted management-API rule to drop, ops: %+v", ops)
 	}
 	if !containsSet(ops, base+"/destination/port", "22,443") {
 		t.Errorf("expected the drop to cover the management ports 22,443, ops: %+v", ops)
+	}
+	// VyOS 1.5 requires a protocol whenever a destination port is set.
+	if !containsSet(ops, base+"/protocol", "tcp") {
+		t.Errorf("expected the Boundary-A drop to set protocol tcp (required with a port), ops: %+v", ops)
 	}
 }
 
@@ -434,9 +439,9 @@ func TestRenderManagementAPIDrop_IndependentOfManagementCIDR(t *testing.T) {
 	found := false
 	for _, op := range ops {
 		p := op.Path
-		if op.Op == vyos.OpSet && len(p) >= 6 &&
-			p[0] == "firewall" && p[1] == "input" && p[2] == "rule" &&
-			p[len(p)-2] == "ipsec" && p[len(p)-1] == "match-ipsec" {
+		if op.Op == vyos.OpSet && len(p) >= 8 &&
+			p[0] == "firewall" && p[1] == "ipv4" && p[2] == "input" && p[3] == "filter" && p[4] == "rule" &&
+			p[len(p)-2] == "ipsec" && p[len(p)-1] == "match-ipsec-in" {
 			found = true
 			break
 		}

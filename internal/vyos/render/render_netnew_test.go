@@ -66,7 +66,7 @@ func TestRenderMSSClamp_DerivedFromInputMTU(t *testing.T) {
 	ops := render.Render(in)
 
 	want := strconv.Itoa(1400 - render.MSSClampOverhead) // 1360
-	if !containsSet(ops, "firewall/options/interface/eth1/adjust-mss", want) {
+	if !containsSet(ops, "interfaces/ethernet/eth1/ip/adjust-mss", want) {
 		t.Errorf("expected adjust-mss=%s on the resolved tunnel device eth1, ops: %+v", want, ops)
 	}
 }
@@ -83,7 +83,7 @@ func TestRenderMSSClamp_DefaultsToDesignClamp(t *testing.T) {
 	ops := render.Render(in)
 
 	want := strconv.Itoa(render.DefaultOverlayMTU - render.MSSClampOverhead) // 1280
-	if !containsSet(ops, "firewall/options/interface/eth1/adjust-mss", want) {
+	if !containsSet(ops, "interfaces/ethernet/eth1/ip/adjust-mss", want) {
 		t.Errorf("expected default adjust-mss=%s (1320-40), ops: %+v", want, ops)
 	}
 }
@@ -101,8 +101,10 @@ func TestRenderIPSec_ForcesUDPEncapsulation(t *testing.T) {
 
 	ops := render.Render(in)
 
-	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/force-encapsulation", "enable") {
-		t.Errorf("expected forced ESP-in-UDP (force-encapsulation enable) on the peer, ops: %+v", ops)
+	// VyOS 1.5: the peer key is the (sanitised) description, not the IP; the
+	// forced-UDP-encapsulation leaf is `force-udp-encapsulation` (value-less).
+	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/site-a/force-udp-encapsulation", "") {
+		t.Errorf("expected forced ESP-in-UDP (force-udp-encapsulation) on the peer, ops: %+v", ops)
 	}
 }
 

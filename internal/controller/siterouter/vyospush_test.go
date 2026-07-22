@@ -103,16 +103,17 @@ func (f *fakeVyOS) Retrieve(_ context.Context, path []string) (json.RawMessage, 
 		return nil, f.retrieveErr
 	}
 	// Path-aware: confirmSourceFilterActive reads the named set
-	// (firewall/name/TUNNEL-INGRESS) and the forward-chain jump (firewall/forward)
-	// separately (F3). The named-set query returns retrieveResult; the forward
-	// query returns forwardResult, or — when unset — a subtree mirroring the named
-	// set's presence so tests that only wire retrieveResult keep the jump present.
-	if len(path) >= 2 && path[0] == "firewall" && path[1] == "forward" {
+	// (firewall/ipv4/name/TUNNEL-INGRESS) and the forward-chain jump
+	// (firewall/ipv4/forward/filter) separately (F3). The named-set query returns
+	// retrieveResult; the forward query returns forwardResult, or — when unset — a
+	// subtree mirroring the named set's presence so tests that only wire
+	// retrieveResult keep the jump present.
+	if len(path) >= 3 && path[0] == "firewall" && path[1] == "ipv4" && path[2] == "forward" {
 		if f.forwardResult != nil {
 			return f.forwardResult, nil
 		}
 		if ruleSetPresent(f.retrieveResult) {
-			return json.RawMessage(`{"rule":{"20":{"ipsec":{"match-ipsec":{}},"action":"jump","jump-target":"` + render.TunnelIngressRuleSet + `"}}}`), nil
+			return json.RawMessage(`{"rule":{"20":{"ipsec":{"match-ipsec-in":{}},"action":"jump","jump-target":"` + render.TunnelIngressRuleSet + `"}}}`), nil
 		}
 		return f.retrieveResult, nil
 	}
@@ -267,7 +268,7 @@ func opsHave(ops []vyos.Operation, path, value string) bool {
 // forward a valid-source packet to any destination). It scans by rule number so
 // it does not pin a specific numbering.
 func tunnelIngressSources(ops []vyos.Operation) (sources map[string]bool, allConstrained bool) {
-	prefix := "firewall/name/" + render.TunnelIngressRuleSet + "/rule/"
+	prefix := "firewall/ipv4/name/" + render.TunnelIngressRuleSet + "/rule/"
 	srcByRule := map[string]string{}
 	dstByRule := map[string]bool{}
 	for i := range ops {
@@ -657,10 +658,10 @@ func TestReconcile_MACDiscoveryBindsToDiscoveredDevice(t *testing.T) {
 	reconcileInstance(t, r, "demo")
 
 	ops := fakeV.lastOps()
-	if !opsHave(ops, "firewall/options/interface/eth1/adjust-mss", "") {
+	if !opsHave(ops, "interfaces/ethernet/eth1/ip/adjust-mss", "") {
 		t.Errorf("expected MSS clamp bound to the discovered device eth1, ops: %+v", ops)
 	}
-	if !opsHave(ops, "firewall/forward/rule/20/jump-target", render.TunnelIngressRuleSet) {
+	if !opsHave(ops, "firewall/ipv4/forward/filter/rule/20/jump-target", render.TunnelIngressRuleSet) {
 		t.Errorf("expected tunnel-ingress source filter reached via the forward ipsec-match jump, ops: %+v", ops)
 	}
 }
@@ -682,10 +683,10 @@ func TestReconcile_MACDiscoveryFallsBackPositional(t *testing.T) {
 	reconcileInstance(t, r, "demo")
 
 	ops := fakeV.lastOps()
-	if !opsHave(ops, "firewall/options/interface/eth0/adjust-mss", "") {
+	if !opsHave(ops, "interfaces/ethernet/eth0/ip/adjust-mss", "") {
 		t.Errorf("expected MSS clamp to fall back to positional eth0, ops: %+v", ops)
 	}
-	if !opsHave(ops, "firewall/forward/rule/20/jump-target", render.TunnelIngressRuleSet) {
+	if !opsHave(ops, "firewall/ipv4/forward/filter/rule/20/jump-target", render.TunnelIngressRuleSet) {
 		t.Errorf("expected tunnel-ingress source filter reached via the forward ipsec-match jump, ops: %+v", ops)
 	}
 }
@@ -781,14 +782,23 @@ func TestReconcile_ResolveInputsMapping(t *testing.T) {
 		t.Fatalf("expected the resolved config to be pushed, got no Configure ops")
 	}
 
-	// Forced ESP-in-UDP on the peer (always, per render).
-	if !opsHave(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/force-encapsulation", "enable") {
+	// VyOS 1.5 site-to-site peer model: the peer key is the (sanitised) instance
+	// name, the remote IP is in remote-address, and forced ESP-in-UDP is the
+	// value-less `force-udp-encapsulation` leaf (all validated live).
+	if !opsHave(ops, "vpn/ipsec/site-to-site/peer/demo/remote-address", "203.0.113.10") {
+		t.Errorf("expected the remote peer IP in remote-address, ops: %+v", ops)
+	}
+	if !opsHave(ops, "vpn/ipsec/site-to-site/peer/demo/force-udp-encapsulation", "") {
 		t.Errorf("expected forced UDP encapsulation on the peer, ops: %+v", ops)
+	}
+	// PSK moved out of the peer into the global authentication subtree.
+	if !opsHave(ops, "vpn/ipsec/authentication/psk/demo/id", "203.0.113.10") {
+		t.Errorf("expected the global PSK matched to the peer by id, ops: %+v", ops)
 	}
 	// Tunnel-ingress source allow-list from remoteCIDRs, each source-accept
 	// destination-constrained to a tenant network (R1 world-egress fix), plus the
 	// default-action drop.
-	rs := "firewall/name/" + render.TunnelIngressRuleSet
+	rs := "firewall/ipv4/name/" + render.TunnelIngressRuleSet
 	srcs, allConstrained := tunnelIngressSources(ops)
 	if !srcs["172.31.0.0/16"] || !srcs["10.10.0.0/16"] {
 		t.Errorf("expected a source-accept rule per remoteCIDR, ops: %+v", ops)
@@ -800,11 +810,11 @@ func TestReconcile_ResolveInputsMapping(t *testing.T) {
 		t.Errorf("expected tunnel-ingress default-action drop, ops: %+v", ops)
 	}
 	// MSS clamp on the resolved device.
-	if !opsHave(ops, "firewall/options/interface/eth0/adjust-mss", "") {
+	if !opsHave(ops, "interfaces/ethernet/eth0/ip/adjust-mss", "") {
 		t.Errorf("expected the MSS clamp on the resolved tunnel device, ops: %+v", ops)
 	}
 	// Management firewall re-stamped every reconcile from --management-cidr.
-	if !opsHave(ops, "firewall/input/rule/10/source/address", "10.244.0.0/16") {
+	if !opsHave(ops, "firewall/ipv4/input/filter/rule/10/source/address", "10.244.0.0/16") {
 		t.Errorf("expected the management firewall re-stamped from --management-cidr, ops: %+v", ops)
 	}
 	// Static route mapped.

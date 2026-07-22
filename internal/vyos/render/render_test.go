@@ -144,7 +144,7 @@ func TestRender_EmitsManagedSubtreeDeletesBeforeSets(t *testing.T) {
 
 	// Spot-check the documented managed subtrees (NAT is out of scope).
 	for _, path := range []string{
-		"firewall/input",
+		"firewall/ipv4/input/filter",
 		"protocols/static/route",
 		"protocols/bgp",
 		"vpn/ipsec",
@@ -163,19 +163,19 @@ func TestRenderManagementFirewall_AppliedWhenCIDRSet(t *testing.T) {
 
 	ops := render.Render(in)
 
-	if !containsSet(ops, "firewall/input/rule/10/action", "accept") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/10/action", "accept") {
 		t.Errorf("expected accept rule 10")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/10/source/address", "10.244.0.0/16") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/10/source/address", "10.244.0.0/16") {
 		t.Errorf("expected source/address to be the management CIDR")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/10/destination/port", "22,443") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/10/destination/port", "22,443") {
 		t.Errorf("expected port 22,443")
 	}
 
-	if !containsSet(ops, "firewall/input/default-action", "drop") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/default-action", "drop") {
 		t.Errorf("expected default-action=drop")
 	}
 }
@@ -259,19 +259,30 @@ func TestRenderIPSec_EmitsGroupsAndPeerWithDefaults(t *testing.T) {
 		t.Errorf("expected IKE encryption default aes256")
 	}
 
-	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/authentication/pre-shared-secret", "secretpsk") {
-		t.Errorf("expected peer PSK to be set to the resolved value")
+	// VyOS 1.5 site-to-site peer model (validated live): the peer key is the
+	// sanitised description ("aws"), the remote IP is in remote-address, and the
+	// PSK lives in the global authentication subtree (not inline under the peer).
+	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/aws/remote-address", "203.0.113.10") {
+		t.Errorf("expected the remote peer IP in remote-address")
 	}
 
-	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/local-address", "203.0.113.15") {
+	if !containsSet(ops, "vpn/ipsec/authentication/psk/aws/secret", "secretpsk") {
+		t.Errorf("expected the PSK in the global authentication psk subtree")
+	}
+
+	if !containsSet(ops, "vpn/ipsec/authentication/psk/aws/id", "203.0.113.10") {
+		t.Errorf("expected the PSK matched to the peer by remote-address id")
+	}
+
+	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/aws/local-address", "203.0.113.15") {
 		t.Errorf("expected peer local-address from Inputs.ExternalIP")
 	}
 
-	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/tunnel/1/local/prefix", "10.0.0.0/24") {
+	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/aws/tunnel/1/local/prefix", "10.0.0.0/24") {
 		t.Errorf("expected tunnel 1 local prefix")
 	}
 
-	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/203.0.113.10/tunnel/1/remote/prefix", "172.31.0.0/16") {
+	if !containsSet(ops, "vpn/ipsec/site-to-site/peer/aws/tunnel/1/remote/prefix", "172.31.0.0/16") {
 		t.Errorf("expected tunnel 1 remote prefix")
 	}
 }
@@ -345,19 +356,19 @@ func TestRenderManagementFirewall_OpensIKEAndESPWhenIPSecConfigured(t *testing.T
 
 	ops := render.Render(in)
 
-	if !containsSet(ops, "firewall/input/rule/20/protocol", "udp") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/20/protocol", "udp") {
 		t.Errorf("expected IKE accept rule (UDP 500) when IPSec is configured")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/20/destination/port", "500") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/20/destination/port", "500") {
 		t.Errorf("expected IKE rule destination port 500")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/21/destination/port", "4500") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/21/destination/port", "4500") {
 		t.Errorf("expected NAT-T rule destination port 4500")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/22/protocol", "esp") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/22/protocol", "esp") {
 		t.Errorf("expected ESP accept rule (IP protocol 50)")
 	}
 }
@@ -370,7 +381,7 @@ func TestRenderManagementFirewall_DoesNotOpenIPSecPortsWhenNoIPSecConfigured(t *
 
 	ops := render.Render(in)
 
-	if containsSet(ops, "firewall/input/rule/20/protocol", "udp") {
+	if containsSet(ops, "firewall/ipv4/input/filter/rule/20/protocol", "udp") {
 		t.Errorf("expected NO IKE rule on a router without tunnels")
 	}
 }
@@ -391,15 +402,15 @@ func TestRenderManagementFirewall_OpensBGPPortPerPeer(t *testing.T) {
 	ops := render.Render(in)
 
 	// First peer at rule 30, second at rule 40.
-	if !containsSet(ops, "firewall/input/rule/30/source/address", "203.0.113.1") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/30/source/address", "203.0.113.1") {
 		t.Errorf("expected BGP peer 1 firewall rule (TCP 179, source-restricted)")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/30/destination/port", "179") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/30/destination/port", "179") {
 		t.Errorf("expected BGP rule destination port 179")
 	}
 
-	if !containsSet(ops, "firewall/input/rule/40/source/address", "198.51.100.1") {
+	if !containsSet(ops, "firewall/ipv4/input/filter/rule/40/source/address", "198.51.100.1") {
 		t.Errorf("expected BGP peer 2 firewall rule at the next slot")
 	}
 }

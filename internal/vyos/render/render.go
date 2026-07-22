@@ -320,7 +320,7 @@ func deleteManagedSubtrees(in Inputs) []vyos.Operation {
 	// its own so a config that later drops the tunnel does not strand it.
 	if in.ManagementCIDR != "" {
 		ops = append(ops,
-			vyos.Operation{Op: vyos.OpDelete, Path: []string{"firewall", "input"}},
+			vyos.Operation{Op: vyos.OpDelete, Path: inputFilterPath()},
 		)
 	} else if in.TunnelDevice != "" {
 		ops = append(ops,
@@ -334,14 +334,12 @@ func deleteManagedSubtrees(in Inputs) []vyos.Operation {
 	// no stale forward jump (delete-then-set). Only fired when a tunnel device is
 	// resolved (the feature is otherwise off). The M2 pod-NIC-inbound binding is
 	// gone — the guard is now a `firewall forward` ipsec-match jump, so there is
-	// no per-interface binding to delete.
-	//
-	// TODO(T13): validate against the shipped VyOS 1.5 image — see the
-	// consolidated syntax note on forwardFilterPath.
+	// no per-interface binding to delete. Paths use the VyOS 1.5 `firewall ipv4`
+	// family via the shared helpers (validated live; see forwardFilterPath).
 	if in.TunnelDevice != "" {
 		ops = append(ops,
-			vyos.Operation{Op: vyos.OpDelete, Path: []string{"firewall", "name", TunnelIngressRuleSet}},
-			vyos.Operation{Op: vyos.OpDelete, Path: []string{"firewall", "forward"}},
+			vyos.Operation{Op: vyos.OpDelete, Path: tunnelIngressPath()},
+			vyos.Operation{Op: vyos.OpDelete, Path: forwardFilterPath()},
 		)
 	}
 
@@ -492,37 +490,35 @@ func renderManagementFirewall(in Inputs) []vyos.Operation {
 		return nil
 	}
 
-	// TODO(T06): validate against VyOS 1.5-rolling nftables — the ported
-	// `firewall input` global-input hook became `firewall ipv4 input filter`
-	// in 1.5; the whole management-firewall chain (rules 5/10/20-22/30+ and
-	// default-action) is provisional until the live push.
+	// VyOS 1.5-rolling: the `firewall input` global-input hook is now
+	// `firewall ipv4 input filter` (via inputFilterPath) and firewall `state`
+	// is a multi-value leaf (`state established` / `state related`), not the
+	// old `state established enable`. Validated live against the shipped image.
 	ops := make([]vyos.Operation, 0, 16)
 
 	// Rule 5: accept established/related sessions BEFORE any other accept
 	// rule. Without it every Configure (which always replays the input
 	// chain) tears down the controller's own in-flight HTTPS session. The
 	// cloud-init seed must agree on this part of the chain.
-	stateBase := []string{"firewall", "input", "rule", "5"}
 	ops = append(ops,
-		set(append(stateBase, "action"), "accept"),
-		set(append(stateBase, "state", "established"), "enable"),
-		set(append(stateBase, "state", "related"), "enable"),
+		set(inputFilterPath("rule", "5", "action"), "accept"),
+		set(inputFilterPath("rule", "5", "state"), "established"),
+		set(inputFilterPath("rule", "5", "state"), "related"),
 	)
 
 	// Rule 10: management-CIDR allow rule for SSH and HTTPS API.
-	mgmtBase := []string{"firewall", "input", "rule", "10"}
 	ops = append(ops,
-		set(append(mgmtBase, "action"), "accept"),
-		set(append(mgmtBase, "source", "address"), in.ManagementCIDR),
-		set(append(mgmtBase, "protocol"), "tcp"),
-		set(append(mgmtBase, "destination", "port"), "22,443"),
+		set(inputFilterPath("rule", "10", "action"), "accept"),
+		set(inputFilterPath("rule", "10", "source", "address"), in.ManagementCIDR),
+		set(inputFilterPath("rule", "10", "protocol"), "tcp"),
+		set(inputFilterPath("rule", "10", "destination", "port"), "22,443"),
 	)
 
 	ops = append(ops, renderIPSecFirewallAccept(in)...)
 	ops = append(ops, renderBGPFirewallAccept(in)...)
 
 	ops = append(ops,
-		set([]string{"firewall", "input", "default-action"}, "drop"),
+		set(inputFilterPath("default-action"), "drop"),
 	)
 
 	return ops
@@ -536,19 +532,15 @@ func renderIPSecFirewallAccept(in Inputs) []vyos.Operation {
 		return nil
 	}
 
-	ikeBase := []string{"firewall", "input", "rule", "20"}
-	natTBase := []string{"firewall", "input", "rule", "21"}
-	espBase := []string{"firewall", "input", "rule", "22"}
-
 	return []vyos.Operation{
-		set(append(ikeBase, "action"), "accept"),
-		set(append(ikeBase, "protocol"), "udp"),
-		set(append(ikeBase, "destination", "port"), "500"),
-		set(append(natTBase, "action"), "accept"),
-		set(append(natTBase, "protocol"), "udp"),
-		set(append(natTBase, "destination", "port"), "4500"),
-		set(append(espBase, "action"), "accept"),
-		set(append(espBase, "protocol"), "esp"),
+		set(inputFilterPath("rule", "20", "action"), "accept"),
+		set(inputFilterPath("rule", "20", "protocol"), "udp"),
+		set(inputFilterPath("rule", "20", "destination", "port"), "500"),
+		set(inputFilterPath("rule", "21", "action"), "accept"),
+		set(inputFilterPath("rule", "21", "protocol"), "udp"),
+		set(inputFilterPath("rule", "21", "destination", "port"), "4500"),
+		set(inputFilterPath("rule", "22", "action"), "accept"),
+		set(inputFilterPath("rule", "22", "protocol"), "esp"),
 	}
 }
 
@@ -570,12 +562,12 @@ func renderBGPFirewallAccept(in Inputs) []vyos.Operation {
 			continue
 		}
 
-		base := []string{"firewall", "input", "rule", strconv.Itoa(ruleNum)}
+		n := strconv.Itoa(ruleNum)
 		ops = append(ops,
-			set(append(base, "action"), "accept"),
-			set(append(base, "source", "address"), peer.PeerAddress),
-			set(append(base, "protocol"), "tcp"),
-			set(append(base, "destination", "port"), "179"),
+			set(inputFilterPath("rule", n, "action"), "accept"),
+			set(inputFilterPath("rule", n, "source", "address"), peer.PeerAddress),
+			set(inputFilterPath("rule", n, "protocol"), "tcp"),
+			set(inputFilterPath("rule", n, "destination", "port"), "179"),
 		)
 		ruleNum += 10
 	}
@@ -617,10 +609,13 @@ func renderMSSClamp(in Inputs) []vyos.Operation {
 // mssClampOp is the single place that emits the version-specific MSS-clamp
 // leaf path. The device is caller-resolved (never hardcoded).
 //
-// TODO(T06): validate against VyOS 1.5-rolling nftables — `firewall ipv4
-// options interface <dev> adjust-mss`; path provisional until live push.
+// VyOS 1.5-rolling: the TCP MSS clamp is NOT under `firewall` at all (both
+// `firewall options ...` and `firewall ipv4 options ...` are rejected as
+// invalid paths on the shipped image). It lives on the interface itself:
+// `interfaces ethernet <dev> ip adjust-mss <value>`. Validated live against
+// the 2026.05.13-0044-rolling image.
 func mssClampOp(dev, clamp string) vyos.Operation {
-	return set([]string{"firewall", "options", "interface", dev, "adjust-mss"}, clamp)
+	return set([]string{"interfaces", "ethernet", dev, "ip", "adjust-mss"}, clamp)
 }
 
 // renderTunnelIngressFilter renders the platform-owned tunnel-ingress source
@@ -647,10 +642,12 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 	ops := make([]vyos.Operation, 0, len(in.RemoteCIDRs)*2+4)
 
 	// Rule 5: accept established/related return traffic before any source match.
+	// VyOS 1.5 `state` is a multi-value leaf (validated live), not the old
+	// `state established enable`.
 	ops = append(ops,
 		set(tunnelIngressPath("rule", "5", "action"), "accept"),
-		set(tunnelIngressPath("rule", "5", "state", "established"), "enable"),
-		set(tunnelIngressPath("rule", "5", "state", "related"), "enable"),
+		set(tunnelIngressPath("rule", "5", "state"), "established"),
+		set(tunnelIngressPath("rule", "5", "state"), "related"),
 	)
 
 	// One accept per (declared remote CIDR × tenant-reachable cluster network),
@@ -689,12 +686,11 @@ func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
 	// tenant network) decrypted flow — including a valid-source packet to a
 	// non-tenant / world destination (the destination-constrained accepts above).
 	//
-	// TODO(T13): the destination-constrained accept STRUCTURE is now in place; its
-	// exact VyOS 1.5 leaf syntax (`rule N destination address <net>` alongside the
-	// source match) still needs live validation against the shipped image, in
-	// lockstep with the other version-specific paths (see forwardFilterPath). The
-	// T13 negative-security suite must confirm on the live gateway that a
-	// valid-source / world-destination packet is dropped.
+	// The destination-constrained accept (`rule N source address <cidr>` +
+	// `rule N destination address <net>`) and this default-action drop are
+	// validated live against the shipped VyOS 1.5 image (a full render-equivalent
+	// config commits cleanly). The T13 negative-security suite still confirms on
+	// the live gateway that a valid-source / world-destination packet is dropped.
 	ops = append(ops, set(tunnelIngressPath("default-action"), "drop"))
 
 	return ops
@@ -730,16 +726,19 @@ func renderForwardFilter(in Inputs) []vyos.Operation {
 	return []vyos.Operation{
 		// §3 default-deny tunnel→world.
 		set(forwardFilterPath("default-action"), "drop"),
-		// Established/related return traffic (both directions).
+		// Established/related return traffic (both directions). VyOS 1.5 `state`
+		// is a multi-value leaf (validated live).
 		set(forwardFilterPath("rule", "5", "action"), "accept"),
-		set(forwardFilterPath("rule", "5", "state", "established"), "enable"),
-		set(forwardFilterPath("rule", "5", "state", "related"), "enable"),
+		set(forwardFilterPath("rule", "5", "state"), "established"),
+		set(forwardFilterPath("rule", "5", "state"), "related"),
 		// Non-IPsec (local egress) — accepted, NOT subject to the source-filter
-		// drop. This is the M2 fix.
-		set(forwardFilterPath("rule", "10", "ipsec", "match-none"), ""),
+		// drop. This is the M2 fix. VyOS 1.5 spells the inbound non-IPsec matcher
+		// `match-none-in` (bare `match-none` is an ambiguous prefix).
+		set(forwardFilterPath("rule", "10", "ipsec", "match-none-in"), ""),
 		set(forwardFilterPath("rule", "10", "action"), "accept"),
-		// IPsec-decrypted ingress — source-filtered via the named rule set.
-		set(forwardFilterPath("rule", "20", "ipsec", "match-ipsec"), ""),
+		// IPsec-decrypted ingress — source-filtered via the named rule set. VyOS
+		// 1.5 spells the inbound-IPsec matcher `match-ipsec-in` (validated live).
+		set(forwardFilterPath("rule", "20", "ipsec", "match-ipsec-in"), ""),
 		set(forwardFilterPath("rule", "20", "action"), "jump"),
 		set(forwardFilterPath("rule", "20", "jump-target"), TunnelIngressRuleSet),
 	}
@@ -758,8 +757,13 @@ func renderTunnelManagementDrop(in Inputs) []vyos.Operation {
 		return nil
 	}
 
+	// VyOS 1.5 (validated live): the inbound-IPsec matcher is `match-ipsec-in`,
+	// and a rule that sets a destination port MUST also set a protocol or the
+	// commit fails ("Protocol must be defined if specifying a port"). The guest
+	// management ports (SSH 22, HTTPS API 443) are both TCP.
 	return []vyos.Operation{
-		set(inputFilterPath("rule", tunnelMgmtDropRule, "ipsec", "match-ipsec"), ""),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "ipsec", "match-ipsec-in"), ""),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "protocol"), "tcp"),
 		set(inputFilterPath("rule", tunnelMgmtDropRule, "destination", "port"), "22,443"),
 		set(inputFilterPath("rule", tunnelMgmtDropRule, "action"), "drop"),
 	}
@@ -771,26 +775,25 @@ func renderTunnelManagementDrop(in Inputs) []vyos.Operation {
 // ipsec-match jump), and the local-input chain (Boundary A + the management
 // ACL).
 //
-// TODO(T13): CONSOLIDATED VyOS 1.5 syntax validation. The current paths use the
-// flat 1.4-style family (`firewall name <NAME>`, `firewall forward`, `firewall
-// input`) and the ipsec matchers (`ipsec match-ipsec` / `ipsec match-none`) as
-// value-less leaves. VyOS 1.5-rolling moved these under
-// `firewall ipv4 {name <NAME>,forward filter,input filter}` and may spell the
-// ipsec matcher / jump differently. Validate the whole family live against the
-// shipped image and flip all three helpers (plus mssClampOp and the
-// force-encapsulation leaf) together — the controller's tunnelIngressRulesetPath
-// must be flipped in lockstep. See also the destination-constraint TODO(T13) on
-// renderTunnelIngressFilter's default-action.
+// VyOS 1.5-rolling nftables firewall (validated live against the
+// 2026.05.13-0044-rolling image): the flat 1.4-style family (`firewall name`,
+// `firewall forward`, `firewall input`) is rejected as invalid; every rule set
+// and base chain lives under `firewall ipv4 {name <NAME>,forward filter,input
+// filter}`. The ipsec matchers are `ipsec match-ipsec-in` / `ipsec match-none-in`
+// (bare `match-ipsec`/`match-none` are ambiguous prefixes), and firewall `state`
+// is a multi-value leaf (`state established` / `state related`), not the old
+// `state established enable`. The controller's tunnelIngressRulesetPath /
+// tunnelIngressForwardPath are flipped in lockstep.
 func tunnelIngressPath(sub ...string) []string {
-	return append([]string{"firewall", "name", TunnelIngressRuleSet}, sub...)
+	return append([]string{"firewall", "ipv4", "name", TunnelIngressRuleSet}, sub...)
 }
 
 func forwardFilterPath(sub ...string) []string {
-	return append([]string{"firewall", "forward"}, sub...)
+	return append([]string{"firewall", "ipv4", "forward", "filter"}, sub...)
 }
 
 func inputFilterPath(sub ...string) []string {
-	return append([]string{"firewall", "input"}, sub...)
+	return append([]string{"firewall", "ipv4", "input", "filter"}, sub...)
 }
 
 func renderStaticRoutes(in Inputs) []vyos.Operation {
@@ -848,29 +851,45 @@ func renderIPSec(in Inputs) []vyos.Operation {
 			set([]string{"vpn", "ipsec", "esp-group", espGroupName, "lifetime"}, strconv.Itoa(esp.Lifetime)),
 		)
 
-		peer := []string{"vpn", "ipsec", "site-to-site", "peer", t.PeerAddress}
+		// VyOS 1.5 site-to-site peer model (validated live against the shipped
+		// image): the peer key is an alphanumeric NAME, not the IP — an IP with
+		// dots is rejected ("Peer connection name must be alphanumeric"). The
+		// remote IP goes in `remote-address`, and the PSK is no longer inline under
+		// the peer (`authentication pre-shared-secret` was removed); it lives in the
+		// global `vpn ipsec authentication psk <name>` subtree, matched to the peer
+		// by id.
+		peerName := sanitisePeerName(t.Description, i)
+		peer := []string{"vpn", "ipsec", "site-to-site", "peer", peerName}
+
+		// Global PSK for this peer, matched by the remote address as id.
+		ops = append(ops,
+			set([]string{"vpn", "ipsec", "authentication", "psk", peerName, "secret"}, t.PSK),
+			set([]string{"vpn", "ipsec", "authentication", "psk", peerName, "id"}, t.PeerAddress),
+		)
 
 		ops = append(ops,
 			set(append(peer, "authentication", "mode"), "pre-shared-secret"),
-			set(append(peer, "authentication", "pre-shared-secret"), t.PSK),
+			set(append(peer, "remote-address"), t.PeerAddress),
 			set(append(peer, "ike-group"), ikeGroupName),
 			set(append(peer, "default-esp-group"), espGroupName),
 		)
 
-		// Forced ESP-in-UDP (NAT-T) on every peer, unconditionally: native
-		// ESP is dropped pod-to-pod by Cilium conntrack, so the tunnel must
-		// always encapsulate in UDP regardless of whether a NAT is detected.
-		//
-		// TODO(T06): validate against VyOS 1.5-rolling — force-encapsulation
-		// leaf placement under `vpn ipsec site-to-site peer <p>`; path
-		// provisional until live push.
-		ops = append(ops, set(append(peer, "force-encapsulation"), "enable"))
+		// Forced ESP-in-UDP (NAT-T) on every peer, unconditionally: native ESP is
+		// dropped pod-to-pod by Cilium conntrack, so the tunnel must always
+		// encapsulate in UDP regardless of whether a NAT is detected. VyOS 1.5
+		// renamed the per-peer leaf `force-encapsulation` → `force-udp-encapsulation`
+		// (a value-less flag; validated live).
+		ops = append(ops, set(append(peer, "force-udp-encapsulation"), ""))
 
-		// local-address reflects the router's uplink IP. Empty leaves the
-		// field unset and VyOS auto-detects.
-		if in.ExternalIP != "" {
-			ops = append(ops, set(append(peer, "local-address"), in.ExternalIP))
+		// local-address is REQUIRED in VyOS 1.5 — the commit fails with "Missing
+		// local-address or dhcp-interface on site-to-site peer" without it. Use the
+		// resolved uplink IP when known, else "any" (the Phase-1 responder binds to
+		// whatever the pod NIC carries).
+		localAddr := in.ExternalIP
+		if localAddr == "" {
+			localAddr = "any"
 		}
+		ops = append(ops, set(append(peer, "local-address"), localAddr))
 
 		// Tunnels are numbered starting at 1; pair local and remote
 		// subnets 1-to-1. If counts differ, surplus entries are ignored.
@@ -988,6 +1007,30 @@ func normaliseESP(p *ESPParams) ESPParams {
 	}
 
 	return out
+}
+
+// sanitisePeerName turns a tunnel description into a valid VyOS 1.5 site-to-site
+// peer name: alphanumerics, hyphen and underscore only (VyOS rejects a peer key
+// with dots — e.g. an IP address — as "Peer connection name must be
+// alphanumeric"). Every other rune is replaced with a hyphen. An empty or
+// fully-stripped description falls back to peer<index> so the name is never
+// empty. The controller sets Description to the instance name (an RFC1123 label),
+// which already satisfies the rule; the sanitisation is a defensive backstop.
+func sanitisePeerName(desc string, idx int) string {
+	var b strings.Builder
+	for _, r := range desc {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		return "peer" + strconv.Itoa(idx)
+	}
+	return name
 }
 
 // set is the canonical way to construct an OpSet operation. Keeps the

@@ -133,10 +133,11 @@ func (r *SiteRouterReconciler) vyosFactory() VyOSClientFactory {
 
 // tunnelIngressRulesetPath is the config path confirmSourceFilterActive reads to
 // verify the guest tunnel-ingress source filter is live. It mirrors the render's
-// tunnel-ingress rule set (render.TunnelIngressRuleSet); the leaf syntax is
-// version-sensitive and shares the render's TODO(T06) 1.5 validation.
+// tunnel-ingress rule set (render.TunnelIngressRuleSet). VyOS 1.5-rolling nests
+// named rule sets under `firewall ipv4 name <NAME>` (validated live); it stays in
+// lockstep with render.tunnelIngressPath.
 func tunnelIngressRulesetPath() []string {
-	return []string{"firewall", "name", render.TunnelIngressRuleSet}
+	return []string{"firewall", "ipv4", "name", render.TunnelIngressRuleSet}
 }
 
 // tunnelIngressForwardPath is the config path confirmSourceFilterActive reads to
@@ -144,13 +145,11 @@ func tunnelIngressRulesetPath() []string {
 // is live (render.renderForwardFilter emits `firewall forward rule 20 jump-target
 // TUNNEL-INGRESS`). The named set is only ACTIVE while this jump exists: deleting
 // the jump but leaving the named set silently disables the source filter, so both
-// must be confirmed (D8). It mirrors render's forwardFilterPath.
-// TODO(T13): the forward-filter base path + jump-target leaf syntax is
-// PROVISIONAL — VyOS 1.5-rolling moves this under `firewall ipv4 forward filter`
-// and may spell the jump differently. Validate live and flip in lockstep with
-// tunnelIngressRulesetPath and the render's version-specific paths.
+// must be confirmed (D8). It mirrors render's forwardFilterPath. VyOS 1.5-rolling
+// nests the forward hook under `firewall ipv4 forward filter` (validated live);
+// it stays in lockstep with render.forwardFilterPath.
 func tunnelIngressForwardPath() []string {
-	return []string{"firewall", "forward"}
+	return []string{"firewall", "ipv4", "forward", "filter"}
 }
 
 // configHash returns the canonical, schema-versioned hash of a rendered op slice
