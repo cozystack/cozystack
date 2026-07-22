@@ -35,7 +35,7 @@ log_success "RestoreJob created"
 separator
 
 log_step "Waiting for RestoreJob to complete..."
-wait_for_field restorejob restore-in-place-test '{.status.phase}' Succeeded "$NAMESPACE" 600
+wait_for_field restorejob restore-in-place-test '{.status.phase}' Succeeded "$NAMESPACE" 1800 Failed
 
 separator
 
@@ -45,5 +45,15 @@ kubectl get restorejob restore-in-place-test -n "$NAMESPACE" -o wide
 
 separator
 
-log_success "In-place restore completed successfully"
+# The RestoreJob reaching Succeeded means Velero re-created the objects; prove
+# the restored VM actually boots from the restored disk (the round-trip proof
+# for a VM, which has no in-guest sentinel we can read from the host).
+log_step "Waiting for the restored VMInstance to boot again..."
+log_command "kubectl -n $NAMESPACE wait virtualmachine.kubevirt.io/vm-instance-test --for=condition=Ready"
+kubectl -n "$NAMESPACE" wait virtualmachine.kubevirt.io/vm-instance-test \
+    --for=condition=Ready --timeout=600s
+
+separator
+
+log_success "In-place restore completed successfully; the restored VM is Running"
 echo -e "\n${GREEN}${BOLD}Next step:${NC} ./07-restore-to-copy.sh"

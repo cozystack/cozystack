@@ -1,15 +1,25 @@
 #!/bin/bash
-# Run the full VMInstance backup/restore demo sequentially
+# Convenience runner + e2e harness for the VMInstance backup/restore demo.
+#
+# Runs the numbered steps 01..07 a human reads, in order, non-interactively,
+# stopping on the first failure (set -e). This is the SAME sequence the docs
+# walk through, so the documented flow and the automated test can never drift.
+#
+# Flow: Velero strategies -> BackupClass -> VMDisk + VMInstance (waits until the
+# VM is booted) -> ad-hoc BackupJob (waits Succeeded) -> in-place RestoreJob
+# (waits Succeeded, waits for the VM to boot again) -> cross-namespace to-copy
+# RestoreJob (waits Succeeded).
+#
+# Override NAMESPACE / BACKUP_STORAGE_LOCATION / TARGET_NAMESPACE via the
+# environment; see 00-helpers.sh. hack/e2e-chainsaw/vminstance/ drives this file
+# as the gated vminstance-2-backup-roundtrip test (VMI_E2E_S3_ROUNDTRIP=1).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/00-helpers.sh"
 
 print_header "VMInstance Backup & Restore Demo"
-
-log_info "This script will run all demo steps sequentially"
-log_info "There will be a pause between steps for observation"
-echo ""
+log_info "Namespace: ${NAMESPACE}   BackupStorageLocation: ${BACKUP_STORAGE_LOCATION}"
 
 SCRIPTS=(
     "01-create-strategies.sh"
@@ -21,26 +31,10 @@ SCRIPTS=(
     "07-restore-to-copy.sh"
 )
 
-echo -e "${CYAN}Demo steps:${NC}"
-for i in "${!SCRIPTS[@]}"; do
-    echo "  $((i+1)). ${SCRIPTS[$i]}"
-done
-echo ""
-
-read -p "Run demo? (y/N): " -n 1 -r
-echo
-if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    log_info "Cancelled"
-    exit 0
-fi
-
-separator
-
 for script in "${SCRIPTS[@]}"; do
     if [[ -x "$SCRIPT_DIR/$script" ]]; then
         "$SCRIPT_DIR/$script"
         separator
-        wait_for_enter
     else
         log_error "Script not found or not executable: $script"
         exit 1
@@ -50,13 +44,11 @@ done
 print_header "Demo Complete"
 
 log_success "All steps completed successfully!"
-echo ""
 log_info "What was demonstrated:"
-echo "  1. Created Velero backup strategies for VMInstance and VMDisk"
-echo "  2. Created BackupClass binding strategies to application types"
-echo "  3. Provisioned a VMDisk and VMInstance"
-echo "  4. Created a backup of the VMInstance via BackupJob"
-echo "  5. Restored the VMInstance in-place"
-echo "  6. Restored the VMInstance to a copy in a different namespace"
-echo ""
+echo "  1. Created Velero backup strategies for VMInstance and VMDisk" >&2
+echo "  2. Created BackupClass binding strategies to application types" >&2
+echo "  3. Provisioned a VMDisk and VMInstance" >&2
+echo "  4. Created a backup of the VMInstance via BackupJob" >&2
+echo "  5. Restored the VMInstance in-place" >&2
+echo "  6. Restored the VMInstance to a copy in a different namespace" >&2
 log_info "To clean up resources: ./cleanup.sh"
