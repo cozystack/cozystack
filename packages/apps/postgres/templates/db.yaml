@@ -262,6 +262,9 @@ spec:
   {{- if .Values.backup.retentionPolicy }}
   retentionPolicy: {{ .Values.backup.retentionPolicy | quote }}
   {{- end }}
+  # Pin the barman-cloud sidecar's S3 request checksum to when_required
+  # (rationale in cozy-lib.barman.checksumSidecarConfiguration).
+  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ $destinationPath }}
     endpointURL: {{ $endpointURL }}
@@ -288,6 +291,8 @@ kind: ObjectStore
 metadata:
   name: {{ .Release.Name }}-recovery
 spec:
+  # Same S3 request-checksum pin as the backup ObjectStore above.
+  {{- include "cozy-lib.barman.checksumSidecarConfiguration" . | nindent 2 }}
   configuration:
     destinationPath: {{ $destinationPath }}
     endpointURL: {{ $endpointURL }}

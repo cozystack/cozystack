@@ -1,0 +1,40 @@
+suite: keycloak DB backup ObjectStore (barman-cloud plugin)
+templates:
+  - templates/db.yaml
+release:
+  name: keycloak
+  namespace: cozy-keycloak
+tests:
+  - it: "backup enabled: renders a barman-cloud ObjectStore that pins the sidecar S3 request checksum to when_required"
+    set:
+      _cluster:
+        root-host: example.org
+        cluster-domain: cozy.local
+      backup:
+        enabled: true
+        destinationPath: s3://aenix/keycloak-db/
+        endpointURL: https://s3.frcloud.kz
+        existingSecretName: keycloak-db-backup-s3-creds
+    asserts:
+      # A barman-cloud ObjectStore is rendered for the Keycloak DB.
+      - equal:
+          path: metadata.name
+          value: keycloak-db
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      # Non-AWS S3 gateways (Ceph RGW, the platform's SeaweedFS system bucket)
+      # reject botocore's default flexible checksum; the sidecar must request
+      # one only when required.
+      - equal:
+          path: spec.instanceSidecarConfiguration.env[0].name
+          value: AWS_REQUEST_CHECKSUM_CALCULATION
+        documentSelector:
+          path: kind
+          value: ObjectStore
+      - equal:
+          path: spec.instanceSidecarConfiguration.env[0].value
+          value: when_required
+        documentSelector:
+          path: kind
+          value: ObjectStore
