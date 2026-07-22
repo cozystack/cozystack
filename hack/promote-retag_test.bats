@@ -21,6 +21,41 @@
 #           (or `bats hack/promote-retag_test.bats` if the bats binary is
 #           installed; cozytest.sh is the CI path.)
 
+_make_registry_mocks() {
+  t="$1"
+  mkdir -p "$t/bin"
+  cat >"$t/bin/yq" <<'EOF'
+#!/bin/sh
+set -eu
+if [ "${1:-}" = "--version" ]; then
+  echo 'yq (https://github.com/mikefarah/yq/) version v4.45.1'
+else
+  printf '%s\n' "$MOCK_REF"
+fi
+EOF
+  cat >"$t/bin/skopeo" <<'EOF'
+#!/bin/sh
+set -eu
+printf '%s\n' "$*" >>"$MOCK_SKOPEO_LOG"
+case "$1" in
+  inspect)
+    [ "$2" = "--raw" ]
+    if [ "$MOCK_MISSING_ONCE" = "1" ] && [ ! -f "$MOCK_STATE" ]; then
+      exit 1
+    fi
+    printf '%s' "$MOCK_MANIFEST"
+    ;;
+  copy)
+    : >"$MOCK_STATE"
+    ;;
+  *)
+    exit 2
+    ;;
+esac
+EOF
+  chmod +x "$t/bin/yq" "$t/bin/skopeo"
+}
+
 @test "dry-run over the real tree retags only cozystack-owned refs" {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
@@ -159,4 +194,77 @@
   # reachable from any values.yaml.
   grep -q 'cozystack/grafana:v9.9.9' "$tmp/out"
   grep -q 'cozystack/multus-cni:v9.9.9' "$tmp/out"
+}
+
+@test "raw manifest digest resolves for an OCI artifact" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_registry_mocks "$tmp"
+
+  manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"layers":[]}'
+  digest="sha256:$(printf '%s' "$manifest" | sha256sum | cut -d' ' -f1)"
+  ref="example.com/cozystack/cozystack-packages:v1.6.0-rc.1@${digest}"
+
+  rc=0
+  REGISTRY="example.com/cozystack" MOCK_REF="$ref" MOCK_MANIFEST="$manifest" \
+    MOCK_MISSING_ONCE=0 MOCK_STATE="$tmp/state" MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+    PATH="$tmp/bin:/usr/bin:/bin" hack/promote-retag.sh v1.6.0 \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  grep -q "already at ${digest}; skipping stable copy" "$tmp/out"
+  [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
+  ! grep -q '^copy ' "$tmp/skopeo.log"
+}
+
+@test "post-copy raw manifest digest mismatch fails verification" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_registry_mocks "$tmp"
+
+  manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"layers":[]}'
+  expected_manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"},"layers":[]}'
+  actual="sha256:$(printf '%s' "$manifest" | sha256sum | cut -d' ' -f1)"
+  expected="sha256:$(printf '%s' "$expected_manifest" | sha256sum | cut -d' ' -f1)"
+  ref="example.com/cozystack/cozystack-packages:v1.6.0-rc.1@${expected}"
+
+  rc=0
+  REGISTRY="example.com/cozystack" MOCK_REF="$ref" MOCK_MANIFEST="$manifest" \
+    MOCK_MISSING_ONCE=1 MOCK_STATE="$tmp/state" MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+    PATH="$tmp/bin:/usr/bin:/bin" hack/promote-retag.sh v1.6.0 \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q "resolved to '${actual}', expected '${expected}'" "$tmp/err"
+  grep -q '^copy --multi-arch all ' "$tmp/skopeo.log"
+  [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
+}
+
+@test "missing stable tag remains an empty digest and proceeds to copy" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_registry_mocks "$tmp"
+
+  manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"layers":[]}'
+  digest="sha256:$(printf '%s' "$manifest" | sha256sum | cut -d' ' -f1)"
+  ref="example.com/cozystack/cozystack-packages:v1.6.0-rc.1@${digest}"
+
+  rc=0
+  REGISTRY="example.com/cozystack" MOCK_REF="$ref" MOCK_MANIFEST="$manifest" \
+    MOCK_MISSING_ONCE=1 MOCK_STATE="$tmp/state" MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+    PATH="$tmp/bin:/usr/bin:/bin" hack/promote-retag.sh v1.6.0 \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  grep -q '^copy --multi-arch all ' "$tmp/skopeo.log"
+  [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
+  grep -q 'Retagged image refs to v1.6.0' "$tmp/out"
 }
