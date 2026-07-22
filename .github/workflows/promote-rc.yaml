@@ -259,7 +259,18 @@ jobs:
             BASE="release-${LINE}"
           fi
           BODY="Promotes \`${RC_TAG}\` to stable \`${STABLE_TAG}\` — no rebuild. The tree pins the rc's images by digest. On merge, pull-requests-release.yaml creates the write-once \`${STABLE_TAG}\` tag at the merge commit, retags those digests to \`${STABLE_TAG}\` (+\`:latest\` when this is the newest stable), publishes the stable cozy-installer chart, and publishes the release — so the stable artifacts are bit-for-bit the rc that passed e2e. The \`full-e2e\` label forces the full suite on this PR. Do NOT squash-merge (decision B): the stable tag must attach to a real merge commit."
-          if gh pr view "${STABLE_BRANCH}" >/dev/null 2>&1; then
+          # Reuse an OPEN pr, create one otherwise. `gh pr view <branch>` was
+          # wrong here: it resolves a pr by head branch in any state, so a
+          # closed one satisfied the guard and creation was skipped while the
+          # step still exited 0 — a promotion that reports success and leaves
+          # nothing to merge. That wedges the two paths this workflow is built
+          # to support, because STABLE_BRANCH is derived from the stable
+          # version and is therefore shared by every rc promoted to it:
+          # re-dispatching the same rc, and promoting a newer rc to the same
+          # version. Neither can recover by reopening, since the force-push
+          # below makes the old pr's head unreachable and GitHub then refuses
+          # the reopen outright ("branch was force-pushed or recreated").
+          if [ -n "$(gh pr list --head "${STABLE_BRANCH}" --state open --json number --jq '.[0].number')" ]; then
             echo "PR already open for ${STABLE_BRANCH}"
           else
             gh pr create --base "$BASE" --head "${STABLE_BRANCH}" \
