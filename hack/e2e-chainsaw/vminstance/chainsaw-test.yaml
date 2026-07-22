@@ -135,3 +135,105 @@ spec:
           status:
             (conditions[?type == 'Ready']):
             - status: "True"
+---
+# vminstance-2-backup-roundtrip — full Velero backup/restore round-trip for a
+# VMInstance, gated out of CI (opt in with VMI_E2E_S3_ROUNDTRIP=1).
+#
+# It delegates the whole flow to the validated example scripts
+# (examples/backups/vmi/run-all.sh) so the documented demo and the automated
+# test can never drift — the same pattern as postgres-2-backup-roundtrip and
+# etcd-2-backup-roundtrip. run-all.sh: Velero strategies -> BackupClass -> a
+# booted Ubuntu VMInstance -> ad-hoc BackupJob (waits Succeeded) -> in-place
+# RestoreJob (waits Succeeded, then waits for the restored VM to boot again) ->
+# cross-namespace to-copy RestoreJob (waits Succeeded). A VM has no in-guest
+# sentinel the host can read, so the round-trip proof is that the VM boots from
+# the restored disk end to end.
+#
+# Runs in tenant-root, not tenant-test: Velero's CSI data mover streams the VM
+# disk from a Pod in the source namespace to the SeaweedFS S3 endpoint in
+# tenant-root, and the e2e tenant is created isolated
+# (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist blocks a
+# tenant-test Pod from reaching tenant-root's seaweedfs, while a tenant-root Pod
+# reaches it over same-tenant egress (same reasoning as the postgres suite).
+#
+# Gated because that S3 endpoint serves a self-signed cert kind cannot publicly
+# trust, and the platform BackupStorageLocation TLS/checksum defaults do not
+# complete the flow out of the box in the sandbox (cozystack/cozystack#3236) —
+# the same class of blocker that gates etcd-2-backup-roundtrip. Set
+# VMI_E2E_S3_ROUNDTRIP=1 on a real backups-enabled cluster to run it.
+#
+# Teardown is explicit (skipDelete: true): the BackupClass and Velero
+# strategies are cluster-scoped and the Velero Backup/Restore live in
+# cozy-velero, none of which Chainsaw applied, so cleanup.sh prunes them.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: vminstance-2-backup-roundtrip
+spec:
+  namespace: tenant-root
+  skipDelete: true
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: vm-instance-test
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      name: vm-instance-test
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: BackupJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: RestoreJob
+  - describe:
+      apiVersion: backups.cozystack.io/v1alpha1
+      kind: Backup
+  # Velero server + node-agent (the CSI data mover) run in cozy-velero; a failed
+  # upload or a TLS handshake against seaweedfs leaves its error only there.
+  - podLogs:
+      namespace: cozy-velero
+      selector: app.kubernetes.io/name=velero
+      tail: 200
+  steps:
+  - name: run
+    try:
+    # The 50m budget is the whole documented flow: Ubuntu image import (~700MB)
+    # + VM boot, a full VM-disk (20Gi) Velero backup to S3, an in-place restore
+    # with a second VM boot, and a cross-namespace to-copy restore (convention
+    # 6: justified in-line). run-all.sh is `set -e` and fails fast on terminal
+    # BackupJob/RestoreJob phases rather than polling out the budget.
+    - script:
+        timeout: 50m
+        content: |
+          set -eu
+          if [ "${VMI_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
+            echo "# VMInstance S3 backup/restore round-trip gated out of CI: Velero"
+            echo "# moves the VM disk to the SeaweedFS BackupStorageLocation, whose"
+            echo "# in-cluster endpoint serves a self-signed cert kind cannot trust"
+            echo "# (cozystack/cozystack#3236). Set VMI_E2E_S3_ROUNDTRIP=1 on a real"
+            echo "# backups-enabled cluster to run it."
+            exit 0
+          fi
+          cd ../../..
+          [ -x examples/backups/vmi/run-all.sh ] || { echo "vmi backup example scripts not found at examples/backups/vmi" >&2; exit 1; }
+          NAMESPACE="$NAMESPACE" BACKUP_STORAGE_LOCATION=cozy-default \
+            examples/backups/vmi/run-all.sh
+        check:
+          ($error == null): true
+    finally:
+    # Prune everything the harness created — the cluster-scoped BackupClass /
+    # Velero strategies, the namespaced BackupJob/RestoreJob/Backup (which
+    # cascade to the Velero Backup/Restore in cozy-velero), the VMInstance /
+    # VMDisk and the to-copy target namespace. Idempotent: a no-op when the
+    # round-trip was gated out. Has teeth — a teardown that does not settle
+    # fails the step instead of leaking into later app tests.
+    - description: vmi backup-flow cleanup
+      script:
+        timeout: 15m
+        content: |
+          set -eu
+          cd ../../..
+          NAMESPACE="$NAMESPACE" examples/backups/vmi/cleanup.sh
