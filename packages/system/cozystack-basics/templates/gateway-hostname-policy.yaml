@@ -25,13 +25,26 @@ spec:
          ? namespaceObject.metadata.labels["namespace.cozystack.io/host"]
          : ""
   validations:
+  # Both operands of the hostname match are normalized with .lowerAscii():
+  # the listener hostname is already lowercase (the CRD pattern permits
+  # nothing else), but tenantHost
+  # comes from the namespace.cozystack.io/host label value, which
+  # Kubernetes permits to carry uppercase. Unlike the Ingress policy this
+  # one never compares against the platform root-host.
+  #
+  # The leading `tenantHost == "" ||` makes this policy fail OPEN when the
+  # host label is absent or empty, unlike its fail-closed siblings. That is
+  # the platform's documented fail-open exception, with its compensating
+  # control and its limits — see docs/security/threat-model.md. Changing
+  # that posture is a security-model decision, not a side effect of
+  # normalizing case, so the behavior is left as it was and pinned by test.
   - expression: >-
       variables.tenantHost == "" ||
       !has(object.spec.listeners) ||
       object.spec.listeners.all(l,
         !has(l.hostname) ||
-        l.hostname == variables.tenantHost ||
-        l.hostname.endsWith("." + variables.tenantHost)
+        l.hostname.lowerAscii() == variables.tenantHost.lowerAscii() ||
+        l.hostname.lowerAscii().endsWith("." + variables.tenantHost.lowerAscii())
       )
     messageExpression: >-
       "Gateway listener hostname must equal " + variables.tenantHost +

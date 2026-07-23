@@ -68,11 +68,52 @@ tests:
       - documentIndex: 0
         matchRegex:
           path: spec.validations[0].expression
-          pattern: 'l\.hostname\.endsWith'
+          pattern: 'l\.hostname\.lowerAscii\(\)\.endsWith'
       - documentIndex: 0
         matchRegex:
           path: spec.validations[0].expression
           pattern: 'variables\.tenantHost'
+      # Both operands normalized with lowerAscii() — tenantHost comes from
+      # the label value, which may carry uppercase even though the listener
+      # hostname is lowercase-only. Unlike the Ingress policy this one never
+      # compares against the platform root host, so the normalization here
+      # only stops a mixed-case apex from wrongly denying a tenant its own
+      # listener.
+      #
+      # Both comparisons are pinned as whole operand PAIRS. This policy has
+      # no runtime probe of its own — it relies on these renderings — so a
+      # pattern matching a lone `.lowerAscii()` somewhere in the expression
+      # would let either operand lose its normalization unnoticed.
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'l\.hostname\.lowerAscii\(\) == variables\.tenantHost\.lowerAscii\(\)'
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: 'l\.hostname\.lowerAscii\(\)\.endsWith\("\." \+ variables\.tenantHost\.lowerAscii\(\)\)'
+
+  - it: cozystack-gateway-hostname-policy admits any listener hostname when the host label is absent or empty
+    # Pins the documented fail-open exception, so that changing it has to be
+    # a deliberate act rather than a silent one. The leading
+    # `tenantHost == "" ||` admits a Gateway with any listener hostname when
+    # the namespace.cozystack.io/host label is absent or empty — the
+    # opposite of the sibling Route and Ingress policies, which fail closed
+    # on the same input. docs/security/threat-model.md records this as the
+    # platform's one fail-open exception and states that the Gateway-side
+    # guarantee is conditional on the label being present; the compensating
+    # control is that the platform sets the label at tenant creation and the
+    # host-label policy keeps it immutable. This test asserts the shape the
+    # threat model describes, so that a change to the posture shows up here
+    # and gets made against that document rather than by accident.
+    asserts:
+      # Anchored: the empty-host short-circuit must be the FIRST operand, and
+      # `||` is what makes it admit. Rewriting it to the siblings' fail-closed
+      # `tenantHost == "" ? false :` breaks this pattern, which is the point.
+      - documentIndex: 0
+        matchRegex:
+          path: spec.validations[0].expression
+          pattern: '^variables\.tenantHost == "" \|\|'
 
   - it: cozystack-gateway-hostname-policy Binding is fail-closed (validationActions Deny)
     asserts:
