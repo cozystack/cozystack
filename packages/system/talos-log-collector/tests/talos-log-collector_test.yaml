@@ -147,6 +147,18 @@ tests:
           path: spec.ingress[0].toPorts[0].ports[0].port
           value: "5170"
 
+  - it: "Cilium NetworkPolicy ingress port follows the listenPort override"
+    template: templates/networkpolicy.yaml
+    capabilities:
+      apiVersions:
+        - cilium.io/v2/CiliumNetworkPolicy
+    set:
+      listenPort: 6000
+    asserts:
+      - equal:
+          path: spec.ingress[0].toPorts[0].ports[0].port
+          value: "6000"
+
   - it: "falls back to a CNI-agnostic default-deny NetworkPolicy when the Cilium CRD is absent"
     template: templates/networkpolicy.yaml
     asserts:
