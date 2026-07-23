@@ -150,29 +150,51 @@ while :; do
   all_sources="$all_sources $new"
 done
 
-# Filter to *-application sources, then map to Chainsaw suite names.
-final=""
+# Filter to *-application sources, then map to Chainsaw suite names. Kept
+# separate from the directly-selected per-suite edits below so the
+# no-app-descendants safety net can key off the source-derived selection alone.
+sources_final=""
 for s in $all_sources; do
   app=${s#cozystack.}
   case "$app" in
-    *-application) final="$final $(src_to_suites "$app")" ;;
-    external-dns) final="$final external-dns" ;;
+    *-application) sources_final="$sources_final $(src_to_suites "$app")" ;;
+    external-dns) sources_final="$sources_final external-dns" ;;
   esac
 done
 
-# Add directly-selected suites from per-suite edits.
-final="$final $selected_apps"
-
-# Deduplicate; intersect with available Chainsaw suites.
-final_apps=$(echo "$final" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
+# Suites contributed by the PackageSource graph alone, intersected with the
+# available Chainsaw suites.
+sources_apps=$(echo "$sources_final" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
   if echo "$all_apps" | grep -Fxq "$app"; then
     echo "$app"
   fi
 done | paste -sd ' ' -)
 
-# Safety net: a system source with no *-application descendants would otherwise
-# silently skip E2E. Fall back to full suite so a path inside the graph is
-# never silently dropped.
+# Safety net: a selected packages/* component that resolves into the graph but
+# has no *-application descendant would otherwise silently skip E2E. The signal
+# is the source-derived selection being empty, and it must be read ONLY from the
+# graph, never from the combined result. A PR that also edits one unrelated
+# suite's tests contributes that suite via $selected_apps, and keying the
+# escalation off the combined result let that lone suite mask it (the same
+# system-package change selected the full suite alone but exactly one suite
+# alongside a suite edit). Fall back to the full suite so a graph path is never
+# silently dropped.
+if [ -n "$selected_sources" ] && [ -z "$sources_apps" ]; then
+  echo "$all_apps" | paste -sd ' ' -
+  exit 0
+fi
+
+# Combine the graph-derived suites with the directly-selected per-suite edits,
+# deduplicate, and intersect with the available Chainsaw suites.
+final_apps=$(printf '%s %s' "$sources_apps" "$selected_apps" | tr ' ' '\n' | sort -u | grep -v '^$' | while read -r app; do
+  if echo "$all_apps" | grep -Fxq "$app"; then
+    echo "$app"
+  fi
+done | paste -sd ' ' -)
+
+# Original catch-all: something was selected (trigger_any) yet nothing runnable
+# resolved, e.g. a per-suite edit on a directory that has no chainsaw-test.yaml
+# yet. Escalate rather than silently skip.
 if [ -z "$final_apps" ]; then
   echo "$all_apps" | paste -sd ' ' -
   exit 0
