@@ -7481,21 +7481,21 @@ spec:
         - name: ANSIBLE_GATHERING
           value: explicit
         - name: CONTROLLER_IMAGE
-          value: quay.io/kubev2v/forklift-controller:release-2.11
+          value: quay.io/kubev2v/forklift-controller:release-2.11@sha256:f265574b8432d164d4ae4b388825cbb8ef7806b4afe1e87880735a8dc1868754
         - name: API_IMAGE
-          value: quay.io/kubev2v/forklift-api:release-2.11
+          value: quay.io/kubev2v/forklift-api:release-2.11@sha256:b78142f746c6380afc3719956e47b1860afd4435e449377629cd03459dc73255
         - name: MUST_GATHER_IMAGE
-          value: quay.io/kubev2v/forklift-must-gather:release-2.11
+          value: quay.io/kubev2v/forklift-must-gather:v2.7.1@sha256:62eecec1408be00e907fbde6b13be9223fdbca116933ecba85cd87d68d6acfbb
         - name: UI_PLUGIN_IMAGE
-          value: quay.io/kubev2v/forklift-console-plugin:release-2.11
+          value: quay.io/kubev2v/forklift-console-plugin:release-v2.6.7@sha256:99c34ac714604853f4abf589e1ccddb13cd9eaf1bd1eae2c928c622deb22304d
         - name: CLI_DOWNLOAD_IMAGE
-          value: quay.io/kubev2v/forklift-cli-download:release-2.11
+          value: quay.io/kubev2v/forklift-cli-download:release-2.11@sha256:3330eab526f490fabbd9c6640696e45b0482377edf07b805a07663b562145337
         - name: VALIDATION_IMAGE
-          value: quay.io/kubev2v/forklift-validation:release-2.11
+          value: quay.io/kubev2v/forklift-validation:release-2.11@sha256:e202c93485dbef2536ecfd9b0ddab4cb12c2efc33ff5af721eb4fa492aff742d
         - name: VIRT_V2V_IMAGE
-          value: quay.io/kubev2v/forklift-virt-v2v:release-2.11
+          value: quay.io/kubev2v/forklift-virt-v2v:release-2.11@sha256:c25718c24f84ee0a4c72152ee9641ecc13d94f1397c9942af1825906bce50b58
         - name: VIRT_V2V_IMAGE_XFS
-          value: quay.io/kubev2v/forklift-virt-v2v-xfs:release-2.11
+          value: quay.io/kubev2v/forklift-virt-v2v-xfs:release-2.11@sha256:5963fade6ba16e62ead0979becf7782de787a5cdceb559097e47dbf64939559d
         - name: VIRT_V2V_DONT_REQUEST_KVM
           value: "false"
         - name: SNAPSHOT_REMOVAL_TIMEOUT
@@ -7511,17 +7511,17 @@ spec:
         - name: BLOCK_OVERHEAD
           value: "0"
         - name: POPULATOR_CONTROLLER_IMAGE
-          value: quay.io/kubev2v/populator-controller:release-2.11
+          value: quay.io/kubev2v/populator-controller:release-2.11@sha256:b0912446fb9d3c112e60f6867742c7333d22aff4a666f26bef8f8846c2faa67b
         - name: OVIRT_POPULATOR_IMAGE
-          value: quay.io/kubev2v/ovirt-populator:release-2.11
+          value: quay.io/kubev2v/ovirt-populator:release-2.11@sha256:3e0320559c4e16437c30511e06e7759822d656a7a5d5d9b780df7d4c833da64e
         - name: OPENSTACK_POPULATOR_IMAGE
-          value: quay.io/kubev2v/openstack-populator:release-2.11
+          value: quay.io/kubev2v/openstack-populator:release-2.11@sha256:b8505145af2fa24006bbdf4598039121c0922a74f0b248b584da6293451690d7
         - name: OVA_PROVIDER_SERVER_IMAGE
-          value: quay.io/kubev2v/forklift-ova-provider-server:release-2.11
+          value: quay.io/kubev2v/forklift-ova-provider-server:release-2.11@sha256:db4fa560d37ff90917f8f62a7b4dc26b5e6d4acfa6a5d73adb94e41431d824fd
         - name: HYPERV_PROVIDER_SERVER_IMAGE
-          value: quay.io/kubev2v/forklift-hyperv-provider-server:release-2.11
+          value: quay.io/kubev2v/forklift-hyperv-provider-server:release-2.11@sha256:49b3e8cb06c9e854f67eb0d8b2e4b2c2f6463018a5ee08b0ec81600b45f5231d
         - name: OVA_PROXY_IMAGE
-          value: quay.io/kubev2v/forklift-ova-proxy:release-2.11
+          value: quay.io/kubev2v/forklift-ova-proxy:release-2.11@sha256:4c88ec127830ed39a50c67357e22ea75c654c53d5422ea4bcaa7457eb8bc545d
         - name: OVIRT_OS_MAP
           value: ""
         - name: VSPHERE_OS_MAP
@@ -7529,8 +7529,8 @@ spec:
         - name: VIRT_CUSTOMIZE_MAP
           value: ""
         - name: VSPHERE_XCOPY_VOLUME_POPULATOR_IMAGE
-          value: quay.io/kubev2v/vsphere-xcopy-volume-populator:release-2.11
-        image: quay.io/kubev2v/forklift-operator:release-2.11
+          value: quay.io/kubev2v/vsphere-xcopy-volume-populator:release-2.11@sha256:b76dd4d4f942ccad94c694918455cab3471ef2142dfdda8bcfc9f0ba3c1b327a
+        image: quay.io/kubev2v/forklift-operator:release-2.11@sha256:ed13c2890d09555580c5b53a7e9f67c7846d759c227b2145576ce9cfca7c58e2
         imagePullPolicy: Always
         livenessProbe:
           httpGet:
