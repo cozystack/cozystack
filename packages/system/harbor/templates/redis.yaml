@@ -18,11 +18,11 @@ spec:
     replicas: 3
     resources:
       limits:
-        cpu: 100m
+        cpu: 250m
         memory: 128Mi
       requests:
-        cpu: 50m
-        memory: 64Mi
+        cpu: 250m
+        memory: 128Mi
   redis:
     replicas: {{ .Values.redis.replicas }}
     resources:

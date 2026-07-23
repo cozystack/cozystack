@@ -1,0 +1,31 @@
+suite: redis sentinel sizing
+
+release:
+  name: harbor
+  namespace: tenant-root
+
+# templates/redis.yaml renders two documents: doc 0 is the redis-auth Secret,
+# doc 1 is the RedisFailover. The sentinels must run at Guaranteed QoS
+# (requests == limits): guaranteed CPU shares under node contention and top
+# eviction priority. A starved sentinel delays master election and stalls
+# harbor convergence.
+tests:
+  - it: sentinel is sized for contended-node convergence (Guaranteed QoS)
+    template: templates/redis.yaml
+    documentIndex: 1
+    set:
+      harbor:
+        fullnameOverride: harbor-test
+    asserts:
+      - equal:
+          path: spec.sentinel.resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.sentinel.resources.limits.cpu
+          value: 250m
+      - equal:
+          path: spec.sentinel.resources.requests.memory
+          value: 128Mi
+      - equal:
+          path: spec.sentinel.resources.limits.memory
+          value: 128Mi

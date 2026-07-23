@@ -16,8 +16,8 @@
 # dead container the evidence is gone for good.
 #
 # The Chainsaw suites capture current logs through the built-in `podLogs`
-# collector, which has no `previous` option (chainsaw v0.2.15 PodLogs exposes
-# only container/tail/selector), so this closes that gap for every suite at once
+# collector, which has no `previous` option in chainsaw v0.2.15, so this
+# closes that gap for every suite at once
 # from the global catch rather than per-suite. The crust-gather snapshot does
 # collect previous.log per container, but that is a whole archive to download
 # and `crust-gather serve`; this puts the decisive lines directly in the failed
