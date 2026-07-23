@@ -1,0 +1,51 @@
+suite: Cilium Gateway API ALPN tests
+templates:
+  - templates/helmreleases/cilium.yaml
+values:
+  - values-ci.yaml
+tests:
+  - it: renders no gatewayAPI block when the gatewayAPI addon is disabled
+    set:
+      addons:
+        gatewayAPI:
+          enabled: false
+        cilium:
+          valuesOverride: {}
+    asserts:
+      - notExists:
+          path: spec.values.cilium.gatewayAPI
+
+  # Browsers negotiate HTTP/2 only through TLS ALPN "h2"; without enableAlpn
+  # every client of a tenant-cluster Gateway silently downgrades to HTTP/1.1.
+  - it: advertises ALPN h2 on Gateway listeners when the gatewayAPI addon is enabled
+    set:
+      addons:
+        gatewayAPI:
+          enabled: true
+        cilium:
+          valuesOverride: {}
+    asserts:
+      - equal:
+          path: spec.values.cilium.gatewayAPI.enabled
+          value: true
+      - equal:
+          path: spec.values.cilium.gatewayAPI.enableAlpn
+          value: true
+
+  - it: lets addons.cilium.valuesOverride opt a cluster out of ALPN
+    set:
+      addons:
+        gatewayAPI:
+          enabled: true
+        cilium:
+          valuesOverride:
+            cilium:
+              gatewayAPI:
+                enableAlpn: false
+    asserts:
+      - equal:
+          path: spec.values.cilium.gatewayAPI.enabled
+          value: true
+      - equal:
+          path: spec.values.cilium.gatewayAPI.enableAlpn
+          value: false

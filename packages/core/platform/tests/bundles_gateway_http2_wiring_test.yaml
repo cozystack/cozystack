@@ -1,0 +1,94 @@
+suite: gateway.http2 bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Browsers negotiate HTTP/2 only through TLS ALPN "h2". The knob maps to
+  # cilium.gatewayAPI.enableAlpn, which must arrive as inline component values
+  # on the cozystack.networking Package — inline HelmRelease values are the
+  # only layer that overrides the system/cilium valuesFiles default, so a
+  # value that stops rendering here silently stops reaching the dataplane.
+  - it: threads gatewayAPI.enableAlpn=true into cilium by default (isp-full)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium
+      - equal:
+          path: spec.components.cilium.values.cilium.gatewayAPI.enableAlpn
+          value: true
+
+  - it: threads gatewayAPI.enableAlpn=false when gateway.http2 is disabled (isp-full)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      gateway:
+        http2: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.components.cilium.values.cilium.gatewayAPI.enableAlpn
+          value: false
+
+  - it: keeps the Talos-specific cilium endpoint values alongside the ALPN flag (isp-full)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.components.cilium.values.cilium.k8sServiceHost
+          value: localhost
+      - equal:
+          path: spec.components.cilium.values.cilium.k8sServicePort
+          value: "7445"
+
+  - it: threads gatewayAPI.enableAlpn=true into cilium by default (isp-full-generic)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubeovn-cilium-generic
+      - equal:
+          path: spec.components.cilium.values.cilium.gatewayAPI.enableAlpn
+          value: true
+
+  - it: threads gatewayAPI.enableAlpn=false when gateway.http2 is disabled (isp-full-generic)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      gateway:
+        http2: false
+    documentSelector:
+      path: metadata.name
+      value: cozystack.networking
+    asserts:
+      - equal:
+          path: spec.components.cilium.values.cilium.gatewayAPI.enableAlpn
+          value: false

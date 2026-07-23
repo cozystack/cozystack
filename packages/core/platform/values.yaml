@@ -386,6 +386,29 @@ gateway:
   # materialises the Gateway itself. This flag only controls platform-wide
   # Gateway API integration (cert-manager solver + per-service HTTPRoutes).
   enabled: false
+  # Advertise HTTP/2 on every Gateway API listener served by the bundled
+  # Cilium dataplane. Browsers negotiate HTTP/2 exclusively through TLS ALPN
+  # "h2"; with this off, Envoy advertises no ALPN protocols and every client
+  # silently falls back to HTTP/1.1 — no error anywhere, just head-of-line
+  # blocking and the per-origin connection limit that HTTP/2 removes.
+  # ingress-nginx (which the Gateway path replaces) advertised h2 out of the
+  # box, so on-by-default restores the pre-migration behaviour. ALPN offers
+  # h2 then http/1.1, so clients without HTTP/2 keep working unchanged.
+  #
+  # Frontend hop only: gateway↔backend connections stay HTTP/1.1 unless a
+  # Service opts in per GEP-1911 by declaring appProtocol
+  # kubernetes.io/h2c on its port (that backend-protocol support is switched
+  # on together with ALPN; no cozystack-shipped Service declares such a
+  # value today, so backends see no change from this flag alone).
+  #
+  # Cluster-wide: maps to Cilium's enable-gateway-api-alpn agent config, so
+  # it covers the root and every tenant Gateway at once — there is no
+  # per-Gateway granularity in the dataplane. Only effective on bundles
+  # where cozystack manages Cilium (isp-full, isp-full-generic); on
+  # isp-hosted the hosting-side CNI owns this setting. Flipping it re-rolls
+  # the cilium DaemonSet on the next platform upgrade (rollOutCiliumPods),
+  # the same disruption profile as any cilium config change.
+  http2: true
   # Namespaces that are allowed to attach HTTPRoute or TLSRoute to a tenant
   # Gateway. The publishing tenant namespace is always included implicitly.
   # Additional entries must be the exact namespace name (matched on the
