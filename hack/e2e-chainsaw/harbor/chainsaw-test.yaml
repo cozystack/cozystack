@@ -37,6 +37,38 @@ spec:
   - podLogs:
       selector: app.kubernetes.io/instance=harbor-test
       tail: 50
+  # harbor-test readiness is gated by the inline RedisFailover
+  # harbor-test-redis: its three sentinels stay NotReady until the spotahome
+  # redis-operator elects a master and rewrites their monitored-master config.
+  # None of the collectors above see that path: the harbor-test instance
+  # selector matches neither the operator (namespace cozy-redis-operator) nor
+  # the rfr-/rfs- pods, and the RedisFailover CRD ships no status subresource,
+  # so there is nothing to assert on declaratively.
+  - describe:
+      apiVersion: databases.spotahome.com/v1
+      kind: RedisFailover
+      name: harbor-test-redis
+  - podLogs:
+      namespace: cozy-redis-operator
+      selector: app.kubernetes.io/name=redis-operator
+      tail: 200
+  - script:
+      # A script rather than more podLogs entries: the -o wide pod tables and
+      # the rfr-/rfs- name-prefix match (independent of the operator's
+      # pod-label scheme) are not expressible declaratively. Every command is
+      # best-effort (|| true) so diagnostics never mask the test's own error;
+      # no inner timeout wrappers, so the 2m op timeout is the only budget.
+      timeout: 2m
+      content: |
+        set -u
+        echo "== redis-operator pods (cozy-redis-operator) =="
+        kubectl -n cozy-redis-operator get pods -o wide || true
+        echo "== rfr-/rfs- pod states ($NAMESPACE) =="
+        kubectl -n "$NAMESPACE" get pods -o wide | grep -E 'rf[rs]-harbor-test-redis' || true
+        for p in $(kubectl -n "$NAMESPACE" get pods -o name | grep -E 'rf[rs]-harbor-test-redis'); do
+          echo "== logs $p =="
+          kubectl -n "$NAMESPACE" logs "$p" --all-containers --tail=100 --prefix || true
+        done
   steps:
   - name: create-harbor
     try:
@@ -45,8 +77,16 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
+    # 10m, not the standard 5-6m: harbor-test readiness is gated by the inline
+    # RedisFailover, whose three sentinels only go Ready after the spotahome
+    # redis-operator elects a master and rewrites their config. Normal
+    # convergence is 2-3m, but on a CPU-committed runner the tail runs long
+    # (steal-induced probe misses, documented in pull-requests.yaml). Matches
+    # the harbor-test-system budget below and the justified-longer-wait
+    # allowance in docs/agents/e2e-testing.md. If this still times out, the
+    # catch block's redis-operator log shows which reconcile gate stalled.
     - assert:
-        timeout: 6m
+        timeout: 10m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
