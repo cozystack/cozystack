@@ -14,7 +14,10 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
   # Re-evaluate when a review is submitted or dismissed so an approval by an
-  # API owner flips the check from failing to passing without a new push.
+  # API owner flips the check from failing to passing without a new push. The
+  # job-level `if` below drops the review-bot noise (plain `commented` reviews);
+  # only reviews that can move the gate — approved, changes_requested, dismissed
+  # — actually re-run it.
   pull_request_review:
     types: [submitted, dismissed]
 
@@ -29,6 +32,15 @@ permissions:
 jobs:
   api-review-gate:
     name: Require API owner review for sizeable API changes
+    # A push (pull_request) always evaluates the gate — that run is what branch
+    # protection gates on. A review event only re-runs it when the review can
+    # change the verdict: an approval can flip fail->pass, a dismissal or a
+    # changes_requested can flip pass->fail. Plain `commented` reviews — all the
+    # review bots (CodeRabbit, dosubot) ever post — cannot, so they skip here
+    # instead of rebuilding the detector on every bot comment.
+    if: >-
+      github.event_name != 'pull_request_review' ||
+      github.event.review.state != 'commented'
     runs-on: ubuntu-22.04
     env:
       # Space-separated GitHub logins allowed to satisfy the gate. Edit here to
