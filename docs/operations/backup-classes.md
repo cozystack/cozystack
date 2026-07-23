@@ -202,3 +202,60 @@ spec:
     kind: Postgres
     name: orders-db
 ```
+
+## Point-in-time recovery (PostgreSQL)
+
+A `RestoreJob` restores a `Postgres` application from a `Backup`. Omit `spec.options.recoveryTime` to recover to the latest point in the WAL archive; set it (RFC3339) to recover the database to an exact instant — a point-in-time recovery (PITR). Under the hood the CNPG barman-cloud plugin restores the newest base backup taken at/before that instant and replays archived WAL up to it, so the restored cluster reflects the database exactly as of `recoveryTime`; later writes are absent.
+
+```yaml
+apiVersion: backups.cozystack.io/v1alpha1
+kind: RestoreJob
+metadata:
+  name: orders-db-pitr
+  namespace: tenant-acme
+spec:
+  backupRef:
+    name: orders-db-adhoc            # a completed Backup of the source
+  targetApplicationRef:              # omit for a destructive in-place restore
+    apiGroup: apps.cozystack.io
+    kind: Postgres
+    name: orders-db-copy             # a pre-deployed, empty Postgres app
+  options:
+    recoveryTime: "2026-07-21T09:30:00Z"
+```
+
+A full, scripted example (write a marker, capture the timestamp, restore to it, assert what survived) is in [`examples/backups/postgres/`](../../examples/backups/postgres/) — `45-restorejob-pitr.yaml`, driven by `run-all.sh`.
+
+### The recoverable window
+
+`recoveryTime` must fall inside the window the archive can reconstruct:
+
+- **Earliest** — the completion of the oldest base backup still in the archive. You cannot recover to an instant before the first base backup: WAL replay always starts from a base backup, and retention (`barmanObjectStore.retentionPolicy`) eventually trims the oldest ones together with the WAL that predates them.
+- **Latest** — the timestamp of the most recent WAL segment shipped to object storage. While the source runs with `backup.enabled: true` it archives continuously, so the latest restorable time trails "now" only by the archive lag (seconds for a healthy cluster). Once the source is deleted, the latest restorable time is frozen at whatever WAL made it to S3 before it went away.
+
+A `recoveryTime` **past the latest archived WAL cannot converge**: PostgreSQL replays every available WAL, never reaches the target, exits with `FATAL: recovery ended before configured recovery target was reached`, and CNPG re-creates the recovery instance in a loop. Such a wedged restore is failed by the restore deadline (`spec.options.restoreTimeoutSeconds`, default 30m) — and the driver reads the recovery pod's log at that point, so instead of a generic timeout the RestoreJob ends `status.phase: Failed` with conditions `RecoveryConverged=False` and `Ready=False`, both reason `RecoveryTargetUnreachable`, and a message naming the target. The driver deliberately does **not** fail earlier off that FATAL: a *reachable* near-now target hits the identical FATAL transiently — often repeatedly, on a slow archiver — before it converges, so an earlier trip would reject a recoverable restore. To reject an unreachable target quickly, set a short `restoreTimeoutSeconds`; otherwise widen the window (take a fresh backup, or restore closer to now) or pick a time inside it.
+
+Restoring to a **very recent** instant is safe as long as WAL archiving is current: the segment covering the target may not be in object storage yet and the same FATAL fires transiently, but because the driver only fails at the deadline (not on that FATAL), the recovery has the whole window to catch up — the next attempt promotes once the WAL ships and the cluster goes healthy, which completes the restore. Only a target that never becomes reachable within the deadline is failed. If archiving is badly behind (a stalled `archive_command`, an overloaded cluster) a near-now target can exceed even the default 30m window; restore to a point you can confirm is archived (e.g. at/before the most recent completed backup, per the discovery query below).
+
+A `recoveryTime` **before the earliest base backup** fails differently: PostgreSQL cannot begin replay before the base backup it restored, so recovery never reaches a consistent state and never emits the "recovery ended before …" FATAL the driver classifies on. That case also surfaces at the deadline, but with the generic reason `RestoreFailed` rather than `RecoveryTargetUnreachable`. Choosing a `recoveryTime` at/after the oldest base backup's completion (below) avoids it.
+
+### Discovering the earliest / latest restorable time
+
+CNPG's `Cluster.status.firstRecoverabilityPoint` exists in the status schema but is unreliable under the barman-cloud plugin — it was observed empty on every plugin-backed cluster on the dev7 test cluster (CNPG 1.28.1) — so read the window from the backup catalog instead. Each completed base backup records its WAL range and timestamps on the underlying `cnpg.io/Backup`:
+
+```bash
+# Completed base backups, oldest first: STOP is the earliest instant that
+# backup alone can restore to; the oldest STOP is the window's lower bound.
+kubectl -n <ns> get backups.postgresql.cnpg.io \
+  --sort-by=.status.stoppedAt \
+  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,START:.status.startedAt,STOP:.status.stoppedAt,BEGINWAL:.status.beginWal,ENDWAL:.status.endWal
+
+# The cozystack Backup points at its underlying cnpg.io/Backup and S3 prefix.
+kubectl -n <ns> get backup.backups.cozystack.io <name> -o jsonpath='{.spec.driverMetadata}'
+```
+
+The upper bound — the latest archived WAL — is whatever the source has shipped so far; with archiving healthy, any time up to a few seconds ago is safe. To confirm the archive is current, check that the source cluster's WAL is flowing to S3 (the `barman-cloud` sidecar logs an upload per segment) before restoring to a near-now target.
+
+### Idempotency under GitOps
+
+An in-progress restore is safe to reconcile. The driver purges the target `Cluster` + PVCs exactly once per RestoreJob (guarded by the `TargetPurged` condition and a freshly-recovered check), suspends the target's HelmRelease across the purge so Flux cannot race the bootstrap swap, and resumes it once the recovery cluster is rendered. A Flux reconcile (or a controller restart) mid-restore therefore re-attaches to the recovering cluster rather than deleting it and starting over.

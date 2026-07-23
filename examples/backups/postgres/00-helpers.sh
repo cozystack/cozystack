@@ -24,7 +24,13 @@ export PG_TARGET_CLUSTER="postgres-${PG_TARGET_NAME}"
 export STRATEGY_NAME="${STRATEGY_NAME:-cnpg-strategy-default}"
 export BACKUPCLASS_NAME="${BACKUPCLASS_NAME:-postgres-cnpg}"
 export BACKUPJOB_NAME="${BACKUPJOB_NAME:-pg-src-adhoc}"
+# A second ad-hoc BackupJob taken after the PITR marker writes; its completion
+# is the deterministic "WAL past the recovery target is archived" gate for the
+# point-in-time restore (see run-all.sh step 45).
+export BACKUPJOB_POSTMARKER_NAME="${BACKUPJOB_POSTMARKER_NAME:-pg-src-postmarker}"
 export RESTOREJOB_TOCOPY_NAME="${RESTOREJOB_TOCOPY_NAME:-pg-src-to-pg-target}"
+export RESTOREJOB_PITR_NAME="${RESTOREJOB_PITR_NAME:-pg-src-to-pg-target-pitr}"
+export RESTOREJOB_UNREACHABLE_NAME="${RESTOREJOB_UNREACHABLE_NAME:-pg-src-to-pg-target-unreachable}"
 export PLAN_NAME="${PLAN_NAME:-pg-src-daily}"
 # App user password baked into 05-postgres-src.yaml (REPLACE_WITH_PASSWORD).
 export PG_PASSWORD="${PG_PASSWORD:-Xai7Wepo0aeThie8}"
