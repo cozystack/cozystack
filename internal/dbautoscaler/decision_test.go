@@ -182,6 +182,10 @@ func TestDecideClampMax(t *testing.T) {
 	if d.Desired != 6 || !d.Limited || d.LimitedReason != autoscalingv1alpha1.ReasonAtLimit {
 		t.Fatalf("clamp max: desired=%d limited=%v reason=%s", d.Desired, d.Limited, d.LimitedReason)
 	}
+	// The limiting reason must carry a human-readable message for the condition.
+	if d.Message == "" {
+		t.Fatalf("clamp max: expected a non-empty message for AtLimit")
+	}
 }
 
 func TestDecideQuorumFloorClampUp(t *testing.T) {
@@ -195,6 +199,9 @@ func TestDecideQuorumFloorClampUp(t *testing.T) {
 	d := Decide(in)
 	if d.Desired != 4 || !d.Limited || d.LimitedReason != autoscalingv1alpha1.ReasonQuorumFloor {
 		t.Fatalf("quorum floor: desired=%d limited=%v reason=%s", d.Desired, d.Limited, d.LimitedReason)
+	}
+	if d.Message == "" {
+		t.Fatalf("quorum floor: expected a non-empty message for QuorumFloor")
 	}
 }
 
@@ -313,6 +320,9 @@ func TestDecideQuotaCeiling(t *testing.T) {
 	d := Decide(in)
 	if d.Desired != 4 || !d.Limited || d.LimitedReason != autoscalingv1alpha1.ReasonQuotaExceeded {
 		t.Fatalf("quota ceiling: desired=%d limited=%v reason=%s", d.Desired, d.Limited, d.LimitedReason)
+	}
+	if d.Message == "" {
+		t.Fatalf("quota ceiling: expected a non-empty message for QuotaExceeded")
 	}
 }
 

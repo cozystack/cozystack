@@ -154,6 +154,7 @@ func Decide(in ScaleInput) Decision {
 		natural = in.Max
 		d.Limited = true
 		d.LimitedReason = autoscalingv1alpha1.ReasonAtLimit
+		d.Message = fmt.Sprintf("held at maxReplicas %d", in.Max)
 	}
 
 	// Quorum floor overrides min/max: clamp UP to the floor even above max
@@ -162,6 +163,7 @@ func Decide(in ScaleInput) Decision {
 		natural = qfloor
 		d.Limited = true
 		d.LimitedReason = autoscalingv1alpha1.ReasonQuorumFloor
+		d.Message = fmt.Sprintf("held at quorum floor %d", qfloor)
 	}
 
 	// Quota is the hard ceiling and wins over everything (we already proved the
@@ -170,6 +172,7 @@ func Decide(in ScaleInput) Decision {
 		natural = *in.QuotaMaxReplicas
 		d.Limited = true
 		d.LimitedReason = autoscalingv1alpha1.ReasonQuotaExceeded
+		d.Message = fmt.Sprintf("clamped to tenant quota ceiling %d", *in.QuotaMaxReplicas)
 	}
 
 	// Rate-limit the current->natural transition. Reaching the quorum floor is
