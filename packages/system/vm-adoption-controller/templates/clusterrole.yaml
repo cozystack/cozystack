@@ -18,7 +18,7 @@ rules:
   resources: ["vminstances", "vmdisks"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 
-# Label DataVolumes for Helm adoption and clone them (cross-namespace adoption)
+# Clone DataVolumes into the tenant (cross-namespace adoption)
 - apiGroups: ["cdi.kubevirt.io"]
   resources: ["datavolumes"]
   verbs: ["get", "list", "watch", "update", "patch", "create"]
@@ -32,3 +32,9 @@ rules:
 - apiGroups: [""]
   resources: ["persistentvolumeclaims"]
   verbs: ["get", "list"]
+
+# Emit Events on imported VMs so adoption outcomes are visible via
+# `kubectl describe` / the dashboard, not only in the controller log
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]

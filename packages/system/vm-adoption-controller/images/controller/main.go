@@ -12,13 +12,17 @@ import (
 	"syscall"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/kubernetes/scheme"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/klog/v2"
 	kubevirtv1 "kubevirt.io/api/core/v1"
 )
@@ -93,9 +97,17 @@ func main() {
 		klog.Fatalf("Failed to create dynamic client: %v", err)
 	}
 
+	// Event recorder so adoption outcomes are visible via `kubectl describe`
+	// / the dashboard, not only in the controller log.
+	eventBroadcaster := record.NewBroadcaster()
+	eventBroadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{Interface: clientset.CoreV1().Events("")})
+	defer eventBroadcaster.Shutdown()
+	recorder := eventBroadcaster.NewRecorder(scheme.Scheme, corev1.EventSource{Component: "vm-adoption-controller"})
+
 	controller := &AdoptionController{
 		clientset:     clientset,
 		dynamicClient: dynamicClient,
+		recorder:      recorder,
 		planCache:     make(map[string]*PlanCacheEntry),
 	}
 
@@ -139,8 +151,22 @@ func main() {
 type AdoptionController struct {
 	clientset     *kubernetes.Clientset
 	dynamicClient dynamic.Interface
+	recorder      record.EventRecorder
 	planCache     map[string]*PlanCacheEntry
 	cacheMutex    sync.RWMutex
+}
+
+// vmRef builds an ObjectReference to a Forklift-imported VirtualMachine so the
+// controller can attach Events to it without registering kubevirt types in the
+// event scheme (record.GetReference returns an *ObjectReference as-is).
+func vmRef(vm *kubevirtv1.VirtualMachine) *corev1.ObjectReference {
+	return &corev1.ObjectReference{
+		APIVersion: "kubevirt.io/v1",
+		Kind:       "VirtualMachine",
+		Namespace:  vm.Namespace,
+		Name:       vm.Name,
+		UID:        vm.UID,
+	}
 }
 
 type PlanCacheEntry struct {
@@ -186,6 +212,8 @@ func (c *AdoptionController) reconcile(ctx context.Context) {
 	for _, vm := range vms {
 		if err := c.adoptVM(ctx, vm); err != nil {
 			klog.Errorf("Failed to adopt VM %s/%s: %v", vm.Namespace, vm.Name, err)
+			c.recorder.Eventf(vmRef(&vm), corev1.EventTypeWarning, "AdoptionFailed",
+				"Failed to adopt imported VM into a Cozystack VMInstance: %v", err)
 		}
 	}
 }
@@ -655,7 +683,6 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 	volumes, _, _ := unstructured.NestedSlice(templateSpec, "volumes")
 
 	var disks []interface{}
-	var dvNames []string // Track DataVolume names for Helm labeling
 	diskNames := make(map[string]bool)
 	diskIndex := 0
 	for i, vol := range volumes {
@@ -712,7 +739,6 @@ func (c *AdoptionController) adoptVM(ctx context.Context, vm kubevirtv1.VirtualM
 			"dvName": dvName,
 			"bus":    "virtio",
 		})
-		dvNames = append(dvNames, dvName)
 		klog.V(3).Infof("VM %s/%s: added disk %s (dvName=%s)", vm.Namespace, vm.Name, diskName, dvName)
 	}
 
@@ -890,6 +916,8 @@ func (c *AdoptionController) adoptVMViaVMDisks(ctx context.Context, vm kubevirtv
 		return fmt.Errorf("failed to create VMInstance %s/%s: %w", targetNamespace, vmInstanceName, err)
 	}
 	klog.Infof("Created VMInstance %s/%s (from VM %s/%s)", targetNamespace, vmInstanceName, vm.Namespace, vm.Name)
+	c.recorder.Eventf(vmRef(&vm), corev1.EventTypeNormal, "Adopted",
+		"Imported VM adopted as Cozystack VMInstance %s/%s", targetNamespace, vmInstanceName)
 
 	// Mark the source VM as adopted so it is not reprocessed (only relevant when
 	// it still exists, i.e. a different namespace than the managed VMInstance).
@@ -898,161 +926,6 @@ func (c *AdoptionController) adoptVMViaVMDisks(ctx context.Context, vm kubevirtv
 			klog.Warningf("VMInstance created but failed to label source VM %s/%s as adopted: %v", vm.Namespace, vm.Name, err)
 		}
 	}
-	return nil
-}
-
-// prepareVMForHelmAdoption adds Helm metadata labels and annotations to an existing
-// VirtualMachine so that Helm will adopt it as a managed resource instead of
-// failing with "already exists".
-func (c *AdoptionController) prepareVMForHelmAdoption(ctx context.Context, namespace, vmName, helmReleaseName string) error {
-	vmGVR := schema.GroupVersionResource{
-		Group:    "kubevirt.io",
-		Version:  "v1",
-		Resource: "virtualmachines",
-	}
-
-	vm, err := c.dynamicClient.Resource(vmGVR).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get VM: %w", err)
-	}
-
-	// Add Helm ownership labels
-	labels := vm.GetLabels()
-	if labels == nil {
-		labels = make(map[string]string)
-	}
-	labels["app.kubernetes.io/managed-by"] = "Helm"
-	vm.SetLabels(labels)
-
-	// Add Helm release annotations
-	annotations := vm.GetAnnotations()
-	if annotations == nil {
-		annotations = make(map[string]string)
-	}
-	annotations["meta.helm.sh/release-name"] = helmReleaseName
-	annotations["meta.helm.sh/release-namespace"] = namespace
-	vm.SetAnnotations(annotations)
-
-	_, err = c.dynamicClient.Resource(vmGVR).Namespace(namespace).Update(ctx, vm, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to add Helm metadata to VM: %w", err)
-	}
-
-	klog.Infof("Prepared VM %s/%s for Helm adoption (release=%s)", namespace, vmName, helmReleaseName)
-	return nil
-}
-
-// prepareDataVolumesForHelmAdoption adds Helm metadata labels and annotations
-// to existing DataVolumes so that Helm will adopt them.
-func (c *AdoptionController) prepareDataVolumesForHelmAdoption(ctx context.Context, namespace string, dvNames []string, helmReleaseName string) error {
-	dvGVR := schema.GroupVersionResource{
-		Group:    "cdi.kubevirt.io",
-		Version:  "v1beta1",
-		Resource: "datavolumes",
-	}
-
-	for _, dvName := range dvNames {
-		dv, err := c.dynamicClient.Resource(dvGVR).Namespace(namespace).Get(ctx, dvName, metav1.GetOptions{})
-		if err != nil {
-			klog.Warningf("DataVolume %s/%s not found, skipping Helm labeling: %v", namespace, dvName, err)
-			continue
-		}
-
-		labels := dv.GetLabels()
-		if labels == nil {
-			labels = make(map[string]string)
-		}
-		labels["app.kubernetes.io/managed-by"] = "Helm"
-		dv.SetLabels(labels)
-
-		annotations := dv.GetAnnotations()
-		if annotations == nil {
-			annotations = make(map[string]string)
-		}
-		annotations["meta.helm.sh/release-name"] = helmReleaseName
-		annotations["meta.helm.sh/release-namespace"] = namespace
-		dv.SetAnnotations(annotations)
-
-		_, err = c.dynamicClient.Resource(dvGVR).Namespace(namespace).Update(ctx, dv, metav1.UpdateOptions{})
-		if err != nil {
-			return fmt.Errorf("failed to add Helm metadata to DataVolume %s: %w", dvName, err)
-		}
-
-		klog.Infof("Prepared DataVolume %s/%s for Helm adoption (release=%s)", namespace, dvName, helmReleaseName)
-	}
-
-	return nil
-}
-
-// removeHelmLabelsFromVM removes Helm metadata from a VM (for rollback).
-func (c *AdoptionController) removeHelmLabelsFromVM(ctx context.Context, namespace, vmName string) error {
-	vmGVR := schema.GroupVersionResource{
-		Group:    "kubevirt.io",
-		Version:  "v1",
-		Resource: "virtualmachines",
-	}
-
-	vm, err := c.dynamicClient.Resource(vmGVR).Namespace(namespace).Get(ctx, vmName, metav1.GetOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to get VM for rollback: %w", err)
-	}
-
-	labels := vm.GetLabels()
-	if labels != nil {
-		delete(labels, "app.kubernetes.io/managed-by")
-		vm.SetLabels(labels)
-	}
-
-	annotations := vm.GetAnnotations()
-	if annotations != nil {
-		delete(annotations, "meta.helm.sh/release-name")
-		delete(annotations, "meta.helm.sh/release-namespace")
-		vm.SetAnnotations(annotations)
-	}
-
-	_, err = c.dynamicClient.Resource(vmGVR).Namespace(namespace).Update(ctx, vm, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("failed to remove Helm metadata from VM: %w", err)
-	}
-
-	klog.Infof("Removed Helm metadata from VM %s/%s (rollback)", namespace, vmName)
-	return nil
-}
-
-// removeHelmLabelsFromDataVolumes removes Helm metadata from DataVolumes (for rollback).
-func (c *AdoptionController) removeHelmLabelsFromDataVolumes(ctx context.Context, namespace string, dvNames []string) error {
-	dvGVR := schema.GroupVersionResource{
-		Group:    "cdi.kubevirt.io",
-		Version:  "v1beta1",
-		Resource: "datavolumes",
-	}
-
-	for _, dvName := range dvNames {
-		dv, err := c.dynamicClient.Resource(dvGVR).Namespace(namespace).Get(ctx, dvName, metav1.GetOptions{})
-		if err != nil {
-			klog.Warningf("DataVolume %s/%s not found during rollback: %v", namespace, dvName, err)
-			continue
-		}
-
-		labels := dv.GetLabels()
-		if labels != nil {
-			delete(labels, "app.kubernetes.io/managed-by")
-			dv.SetLabels(labels)
-		}
-
-		annotations := dv.GetAnnotations()
-		if annotations != nil {
-			delete(annotations, "meta.helm.sh/release-name")
-			delete(annotations, "meta.helm.sh/release-namespace")
-			dv.SetAnnotations(annotations)
-		}
-
-		_, err = c.dynamicClient.Resource(dvGVR).Namespace(namespace).Update(ctx, dv, metav1.UpdateOptions{})
-		if err != nil {
-			klog.Warningf("Failed to remove Helm metadata from DataVolume %s/%s: %v", namespace, dvName, err)
-		}
-	}
-
 	return nil
 }
 
