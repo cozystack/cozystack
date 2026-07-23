@@ -18,10 +18,8 @@ image:
 		$(call cache-args,vector) \
 		--metadata-file images/vector.json \
 		$(BUILDX_ARGS)
-	REPOSITORY="$(REGISTRY)/vector" \
-		yq -i '.image.repository = strenv(REPOSITORY)' values.yaml
-	TAG=$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/vector.json -o json -r) \
-		yq -i '.image.tag = strenv(TAG)' values.yaml
+	echo "$(REGISTRY)/vector:$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/vector.json -o json -r)" \
+		> images/vector.tag
 	rm -f images/vector.json
 
 generate:

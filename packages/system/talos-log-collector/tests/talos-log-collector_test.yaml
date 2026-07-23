@@ -2,7 +2,8 @@ suite: talos-log-collector receive/forward wiring
 
 # Pins the surface this package owns:
 #   - the DaemonSet pulls the first-party vector image from the cozystack
-#     registry (repository is the load-bearing ref re-pinned by `make image`);
+#     registry (the load-bearing ref lives in images/vector.tag, re-pinned by
+#     `make image`);
 #   - Talos logs are received on the node loopback via hostPort+hostIP (the pod
 #     stays on the pod network for the sink; the loopback socket is published
 #     via portmap), NOT via hostNetwork;

@@ -21,28 +21,6 @@
       "maximum": 65535,
       "minimum": 1
     },
-    "image": {
-      "description": "Vector container image.",
-      "type": "object",
-      "default": {},
-      "properties": {
-        "pullPolicy": {
-          "description": "Image pull policy.",
-          "type": "string",
-          "default": "IfNotPresent"
-        },
-        "repository": {
-          "description": "Image repository.",
-          "type": "string",
-          "default": "ghcr.io/cozystack/cozystack/vector"
-        },
-        "tag": {
-          "description": "Image tag (digest-pinned by the build).",
-          "type": "string",
-          "default": "0.56.0-alpine@sha256:0eb66216f5f9322264e2ba83f4606428ef77a2cd4dea619a5bea610ac80ccc43"
-        }
-      }
-    },
     "resources": {
       "description": "Compute resources for the collector.",
       "type": "object",

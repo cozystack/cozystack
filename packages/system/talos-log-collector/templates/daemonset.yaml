@@ -39,8 +39,8 @@ spec:
           type: RuntimeDefault
       containers:
       - name: vector
-        image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-        imagePullPolicy: {{ .Values.image.pullPolicy }}
+        image: "{{ $.Files.Get "images/vector.tag" | trim }}"
+        imagePullPolicy: IfNotPresent
         args: ["--config", "/etc/vector/vector.yaml"]
         livenessProbe:
           tcpSocket:

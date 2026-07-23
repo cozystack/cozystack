@@ -78,17 +78,13 @@ url: "tcp://127.0.0.1:5170/"
 
 ### Common parameters
 
-| Name               | Description                                                                              | Type       | Value                                                                                   |
-| ------------------ | ---------------------------------------------------------------------------------------- | ---------- | --------------------------------------------------------------------------------------- |
-| `logLevel`         | Vector log verbosity (trace, debug, info, warn, error).                                  | `string`   | `warn`                                                                                  |
-| `listenPort`       | TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs. | `int`      | `5170`                                                                                  |
-| `image`            | Vector container image.                                                                  | `object`   | `{}`                                                                                    |
-| `image.repository` | Image repository.                                                                        | `string`   | `ghcr.io/cozystack/cozystack/vector`                                                    |
-| `image.tag`        | Image tag (digest-pinned by the build).                                                  | `string`   | `0.56.0-alpine@sha256:0eb66216f5f9322264e2ba83f4606428ef77a2cd4dea619a5bea610ac80ccc43` |
-| `image.pullPolicy` | Image pull policy.                                                                       | `string`   | `IfNotPresent`                                                                          |
-| `resources`        | Compute resources for the collector.                                                     | `object`   | `{}`                                                                                    |
-| `resources.cpu`    | CPU request.                                                                             | `quantity` | `100m`                                                                                  |
-| `resources.memory` | Memory request and limit.                                                                | `quantity` | `128Mi`                                                                                 |
+| Name               | Description                                                                              | Type       | Value   |
+| ------------------ | ---------------------------------------------------------------------------------------- | ---------- | ------- |
+| `logLevel`         | Vector log verbosity (trace, debug, info, warn, error).                                  | `string`   | `warn`  |
+| `listenPort`       | TCP port bound on the node loopback (127.0.0.1) where Talos machine.logging pushes logs. | `int`      | `5170`  |
+| `resources`        | Compute resources for the collector.                                                     | `object`   | `{}`    |
+| `resources.cpu`    | CPU request.                                                                             | `quantity` | `100m`  |
+| `resources.memory` | Memory request and limit.                                                                | `quantity` | `128Mi` |
 
 
 ### VictoriaLogs destination
