@@ -88,7 +88,7 @@ else
 fi
 
 # Check for networks
-echo "Checking network configuration..."
+echo -e "  Checking network configuration..."
 NETWORKS=$(kubectl get vm "$VM_NAME" -n "$NAMESPACE" -o json 2>/dev/null | \
   jq -r '.spec.template.spec.networks[]? | select(.multus) | .multus.networkName' || echo "")
 
