@@ -9,3 +9,6 @@ update:
 	helm repo update opensearch-operator
 	helm pull opensearch-operator/opensearch-operator --version 2.8.0 --untar --untardir charts
 	patch --no-backup-if-mismatch -p1 < patches/leaderElection.diff
+
+test:
+	helm unittest .

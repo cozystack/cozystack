@@ -23,6 +23,7 @@ import (
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
+	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -72,7 +73,7 @@ type PackageReconciler struct {
 // attempts; Interval polls healthy releases.
 func (r *PackageReconciler) buildHelmReleaseSpec(componentInstall *cozyv1alpha1.ComponentInstall, artifactName string) helmv2.HelmReleaseSpec {
 	maxHistory := r.HelmReleaseMaxHistory
-	return helmv2.HelmReleaseSpec{
+	spec := helmv2.HelmReleaseSpec{
 		Interval:   metav1.Duration{Duration: r.HelmReleaseInterval},
 		MaxHistory: &maxHistory,
 		ChartRef: &helmv2.CrossNamespaceSourceReference{
@@ -96,6 +97,14 @@ func (r *PackageReconciler) buildHelmReleaseSpec(componentInstall *cozyv1alpha1.
 			CRDs: parseCRDPolicy(componentInstall),
 		},
 	}
+	// kstatus readiness (issue #2642): gate the release on the CR(s) it renders.
+	// ResolveWaitStrategy couples the default — expressions imply poller when no
+	// strategy is set, since healthCheckExprs are only evaluated under poller.
+	if componentInstall != nil {
+		spec.HealthCheckExprs = componentInstall.HealthCheckExprs
+		spec.WaitStrategy = config.ResolveWaitStrategy(componentInstall.WaitStrategy, len(componentInstall.HealthCheckExprs) > 0)
+	}
+	return spec
 }
 
 // +kubebuilder:rbac:groups=cozystack.io,resources=packages,verbs=get;list;watch;create;update;patch;delete

@@ -24,11 +24,16 @@ import (
 
 // ApplicationStatusApplyConfiguration represents a declarative configuration of the ApplicationStatus type for use
 // with apply.
+//
+// ApplicationStatus is the status of a Application.
 type ApplicationStatusApplyConfiguration struct {
-	Version          *string                          `json:"version,omitempty"`
-	Conditions       []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
-	Namespace        *string                          `json:"namespace,omitempty"`
-	ExternalIPsCount *int32                           `json:"externalIPsCount,omitempty"`
+	// Conditions holds the conditions for the Application.
+	Version    *string                          `json:"version,omitempty"`
+	Conditions []v1.ConditionApplyConfiguration `json:"conditions,omitempty"`
+	// Namespace holds the computed namespace for Tenant applications.
+	Namespace *string `json:"namespace,omitempty"`
+	// ExternalIPsCount holds the number of LoadBalancer services with assigned external IPs for Tenant applications.
+	ExternalIPsCount *int32 `json:"externalIPsCount,omitempty"`
 }
 
 // ApplicationStatusApplyConfiguration constructs a declarative configuration of the ApplicationStatus type for use with

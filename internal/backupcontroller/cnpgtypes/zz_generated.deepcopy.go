@@ -72,6 +72,26 @@ func (in *ClusterSpec) DeepCopyInto(out *ClusterSpec) {
 		out.Bootstrap = new(BootstrapConfiguration)
 		in.Bootstrap.DeepCopyInto(out.Bootstrap)
 	}
+	if in.Plugins != nil {
+		out.Plugins = make([]PluginConfiguration, len(in.Plugins))
+		for i := range in.Plugins {
+			in.Plugins[i].DeepCopyInto(&out.Plugins[i])
+		}
+	}
+}
+
+func (in *PluginConfiguration) DeepCopyInto(out *PluginConfiguration) {
+	*out = *in
+	if in.IsWALArchiver != nil {
+		out.IsWALArchiver = new(bool)
+		*out.IsWALArchiver = *in.IsWALArchiver
+	}
+	if in.Parameters != nil {
+		out.Parameters = make(map[string]string, len(in.Parameters))
+		for k, v := range in.Parameters {
+			out.Parameters[k] = v
+		}
+	}
 }
 
 func (in *BackupConfiguration) DeepCopyInto(out *BackupConfiguration) {
@@ -142,8 +162,104 @@ func (in *Backup) DeepCopyInto(out *Backup) {
 	*out = *in
 	out.TypeMeta = in.TypeMeta
 	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
-	out.Spec = in.Spec
+	in.Spec.DeepCopyInto(&out.Spec)
 	in.Status.DeepCopyInto(&out.Status)
+}
+
+func (in *BackupSpec) DeepCopyInto(out *BackupSpec) {
+	*out = *in
+	out.Cluster = in.Cluster
+	if in.PluginConfiguration != nil {
+		out.PluginConfiguration = new(BackupPluginConfiguration)
+		in.PluginConfiguration.DeepCopyInto(out.PluginConfiguration)
+	}
+}
+
+func (in *BackupPluginConfiguration) DeepCopyInto(out *BackupPluginConfiguration) {
+	*out = *in
+	if in.Parameters != nil {
+		out.Parameters = make(map[string]string, len(in.Parameters))
+		for k, v := range in.Parameters {
+			out.Parameters[k] = v
+		}
+	}
+}
+
+func (in *ObjectStore) DeepCopyInto(out *ObjectStore) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ObjectMeta.DeepCopyInto(&out.ObjectMeta)
+	in.Spec.DeepCopyInto(&out.Spec)
+}
+
+func (in *ObjectStore) DeepCopy() *ObjectStore {
+	if in == nil {
+		return nil
+	}
+	out := new(ObjectStore)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ObjectStore) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ObjectStoreList) DeepCopyInto(out *ObjectStoreList) {
+	*out = *in
+	out.TypeMeta = in.TypeMeta
+	in.ListMeta.DeepCopyInto(&out.ListMeta)
+	if in.Items != nil {
+		out.Items = make([]ObjectStore, len(in.Items))
+		for i := range in.Items {
+			in.Items[i].DeepCopyInto(&out.Items[i])
+		}
+	}
+}
+
+func (in *ObjectStoreList) DeepCopy() *ObjectStoreList {
+	if in == nil {
+		return nil
+	}
+	out := new(ObjectStoreList)
+	in.DeepCopyInto(out)
+	return out
+}
+
+func (in *ObjectStoreList) DeepCopyObject() runtime.Object {
+	if c := in.DeepCopy(); c != nil {
+		return c
+	}
+	return nil
+}
+
+func (in *ObjectStoreSpec) DeepCopyInto(out *ObjectStoreSpec) {
+	*out = *in
+	in.Configuration.DeepCopyInto(&out.Configuration)
+	if in.InstanceSidecarConfiguration != nil {
+		out.InstanceSidecarConfiguration = new(InstanceSidecarConfiguration)
+		in.InstanceSidecarConfiguration.DeepCopyInto(out.InstanceSidecarConfiguration)
+	}
+}
+
+func (in *InstanceSidecarConfiguration) DeepCopyInto(out *InstanceSidecarConfiguration) {
+	*out = *in
+	if in.Env != nil {
+		out.Env = make([]EnvVar, len(in.Env))
+		copy(out.Env, in.Env)
+	}
+}
+
+func (in *InstanceSidecarConfiguration) DeepCopy() *InstanceSidecarConfiguration {
+	if in == nil {
+		return nil
+	}
+	out := new(InstanceSidecarConfiguration)
+	in.DeepCopyInto(out)
+	return out
 }
 
 func (in *Backup) DeepCopy() *Backup {

@@ -527,14 +527,15 @@ jobs:
     runs-on: ubuntu-latest
     needs: [generate-changelog, prepare-release]
     # generate-changelog is non-blocking — run as long as prepare-release succeeded.
-    # `always()` is needed so this job runs even if generate-changelog failed/skipped.
+    # `!cancelled()` lets this job run if generate-changelog failed/skipped,
+    # while still stopping it when the workflow is cancelled.
     # Not gated on release_exists: a promoted stable tag already has a draft
     # release (so prepare-release skips the rebuild), but its website docs still
     # need publishing. Gating on release_exists here skipped docs for every
     # promoted stable.
     # Stable tags only — a prerelease (ref_name contains '-') would otherwise open
     # an "update managed apps for vX.Y.Z-rc.N" website PR on every rc.
-    if: always() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-')
+    if: ${{ !cancelled() && needs.prepare-release.result == 'success' && !contains(github.ref_name, '-') }}
     permissions:
       contents: read
     steps:

@@ -18,7 +18,8 @@
 # root-caused after the fact. This collects exactly that state from the pod's
 # node so the next recurrence is dispositive.
 #
-# What it captures, per affected pod (NotReady, scheduled, has a podIP):
+# What it captures, per affected pod (NotReady and scheduled; podIP may still
+# be empty while CNI endpoint allocation is the thing that is stuck):
 #   - cilium-agent on the node:  cilium-dbg endpoint list; bpf ct entries for
 #     the podIP; a short bounded `cilium-dbg monitor --type drop`; hubble
 #     dropped-verdict observations (if the hubble CLI is present in the agent).
@@ -191,10 +192,23 @@ lb_capture_decision() {
 # the capture branch, so reachable/skipped LBs never consume it and a broken LB
 # enumerated after many reachable ones is still characterised. The cap bounds
 # WORK, not wall-clock: at >=2 unreachable LBs (each heavy capture takes tens of
-# seconds) the real wall-clock bound is the outer `timeout -k 30 600` backstop at
-# the call site, not this cap.
+# seconds) the real wall-clock bound is the outer `timeout -k 30 <n>` backstop at
+# the call site, not this cap. That budget differs per caller -- the cozytest.sh
+# EXIT trap runs with no containing operation and allows 600s, while the Chainsaw
+# global catch shares an op envelope with the crust-gather snapshot and allows
+# 300s -- so do not hard-code either number here.
 lb_budget_ok() {
   if [ "$1" -lt "$2" ]; then echo yes; else echo no; fi
+}
+
+# pod_filter_affected: stdin =
+# `namespace|name|podIP|nodeName|ready|phase` rows. Keep scheduled, non-terminal
+# pods whose Ready condition is not True. podIP is deliberately NOT a gate: the
+# cilium endpointManager leak this collector diagnoses can strand a pod before
+# an IP is assigned, and the node-global Cilium/OVN state plus pod events remain
+# useful in that state. IP-specific commands are gated later at their call sites.
+pod_filter_affected() {
+  awk -F'|' '$4 != "" && $5 != "True" && $6 != "Succeeded" && $6 != "Failed"'
 }
 
 # Sourcing guard: hack/capture-dataplane.bats sets E2E_CAPTURE_DATAPLANE_LIB and
@@ -226,8 +240,10 @@ GENEVE_IFACE="${COZY_GENEVE_IFACE:-genev_sys_6081}"
 # Cap how many UNREACHABLE LBs get the heavy datapath capture; reachable/skipped
 # LBs never count toward it (see the captured-budget gate in capture_lb_datapath).
 # This bounds WORK, not wall-clock: at >=2 unreachable LBs the real wall-clock
-# bound is the outer `timeout -k 30 600` backstop at the call site (truncate +
-# hard-kill), since each heavy capture itself takes tens of seconds.
+# bound is the outer `timeout -k 30 <n>` backstop at the call site (truncate +
+# hard-kill), since each heavy capture itself takes tens of seconds. That budget
+# is per-caller (600s from the cozytest.sh EXIT trap, 300s from the Chainsaw
+# global catch, which shares an op envelope with the snapshot leg).
 MAX_LBS="${COZY_DATAPLANE_MAX_LBS:-6}"
 
 command -v kubectl >/dev/null 2>&1 || exit 0
@@ -235,40 +251,20 @@ mkdir -p "$OUT" 2>/dev/null || exit 0
 
 log() { echo "[capture-dataplane] $*"; }
 
-# Affected = scheduled (has nodeName), has a podIP (so an endpoint exists to
-# inspect), Ready!=True, and not already terminal. That is the superset of the
-# "readiness/startup probe failing with connection refused" symptom -- a pod
-# that is Running with an IP but whose Ready condition is False is exactly the
-# transient's signature. Succeeded/Failed pods (completed Jobs, hook pods) are
-# Ready!=True too but are not the symptom, so they are excluded to keep the
-# MAX_PODS budget on Running/Pending pods that are actually wedged.
+# Affected = scheduled (has nodeName), Ready!=True, and not already terminal.
+# A podIP is intentionally optional: a CNI endpoint leak can strand the pod
+# before allocation. Running pods with an IP cover the host->pod probe failure;
+# Pending pods without one cover the endpoint-allocation failure. Succeeded/
+# Failed pods (completed Jobs, hook pods) are Ready!=True too but are not either
+# symptom, so they are excluded to keep the MAX_PODS budget on actual wedges.
 # jsonpath keeps this dependency-free (no jq / go-template reassignment).
 affected=$(kubectl get pods -A \
   -o jsonpath='{range .items[*]}{.metadata.namespace}{"|"}{.metadata.name}{"|"}{.status.podIP}{"|"}{.spec.nodeName}{"|"}{.status.conditions[?(@.type=="Ready")].status}{"|"}{.status.phase}{"\n"}{end}' \
-  2>/dev/null | awk -F'|' '$3!="" && $4!="" && $5!="True" && $6!="Succeeded" && $6!="Failed"')
+  2>/dev/null | pod_filter_affected)
 
-if [ -z "$affected" ]; then
-  log "no NotReady pods with a podIP+node -- nothing to capture"
-  exit 0
-fi
-
-ncount=$(printf '%s\n' "$affected" | wc -l | tr -d ' ')
-log "capturing host->pod data-plane for up to $MAX_PODS of $ncount affected pod(s) -> $OUT"
-
-# OVN southbound logical-flow dump is cluster-global, so capture it once rather
-# than per pod. ovn-central is a Deployment (not per-node); any replica answers.
-# --no-leader-only lets a read land on a raft follower instead of erroring.
-central=$(kubectl get pod -n "$KUBEOVN_NS" -l app=ovn-central \
-  -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-if [ -n "$central" ]; then
-  {
-    echo "=== ovn-sbctl lflow-list (cluster-global, pod=$central) ==="
-    timeout 30 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
-      ovn-sbctl --no-leader-only lflow-list 2>&1 || true
-  } > "$OUT/ovn-lflows.txt" 2>&1 || true
-else
-  log "no ovn-central pod in $KUBEOVN_NS -- skipping OVN logical-flow dump"
-fi
+# Set even when the pod path is empty; the per-pod capture references it, while
+# the independent LoadBalancer path below does not.
+central=""
 
 # pod_on_node <ns> <label> <node> -> first matching pod name (empty if none).
 pod_on_node() {
@@ -378,10 +374,32 @@ capture_node() {
   } >> "$nf" 2>&1 || true
 }
 
-i=0
-printf '%s\n' "$affected" | {
+if [ -z "$affected" ]; then
+  log "no scheduled NotReady pods -- skipping host->pod capture; checking LoadBalancers independently"
+else
+  ncount=$(printf '%s\n' "$affected" | wc -l | tr -d ' ')
+  log "capturing host->pod data-plane for up to $MAX_PODS of $ncount affected pod(s) -> $OUT"
+
+  # OVN southbound logical-flow dump is cluster-global, so capture it once
+  # rather than per pod. ovn-central is a Deployment (not per-node); any replica
+  # answers. --no-leader-only lets a read land on a raft follower instead of
+  # erroring.
+  central=$(kubectl get pod -n "$KUBEOVN_NS" -l app=ovn-central \
+    -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [ -n "$central" ]; then
+    {
+      echo "=== ovn-sbctl lflow-list (cluster-global, pod=$central) ==="
+      timeout 30 kubectl exec -n "$KUBEOVN_NS" "$central" -c ovn-central -- \
+        ovn-sbctl --no-leader-only lflow-list 2>&1 || true
+    } > "$OUT/ovn-lflows.txt" 2>&1 || true
+  else
+    log "no ovn-central pod in $KUBEOVN_NS -- skipping OVN logical-flow dump"
+  fi
+
+  i=0
+  printf '%s\n' "$affected" | {
   while IFS='|' read -r ns pod podip node _ready _phase; do
-    [ -n "$ns" ] && [ -n "$pod" ] && [ -n "$podip" ] && [ -n "$node" ] || continue
+    [ -n "$ns" ] && [ -n "$pod" ] && [ -n "$node" ] || continue
     i=$((i + 1))
     if [ "$i" -gt "$MAX_PODS" ]; then
       log "reached MAX_PODS=$MAX_PODS cap; $((ncount - MAX_PODS)) more affected pod(s) NOT captured"
@@ -398,7 +416,7 @@ printf '%s\n' "$affected" | {
     ovs=$(pod_on_node "$KUBEOVN_NS" app=ovs "$node")
     {
       echo "################################################################"
-      echo "# POD $ns/$pod  podIP=$podip  node=$node  (Ready=$_ready)"
+      echo "# POD $ns/$pod  podIP=${podip:-<none>}  node=$node  (Ready=$_ready)"
       echo "# node-global captures are in node-$node.txt"
       echo "################################################################"
 
@@ -409,7 +427,13 @@ printf '%s\n' "$affected" | {
       kubectl get events -n "$ns" --field-selector "involvedObject.name=$pod" \
         -o jsonpath='{range .items[*]}{.lastTimestamp}{" "}{.reason}{": "}{.message}{"\n"}{end}' 2>&1 || true
 
-      if [ -n "$agent" ]; then
+      if [ -z "$podip" ]; then
+        echo
+        echo "=== pod has no podIP; IP-specific route/conntrack capture skipped ==="
+        echo "Node-global Cilium/OVN state and pod allocation events remain captured."
+      fi
+
+      if [ -n "$podip" ] && [ -n "$agent" ]; then
         echo
         echo "=== cilium-dbg bpf ct list global | grep $podip (node=$node agent=$agent) ==="
         timeout 25 kubectl exec -n "$CILIUM_NS" "$agent" -c cilium-agent -- \
@@ -417,7 +441,7 @@ printf '%s\n' "$affected" | {
       fi
 
       cni=$(pod_on_node "$KUBEOVN_NS" app=kube-ovn-cni "$node")
-      if [ -n "$cni" ]; then
+      if [ -n "$podip" ] && [ -n "$cni" ]; then
         echo
         echo "=== host netns: ip route get $podip (via kube-ovn cni-server) ==="
         timeout 15 kubectl exec -n "$KUBEOVN_NS" "$cni" -c cni-server -- \
@@ -466,7 +490,8 @@ printf '%s\n' "$affected" | {
     } > "$pf" 2>&1 || true
   done
   log "host->pod data-plane capture complete"
-}
+  }
+fi
 
 # ============================================================================ #
 # LoadBalancer-datapath capture (see the header block for the full rationale).  #

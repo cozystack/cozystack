@@ -25,6 +25,7 @@ import (
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	"github.com/fluxcd/pkg/apis/kustomize"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"sigs.k8s.io/yaml"
 )
@@ -157,6 +158,41 @@ func TestBuildHelmReleaseSpec(t *testing.T) {
 // TestBuildHelmReleaseSpecZeroMaxHistory pins that MaxHistory=0 (unlimited
 // history per Helm semantics) survives the spec build — i.e. is set as a
 // non-nil pointer to 0 rather than dropped or replaced with a default.
+// buildHelmReleaseSpec threads the kstatus readiness knobs from ComponentInstall
+// (issue #2642) onto the generated HelmRelease, coupling the poller default when
+// healthCheckExprs are present but no wait strategy was set.
+func TestBuildHelmReleaseSpecHealthCheckExprs(t *testing.T) {
+	r := &PackageReconciler{HelmReleaseMaxHistory: 7}
+	exprs := []kustomize.CustomHealthCheck{{
+		APIVersion: "postgresql.cnpg.io/v1",
+		Kind:       "Cluster",
+	}}
+
+	// exprs present, no explicit strategy -> poller (coupled default)
+	spec := r.buildHelmReleaseSpec(&cozyv1alpha1.ComponentInstall{HealthCheckExprs: exprs}, "x")
+	if len(spec.HealthCheckExprs) != 1 || spec.HealthCheckExprs[0].Kind != "Cluster" {
+		t.Fatalf("HealthCheckExprs not threaded: %+v", spec.HealthCheckExprs)
+	}
+	if spec.WaitStrategy == nil || spec.WaitStrategy.Name != helmv2.WaitStrategyPoller {
+		t.Errorf("WaitStrategy = %+v, want poller (coupled default)", spec.WaitStrategy)
+	}
+
+	// explicit legacy honored even with exprs
+	spec = r.buildHelmReleaseSpec(&cozyv1alpha1.ComponentInstall{HealthCheckExprs: exprs, WaitStrategy: "legacy"}, "x")
+	if spec.WaitStrategy == nil || spec.WaitStrategy.Name != helmv2.WaitStrategyLegacy {
+		t.Errorf("WaitStrategy = %+v, want legacy", spec.WaitStrategy)
+	}
+
+	// no exprs, no strategy -> unset (flux default)
+	spec = r.buildHelmReleaseSpec(&cozyv1alpha1.ComponentInstall{}, "x")
+	if spec.WaitStrategy != nil {
+		t.Errorf("WaitStrategy = %+v, want nil", spec.WaitStrategy)
+	}
+	if spec.HealthCheckExprs != nil {
+		t.Errorf("HealthCheckExprs = %+v, want nil", spec.HealthCheckExprs)
+	}
+}
+
 func TestBuildHelmReleaseSpecZeroMaxHistory(t *testing.T) {
 	r := &PackageReconciler{HelmReleaseMaxHistory: 0}
 	spec := r.buildHelmReleaseSpec(nil, "x")

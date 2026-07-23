@@ -26,11 +26,20 @@ tests:
       - notContains:
           path: spec.template.spec.containers[1].args
           content: --leader-elect
-      # Recreate avoids two uncoordinated managers overlapping during an upgrade
-      # while leader election is gated off on the single replica.
+      # maxSurge: 0 caps total pods at replicas, so the old manager is scaled down before
+      # the new one is scaled up, rather than the default 25% surge starting a second
+      # manager while the first is fully live. type stays RollingUpdate because under
+      # server-side apply a switch to Recreate does not clear the apiserver-defaulted
+      # rollingUpdate block on an existing Deployment, and the merged object is invalid.
       - equal:
           path: spec.strategy.type
-          value: Recreate
+          value: RollingUpdate
+      - equal:
+          path: spec.strategy.rollingUpdate.maxSurge
+          value: 0
+      - equal:
+          path: spec.strategy.rollingUpdate.maxUnavailable
+          value: 1
 
   - it: scaling past one replica re-enables --leader-elect for real HA
     template: charts/opensearch-operator/templates/opensearch-operator-controller-manager-deployment.yaml

@@ -20,9 +20,10 @@
 #                     with the same max-semver test it uses for the release's
 #                     make_latest flag and sets MOVE_LATEST accordingly.
 #
-# Reads image refs from packages/*/*/values.yaml in the CURRENT tree, which is
-# expected to be the promoted stable digest-vendored tree (the release-X.Y.Z
-# branch, whose digests are the rc's — only the cosmetic tag string differs).
+# Reads image refs from the CURRENT tree (see hack/lib/image-refs.sh for which
+# files that covers), which is expected to be the promoted stable
+# digest-vendored tree (the release-X.Y.Z branch, whose digests are the rc's —
+# only the cosmetic tag string differs).
 # Requires: yq (mikefarah), skopeo, and a registry login already done.
 #
 # The repo/tag split (ref_repo below) strips the :tag from the last path
@@ -49,22 +50,21 @@ yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2
 # skopeo is only needed to actually copy; a --dry-run just prints the plan.
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
-# Collect "repo@sha256:..." refs from every package values.yaml, across the
-# three shapes the build writes:
-#   1. single string  <repo>:<tag>@sha256:<digest>   (e.g. .cozystackAPI.image)
-#   2. split map       {repository, tag, digest}      (e.g. .cilium.image)
-#   3. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=sha256:<digest>}
-collect_refs() {
-  for f in packages/*/*/values.yaml; do
-    [ -f "$f" ] || continue
-    # shape 1
-    yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$f" 2>/dev/null || true
-    # shape 2
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | .repository + "@" + .digest' "$f" 2>/dev/null || true
-    # shape 3
-    yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
-  done
-}
+# Ref collection (which files are scanned, and the YAML shapes within them) is
+# shared with hack/nightly-mirror.sh and hack/promote-rewrite-tags.sh — see
+# hack/lib/image-refs.sh. It was duplicated between the first two for as long
+# as both existed, and they drifted: this script and the mirror scanned only
+# the depth-2 values.yaml, so every ref stored in an images/*.tag file or
+# stamped into a template was silently skipped. That is the same failure mode
+# the shape-3 rule was added for — the promotion reports success while never
+# creating those images' :<version> tags. Because the retag happens within one
+# registry the digests still resolve and digest-pinned installs are unaffected,
+# but the release does not carry the tags it claims to. Keep the enumeration in
+# one place so a fix reaches every consumer at once.
+# shellcheck source=hack/lib/image-refs.sh
+. "$(dirname "$0")/lib/image-refs.sh"
+
+collect_refs() { collect_image_refs packages; }
 
 # Split a "<repo>[:<tag>]@sha256:<digest>" ref into repo and digest.
 # ref_repo strips the :tag from the LAST path component only, so a registry
@@ -99,11 +99,20 @@ refs=""
 for raw in $(collect_refs); do
   [ -n "$raw" ] || continue
   _repo="$(ref_repo "$raw")"
-  # Retag only cozystack-owned images. This drops third-party images
-  # (docker.io/clastix/kubectl, ghcr.io/kvaps/...), bare upstream tags
-  # (kube-ovn/keycloak/kilo) and non-ref scalars (e.g. a "--migrate-image=..."
-  # arg string) — all vendored by digest but not pushed to $REGISTRY, so a
-  # skopeo copy to them would fail and (under set -e) abort the whole promotion.
+  # Retag only cozystack-owned images: those the build pushes to $REGISTRY, so
+  # a skopeo copy can succeed. Everything else is vendored by digest from a
+  # registry this job cannot push to, and a copy there would fail and (under
+  # set -e) abort the whole promotion. What this drops today:
+  #   - third-party hosts: docker.io/clastix/kubectl, ghcr.io/kvaps/...,
+  #     ghcr.io/lexfrei/{kuberture,ouroboros} (deliberately not mirrored under
+  #     ghcr.io/cozystack — see those packages' values.yaml)
+  #   - ghcr.io/cozystack/ingress-nginx-with-protobuf-exporter/*, which is a
+  #     cozystack-org repo but sits outside $REGISTRY's path
+  #   - non-ref scalars, e.g. a "--migrate-image=..." arg string
+  # Note kilo, kube-ovn and keycloak-operator are NOT in that list: all three
+  # are built and pushed to $REGISTRY, and are selected by shapes 3 and 4. An
+  # earlier version of this comment named them as unpushed third parties, which
+  # is what let their missing release tags go unnoticed.
   case "$_repo" in
     "${REGISTRY}/"*) ;;
     *) continue ;;

@@ -85,15 +85,24 @@ rules:
 - apiGroups: ["coordination.k8s.io"]
   resources: ["leases"]
   verbs: ["get", "list", "watch", "create", "update", "patch"]
-# CNPG strategy: SSA-patch the live Cluster (spec.backup.barmanObjectStore),
-# create one-shot Backup CRs, observe their status, and clean them up on
-# RestoreJob purge.
+# CNPG strategy: SSA-patch the live Cluster (spec.plugins referencing the
+# barman-cloud plugin), create one-shot Backup CRs, observe their status, and
+# clean them up on RestoreJob purge.
 - apiGroups: ["postgresql.cnpg.io"]
   resources: ["clusters"]
   verbs: ["get", "list", "watch", "patch", "delete"]
 - apiGroups: ["postgresql.cnpg.io"]
   resources: ["backups"]
   verbs: ["get", "list", "watch", "create", "patch", "delete"]
+# barman-cloud plugin ObjectStore CRs: the CNPG driver SSA-applies one per
+# platform-managed Cluster to carry the S3/barman configuration that native
+# spec.backup.barmanObjectStore used to hold (deprecated in CNPG 1.27, removed
+# in 1.29). The driver owner-references each ObjectStore to its Cluster, so
+# Kubernetes garbage-collects it when the Cluster is deleted (app teardown or
+# the RestoreJob purge) — the driver never deletes it itself, hence no delete verb.
+- apiGroups: ["barmancloud.cnpg.io"]
+  resources: ["objectstores"]
+  verbs: ["get", "list", "watch", "create", "patch", "update"]
 # Secrets: the BackupJob/RestoreJob reconcilers project the platform-managed
 # S3 credentials Secret from the backupStorage.namespace (tenant-root by
 # default) into each tenant namespace as cozy-backups-creds. The verbs are

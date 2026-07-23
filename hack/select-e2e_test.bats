@@ -190,3 +190,20 @@
         exit 1
     fi
 }
+@test "backup example harness edit selects its app suite" {
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "examples/backups/postgres/run-all.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$output" = "postgres" ]
+}
+
+@test "backup example without a matching suite selects nothing" {
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "examples/backups/no-such-app/run.sh" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
+    [ -z "$output" ]
+}

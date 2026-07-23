@@ -48,19 +48,22 @@ command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1;
 yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
 
-# Collect "repo@sha256:..." refs from every package values.yaml, across the three
-# shapes the build writes (identical to hack/promote-retag.sh):
-#   1. single string  <repo>:<tag>@sha256:<digest>
-#   2. split map       {repository, tag, digest}
-#   3. OCI artifact    {platformSourceUrl: oci://<repo>, platformSourceRef: digest=...}
-collect_refs() {
-  for f in "$TREE"/*/*/values.yaml; do
-    [ -f "$f" ] || continue
-    yq -r '.. | select(tag == "!!str") | select(test("@sha256:[0-9a-f]{64}"))' "$f" 2>/dev/null || true
-    yq -r '.. | select(tag == "!!map") | select(has("repository") and has("digest")) | .repository + "@" + .digest' "$f" 2>/dev/null || true
-    yq -r '.. | select(tag == "!!map") | select(has("platformSourceUrl") and has("platformSourceRef")) | (.platformSourceUrl | sub("^oci://"; "")) + "@" + (.platformSourceRef | sub("^digest="; ""))' "$f" 2>/dev/null || true
-  done
-}
+# Ref collection (which files are scanned, and the YAML shapes within them) is
+# shared with hack/promote-retag.sh and hack/promote-rewrite-tags.sh — see
+# hack/lib/image-refs.sh.
+#
+# Getting the file set right matters twice over here, and worse than it does
+# for the retag. A ref this does not collect is neither mirrored NOR host-
+# rewritten (the rewrite below walks the same file list), so the published
+# tree keeps pointing at the private CI registry — where a retag miss merely
+# leaves an image short of a tag, a mirror miss publishes a nightly whose refs
+# a user may not be able to pull at all. That is precisely what happened to
+# every ref living in an images/*.tag file or stamped into a template while
+# this scanned the depth-2 values.yaml alone.
+# shellcheck source=hack/lib/image-refs.sh
+. "$(dirname "$0")/lib/image-refs.sh"
+
+collect_refs() { collect_image_refs "$TREE"; }
 
 # Split a "<repo>[:<tag>]@sha256:<digest>" ref into repo and digest, stripping
 # the :tag from the LAST path component only so a host :port is preserved.
@@ -130,14 +133,15 @@ done
 # its digest (platformSourceRef) is reset by the caller after the GHCR re-push.
 SRC_ESC=$(printf '%s' "$SRC_REGISTRY" | sed -e 's/[].[^$*/\\]/\\&/g')
 if [ "$DRY_RUN" -eq 1 ]; then
-  echo "DRY-RUN sed -i 's|${SRC_REGISTRY}/|${DST_REGISTRY}/|g' over ${TREE}/*/*/values.yaml"
+  echo "DRY-RUN sed -i 's|${SRC_REGISTRY}/|${DST_REGISTRY}/|g' over $(image_ref_files "$TREE" | wc -l | tr -d ' ') ref-bearing files under ${TREE}"
 else
-  # Same depth-2 glob as collect_refs: the files whose hosts are rewritten are
-  # exactly the files scanned for images to mirror. A `find -name values.yaml`
-  # (any depth) could host-rewrite a deeper values.yaml whose image was never
-  # mirrored, leaving a dangling GHCR ref.
-  for f in "$TREE"/*/*/values.yaml; do
-    [ -f "$f" ] || continue
+  # Exactly the files collect_refs scanned, via the same enumeration: the set
+  # whose hosts are rewritten must equal the set scanned for images to mirror.
+  # Rewriting a file that was not scanned leaves a dangling ref to an image
+  # never pushed to DST_REGISTRY; scanning a file that is not rewritten leaves
+  # the published tree pointing at the private CI registry. A `find -name
+  # values.yaml` at any depth would do the former to vendored chart defaults.
+  image_ref_files "$TREE" | while IFS= read -r f; do
     sed -i "s|${SRC_ESC}/|${DST_REGISTRY}/|g" "$f"
   done
 fi

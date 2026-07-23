@@ -5,11 +5,11 @@
 # the source's S3 archive.
 #
 # This manifest is the reference for the same-namespace to-copy happy path:
-# deploy it alongside pg-src and the restore leaves the source running. It
-# is a manual / dev-cluster flow — the automated e2e suite (hack/e2e-chainsaw/)
-# does not exercise postgres backups. The cross-tenant variant (target in
-# tenant-test, source's seaweedfs in tenant-root) is blocked by the per-tenant
-# Cilium egress policy.
+# deploy it alongside pg-src and the restore leaves the source running. The
+# postgres backup e2e (hack/e2e-chainsaw/postgres, postgres-2-backup-roundtrip)
+# drives exactly this flow via run-all.sh in CI. The
+# cross-tenant variant (target in tenant-test, source's seaweedfs in
+# tenant-root) is blocked by the per-tenant Cilium egress policy.
 ---
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Postgres

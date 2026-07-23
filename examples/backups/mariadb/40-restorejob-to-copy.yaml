@@ -4,10 +4,10 @@
 # dump into the running target while mariadb-src stays running and
 # untouched.
 #
-# Smoke-testable manually with kubectl apply -f for the same-namespace
-# happy path. The cross-tenant variant stays manual; see
-# 30-mariadb-target.yaml for the network-policy reason. A dedicated bats
-# e2e harness will land in a follow-up PR.
+# Driven for the same-namespace happy path by run-all.sh in this
+# directory (and the mariadb-2-backup-roundtrip Chainsaw suite); also
+# applicable manually with kubectl apply -f. The cross-tenant variant
+# stays manual; see 30-mariadb-target.yaml for the network-policy reason.
 ---
 apiVersion: backups.cozystack.io/v1alpha1
 kind: RestoreJob

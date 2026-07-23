@@ -20,12 +20,12 @@ tests:
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
-          value: ghcr.io/cozystack/etcd-operator:v0.5.2
+          value: ghcr.io/cozystack/etcd-operator:v0.5.3
       - contains:
           path: spec.template.spec.containers[0].env
           content:
             name: OPERATOR_IMAGE
-            value: ghcr.io/cozystack/etcd-operator:v0.5.2
+            value: ghcr.io/cozystack/etcd-operator:v0.5.3
           any: true
 
   - it: "image.tag overrides the appVersion default for both the container and the agent env"

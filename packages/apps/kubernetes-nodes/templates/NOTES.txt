@@ -1,0 +1,18 @@
+Worker node pool "{{ include "kubernetes-nodes.groupName" . }}" for cluster "{{ .Values.cluster }}".
+
+This pool is a separate release from the control plane. Three operational notes:
+
+1. Deletion order. Deleting the parent Kubernetes cluster while this pool still
+   exists leaves the pool release trying to recreate CAPI objects against a
+   cluster that is being torn down. Delete the KubernetesNodes pools first, then
+   the parent Kubernetes cluster.
+
+2. Version skew. Keep this pool's `version` and `talos.*` in sync with the parent
+   Kubernetes cluster. A pool on a Kubernetes/Talos combination the parent does
+   not run can produce workers the control plane will not admit.
+
+3. Pool name. The pool name (the part after `<cluster>-` in the KubernetesNodes
+   name) must not collide with a nodeGroup still managed by the parent kubernetes
+   chart — most importantly the implicit default `md0`. A collision makes this
+   release fail on a Helm ownership conflict against the parent-owned objects.
+   The chart guards this at render time with a clear error.

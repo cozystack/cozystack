@@ -1651,6 +1651,14 @@ func (r *REST) convertApplicationToHelmRelease(app *appsv1alpha1.Application) (*
 		helmRelease.Spec.Upgrade.DisableWait = true
 	}
 
+	// kstatus readiness (issue #2642): set the wait strategy + CEL health
+	// expressions so the release reports Ready only when the rendered CR is
+	// actually healthy instead of as soon as helm applies it. ResolveWaitStrategy
+	// couples the default — expressions imply the poller strategy when none is
+	// set, since healthCheckExprs are only evaluated under poller.
+	helmRelease.Spec.HealthCheckExprs = r.releaseConfig.HealthCheckExprs
+	helmRelease.Spec.WaitStrategy = config.ResolveWaitStrategy(r.releaseConfig.WaitStrategy, len(r.releaseConfig.HealthCheckExprs) > 0)
+
 	return helmRelease, nil
 }
 

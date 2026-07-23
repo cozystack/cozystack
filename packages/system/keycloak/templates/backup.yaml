@@ -3,8 +3,8 @@
 
   Rendered only when backup.enabled, backup.destinationPath and
   backup.schedule are all set. The destinationPath gate must match db.yaml /
-  backup-secret.yaml: without it the Cluster gets no spec.backup.barmanObjectStore,
-  so a ScheduledBackup would target a Cluster with no object store and CNPG
+  backup-secret.yaml: without it the Cluster gets no spec.plugins / ObjectStore,
+  so a ScheduledBackup would target a Cluster with no backup wiring and CNPG
   would perpetually fail it. CNPG also rejects an empty schedule.
 
   NOTE: schedule is a 6-field cron (leading seconds field), not the 5-field
@@ -18,6 +18,9 @@ metadata:
 spec:
   schedule: {{ .Values.backup.schedule | quote }}
   backupOwnerReference: self
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
   cluster:
     name: keycloak-db
 {{- end }}

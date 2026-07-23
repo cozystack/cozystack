@@ -48,6 +48,29 @@
   # At least one cozystack-owned image is selected.
   grep -q 'docker://ghcr.io/cozystack/cozystack/' "$tmp/out"
 
+  # Images whose digest is embedded in `tag` ({repository, tag: <t>@sha256:<d>})
+  # must be selected too. The "at least one owned ref" check above cannot catch
+  # their absence — it is satisfied by the shapes that already worked, which is
+  # why eight images across six packages were silently skipped while this suite
+  # stayed green. Naming concrete packages is deliberate: a count or a generic
+  # pattern would drift back to proving nothing. linstor-csi and piraeus-server
+  # are the two whose absence from GHCR broke the nightly e2e at image pre-pull.
+  for owned in linstor-csi piraeus-server kamaji redis-operator; do
+    grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
+  done
+
+  # Images whose host is NOT inside `repository` must be selected too. Both are
+  # built and pushed to $REGISTRY by cozystack, both carry the digest in `tag`,
+  # and both were dropped by the ownership filter for looking host-less — so
+  # neither has ever received a 1.x release tag (on GHCR keycloak-operator has
+  # only `latest`, and kubeovn's newest cozystack-versioned tag predates 1.0).
+  # keycloak-operator splits the host into a sibling `registry` key; kubeovn
+  # keeps it in the document-level global.registry.address, written by the
+  # cozystack/kubeovn-chart wrapper's own `make image`.
+  for owned in keycloak-operator kubeovn; do
+    grep -q "docker://ghcr.io/cozystack/cozystack/${owned}@sha256:" "$tmp/out"
+  done
+
   # Every docker:// ref in the copy plan is under the cozystack registry — no
   # third-party repos and no malformed arg-string refs leak through.
   bad=$(grep -oE 'docker://[^ ]+' "$tmp/out" | sed 's|docker://||' \
@@ -109,4 +132,31 @@
   [ "$rc" -ne 0 ]
   # The diagnostic is written to stderr.
   grep -q 'No cozystack-owned digest-pinned image refs found' "$tmp/err"
+}
+
+@test "retags images whose ref lives outside a values.yaml" {
+  # Until the file enumeration moved to hack/lib/image-refs.sh this scanned the
+  # depth-2 values.yaml alone, so every ref held in an images/*.tag file or
+  # stamped into a template was skipped — the promotion reported success while
+  # never creating those images' :<version> tags. Twelve images were affected
+  # (30 refs selected before, 42 after). Because the retag stays inside one
+  # registry the digests still resolved, so nothing failed at pull time and the
+  # gap went unnoticed until a release shipped reading as a release candidate.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+
+  rc=0
+  env -u REGISTRY hack/promote-retag.sh v9.9.9 --dry-run \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "promote-retag.sh exited $rc" >&2
+    echo "--- script stderr ---" >&2; cat "$tmp/err" >&2
+    return "$rc"
+  fi
+
+  # grafana lives in packages/system/monitoring/images/grafana.tag, and
+  # multus-cni is sed'd into packages/system/multus/templates/*.yml. Neither is
+  # reachable from any values.yaml.
+  grep -q 'cozystack/grafana:v9.9.9' "$tmp/out"
+  grep -q 'cozystack/multus-cni:v9.9.9' "$tmp/out"
 }

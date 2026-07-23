@@ -1,4 +1,31 @@
 #!/bin/sh
+
+# cozyreport_collect_talos_node <talosconfig> <node> <output-dir>
+#
+# The e2e talosconfig intentionally carries no endpoints, so both -e and -n are
+# required. Each node's InternalIP is itself a Talos API endpoint. `dmesg
+# --tail` is a boolean follow-mode flag (unlike `logs --tail`, which is an
+# integer), so request the complete kernel ring buffer and retain bounded tails
+# only for kubelet/containerd service logs.
+cozyreport_collect_talos_node() {
+  _crt_config=$1
+  _crt_node=$2
+  _crt_dir=$3
+
+  talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
+    dmesg > "$_crt_dir/talos-$_crt_node-dmesg.txt" 2>&1 || true
+  talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
+    logs kubelet --tail=500 > "$_crt_dir/talos-$_crt_node-kubelet.log" 2>&1 || true
+  talosctl --talosconfig "$_crt_config" -e "$_crt_node" -n "$_crt_node" \
+    logs containerd --tail=500 > "$_crt_dir/talos-$_crt_node-containerd.log" 2>&1 || true
+}
+
+# Let the focused BATS test source the command builder without running the full
+# cluster report. Production callers never set this variable.
+if [ -n "${COZYREPORT_LIB:-}" ]; then
+  return 0 2>/dev/null
+fi
+
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPORT_DATE=$(date +%Y-%m-%d_%H-%M-%S)
 REPORT_NAME=${1:-cozyreport-$REPORT_DATE}
@@ -342,9 +369,7 @@ if [ -f /workspace/talosconfig ]; then
   NODES=$(kubectl get nodes -o jsonpath='{range .items[*]}{.status.addresses[?(@.type=="InternalIP")].address}{"\n"}{end}' 2>/dev/null)
   for node in ${NODES:-192.168.123.11 192.168.123.12 192.168.123.13}; do
     [ -z "$node" ] && continue
-    talosctl --talosconfig /workspace/talosconfig -n "$node" dmesg --tail=200 > "$DIR/talos-$node-dmesg.txt" 2>&1 || true
-    talosctl --talosconfig /workspace/talosconfig -n "$node" logs kubelet --tail=500 > "$DIR/talos-$node-kubelet.log" 2>&1 || true
-    talosctl --talosconfig /workspace/talosconfig -n "$node" logs containerd --tail=500 > "$DIR/talos-$node-containerd.log" 2>&1 || true
+    cozyreport_collect_talos_node /workspace/talosconfig "$node" "$DIR"
   done
 fi
 
