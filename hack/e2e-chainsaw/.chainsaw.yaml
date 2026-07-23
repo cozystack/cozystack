@@ -93,9 +93,8 @@ spec:
           # Nth restart — a fresh replay of the same startup path — while the
           # evidence that explains the failure sits in the immediately preceding
           # instance, reachable only via `--previous`. Chainsaw v0.2.15's podLogs
-          # collector has no `previous` option (it exposes container/tail/
-          # selector only), so this closes the gap once for every suite here
-          # instead of per-suite. crust-gather does archive a previous.log per
+          # collector has no `previous` option, so this closes the gap once for
+          # every suite here instead of per-suite. crust-gather does archive a previous.log per
           # container, but that is a whole archive to fetch and serve; this puts
           # the decisive lines straight into the failed job's log, and keeps
           # them even when the snapshot below is truncated.
