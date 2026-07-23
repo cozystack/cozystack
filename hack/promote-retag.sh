@@ -24,7 +24,7 @@
 # files that covers), which is expected to be the promoted stable
 # digest-vendored tree (the release-X.Y.Z branch, whose digests are the rc's —
 # only the cosmetic tag string differs).
-# Requires: yq (mikefarah), skopeo, and a registry login already done.
+# Requires: yq (mikefarah), skopeo, sha256sum, and a registry login already done.
 #
 # The repo/tag split (ref_repo below) strips the :tag from the last path
 # component only, so registry hosts that carry a :port are preserved.
@@ -49,6 +49,7 @@ command -v yq >/dev/null     || { echo "yq (mikefarah) is required" >&2; exit 1;
 yq --version 2>&1 | grep -q mikefarah || { echo "yq (mikefarah) is required" >&2; exit 1; }
 # skopeo is only needed to actually copy; a --dry-run just prints the plan.
 [ "$DRY_RUN" -eq 1 ] || command -v skopeo >/dev/null || { echo "skopeo is required" >&2; exit 1; }
+[ "$DRY_RUN" -eq 1 ] || command -v sha256sum >/dev/null || { echo "sha256sum is required" >&2; exit 1; }
 
 # Ref collection (which files are scanned, and the YAML shapes within them) is
 # shared with hack/nightly-mirror.sh and hack/promote-rewrite-tags.sh — see
@@ -80,6 +81,17 @@ ref_repo() {
   fi
 }
 ref_digest() { printf '%s' "${1##*@}"; }               # sha256:...
+
+manifest_digest() {
+  _ref="$1"
+  _manifest="$(mktemp)"
+  # Hash the raw bytes so this works for images and OCI artifacts alike. A
+  # file preserves inspect's status without relying on non-POSIX pipefail.
+  if skopeo inspect --raw "docker://$_ref" >"$_manifest" 2>/dev/null; then
+    printf 'sha256:%s' "$(sha256sum "$_manifest" | cut -d' ' -f1)"
+  fi
+  rm -f "$_manifest"
+}
 
 copy() {
   _src="$1"; _dst="$2"
@@ -128,13 +140,14 @@ echo "$refs" | while IFS= read -r ref; do
   repo="${ref%@*}"
   digest="${ref##*@}"
   echo "▸ ${repo}  ${digest}"
-  # The stable tag is write-once at the image level: inspect the destination
-  # before copying. No-op if it already points at this rc digest (idempotent
-  # re-run), fail if it points elsewhere (a partial run or manual push already
-  # put different bytes there) rather than mutate released bytes. :latest is
-  # intentionally mutable and (re)pointed below only when MOVE_LATEST=1.
+  # The stable tag is write-once at the image level: resolve the destination's
+  # raw manifest digest before copying. No-op if it already points at this rc
+  # digest (idempotent re-run), fail if it points elsewhere (a partial run or
+  # manual push already put different bytes there) rather than mutate released
+  # bytes. :latest is intentionally mutable and (re)pointed below only when
+  # MOVE_LATEST=1.
   if [ "$DRY_RUN" -eq 0 ]; then
-    cur="$(skopeo inspect --format '{{.Digest}}' "docker://${repo}:${STABLE}" 2>/dev/null || echo '')"
+    cur="$(manifest_digest "${repo}:${STABLE}")"
     if [ -n "$cur" ] && [ "$cur" != "$digest" ]; then
       echo "::error::${repo}:${STABLE} already exists at '${cur}'; refusing to move it to '${digest}' (stable image tags are write-once)" >&2
       exit 1
@@ -150,7 +163,7 @@ echo "$refs" | while IFS= read -r ref; do
   [ "$MOVE_LATEST" = "1" ] && copy "$ref" "${repo}:latest"
   # Verify the stable tag now resolves to the exact rc digest (skip in dry-run).
   if [ "$DRY_RUN" -eq 0 ]; then
-    got="$(skopeo inspect --format '{{.Digest}}' "docker://${repo}:${STABLE}" 2>/dev/null || echo '')"
+    got="$(manifest_digest "${repo}:${STABLE}")"
     if [ "$got" != "$digest" ]; then
       echo "::error::${repo}:${STABLE} resolved to '${got}', expected '${digest}'" >&2
       exit 1
