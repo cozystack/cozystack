@@ -19,6 +19,13 @@ release:
 # Both gates are dropped; inheritance now flows via the label
 # selector on Gateway.spec.listeners[].allowedRoutes.
 
+# The template now gates on the ValidatingAdmissionPolicy API (GA since
+# Kubernetes 1.30); helm-unittest's default capability set omits it, so every
+# rendering test declares it, exactly as the platform deletion-protection suite.
+capabilities:
+  apiVersions:
+    - admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy
+
 tests:
   - it: renders 3 VAPs + 3 Bindings (6 documents total)
     asserts:

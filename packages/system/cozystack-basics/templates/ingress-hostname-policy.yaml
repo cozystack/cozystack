@@ -57,7 +57,8 @@
   labelling yet — in which case the caller should retry.
 */}}
 {{- $rootHost := index .Values._cluster "root-host" }}
-{{- if $rootHost }}
+{{- /* Also gate on the ValidatingAdmissionPolicy API (GA since Kubernetes 1.30; the management cluster requires 1.33+), so a cluster without it does not get an unrenderable resource. Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
+{{- if and $rootHost (.Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy") }}
 {{- $A := `namespaceObject.metadata.labels["namespace.cozystack.io/host"]` }}
 {{- $celValidator := printf `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.defaultBackend) && (!has(object.spec.rules) || object.spec.rules.all(r, has(r.host) && r.host != "" && (r.host == %s || r.host.endsWith("." + %s) || (!r.host.startsWith("*.") && !(r.host == %q || r.host.endsWith(%q)))))) && (!has(object.spec.tls) || object.spec.tls.all(t, !has(t.hosts) || t.hosts.all(h, h != "" && (h == %s || h.endsWith("." + %s) || (!h.startsWith("*.") && !(h == %q || h.endsWith(%q))))))))` $A $A $rootHost (printf ".%s" $rootHost) $A $A $rootHost (printf ".%s" $rootHost) -}}
 ---
