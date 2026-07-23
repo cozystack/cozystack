@@ -261,5 +261,11 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
+{{- /* IP addresses as a first-class resource: the class-agnostic core plus the
+       MetalLB driver. Enable both together — the driver's PackageSource
+       dependsOn the core (and cozystack.metallb), so enabling only the driver
+       leaves it waiting forever. */}}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.address-controller" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.metallb-iad" $) }}
 
 {{- end }}
