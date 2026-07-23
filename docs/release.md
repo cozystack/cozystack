@@ -29,18 +29,19 @@ All three are matched by `tags.yaml`'s regex `^v\d+\.\d+\.\d+(-(alpha|beta|rc)\.
 
 ## Release Candidates
 
-Release candidates are Cozystack versions that introduce new features and are published before a stable release.
-Their purpose is to help validate stability before finalizing a new feature release.
-They allow for final rounds of testing and bug fixes without freezing development.
+Release candidates are Cozystack versions that introduce new features and are published before a stable release. Their purpose is to help validate stability before finalizing a new feature release.
 
-Release candidates are given numbers `vX.Y.0-rc.N`, for example, `v1.2.0-rc.1`.
-They are created directly in the `main` branch.
-An RC is typically tagged when all major features for the upcoming release have been merged into main and the release enters its testing phase.
-However, new features and changes can still be added before the regular release `vX.Y.0`.
+Release candidates are given numbers `vX.Y.0-rc.N`, for example, `v1.2.0-rc.1`. The first one is cut from `main`, once all major features for the upcoming release have merged and the release enters its testing phase.
 
-Each RC contributes to a cumulative set of release notes that will be finalized when `vX.Y.0` is released.
-After testing, if no critical issues remain, the regular release (`vX.Y.0`) is tagged from the last RC or a later commit in main.
-This begins the regular release process, creates a dedicated `release-X.Y` branch, and opens the way for patch releases.
+**Cutting the first rc freezes the line.** [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) creates `release-X.Y` at the tagged commit, and from that point the release's content is closed:
+
+- Every later cut for that line — `rc.2`, `rc.3`, an `alpha`/`beta`, or a patch-line rc — must be dispatched from `release-X.Y`. A dispatch from `main` is refused.
+- Fixes reach the release only by cherry-pick or backport onto `release-X.Y` (see [Backports](#backports)).
+- `main` reopens immediately for the next minor, so feature work never has to wait for the release to ship.
+
+This is what makes an rc mean something. Previously `release-X.Y` was created only when the stable release merged, so `rc.2` was cut from `main`'s tip and silently absorbed everything that had landed since `rc.1` — the shipped release could contain code that no rc had ever validated.
+
+Each RC contributes to a cumulative set of release notes that will be finalized when `vX.Y.0` is released. After testing, if no critical issues remain, the last green rc is promoted to `vX.Y.0` — the same bytes, retagged, never rebuilt.
 
 ## Regular Releases
 
@@ -55,22 +56,38 @@ gitGraph
 
 A regular release sequence runs as follows:
 
-1. Cut a release candidate (`v1.2.0-rc.N`) from the last good commit on `main`: run the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `main`**) with the tag. It tags `main`'s HEAD as the CI app; `tags.yaml` then builds the rc images, drafts the rc release, and pushes the digest-vendored `release-1.2.0-rc.N` staging branch.
-2. Validate the rc. New features and fixes can still land on `main` and be picked up by a later rc.
-3. Once an rc is green, run the [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) workflow (manual dispatch) with that rc tag. Promotion is **transactional** — it performs no registry mutation at dispatch. It:
-   1. Pushes the `release-1.2.0` branch: the rc's digest-vendored tree with the rc version substring rewritten to `1.2.0` (the digests are the rc's — unchanged).
-   2. Drafts the `v1.2.0` release and uploads the (restamped) assets.
-   3. Opens the `chore(release): promote v1.2.0-rc.N -> v1.2.0` PR into `main`, labelled `release` and `full-e2e` (the latter forces the full e2e suite on the PR). The retag itself is deferred to the merge (step 5) — so an abandoned promotion leaves no stable-named images and cannot wedge a re-promotion.
+1. Cut the first release candidate (`v1.2.0-rc.1`) from the last good commit on `main`: run the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `main`**) with the tag. It tags `main`'s HEAD as the CI app, then **creates `release-1.2` at that commit, freezing the line**; `tags.yaml` builds the rc images, drafts the rc release, and pushes the digest-vendored `release-1.2.0-rc.N` staging branch.
+2. Validate the rc. `main` is already open for the next minor, so anything landing there is **not** in this release. Fixes for `1.2` are cherry-picked onto `release-1.2`, and a later rc is cut by dispatching the workflow **from `release-1.2`**.
 
    ```mermaid
    gitGraph
        commit id: "feature"
        commit id: "feature 2"
        commit id: "feature 3" tag: "v1.2.0-rc.1"
+       branch release-1.2
+       checkout main
+       commit id: "feature 4 (next minor)"
+       checkout release-1.2
+       commit id: "cherry-picked fix" tag: "v1.2.0-rc.2"
+   ```
+
+3. Once an rc is green, run the [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) workflow (manual dispatch) with that rc tag. Promotion is **transactional** — it performs no registry mutation at dispatch. It:
+   1. Pushes the `release-1.2.0` branch: the rc's digest-vendored tree with the rc version substring rewritten to `1.2.0` (the digests are the rc's — unchanged).
+   2. Drafts the `v1.2.0` release and uploads the (restamped) assets.
+   3. Opens the `chore(release): promote v1.2.0-rc.N -> v1.2.0` PR into `release-1.2`, labelled `release` and `full-e2e` (the latter forces the full e2e suite on the PR). The retag itself is deferred to the merge (step 5) — so an abandoned promotion leaves no stable-named images and cannot wedge a re-promotion.
+
+   The PR targets the maintenance branch, not `main`: `promote-rc.yaml` prefers `release-X.Y` whenever it exists, and since the rc freeze it always does. The digest-vendored `Prepare release` commit therefore stays on the release line instead of landing on `main`.
+
+   ```mermaid
+   gitGraph
+       commit id: "feature 3" tag: "v1.2.0-rc.1"
+       branch release-1.2
+       checkout release-1.2
+       commit id: "cherry-picked fix" tag: "v1.2.0-rc.2"
        branch release-1.2.0
        checkout release-1.2.0
        commit id: "Prepare release v1.2.0"
-       checkout main
+       checkout release-1.2
        merge release-1.2.0 id: "Pull Request"
    ```
 
@@ -78,29 +95,35 @@ A regular release sequence runs as follows:
 5. CI workflow triggers on merge (this is where every irreversible side effect happens, all after the PR's e2e passed):
    1. Creates the tag `v1.2.0` at the newly created merge commit — write-once. The tag is published here for the first time, never moved.
    2. Cuts the write-once `api/apps/v1alpha1/v1.2.0` Go-module tag at the same commit.
-   3. Ensures the `release-1.2` maintenance branch exists at the tag commit.
+   3. Ensures the `release-1.2` maintenance branch exists at the tag commit. Since the rc freeze created it, this is normally a no-op fast-forward: the merge commit is already its tip.
    4. Publishes the release page (`draft` → `latest`).
    5. Retags the rc's images by digest to `v1.2.0` (and `:latest` only when `v1.2.0` is the newest published stable), and publishes the stable `cozy-installer` chart — no rebuild.
 6. The maintainer can now announce the release to the community.
 
 ```mermaid
 gitGraph
-    commit id: "feature"
     commit id: "feature 2"
     commit id: "feature 3" tag: "v1.2.0-rc.1"
+    branch release-1.2
+    checkout main
+    commit id: "feature 4 (next minor)"
+    checkout release-1.2
+    commit id: "cherry-picked fix" tag: "v1.2.0-rc.2"
     branch release-1.2.0
     checkout release-1.2.0
     commit id: "Prepare release v1.2.0"
-    checkout main
+    checkout release-1.2
     merge release-1.2.0 id: "Release v1.2.0" tag: "v1.2.0"
 ```
 
+Note that `main` never receives the release commit. It forked away at the freeze and carries the next minor's work.
+
 ## Patch Releases
 
-Making a patch release has a lot in common with a regular release, with a couple of differences:
+A patch release now follows exactly the same shape as the regular release above — by the time `vX.Y.0` ships, everything is already happening on `release-X.Y`. The only difference is where the line starts:
 
-* The rc and its promotion happen on the `release-X.Y` maintenance branch instead of `main`.
-* Patch commits are cherry-picked to that branch before the rc is tagged.
+* `release-X.Y` already exists, created by the freeze at `vX.Y.0-rc.1`, so there is no branch to create.
+* Patch commits are cherry-picked onto it, and the rc is cut by dispatching **from `release-X.Y`** — the same dispatch used for `rc.2` of the original release.
 
 
 Let's assume that we've released `v1.2.0` and that development is ongoing.
@@ -111,7 +134,10 @@ Once problems were found and fixed, a patch release is due.
 
 ```mermaid
 gitGraph
-   commit id: "Release v1.2.0" tag: "v1.2.0"
+    commit id: "feature 3" tag: "v1.2.0-rc.1"
+    branch release-1.2
+    checkout release-1.2
+    commit id: "Release v1.2.0" tag: "v1.2.0"
     checkout main
     commit id: "feature 4"
     commit id: "patch 1"
@@ -120,16 +146,18 @@ gitGraph
 ```
 
 
-1. The maintainer creates a release branch, `release-1.2,` and cherry-picks patch commits from `main` to `release-1.2`.
-   These must be only patches to features that were present in version `v1.2.0`.
+1. The maintainer cherry-picks patch commits from `main` onto the existing `release-1.2` branch. These must be only patches to features that were present in version `v1.2.0`.
 
-   Cherry-picking can be done as soon as each patch is merged into `main`,
-   or directly before the release.
+   Cherry-picking can be done as soon as each patch is merged into `main`, or directly before the release.
+
+   The `backport` label automates this: [`backport.yaml`](../.github/workflows/backport.yaml) targets the newest existing `release-X.Y` branch, which during a freeze window is the line being stabilised rather than the last published one.
 
    ```mermaid
    gitGraph
-       commit id: "Release v1.2.0" tag: "v1.2.0"
+       commit id: "feature 3" tag: "v1.2.0-rc.1"
        branch release-1.2
+       checkout release-1.2
+       commit id: "Release v1.2.0" tag: "v1.2.0"
        checkout main
        commit id: "feature 4"
        commit id: "patch 1"
@@ -148,8 +176,10 @@ gitGraph
 
    ```mermaid
    gitGraph
-       commit id: "Release v1.2.0" tag: "v1.2.0"
+       commit id: "feature 3" tag: "v1.2.0-rc.1"
        branch release-1.2
+       checkout release-1.2
+       commit id: "Release v1.2.0" tag: "v1.2.0"
        checkout main
        commit id: "feature 4"
        commit id: "patch 1"
@@ -178,7 +208,7 @@ gitGraph
 
 The numbered process above is implemented by five workflows. Knowing which job does what makes the failure modes much easier to diagnose.
 
-1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Stable tags are never created here.
+1. [`cut-prerelease.yaml`](../.github/workflows/cut-prerelease.yaml) — manual dispatch (from `main` or `release-X.Y`): the sole entry point for creating a pre-release tag. Validates the `-alpha`/`-beta`/`-rc` tag, then pushes it (write-once, at the branch tip) as the CI app so `tags.yaml` fires. Cutting the first `vX.Y.0-rc.N` also creates `release-X.Y`, freezing the line; afterwards a `vX.Y.*` dispatch from `main` is refused. Stable tags are never created here.
 2. [`tags.yaml`](../.github/workflows/tags.yaml) — fires on an rc tag push: runs `prepare-release`, then `generate-changelog`, then `update-website-docs`.
 3. [`promote-rc.yaml`](../.github/workflows/promote-rc.yaml) — manual dispatch: stages the `release-X.Y.Z` tree (rc digests, tag string rewritten to stable), drafts the stable release, and opens the `release-X.Y.Z` promote PR. No registry mutation — transactional.
 4. [`pull-requests-release.yaml`](../.github/workflows/pull-requests-release.yaml) — fires when the `release-X.Y.Z` PR merges; finalizes the release: cuts the write-once stable + Go-module tags, publishes, then retags the rc images to stable by digest (`:latest` gated on newest-stable) and publishes the stable chart.
@@ -236,7 +266,7 @@ Fires on merge of a PR that is merged, carries the `release` label, and is autho
 
 1. **Create the tag at the merge commit** (write-once). The merge commit of `Prepare release vX.Y.Z` did not exist before the PR opened, so there is nothing to move — the tag is created here for the first time. A pre-existing tag at a different commit fails the step loudly rather than being force-moved (see [Tag immutability](#tag-immutability)).
 2. **Cut the `api/apps/v1alpha1/vX.Y.Z` Go-module tag** (write-once, stable only) at the same commit, so Go consumers of `api/apps/v1alpha1` get the release. Moved here from `tags.yaml`, whose `prepare-release` body is skipped for a promoted stable (the draft already exists).
-3. **Ensure the maintenance branch `release-X.Y` exists** at the tag commit. Created if missing; updated fast-forward-only — a non-fast-forward update warns and is left for a maintainer rather than being force-updated.
+3. **Ensure the maintenance branch `release-X.Y` exists** at the tag commit. Since the rc freeze creates it, this is normally a no-op fast-forward — the merge commit is already the branch tip. Still created if missing; updated fast-forward-only — a non-fast-forward update warns and is left for a maintainer rather than being force-updated.
 4. **Publish the draft release.** `make_latest` is computed against published-non-prerelease tags: prereleases stay `false`; tags older than the current max stay `false` (and the current max is force-restored to `latest` if necessary, so an older patch tag cut after a newer minor won't downgrade `latest`).
 5. **Retag the rc images to stable** by digest (`hack/promote-retag.sh`, no rebuild) and **publish the stable `cozy-installer` chart**. `:latest` (on both the images and the chart) moves only when this release's `make_latest` was `true` — the same decision as step 4, so the release's `latest` and the images' `:latest` never disagree. The chart is packaged with `platformVersion` stamped into its default values so the documented `helm --install --version X.Y.Z` path reports the stable version.
 
@@ -574,7 +604,7 @@ Sometimes the work that has to land before a release is a 40-commit grab bag (CI
 
 ## Cleanup after release
 
-- The `release-X.Y.Z` branch is deleted by GitHub when its PR merges. The `release-X.Y` maintenance branch is created/updated by `pull-requests-release.yaml::Ensure maintenance branch`.
+- The `release-X.Y.Z` branch is deleted by GitHub when its PR merges. The `release-X.Y` maintenance branch is created by `cut-prerelease.yaml` at the rc freeze (create-only, never force-moved) and fast-forwarded afterwards by `pull-requests-release.yaml::Ensure maintenance branch`.
 - The draft release is published by the same workflow.
 - The `update-releasenotes.yaml` workflow syncs `docs/changelogs/vX.Y.Z.md` into the GitHub Release body on the next push to `main`. Edits to a published changelog file land on the release page the next time `main` moves.
 - Local cleanup: remove your worktree (`git worktree remove`) and prune merged release branches.
