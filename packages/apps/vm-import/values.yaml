@@ -37,7 +37,7 @@ warm: false
 ## @param {bool} enableAdoption - Automatically label imported VMs for Cozystack adoption and dashboard visibility.
 enableAdoption: true
 
-## @param {string} tenantNamespace - Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption). A cross-namespace target is only honored when this VMImport is deployed in a privileged (non-`tenant-*`) namespace; a VMImport deployed inside a tenant namespace is confined to its own namespace, so a tenant cannot direct the import at another tenant.
+## @param {string} tenantNamespace - Tenant namespace where the imported VM is adopted as a Cozystack VMInstance. Defaults to the VMImport's own namespace. Set this when conversion runs in a privileged system namespace but the managed VM must land in a user tenant (cross-namespace adoption). A cross-namespace target is only honored when this VMImport is deployed in a privileged (non-`tenant-*`) namespace; a VMImport deployed inside a tenant namespace is confined to its own namespace — enforced both at render time (the raw-copy `Plan.spec.targetNamespace`) and by the adoption controller — so a tenant cannot direct the import at another tenant.
 tenantNamespace: ""
 
 ## @param {string} instanceType - KubeVirt cluster instance type (sizing preset, e.g. `u1.medium`) assigned to the adopted VMInstance. Leave empty to keep the size detected on the source VM, falling back to the adoption controller default.
