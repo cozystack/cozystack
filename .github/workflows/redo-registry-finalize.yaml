@@ -1,0 +1,295 @@
+name: Redo Registry Finalize
+
+# Recovery lane for the registry-only tail of a stable release promotion.
+#
+# A normal finalize run executes from the promote PR's merge commit. Re-running
+# that job therefore reuses the same scripts even when its failure was fixed on
+# main afterwards. This workflow deliberately checks out two trees: the exact
+# main commit selected for the dispatch supplies the current promotion scripts,
+# while the immutable release tag supplies the digest pins and installer chart
+# sources that were actually released.
+#
+# Stable tags only: promote-retag.sh promotes rc-built digests to a stable
+# destination, and pull-requests-release.yaml intentionally skips these registry
+# steps for prereleases. An alpha, beta, or rc tag is therefore rejected.
+# force_chart is a break-glass input that permits overwriting an existing stable
+# chart only when its extracted contents differ from the release tag tree.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing stable release tag to finalize again, e.g. v1.6.0 (prereleases rejected)"
+        required: true
+        type: string
+      force_chart:
+        description: "Overwrite the stable chart if its contents differ from the release tag tree"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  # Serialize every redo, not merely repeats of the same tag. Different stable
+  # versions can target the same repositories and the same floating :latest
+  # tags, so letting old-line and current-line recovery runs overlap would make
+  # the final floating tags timing-dependent. Never cancel a run mid-promotion:
+  # let its write-once/idempotent operations finish before the next one starts.
+  # GitHub keeps only one pending run, so a third dispatch may drop the middle run.
+  group: redo-registry-finalize
+  cancel-in-progress: false
+
+# Top-level token defaults to read-only; the job opts into only the GHCR write
+# scope used by skopeo and helm. No app token or persisted git credential exists
+# in this recovery lane, and no step writes a git ref.
+permissions:
+  contents: read # Read release metadata and repository trees; no repository writes.
+
+jobs:
+  redo:
+    name: Redo registry finalize for ${{ inputs.tag }}
+    # Match the normal finalize job: this ephemeral runner is the release lane
+    # that supports skopeo + helm, rather than the self-hosted build pool.
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
+    timeout-minutes: 45
+    permissions:
+      contents: read # Read release metadata and check out both repository trees.
+      packages: write # Push and copy the GHCR image and chart tags being repaired.
+
+    env:
+      # Must match pull-requests-release.yaml finalize and
+      # hack/promote-retag.sh's default. This is the release registry, not the
+      # OCIR build registry.
+      REGISTRY: ghcr.io/cozystack/cozystack
+
+    steps:
+      # Pure-input validation runs before either checkout or registry login. The
+      # main-only gate is load-bearing: the purpose of this lane is to apply the
+      # corrected scripts from main to an older immutable release tree.
+      - name: Parse and validate request
+        id: request
+        env:
+          TAG: ${{ inputs.tag }}
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag = process.env.TAG;
+            const m = tag.match(/^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/);
+            if (!m) {
+              core.setFailed(
+                `tag '${tag}' must be a stable tag matching 'vX.Y.Z' (without leading zeroes). ` +
+                `Prerelease tags are not accepted because normal finalize skips registry promotion for them.`
+              );
+              return;
+            }
+            if (process.env.REF_TYPE !== 'branch' || process.env.REF_NAME !== 'main') {
+              core.setFailed(
+                `Dispatch this recovery workflow from the 'main' branch so it uses the corrected promotion scripts; ` +
+                `got ${process.env.REF_TYPE} '${process.env.REF_NAME}'.`
+              );
+              return;
+            }
+            core.setOutput('tag', tag);
+
+      # Reproduce finalize's make_latest decision for an arbitrary historical
+      # stable: compare numeric major/minor/patch components against all
+      # published stable releases. The current release itself may be the max;
+      # only a strictly newer release makes this redo leave :latest untouched.
+      # Pagination strengthens the same rule for repositories with more than
+      # one API page of releases.
+      - name: Determine whether tag should move latest
+        id: latest
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const tag = process.env.TAG;
+
+            function parseSemver(value) {
+              const match = value.match(/^v(\d+)\.(\d+)\.(\d+)$/);
+              if (!match) return null;
+              return {
+                major: Number.parseInt(match[1], 10),
+                minor: Number.parseInt(match[2], 10),
+                patch: Number.parseInt(match[3], 10),
+              };
+            }
+
+            function compareSemver(a, b) {
+              if (a.major !== b.major) return a.major - b.major;
+              if (a.minor !== b.minor) return a.minor - b.minor;
+              return a.patch - b.patch;
+            }
+
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100,
+            });
+            const publishedStable = releases
+              .filter(release => !release.draft && !release.prerelease)
+              .map(release => ({
+                tag: release.tag_name,
+                semver: parseSemver(release.tag_name),
+              }))
+              .filter(release => release.semver !== null);
+
+            if (!publishedStable.some(release => release.tag === tag)) {
+              core.setFailed(
+                `Published stable GitHub release '${tag}' was not found. ` +
+                `This lane only repairs the registry tail of an already-published release.`
+              );
+              return;
+            }
+
+            let maxRelease = null;
+            for (const release of publishedStable) {
+              if (!maxRelease || compareSemver(release.semver, maxRelease.semver) > 0) {
+                maxRelease = release;
+              }
+            }
+
+            const current = parseSemver(tag);
+            const isOutdated = compareSemver(current, maxRelease.semver) < 0;
+            core.setOutput('move_latest', isOutdated ? 'false' : 'true');
+            if (isOutdated) {
+              core.info(`${tag} < ${maxRelease.tag} (max stable semver): leaving :latest unmoved.`);
+            } else {
+              core.info(`${tag} is the highest stable version: :latest will be reconciled.`);
+            }
+
+      # Checkout A: only scripts and helpers come from the exact main commit at
+      # which workflow_dispatch started. Pinning github.sha also prevents main
+      # advancing in the concurrency queue from changing code under a queued run.
+      - name: Checkout workflow source
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-source
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Checkout B: digest pins and chart sources must come from the immutable
+      # release tree, never from main. Explicit refs/tags/ avoids a branch/tag
+      # ambiguity if a similarly named ref exists.
+      - name: Checkout release tree
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/tags/${{ steps.request.outputs.tag }}
+          path: release-tree
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Mirror normal finalize's tool bootstrap. These tools act only on GHCR
+      # and on the ephemeral release-tree checkout; there is no git write path.
+      - name: Set up toolchain (skopeo, yq, helm)
+        run: |
+          command -v yq >/dev/null \
+            || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+          command -v skopeo >/dev/null \
+            || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          command -v helm >/dev/null \
+            || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+
+      # Authenticate exactly like normal finalize: the built-in per-run token
+      # receives packages:write only for this job and is accepted by both tools.
+      - name: Login to registry (GHCR)
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "$GHCR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+          echo "$GHCR_TOKEN" | helm registry login "${REGISTRY%%/*}" -u "$GHCR_USER" --password-stdin
+
+      # promote-retag.sh resolves its helper beside the SCRIPT but deliberately
+      # scans packages/ below the CURRENT DIRECTORY. Running the main script with
+      # release-tree as cwd gives it the fixed code and the released digest pins
+      # without changing the script or copying files between checkouts.
+      #
+      # Each stable image tag is write-once: the script skips an existing tag at
+      # the expected digest, creates a missing tag, and fails rather than moving
+      # a stable tag that already points elsewhere. :latest is mutable but is
+      # enabled only by the max-semver decision above.
+      - name: Retag rc images to stable
+        working-directory: release-tree
+        env:
+          STABLE_TAG: ${{ steps.request.outputs.tag }}
+          MOVE_LATEST: ${{ steps.latest.outputs.move_latest == 'true' && '1' || '0' }}
+        run: ../workflow-source/hack/promote-retag.sh "${STABLE_TAG}"
+
+      # Package the stable cozy-installer chart from the release tree, matching
+      # normal finalize's version/appVersion/platformVersion stamping. An
+      # existing stable chart must match that package file-for-file; mismatches
+      # fail unless the dispatch explicitly sets the break-glass force_chart
+      # input. `--raw` is required because a Helm OCI artifact is not a container
+      # image and an image-specific skopeo inspect can reject it.
+      - name: Publish stable cozy-installer chart
+        working-directory: release-tree
+        env:
+          TAG: ${{ steps.request.outputs.tag }}
+          MAKE_LATEST: ${{ steps.latest.outputs.move_latest }}
+          FORCE_CHART: ${{ inputs.force_chart }}
+        run: |
+          set -euo pipefail
+          STABLE_VERSION="${TAG#v}"
+          WORKDIR="$(mktemp -d)"
+          mkdir -p "${WORKDIR}/fresh" "${WORKDIR}/published" \
+            "${WORKDIR}/fresh-tree" "${WORKDIR}/published-tree"
+
+          # Stamp only the ephemeral tagged checkout. The git tag remains
+          # immutable, while the packaged chart gets the same stable default
+          # and metadata as one produced by normal finalize.
+          export STABLE_VERSION
+          yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
+            packages/core/installer/values.yaml
+          helm package packages/core/installer \
+            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" \
+            --destination "${WORKDIR}/fresh"
+          PKG="${WORKDIR}/fresh/cozy-installer-${STABLE_VERSION}.tgz"
+
+          if skopeo inspect --raw "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" >/dev/null 2>&1; then
+            helm pull "oci://${REGISTRY}/cozy-installer" \
+              --version "${STABLE_VERSION}" --destination "${WORKDIR}/published"
+            PUBLISHED_PKG="${WORKDIR}/published/cozy-installer-${STABLE_VERSION}.tgz"
+            tar -xzf "${PKG}" -C "${WORKDIR}/fresh-tree"
+            tar -xzf "${PUBLISHED_PKG}" -C "${WORKDIR}/published-tree"
+
+            DIFF_REPORT="${WORKDIR}/chart.diff"
+            if diff -qr "${WORKDIR}/fresh-tree/cozy-installer" \
+              "${WORKDIR}/published-tree/cozy-installer" >"${DIFF_REPORT}" 2>&1; then
+              echo "cozy-installer:${STABLE_VERSION} matches the release tag tree; skipping stable chart push."
+            else
+              DIFF_STATUS=$?
+              if [ "${DIFF_STATUS}" -ne 1 ]; then
+                echo "::error::Unable to compare published cozy-installer:${STABLE_VERSION} with the release tag tree."
+                cat "${DIFF_REPORT}"
+                exit "${DIFF_STATUS}"
+              fi
+
+              echo "Published cozy-installer:${STABLE_VERSION} differs from the chart packaged from release tag ${TAG}."
+              echo "Differing files:"
+              cat "${DIFF_REPORT}"
+              if [ "${FORCE_CHART}" = "true" ]; then
+                echo "::warning::force_chart=true; overwriting cozy-installer:${STABLE_VERSION} with the release tag tree."
+                helm push "${PKG}" "oci://${REGISTRY}"
+              else
+                echo "::error::Published cozy-installer:${STABLE_VERSION} differs from the release tag tree."
+                echo "::error::Refusing to overwrite published chart bytes. Review the files above and re-dispatch with force_chart=true to republish deliberately."
+                exit 1
+              fi
+            fi
+          else
+            echo "cozy-installer:${STABLE_VERSION} is not published; pushing the release tag tree."
+            helm push "${PKG}" "oci://${REGISTRY}"
+          fi
+
+          # cozy-installer:latest follows the identical max-semver decision as
+          # component-image :latest. Replaying an old stable can repair its
+          # immutable chart tag but can never steal the floating tag.
+          if [ "${MAKE_LATEST}" = "true" ]; then
+            skopeo copy --multi-arch all \
+              "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
+              "docker://${REGISTRY}/cozy-installer:latest"
+          fi
