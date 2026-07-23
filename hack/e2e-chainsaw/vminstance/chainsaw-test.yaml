@@ -136,35 +136,34 @@ spec:
             (conditions[?type == 'Ready']):
             - status: "True"
 ---
-# vminstance-2-backup-roundtrip — full Velero backup/restore round-trip for a
-# VMInstance, gated out of CI (opt in with VMI_E2E_S3_ROUNDTRIP=1).
+# vminstance-2-backup-roundtrip — REAL Velero backup/restore round-trip for a
+# booted VMInstance, run un-gated in CI on a deliberately tiny VM.
 #
-# It delegates the whole flow to the validated example scripts
-# (examples/backups/vmi/run-all.sh) so the documented demo and the automated
-# test can never drift — the same pattern as postgres-2-backup-roundtrip and
-# etcd-2-backup-roundtrip. run-all.sh: Velero strategies -> BackupClass -> a
-# booted Ubuntu VMInstance -> ad-hoc BackupJob (waits Succeeded) -> in-place
-# RestoreJob (waits Succeeded, then waits for the restored VM to boot again) ->
-# cross-namespace to-copy RestoreJob (waits Succeeded). A VM has no in-guest
-# sentinel the host can read, so the round-trip proof is that the VM boots from
-# the restored disk end to end.
+# This is the in-CI proof of the cozy-default-velero-vminstance path: a running
+# VM's disk is CSI-snapshotted, moved to S3 by Velero's data mover (kopia), and
+# restored in place — after which the VM boots again from the restored disk (a
+# VM has no in-guest sentinel the host can read, so "boots again" is the proof).
+# It drives the validated example (examples/backups/vmi/run-all.sh) so the demo
+# and the test can never drift.
 #
-# Runs in tenant-root, not tenant-test: Velero's CSI data mover streams the VM
-# disk from a Pod in the source namespace to the SeaweedFS S3 endpoint in
-# tenant-root, and the e2e tenant is created isolated
-# (hack/e2e-install-cozystack.bats) — its Cilium egress allowlist blocks a
-# tenant-test Pod from reaching tenant-root's seaweedfs, while a tenant-root Pod
-# reaches it over same-tenant egress (same reasoning as the postgres suite).
+# Kept light enough for kind: a cirros guest (~20MB image, instanceProfile
+# cirros) on the smallest instance type (u1.nano = 1 vCPU / 512Mi) with a 2Gi
+# disk, and SKIP_RESTORE_TO_COPY=1 so only the in-place restore runs (the
+# cross-namespace to-copy restore stands up a second full VM — too heavy for CI
+# and redundant for proving the round-trip). cirros has no qemu-guest-agent, so
+# Velero takes a crash-consistent snapshot without a filesystem freeze, which is
+# fine for exercising the mechanics.
 #
-# Gated because that S3 endpoint serves a self-signed cert kind cannot publicly
-# trust, and the platform BackupStorageLocation TLS/checksum defaults do not
-# complete the flow out of the box in the sandbox (cozystack/cozystack#3236) —
-# the same class of blocker that gates etcd-2-backup-roundtrip. Set
-# VMI_E2E_S3_ROUNDTRIP=1 on a real backups-enabled cluster to run it.
+# S3 target: like vmdisk-2-backup-roundtrip, the harness stands up a throwaway
+# BSL cozy-e2e-vmi at the IN-CLUSTER seaweedfs endpoint (the platform
+# cozy-default BSL derives the external ingress endpoint, unroutable in kind)
+# with insecureSkipTLSVerify + checksumAlgorithm="" (the cozystack#3236 fixes),
+# reusing the platform bucket + cozy-backups-creds. Runs in tenant-root so the
+# data-mover DataUpload Pods reach seaweedfs over same-tenant egress.
 #
-# Teardown is explicit (skipDelete: true): the BackupClass and Velero
-# strategies are cluster-scoped and the Velero Backup/Restore live in
-# cozy-velero, none of which Chainsaw applied, so cleanup.sh prunes them.
+# Teardown is explicit (skipDelete: true): cleanup.sh prunes the cluster-scoped
+# BackupClass/strategies and the cozy-velero Velero Backup/Restore, and the
+# harness deletes the throwaway BSL.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
@@ -200,36 +199,66 @@ spec:
   steps:
   - name: run
     try:
-    # The 50m budget is the whole documented flow: Ubuntu image import (~700MB)
-    # + VM boot, a full VM-disk (20Gi) Velero backup to S3, an in-place restore
-    # with a second VM boot, and a cross-namespace to-copy restore (convention
-    # 6: justified in-line). run-all.sh is `set -e` and fails fast on terminal
-    # BackupJob/RestoreJob phases rather than polling out the budget.
+    # 35m budget: build the in-cluster BSL, import the tiny cirros image + boot
+    # the VM, a CSI-snapshot data-mover backup to S3, and an in-place restore
+    # with a second boot. BSL setup is in this step (not a separate one) so the
+    # finally below always tears the BSL down, even if setup fails. run-all.sh is
+    # `set -e` and fails fast on a terminal BackupJob/RestoreJob phase.
     - script:
-        timeout: 50m
+        timeout: 35m
         content: |
           set -eu
-          if [ "${VMI_E2E_S3_ROUNDTRIP:-0}" != "1" ]; then
-            echo "# VMInstance S3 backup/restore round-trip gated out of CI: Velero"
-            echo "# moves the VM disk to the SeaweedFS BackupStorageLocation, whose"
-            echo "# in-cluster endpoint serves a self-signed cert kind cannot trust"
-            echo "# (cozystack/cozystack#3236). Set VMI_E2E_S3_ROUNDTRIP=1 on a real"
-            echo "# backups-enabled cluster to run it."
-            exit 0
-          fi
+          # Build the in-cluster BSL the example will target (reuse the platform
+          # bucket read off cozy-default + cozy-backups-creds).
+          echo "Waiting for the platform cozy-default BSL to expose its bucket name..."
+          timeout 180 sh -ec 'until kubectl -n cozy-velero get bsl cozy-default -o jsonpath="{.spec.objectStorage.bucket}" 2>/dev/null | grep -q .; do sleep 5; done'
+          BUCKET=$(kubectl -n cozy-velero get bsl cozy-default -o jsonpath='{.spec.objectStorage.bucket}')
+          REGION=$(kubectl -n cozy-velero get bsl cozy-default -o jsonpath='{.spec.config.region}')
+          [ -n "$REGION" ] || REGION=us-east-1
+          echo "Platform bucket: $BUCKET (region $REGION)"
+          kubectl apply -f - <<YAML
+          apiVersion: velero.io/v1
+          kind: BackupStorageLocation
+          metadata:
+            name: cozy-e2e-vmi
+            namespace: cozy-velero
+            labels:
+              cozystack.io/e2e: vminstance-backup
+          spec:
+            provider: aws
+            default: false
+            objectStorage:
+              bucket: "$BUCKET"
+              prefix: velero-e2e-vmi
+            credential:
+              name: cozy-backups-creds
+              key: cloud
+            config:
+              region: "$REGION"
+              s3ForcePathStyle: "true"
+              s3Url: https://seaweedfs-s3.tenant-root.svc.cozy.local:8333
+              insecureSkipTLSVerify: "true"
+              checksumAlgorithm: ""
+          YAML
+          echo "Waiting for BSL cozy-e2e-vmi to validate Available..."
+          timeout 180 sh -ec 'until [ "$(kubectl -n cozy-velero get bsl cozy-e2e-vmi -o jsonpath="{.status.phase}" 2>/dev/null)" = "Available" ]; do sleep 5; done'
+          kubectl -n cozy-velero get bsl cozy-e2e-vmi
+
           cd ../../..
           [ -x examples/backups/vmi/run-all.sh ] || { echo "vmi backup example scripts not found at examples/backups/vmi" >&2; exit 1; }
-          NAMESPACE="$NAMESPACE" BACKUP_STORAGE_LOCATION=cozy-default \
+          # Tiny VM: cirros guest on u1.nano with a 2Gi disk; in-place restore only.
+          NAMESPACE="$NAMESPACE" BACKUP_STORAGE_LOCATION=cozy-e2e-vmi \
+            VMI_IMAGE_URL=https://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-disk.img \
+            VMI_DISK_STORAGE=2Gi VMI_INSTANCE_PROFILE=cirros VMI_INSTANCE_TYPE=u1.nano \
+            SKIP_RESTORE_TO_COPY=1 \
             examples/backups/vmi/run-all.sh
         check:
           ($error == null): true
     finally:
-    # Prune everything the harness created — the cluster-scoped BackupClass /
-    # Velero strategies, the namespaced BackupJob/RestoreJob/Backup (which
-    # cascade to the Velero Backup/Restore in cozy-velero), the VMInstance /
-    # VMDisk and the to-copy target namespace. Idempotent: a no-op when the
-    # round-trip was gated out. Has teeth — a teardown that does not settle
-    # fails the step instead of leaking into later app tests.
+    # Prune everything the harness created — the example cleanup (cluster-scoped
+    # BackupClass/strategies, namespaced BackupJob/RestoreJob/Backup which cascade
+    # to the Velero Backup/Restore in cozy-velero, the VMInstance/VMDisk), then
+    # the throwaway BSL. Has teeth — a teardown that does not settle fails the step.
     - description: vmi backup-flow cleanup
       script:
         timeout: 15m
@@ -237,6 +266,7 @@ spec:
           set -eu
           cd ../../..
           NAMESPACE="$NAMESPACE" examples/backups/vmi/cleanup.sh
+          kubectl -n cozy-velero delete bsl cozy-e2e-vmi --ignore-not-found
 ---
 # vmdisk-2-backup-roundtrip — REAL Velero backup/restore round-trip for a
 # standalone VMDisk, run un-gated in CI. This is the in-CI proof that the
@@ -244,11 +274,11 @@ spec:
 # LINSTOR `replicated` block disk, moved to S3 by Velero's data mover (kopia),
 # then restored back to a Bound, Ready disk.
 #
-# VMDisk (not VMInstance) is the un-gated CI case on purpose: it exercises the
-# same Velero + CSI-data-mover + S3 machinery but captures only HelmRelease +
-# PVC (+ configmaps) — no nested VM boot, no guest-agent freeze, no 20Gi image —
-# so it is fast and reliable enough for the kind sandbox. The heavier VMInstance
-# round-trip above stays gated behind VMI_E2E_S3_ROUNDTRIP=1.
+# This is the disk-only companion to vminstance-2-backup-roundtrip above: same
+# Velero + CSI-data-mover + S3 machinery, but it captures only HelmRelease + PVC
+# (+ configmaps) with no VM at all — no nested boot, no guest-agent freeze — so
+# it isolates the block-volume backup path from anything VM-specific. Both run
+# un-gated in CI now.
 #
 # S3 target: the platform cozy-default BSL derives the EXTERNAL S3 ingress
 # endpoint, which is an unroutable placeholder inside kind (the same reason the

@@ -28,8 +28,13 @@ SCRIPTS=(
     "04-create-vminstance.sh"
     "05-create-backupjob.sh"
     "06-restore-in-place.sh"
-    "07-restore-to-copy.sh"
 )
+# Cross-namespace to-copy restore is the heaviest step (a second full VM in a
+# fresh namespace). SKIP_RESTORE_TO_COPY=1 drops it — used by the lightweight CI
+# round-trip, which proves backup + in-place restore is enough.
+if [[ "${SKIP_RESTORE_TO_COPY:-0}" != "1" ]]; then
+    SCRIPTS+=("07-restore-to-copy.sh")
+fi
 
 for script in "${SCRIPTS[@]}"; do
     if [[ -x "$SCRIPT_DIR/$script" ]]; then
