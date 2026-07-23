@@ -55,13 +55,21 @@ cp "${FLAVOR_FILE}" "${WORK_DIR}/data/build-flavors/vyos-router.toml"
 # every artifact it writes is root-owned. The trailing chown hands the tree back
 # to that mapped UID (== the invoking host/CI user) so the host-side mv below —
 # and any later `git clean` — can touch the outputs without root.
+#
+# build-vyos-image unconditionally generates an SBOM with `syft` at the end of
+# the build (no skip flag), and the pinned vyos-build container does not ship
+# syft, so fetch a version-pinned syft release tarball, verify it against a
+# repo-embedded SHA256 (no `curl | sh` remote-code-execution — integrity is
+# enforced at build time), and extract the binary onto root's PATH (the build
+# runs under sudo). We do not consume the SBOM — we only take the qcow2 below —
+# but the upstream script hard-fails without syft.
 docker run --rm -i \
   --privileged \
   -v /dev:/dev \
   -v "${WORK_DIR}:/vyos" \
   -w /vyos \
   "${VYOS_BUILD_IMAGE}" \
-  bash -c 'set -e; sudo ./build-vyos-image --architecture "$1" --version "$2" vyos-router; sudo chown -R "$(id -u):$(id -g)" .' \
+  bash -c 'set -e; curl -fsSL -o /tmp/syft.tgz https://github.com/anchore/syft/releases/download/v1.49.0/syft_1.49.0_linux_amd64.tar.gz; echo "7aa2f03ee92739cf643279ba3990548b9925d4e22cae13f46831ee62821147fe  /tmp/syft.tgz" | sha256sum -c -; sudo tar -xzf /tmp/syft.tgz -C /usr/local/bin syft; sudo ./build-vyos-image --architecture "$1" --version "$2" vyos-router; sudo chown -R "$(id -u):$(id -g)" .' \
   -- "${VYOS_ARCH}" "${VYOS_VERSION}"
 
 # build-vyos-image names the artifact vyos-<version>-vyos-router-<arch>.qcow2;
