@@ -52,6 +52,7 @@ COZY_CONTROLLER_CRDDIR=packages/system/cozystack-controller/definitions
 COZY_RD_CRDDIR=packages/system/application-definition-crd/definition
 BACKUPS_CORE_CRDDIR=packages/system/backup-controller/definitions
 BACKUPSTRATEGY_CRDDIR=packages/system/backupstrategy-controller/definitions
+DBAUTOSCALER_CRDDIR=packages/system/db-autoscaler/definitions
 
 trap 'rm -rf ${TMPDIR}' EXIT
 
@@ -91,7 +92,7 @@ kube::codegen::gen_client \
     "${SCRIPT_ROOT}/pkg/apis"
 
 $CONTROLLER_GEN object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
-$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." output:crd:artifacts:config=${TMPDIR}
+$CONTROLLER_GEN rbac:roleName=manager-role crd paths="./api/v1alpha1/..." paths="./api/backups/..." paths="./api/gateway/..." paths="./api/autoscaling/..." output:crd:artifacts:config=${TMPDIR}
 
 mv ${TMPDIR}/cozystack.io_packages.yaml ${OPERATOR_CRDDIR}/cozystack.io_packages.yaml
 mv ${TMPDIR}/cozystack.io_packagesources.yaml ${OPERATOR_CRDDIR}/cozystack.io_packagesources.yaml
@@ -101,6 +102,9 @@ mv ${TMPDIR}/cozystack.io_applicationdefinitions.yaml \
 
 mv ${TMPDIR}/backups.cozystack.io*.yaml ${BACKUPS_CORE_CRDDIR}/
 mv ${TMPDIR}/strategy.backups.cozystack.io*.yaml ${BACKUPSTRATEGY_CRDDIR}/
+
+mkdir -p ${DBAUTOSCALER_CRDDIR}
+mv ${TMPDIR}/autoscaling.cozystack.io*.yaml ${DBAUTOSCALER_CRDDIR}/
 
 mv ${TMPDIR}/*.yaml ${COZY_CONTROLLER_CRDDIR}/
 

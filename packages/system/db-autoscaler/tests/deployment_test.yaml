@@ -1,0 +1,83 @@
+suite: db-autoscaler deployment, webhook and RBAC render correctly
+release:
+  name: db-autoscaler
+  namespace: cozy-db-autoscaler
+tests:
+  - it: deployment runs 2 replicas with leader election and the ownership webhook wired
+    templates:
+      - templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --leader-elect
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --operator-username=system:serviceaccount:cozy-db-autoscaler:db-autoscaler
+      - equal:
+          path: spec.template.spec.containers[0].volumeMounts[0].mountPath
+          value: /tmp/k8s-webhook-server/serving-certs
+      # Regression guards for live-cluster spike findings: the webhook cert must
+      # be group-readable (0440) with a matching fsGroup, or the nonroot process
+      # cannot read tls.crt and the webhook server fails to start.
+      - equal:
+          path: spec.template.spec.securityContext.fsGroup
+          value: 65532
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.volumes[0].secret.defaultMode
+          value: 288 # 0440 octal
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+
+  - it: validating webhook guards the backing HelmRelease on UPDATE and fails open
+    templates:
+      - templates/validatingwebhookconfiguration.yaml
+    asserts:
+      - equal:
+          path: webhooks[0].clientConfig.service.path
+          value: /validate-helmrelease-replicas
+      - equal:
+          path: webhooks[0].failurePolicy
+          value: Ignore
+      - equal:
+          path: webhooks[0].rules[0].apiGroups[0]
+          value: helm.toolkit.fluxcd.io
+      - equal:
+          path: webhooks[0].rules[0].resources[0]
+          value: helmreleases
+      - contains:
+          path: webhooks[0].rules[0].operations
+          content: UPDATE
+
+  - it: tenant view role is aggregated read-only and admin role is write
+    templates:
+      - templates/tenant-clusterroles.yaml
+    asserts:
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-view"]
+          value: "true"
+        documentSelector:
+          path: metadata.name
+          value: cozy:dbautoscaler:view
+      - equal:
+          path: metadata.labels["rbac.cozystack.io/aggregate-to-tenant-admin"]
+          value: "true"
+        documentSelector:
+          path: metadata.name
+          value: cozy:dbautoscaler:admin
+
+  - it: ships the DHA CRD
+    templates:
+      - templates/crds.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: metadata.name
+          value: databasehorizontalautoscalers.autoscaling.cozystack.io

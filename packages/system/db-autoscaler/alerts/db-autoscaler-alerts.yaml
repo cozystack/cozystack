@@ -1,0 +1,32 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: db-autoscaler-alerts
+spec:
+  groups:
+    - name: db-autoscaler.rules
+      rules:
+        - alert: DatabaseAutoscalerFrozen
+          expr: db_autoscaler_frozen == 1
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Database autoscaler is frozen for {{ $labels.namespace }}/{{ $labels.name }}"
+            description: >-
+              The DatabaseHorizontalAutoscaler {{ $labels.namespace }}/{{ $labels.name }}
+              has been unable to scale for 15 minutes (metric unavailable, replication
+              lag brake, stuck scaling, or quorum exceeds quota). Check its AbleToScale
+              condition and events.
+        - alert: DatabaseAutoscalerScalingLimited
+          expr: db_autoscaler_scaling_limited == 1
+          for: 30m
+          labels:
+            severity: info
+          annotations:
+            summary: "Database autoscaler limit reached for {{ $labels.namespace }}/{{ $labels.name }}"
+            description: >-
+              The DatabaseHorizontalAutoscaler {{ $labels.namespace }}/{{ $labels.name }}
+              has been clamped by a guardrail (min/max, quorum floor, tenant quota) or a
+              competing writer for 30 minutes. Review its ScalingLimited condition; the
+              maxReplicas or the tenant quota may need raising.

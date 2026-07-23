@@ -256,6 +256,7 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.db-autoscaler" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox-application" $) }}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}

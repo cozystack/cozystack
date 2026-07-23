@@ -1,0 +1,23 @@
+dbAutoscaler:
+  image: "ghcr.io/cozystack/cozystack/db-autoscaler:v0.0.0"
+  replicas: 2
+  # Namespace of the apps.cozystack.io extension server (cozystack-api). Its SA
+  # is allowed by the ownership webhook, since legitimate replicas writes through
+  # the apps API reach the HelmRelease as this identity.
+  appsApiNamespace: cozy-system
+  debug: false
+  webhook:
+    # Register the replicas-ownership validating webhook. failurePolicy is Ignore
+    # so a webhook outage never blocks tenant writes to unrelated apps; ownership
+    # then degrades to the controller's advisory marker + convergence detection.
+    enabled: true
+  metrics:
+    enabled: true
+    bindAddress: ":8443"
+  resources:
+    requests:
+      cpu: 10m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi

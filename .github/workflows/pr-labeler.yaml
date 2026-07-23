@@ -69,6 +69,7 @@ jobs:
               'kafka':               'area/database',
               'clickhouse':          'area/database',
               'mongodb':             'area/database',
+              'db-autoscaler':       'area/database',
 
               // area/extra
               'extra':               'area/extra',

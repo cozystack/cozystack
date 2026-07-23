@@ -1,0 +1,33 @@
+{{- if .Values.dbAutoscaler.metrics.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: db-autoscaler-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: db-autoscaler
+spec:
+  selector:
+    app: db-autoscaler
+  ports:
+  - name: metrics
+    port: {{ splitList ":" .Values.dbAutoscaler.metrics.bindAddress | mustLast }}
+    targetPort: metrics
+    protocol: TCP
+---
+apiVersion: operator.victoriametrics.com/v1beta1
+kind: VMServiceScrape
+metadata:
+  name: db-autoscaler
+  namespace: {{ .Release.Namespace }}
+spec:
+  selector:
+    matchLabels:
+      app: db-autoscaler
+  endpoints:
+  - port: metrics
+    scheme: https
+    tlsConfig:
+      insecureSkipVerify: true
+    bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+{{- end }}

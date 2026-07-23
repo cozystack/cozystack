@@ -1,0 +1,332 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: databasehorizontalautoscalers.autoscaling.cozystack.io
+spec:
+  group: autoscaling.cozystack.io
+  names:
+    kind: DatabaseHorizontalAutoscaler
+    listKind: DatabaseHorizontalAutoscalerList
+    plural: databasehorizontalautoscalers
+    shortNames:
+    - dha
+    singular: databasehorizontalautoscaler
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.targetRef.name
+      name: Target
+      type: string
+    - jsonPath: .spec.minReplicas
+      name: Min
+      type: integer
+    - jsonPath: .spec.maxReplicas
+      name: Max
+      type: integer
+    - jsonPath: .status.currentReplicas
+      name: Current
+      type: integer
+    - jsonPath: .status.desiredReplicas
+      name: Desired
+      type: integer
+    - jsonPath: .spec.dryRun
+      name: DryRun
+      type: boolean
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: DatabaseHorizontalAutoscaler is the Schema for the databasehorizontalautoscalers
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: DatabaseHorizontalAutoscalerSpec defines the desired state.
+            properties:
+              behavior:
+                description: Behavior tunes scaling dynamics.
+                properties:
+                  convergenceDeadlineSeconds:
+                    description: |-
+                      ConvergenceDeadlineSeconds bounds how long a patched scale may take to
+                      converge (availableReplicas == replicas) before the operator surfaces
+                      StuckScaling and rolls back to lastConvergedReplicas.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  scaleDown:
+                    description: ScaleDown rules (typically a longer stabilization
+                      window than ScaleUp).
+                    properties:
+                      stabilizationWindowSeconds:
+                        description: StabilizationWindowSeconds is how long the signal
+                          must hold before acting.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      step:
+                        description: |-
+                          Step is the maximum number of replicas changed in a single decision.
+                          The quorum floor overrides this limit (a safe quorum is never rate-limited).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
+                  scaleUp:
+                    description: ScaleUp rules.
+                    properties:
+                      stabilizationWindowSeconds:
+                        description: StabilizationWindowSeconds is how long the signal
+                          must hold before acting.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      step:
+                        description: |-
+                          Step is the maximum number of replicas changed in a single decision.
+                          The quorum floor overrides this limit (a safe quorum is never rate-limited).
+                        format: int32
+                        minimum: 1
+                        type: integer
+                    type: object
+                type: object
+              constraints:
+                description: Constraints are the safety knobs.
+                properties:
+                  maxReplicationLagSeconds:
+                    description: |-
+                      MaxReplicationLagSeconds is the lag threshold above which scaling is braked
+                      (only while the primary is actively writing).
+                    format: int32
+                    minimum: 0
+                    type: integer
+                  respectQuorum:
+                    default: true
+                    description: RespectQuorum keeps the desired count at or above
+                      the engine's quorum floor.
+                    type: boolean
+                type: object
+              dryRun:
+                default: false
+                description: DryRun writes decisions to status/events without applying
+                  any patch.
+                type: boolean
+              maxReplicas:
+                description: MaxReplicas is the maximum TOTAL instance count.
+                format: int32
+                minimum: 2
+                type: integer
+              metrics:
+                description: |-
+                  Metrics drive the scaling decision. When several are set the desired count is
+                  the maximum of the per-metric desired counts (HPA semantics).
+                items:
+                  description: MetricSpec selects one driver metric and its target.
+                  properties:
+                    target:
+                      description: Target goal for this metric.
+                      properties:
+                        averageValue:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          description: |-
+                            AverageValue is the target value per read-serving replica. It must be
+                            strictly positive; a zero or negative target makes the autoscaler freeze
+                            the DHA with condition AbleToScale=False, reason InvalidMetricTarget
+                            (the metric cannot be divided by a non-positive target).
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                      required:
+                      - averageValue
+                      type: object
+                    type:
+                      description: Type of the driver metric.
+                      enum:
+                      - ReadConnections
+                      - ReadCPUUtilization
+                      type: string
+                  required:
+                  - target
+                  - type
+                  type: object
+                minItems: 1
+                type: array
+              minReplicas:
+                description: |-
+                  MinReplicas is the minimum TOTAL instance count (primary + standbys). Must be
+                  >= 2 so at least one read-serving replica exists.
+                format: int32
+                minimum: 2
+                type: integer
+              targetRef:
+                description: TargetRef is the managed database Application to scale.
+                properties:
+                  apiGroup:
+                    default: apps.cozystack.io
+                    description: APIGroup of the target. Defaults to apps.cozystack.io.
+                    type: string
+                  kind:
+                    description: Kind of the target Application (e.g. Postgres).
+                    type: string
+                  name:
+                    description: Name of the target Application in the same namespace
+                      as the DHA.
+                    type: string
+                required:
+                - kind
+                - name
+                type: object
+            required:
+            - maxReplicas
+            - metrics
+            - minReplicas
+            - targetRef
+            type: object
+            x-kubernetes-validations:
+            - message: maxReplicas must be greater than or equal to minReplicas
+              rule: self.maxReplicas >= self.minReplicas
+          status:
+            description: DatabaseHorizontalAutoscalerStatus defines the observed state.
+            properties:
+              conditions:
+                description: Conditions represent the latest available observations.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
+              currentMetrics:
+                description: CurrentMetrics is the last observed value of each driver
+                  metric.
+                items:
+                  description: MetricStatus is the last observed value of a driver
+                    metric.
+                  properties:
+                    averageValue:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      description: AverageValue observed per read-serving replica.
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    type:
+                      description: Type of the driver metric.
+                      enum:
+                      - ReadConnections
+                      - ReadCPUUtilization
+                      type: string
+                  required:
+                  - averageValue
+                  - type
+                  type: object
+                type: array
+              currentReplicas:
+                description: CurrentReplicas is the total instance count last observed
+                  on the target.
+                format: int32
+                type: integer
+              desiredReplicas:
+                description: DesiredReplicas is the total instance count the autoscaler
+                  computed.
+                format: int32
+                type: integer
+              lastAppliedReplicas:
+                description: |-
+                  LastAppliedReplicas is the last replica count the autoscaler itself wrote.
+                  Persisted so the ownership back-off (detecting a competing writer) survives
+                  a controller restart or leader failover.
+                format: int32
+                type: integer
+              lastConvergedReplicas:
+                description: LastConvergedReplicas is the last count that reached
+                  availableReplicas == replicas.
+                format: int32
+                type: integer
+              lastScaleTime:
+                description: LastScaleTime is when the autoscaler last patched the
+                  target.
+                format: date-time
+                type: string
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation the status
+                  reflects.
+                format: int64
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

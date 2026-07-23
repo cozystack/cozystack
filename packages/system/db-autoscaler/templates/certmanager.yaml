@@ -1,0 +1,48 @@
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: db-autoscaler-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: db-autoscaler-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: db-autoscaler-ca
+  duration: 43800h # 5 years
+  commonName: db-autoscaler-ca
+  issuerRef:
+    name: db-autoscaler-selfsigned
+  isCA: true
+  privateKey:
+    rotationPolicy: Never
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: db-autoscaler-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: db-autoscaler-ca
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: db-autoscaler
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: db-autoscaler-cert
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: db-autoscaler-ca
+  commonName: db-autoscaler
+  dnsNames:
+    - db-autoscaler
+    - db-autoscaler.{{ .Release.Namespace }}.svc
+    - db-autoscaler.{{ .Release.Namespace }}.svc.cluster.local

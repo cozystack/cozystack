@@ -1,0 +1,32 @@
+suite: db-autoscaler source waits for the monitoring stack it queries
+# The autoscaler's decision loop reads VictoriaMetrics (vmselect) and
+# WorkloadMonitor status, so it must not reconcile before the monitoring stack
+# and the VictoriaMetrics operator CRDs (VMServiceScrape) exist. Guard those
+# ordering edges so a refactor cannot drop them and leave the loop freezing on
+# a cold install.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: default variant depends on networking and the monitoring stack
+    documentSelector:
+      path: metadata.name
+      value: cozystack.db-autoscaler
+    asserts:
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.networking
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.cert-manager
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.monitoring-agents
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.victoria-metrics-operator
+      - equal:
+          path: spec.variants[0].components[0].install.namespace
+          value: cozy-db-autoscaler
