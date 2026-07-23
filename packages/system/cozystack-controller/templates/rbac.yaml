@@ -22,6 +22,16 @@ rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["helmreleases"]
   verbs: ["get", "list", "watch", "patch", "update"]
+# CACertReconciler reconciles TenantProjection sentinels a chart renders and
+# writes their Ready status. It never creates or deletes a sentinel; that is
+# the chart's (helm-controller's) job, with a companion ValidatingAdmissionPolicy
+# as defence in depth.
+- apiGroups: ["internal.cozystack.io"]
+  resources: ["tenantprojections"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["internal.cozystack.io"]
+  resources: ["tenantprojections/status"]
+  verbs: ["get", "update", "patch"]
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get", "list", "watch", "patch", "update"]
@@ -34,15 +44,13 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["create", "patch"]
-# WildcardSecretReconciler replicates the operator-provided wildcard TLS
-# Secret from the publishing namespace into each tenant namespace that
-# terminates TLS. This grants the platform controller's own
-# ServiceAccount Secret writes — it does not widen any tenant's RBAC;
-# tenant ingress controllers / Gateways still read only the replica in
-# their own namespace. The read verbs (get/list/watch) are intentionally
-# listed too so this rule fully describes the reconciler's Secret access
-# on its own and keeps working if the broad read-only catch-all rule
-# below is ever narrowed; only create/update/patch/delete are new grants.
+# Two reconcilers share this one Secret write grant on the platform controller's
+# own ServiceAccount; it widens no tenant's RBAC. WildcardSecretReconciler
+# replicates the operator wildcard TLS Secret into each tenant namespace;
+# CACertReconciler writes — and withdraws — the key-free "<release>.tenant-ca"
+# projection, deleting only a projection it owns by owner reference, never a
+# foreign Secret. Read was already covered by the catch-all rule below;
+# create/update/patch/delete are the new grants.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
