@@ -10,6 +10,11 @@ print_header "Step 4: Create VMInstance"
 log_step "Creating VMInstance 'test' in namespace $NAMESPACE..."
 log_command "kubectl apply -f - (VMInstance: test)"
 
+# Profile + instance type are overridable so the same flow can boot a heavy
+# ubuntu demo or a tiny cirros VM for a lightweight e2e (u1.nano = 1 vCPU/512Mi).
+VMI_INSTANCE_PROFILE="${VMI_INSTANCE_PROFILE:-ubuntu}"
+VMI_INSTANCE_TYPE="${VMI_INSTANCE_TYPE:-u1.medium}"
+
 kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
 kind: VMInstance
@@ -19,8 +24,8 @@ metadata:
 spec:
   disks:
     - name: ubuntu-source
-  instanceProfile: ubuntu
-  instanceType: "u1.medium"
+  instanceProfile: ${VMI_INSTANCE_PROFILE}
+  instanceType: "${VMI_INSTANCE_TYPE}"
   running: true
   sshKeys:
     #- <paste your ssh public key here>
