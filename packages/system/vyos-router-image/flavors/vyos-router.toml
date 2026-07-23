@@ -113,6 +113,17 @@ packages = ["cloud-init", "qemu-guest-agent"]
 # chart's cloud-init seed owns it (it carries the controller api key), keeping the
 # image and its first-boot config a matched pair (docs/image-lifecycle.md). The
 # seed's `vyos_config_commands` re-apply eth0/console idempotently on top of this.
+# The `user vyos` account below is LOCKED: encrypted-password "*" is an invalid
+# crypt hash, so no password authenticates it on any surface (there is no SSH
+# service, and the serial-console login prompt rejects it). The well-known
+# vyos/vyos credential the reference appliance shipped is gone; break-glass
+# console debug uses an out-of-band credential baked into nothing here.
+#
+# IMPORTANT: this is VyOS curly-brace config (ConfigTree), which has NO `#`
+# comments — a `#` line is a parse error ("Failed to parse config: Syntax
+# error") that aborts cc_vyos / cc_vyos_userdata on first boot, leaving the
+# seed unapplied and the guest unreachable. Keep all rationale in TOML comments
+# out here, never inside the default_config string.
 default_config = """
 interfaces {
     ethernet eth0 {
@@ -160,12 +171,6 @@ system {
         }
         user vyos {
             authentication {
-                # Locked: "*" is an invalid crypt hash, so no password authenticates
-                # this account on any surface (there is no SSH service, and the
-                # serial console login prompt rejects it too). The well-known
-                # `vyos`/`vyos` credential the reference appliance shipped is gone.
-                # Break-glass console debug uses an out-of-band credential; nothing
-                # is baked into the image.
                 encrypted-password "*"
             }
         }
