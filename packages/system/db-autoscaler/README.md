@@ -35,6 +35,10 @@ bundles:
 
 It declares a `dependsOn` on the monitoring stack (VictoriaMetrics / `WorkloadMonitor`), which the decision loop requires, and on cert-manager, which issues the webhook serving certificate.
 
+## Monitoring requirements
+
+The autoscaler resolves the target's vmselect from the `namespace.cozystack.io/monitoring` label on the target's namespace, then runs its PromQL there. For the Postgres and MariaDB adapters that vmselect must serve **both** the engine's own per-pod metrics (e.g. `cnpg_backends_total`) **and** `kube_pod_labels` from kube-state-metrics, because the read-replica role is not carried on the engine metrics and is recovered by joining against `kube_pod_labels` on `label_cnpg_io_instance_role`. kube-state-metrics is cluster-scoped and is scraped only by the root/cluster monitoring, so this holds for the common tenant layout — a tenant with `monitoring: false`, whose namespace label points at the parent (root) monitoring where both series coexist (verified on a live cluster). A tenant that runs its **own** isolated stack (`monitoring: true`) scrapes the engine metrics but not cluster-scoped `kube_pod_labels`; the role join then returns no series, the metric reads as unavailable, and the DHA fail-safe-freezes (`AbleToScale=False`, reason `MetricUnavailable`) rather than scaling blind. Point such targets at a monitoring stack that also scrapes kube-state-metrics before enabling autoscaling.
+
 ## Ownership enforcement
 
 While a DHA is active the autoscaler is the single owner of the target's `replicas` value: it stamps the marker annotation `autoscaling.cozystack.io/managed-by: <dha-name>` and writes via the `db-autoscaler` field manager.
