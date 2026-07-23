@@ -222,7 +222,10 @@ _tenant_snapshot_on_fail() {
   # Output goes to a log beside the snapshot instead of /dev/null so "complete
   # or truncated?" is answerable from the artifact, as for the host snapshot.
   _cg_rc=0
-  timeout -k 30 360 crust-gather collect -k "${CURRENT_TENANT_KC}" --duration 180s \
+  # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+  # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+  # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+  timeout -k 30 360 crust-gather collect -k "${CURRENT_TENANT_KC}" --disable-additional-logs --duration 180s \
     --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" \
     >"$_snap/crust-gather-${CURRENT_TENANT_KC}.log" 2>&1 || _cg_rc=$?
   case "$_cg_rc" in

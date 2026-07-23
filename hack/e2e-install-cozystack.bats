@@ -220,6 +220,12 @@ EOF
 @test "Configure Tenant and wait for applications" {
   # Patch root tenant and wait for its releases
 
+  # cozystack-api can report its APIService Available while a freshly-rolled pod
+  # has not yet loaded the requestheader client-CA — it then drops the
+  # front-proxy identity and answers as system:anonymous (403). The Available
+  # wait in the previous test does not cover that. Prove an AUTHENTICATED
+  # request against the actual resource succeeds before the patch's own GET.
+  timeout 120 sh -ec 'until kubectl get tenants.apps.cozystack.io root -n tenant-root >/dev/null 2>&1; do sleep 2; done'
   kubectl patch tenants/root -n tenant-root --type merge -p '{"spec":{"host":"example.org","ingress":true,"monitoring":true,"etcd":true,"isolated":true, "seaweedfs": true}}'
 
   timeout 60 sh -ec 'until kubectl get hr -n tenant-root etcd ingress monitoring seaweedfs tenant-root >/dev/null 2>&1; do sleep 1; done'

@@ -145,7 +145,10 @@ _cozy_on_exit() {
       # "is this snapshot complete or truncated?" is answerable from the
       # uploaded artifact rather than guessed, matching the Chainsaw catch.
       _cg_rc=0
-      timeout -k 30 360 crust-gather collect --duration 180s \
+      # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+      # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+      # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+      timeout -k 30 360 crust-gather collect --disable-additional-logs --duration 180s \
         --exclude-kind Secret -f "$_snap/host" >"$_snap/crust-gather.log" 2>&1 || _cg_rc=$?
       case "$_cg_rc" in
         0) echo "» crust-gather host snapshot complete" ;;

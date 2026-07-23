@@ -167,7 +167,10 @@ spec:
           # Output goes to a log inside the snapshot instead of /dev/null so
           # "is this snapshot complete or truncated?" is answerable from the
           # uploaded artifact rather than a guess.
-          timeout -k 30 360 crust-gather collect --duration 180s \
+          # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+          # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+          # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+          timeout -k 30 360 crust-gather collect --disable-additional-logs --duration 180s \
             --exclude-kind Secret -f "${snap}/host" >"${snap}/crust-gather.log" 2>&1
           rc=$?
           case "${rc}" in
