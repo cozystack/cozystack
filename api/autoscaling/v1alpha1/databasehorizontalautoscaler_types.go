@@ -148,8 +148,11 @@ type Behavior struct {
 
 	// ConvergenceDeadlineSeconds bounds how long a patched scale may take to
 	// converge (availableReplicas == replicas) before the operator surfaces
-	// StuckScaling and rolls back to lastConvergedReplicas.
+	// StuckScaling and rolls back to lastConvergedReplicas. Capped at 24h so the
+	// exponential re-attempt backoff (up to 8x this value) cannot overflow a
+	// time.Duration.
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=86400
 	// +optional
 	ConvergenceDeadlineSeconds *int32 `json:"convergenceDeadlineSeconds,omitempty"`
 }

@@ -10,9 +10,11 @@ rules:
 - apiGroups: ["autoscaling.cozystack.io"]
   resources: ["databasehorizontalautoscalers/status"]
   verbs: ["get", "update", "patch"]
-# Applications (aggregated apps API): read and patch the replicas value.
+# Applications (aggregated apps API): read and patch the replicas value. Scoped
+# to the database kinds the autoscaler can target (the adapters registered in
+# AdapterFor), not "*", so it cannot touch other apps.cozystack.io resources.
 - apiGroups: ["apps.cozystack.io"]
-  resources: ["*"]
+  resources: ["postgreses", "mariadbs", "redises", "mongodbs"]
   verbs: ["get", "list", "watch", "patch"]
 # WorkloadMonitor: operational / convergence signal.
 - apiGroups: ["cozystack.io"]

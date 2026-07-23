@@ -81,3 +81,51 @@ tests:
       - equal:
           path: metadata.name
           value: databasehorizontalautoscalers.autoscaling.cozystack.io
+
+  - it: apps.cozystack.io access is least-privilege, not a wildcard
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      # The third rule targets the aggregated apps API; it must enumerate the
+      # database kinds, never "*", so the controller cannot patch unrelated
+      # apps.cozystack.io resources cluster-wide.
+      - equal:
+          path: rules[2].apiGroups[0]
+          value: apps.cozystack.io
+      - notContains:
+          path: rules[2].resources
+          content: "*"
+      - contains:
+          path: rules[2].resources
+          content: postgreses
+      - contains:
+          path: rules[2].resources
+          content: mariadbs
+      - contains:
+          path: rules[2].resources
+          content: redises
+      - contains:
+          path: rules[2].resources
+          content: mongodbs
+
+  - it: metrics scrape verifies TLS against the cert-manager CA, not insecureSkipVerify
+    templates:
+      - templates/metrics.yaml
+    asserts:
+      - equal:
+          path: spec.endpoints[0].tlsConfig.ca.secret.name
+          value: db-autoscaler-cert
+        documentSelector:
+          path: kind
+          value: VMServiceScrape
+      - equal:
+          path: spec.endpoints[0].tlsConfig.serverName
+          value: db-autoscaler.cozy-db-autoscaler.svc
+        documentSelector:
+          path: kind
+          value: VMServiceScrape
+      - notExists:
+          path: spec.endpoints[0].tlsConfig.insecureSkipVerify
+        documentSelector:
+          path: kind
+          value: VMServiceScrape

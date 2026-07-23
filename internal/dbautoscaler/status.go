@@ -17,6 +17,7 @@ limitations under the License.
 package dbautoscaler
 
 import (
+	"math"
 	"time"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -64,6 +65,12 @@ func resolveBehavior(dha *autoscalingv1alpha1.DatabaseHorizontalAutoscaler) (up,
 func backoffDuration(base time.Duration, count int) time.Duration {
 	if count < 1 {
 		count = 1
+	}
+	// The loop doubles up to three times (8x). Clamp the base so that ceiling
+	// cannot overflow time.Duration's int64, even if a caller passes a value
+	// beyond the API's ConvergenceDeadlineSeconds maximum.
+	if base > math.MaxInt64/8 {
+		base = math.MaxInt64 / 8
 	}
 	d := base
 	for i := 1; i < count && i < 4; i++ {

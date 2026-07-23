@@ -10,14 +10,14 @@ Horizontal autoscaling applies to primary-replica engines (read replicas are sca
 
 | Kind | Topology | Status |
 |---|---|---|
-| `Postgres` | CloudNativePG, 1 primary + standbys | **Enabled — full scale up/down validated on a live cluster.** Quorum floor = `quorum.maxSyncReplicas + 1`; PromQL joins CNPG metrics against `kube_pod_labels` on `label_cnpg_io_instance_role`. |
-| `Redis` | spotahome RedisFailover (Sentinel) | **Enabled — full scale up/down validated on a live cluster.** 1 master + read-serving slaves; PromQL selects slaves via `label_redisfailovers_role="slave"`; `redis_exporter` sidecar. No sync-replica quorum (floor = 1). |
+| `Postgres` | CloudNativePG, 1 primary + standbys | **Enabled — scale up/down validated on a live dev cluster.** Quorum floor = `quorum.maxSyncReplicas + 1`; PromQL joins CNPG metrics against `kube_pod_labels` on `label_cnpg_io_instance_role`. |
+| `Redis` | spotahome RedisFailover (Sentinel) | **Enabled — scale up/down validated on a live dev cluster.** 1 master + read-serving slaves; PromQL selects slaves via `label_redisfailovers_role="slave"`; `redis_exporter` sidecar. No sync-replica quorum (floor = 1). |
 | `MariaDB` | mariadb-operator async replication | **Not enabled yet** (`Scalable=false`). The adapter is implemented and its PromQL is calibrated, but the cozystack mariadb chart does not set `replication.replica.bootstrapFrom`, so the mariadb-operator rejects on-the-fly scale-out (`MariaDBScaleOutError`). Reported as not-scalable to avoid a patch→stuck→rollback loop; unblocked once the chart supports scale-out (follow-up in the mariadb package). |
 | `MongoDB` | Percona replica set (`rs0`) | **Not enabled yet** (`Scalable=false`). Sharded clusters are inherently non-scalable (data rebalancing); replica sets are topologically scalable but cozystack ships the Percona PMM/mongodb_exporter disabled, so there is no metric source and the queries are uncalibrated. Enabled once the exporter ships on and the PromQL is calibrated (follow-up). |
 
 Engines that require data rebalancing — `ClickHouse`, `Kafka`, and sharded `MongoDB` — are intentionally **not** scalable and report `ScalingActive=False` with a reason.
 
-All queries constrain to the tenant namespace — a tenant can never read another tenant's series. The enabled adapters (`postgres`, `redis`) are calibrated against real metrics on a live cluster.
+All queries constrain to the tenant namespace — a tenant can never read another tenant's series. The enabled adapters (`postgres`, `redis`) are calibrated against real metrics and functionally validated on a live dev cluster (decision path, ownership, and guardrails); they have not been load-tested at production scale.
 
 ## How it works
 

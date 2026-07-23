@@ -44,15 +44,26 @@ func (PostgresAdapter) ReleaseName(appName string) string { return "postgres-" +
 
 // QuorumFloor is maxSyncReplicas + 1: the chart documents maxSyncReplicas as
 // "must be less than total replicas", so dropping to/below it makes CNPG
-// cap/reject the change and can starve synchronous commits.
+// cap/reject the change and can starve synchronous commits. A negative value is
+// clamped to 0 (floor 1) defensively; Scalable rejects it outright before this
+// is reached, but the floor must never come out below 1.
 func (PostgresAdapter) QuorumFloor(appValues map[string]any) int32 {
 	maxSync := nestedInt(appValues, 0, "quorum", "maxSyncReplicas")
+	if maxSync < 0 {
+		maxSync = 0
+	}
 	return maxSync + 1
 }
 
 // Scalable: a cozystack postgres is always a single primary-replica CNPG cluster
-// (no sharded mode), so it is always horizontally scalable.
+// (no sharded mode). It is scalable unless the synchronous-replica configuration
+// is invalid: the postgres values schema does not lower-bound maxSyncReplicas, so
+// a negative value would yield a quorum floor below 1 and silently disable the
+// floor guard. Reject it as non-scalable rather than scaling on a bad floor.
 func (PostgresAdapter) Scalable(appValues map[string]any) (bool, string) {
+	if maxSync := nestedInt(appValues, 0, "quorum", "maxSyncReplicas"); maxSync < 0 {
+		return false, fmt.Sprintf("invalid quorum.maxSyncReplicas %d (must be >= 0)", maxSync)
+	}
 	return true, ""
 }
 

@@ -57,6 +57,21 @@ func TestPostgresQuorumFloor(t *testing.T) {
 	}
 }
 
+// TestPostgresInvalidMaxSyncReplicas guards against a negative maxSyncReplicas
+// (the postgres values schema does not lower-bound it): it must be reported as
+// non-scalable, and the quorum floor must never fall below 1.
+func TestPostgresInvalidMaxSyncReplicas(t *testing.T) {
+	a := PostgresAdapter{}
+	bad := map[string]any{"quorum": map[string]any{"maxSyncReplicas": float64(-3)}}
+	ok, reason := a.Scalable(bad)
+	if ok || reason == "" {
+		t.Fatalf("negative maxSyncReplicas must be non-scalable with a reason, got ok=%v reason=%q", ok, reason)
+	}
+	if got := a.QuorumFloor(bad); got != 1 {
+		t.Fatalf("QuorumFloor with negative maxSyncReplicas = %d, want clamped to 1", got)
+	}
+}
+
 func TestPostgresDriverQueryIsNamespaceScoped(t *testing.T) {
 	a := PostgresAdapter{}
 	app := types.NamespacedName{Namespace: "tenant-acme", Name: "db"}

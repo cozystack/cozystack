@@ -17,11 +17,31 @@ limitations under the License.
 package dbautoscaler
 
 import (
+	"math"
 	"testing"
 	"time"
 
 	autoscalingv1alpha1 "github.com/cozystack/cozystack/api/autoscaling/v1alpha1"
 )
+
+// TestBackoffDurationNoOverflow guards the 8x re-attempt backoff against
+// time.Duration (int64) overflow: even a base beyond the API's
+// ConvergenceDeadlineSeconds maximum must yield a positive, sanely-capped wait,
+// never a wrapped negative one.
+func TestBackoffDurationNoOverflow(t *testing.T) {
+	// A base near the int64 ceiling would overflow when doubled three times.
+	if got := backoffDuration(math.MaxInt64, 4); got <= 0 {
+		t.Fatalf("backoffDuration overflowed to non-positive: %d", int64(got))
+	}
+	// The cap is stable across further consecutive failures.
+	if got := backoffDuration(math.MaxInt64, 99); got <= 0 {
+		t.Fatalf("backoffDuration overflowed to non-positive: %d", int64(got))
+	}
+	// A normal base still doubles as before: 900s, 2 failures => 1800s.
+	if got := backoffDuration(900*time.Second, 2); got != 1800*time.Second {
+		t.Fatalf("backoffDuration(900s, 2) = %s, want 30m", got)
+	}
+}
 
 func ptr[T any](v T) *T { return &v }
 

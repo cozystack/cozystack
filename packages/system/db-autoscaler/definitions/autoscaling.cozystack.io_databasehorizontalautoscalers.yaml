@@ -68,8 +68,11 @@ spec:
                     description: |-
                       ConvergenceDeadlineSeconds bounds how long a patched scale may take to
                       converge (availableReplicas == replicas) before the operator surfaces
-                      StuckScaling and rolls back to lastConvergedReplicas.
+                      StuckScaling and rolls back to lastConvergedReplicas. Capped at 24h so the
+                      exponential re-attempt backoff (up to 8x this value) cannot overflow a
+                      time.Duration.
                     format: int32
+                    maximum: 86400
                     minimum: 1
                     type: integer
                   scaleDown:

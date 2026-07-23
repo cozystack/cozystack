@@ -27,7 +27,15 @@ spec:
   endpoints:
   - port: metrics
     scheme: https
+    # Verify the metrics server's cert-manager serving cert instead of skipping
+    # verification: the CA is read from the same secret the server presents, and
+    # serverName matches a SAN on that cert (the pod is reached by IP, but TLS
+    # verification uses serverName, so no metrics-service DNS name is needed).
     tlsConfig:
-      insecureSkipVerify: true
+      ca:
+        secret:
+          name: db-autoscaler-cert
+          key: ca.crt
+      serverName: db-autoscaler.{{ .Release.Namespace }}.svc
     bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
 {{- end }}

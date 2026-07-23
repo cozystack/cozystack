@@ -112,6 +112,13 @@ func main() {
 	}
 	if secureMetrics {
 		metricsServerOptions.FilterProvider = filters.WithAuthenticationAndAuthorization
+		// Serve metrics with the cert-manager serving cert (the same one mounted
+		// for the webhook) so scrapers can verify the endpoint against its CA,
+		// instead of controller-runtime's in-memory self-signed cert that forces
+		// insecureSkipVerify on the VMServiceScrape.
+		metricsServerOptions.CertDir = "/tmp/k8s-webhook-server/serving-certs"
+		metricsServerOptions.CertName = "tls.crt"
+		metricsServerOptions.KeyName = "tls.key"
 	}
 
 	config := ctrl.GetConfigOrDie()
