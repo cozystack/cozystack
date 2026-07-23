@@ -34,6 +34,21 @@ spec:
   upgrade:
     remediation:
       retries: -1
+  # helm-controller v1.5.0 kstatus: gate Ready on the EtcdCluster actually
+  # having all members ready (#2642). The operator's cluster-level conditions
+  # carry no stable Ready type, so key on readyMembers vs spec.replicas;
+  # brokenMembers signals failure. A freshly-applied cluster has no
+  # readyMembers yet, so the poller holds the release not-ready until the
+  # members come up or the HR timeout fires. poller is required for
+  # healthCheckExprs to be evaluated.
+  waitStrategy:
+    name: poller
+  healthCheckExprs:
+    - apiVersion: etcd-operator.cozystack.io/v1alpha2
+      kind: EtcdCluster
+      inProgress: has(status.readyMembers) && status.readyMembers < spec.replicas
+      failed:     has(status.brokenMembers) && status.brokenMembers > 0
+      current:    has(status.readyMembers) && status.readyMembers == spec.replicas
   valuesFrom:
   - kind: Secret
     name: cozystack-values
