@@ -63,8 +63,11 @@ spec:
   webUrl: "https://linstor-gui.{{ $host }}"
   defaultClientScopes:
     - groups
-  optionalClientScopes:
-    - offline_access
+  # offline_access is intentionally not offered: an offline refresh token
+  # survives logout (see the proxy Deployment's --scope). NB the
+  # keycloak-operator only adds client scopes, so dropping this does not strip
+  # the realm-default offline_access from an already-created client; the proxy
+  # --scope change is what prevents issuance.
   attributes:
     post.logout.redirect.uris: "+"
   redirectUris:
