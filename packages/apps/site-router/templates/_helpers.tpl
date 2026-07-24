@@ -123,14 +123,66 @@ present-but-malformed value.
 {{- end -}}
 
 {{/*
-First-boot cloud-init userdata (VyOS `vyos_config_commands`). Ported from
-the upstream VyOS-router reference implementation's buildCloudInitUserData:
-hostname, HTTPS API key, listen-address, and the fail-closed management
-firewall — plus the T08 guest security guards (Boundary-A management-API drop
-for IPsec-decrypted traffic, forward-chain default-deny), seeded so the router
-is fail-closed from first boot until the controller re-stamps the full set.
-Takes a dict {ctx, token} so the token
-is resolved once by the caller and shared with the api-key Secret.
+First-boot cloud-init userdata for the VyOS gateway. Ported from the upstream
+VyOS-router reference implementation's buildCloudInitUserData: hostname, HTTPS
+API key, listen-address, and the fail-closed management firewall — plus the T08
+guest security guards (Boundary-A management-API drop for IPsec-decrypted
+traffic, forward-chain default-deny), seeded so the router is fail-closed from
+first boot until the controller re-stamps the full set. Takes a dict {ctx,
+token} so the token is resolved once by the caller and shared with the api-key
+Secret.
+
+DELIVERY MECHANISM — READ BEFORE CHANGING (why we write_files a whole config.boot):
+We deliver the seed by cloud-init `write_files`, dropping a COMPLETE, VyOS-
+serialized config.boot at /opt/vyatta/etc/config/config.boot, because on the
+pinned VyOS 1.5-rolling image the cloud-init module set is stripped and neither
+obvious alternative runs:
+  - `vyos_config_commands:` (the `cc_vyos_userdata` module) IS enabled, but it
+    serializes single-value leaf nodes into config.boot as the invalid
+    `node { value }` instead of the valid inline `node "value"`, so boot-time
+    activation rejects the whole file (pinned empirically on image
+    sha256:a3bfc9fe…, iteration 2).
+  - `runcmd:` / `bootcmd:` are NOT enabled — `cloud_final_modules` is empty on
+    this image, so `scripts-user` never runs (iteration 3).
+`write_files` is the one config-capable module actually enabled (cloud_config
+stage: vyos_ifupdown, vyos, write_files, vyos_userdata, vyos_install), and it
+runs BEFORE the `vyos-router` activation, so the file we drop is what gets
+activated (validated hands-off, iteration 4: config activates clean, eth0 DHCPs,
+the HTTPS API answers on :443 with the seeded key; the write_files host-name
+wins over the baked default's "vyos", proving ours is what activates).
+
+The config.boot base (see `site-router.configBoot`) was captured verbatim from
+VyOS's own `save` — the flavor's config.boot.default plus the 23 management
+set-commands, committed and saved — so its serialization is correct by
+construction. Templating only substitutes host-name, the api-key and
+managementCIDR; do NOT hand-edit the tree into `node { value }` form, and do NOT
+switch back to `vyos_config_commands:` / `runcmd:` unless you have re-verified
+the module set + serializer on the then-pinned image.
+
+IMAGE COUPLING: the trailing `// vyos-config-version:` / `// Release version:`
+footer is tied to the exact image build — VyOS runs a config migration (which
+can reformat or reject this file) if it does not match. It MUST advance in
+lockstep with the pinned image. This is the strongest form of the
+"image and cloud-init advance atomically" invariant (docs/image-lifecycle.md):
+the whole config.boot, not just a seed, now lives beside the image. When the
+image bumps, re-capture config.boot from the new image's `save`.
+
+WHY cloud-init at all (and not controller-only over the API): the controller's
+channel is the HTTPS REST API, which can only answer once the gateway already
+has an IP, the API running, AND this per-instance api-key installed — it cannot
+bootstrap itself (chicken-and-egg). cloud-init NoCloud user-data (delivered as
+a per-instance Secret) is the idiomatic KubeVirt channel for that day-0
+bootstrap. The only cloud-init-free alternative is qemu-guest-agent guest-exec,
+which reopens a remote-exec surface on a deliberately-locked-down appliance (no
+SSH, login locked) and needs guest-exec RBAC + the KubeVirt feature gate + a
+security review — a deliberate Phase-1 non-goal.
+
+CONFIG-SAFETY: the templated values land inside VyOS `"…"` quotes, so a value
+with an embedded quote/newline could break the config.boot. assertSafeVyOSInputs
+(called in configBoot) constrains managementCIDR to a strict IPv4 CIDR and
+peer.address to [A-Za-z0-9.:-]; the token is randAlphaNum (alphanumeric) and the
+host-name is the DNS-label Release.Name — none can carry a quote or newline.
+Keep that guard in front of any new interpolated value.
 
 listen-address is 0.0.0.0 because the pod IP is unknown at render time; the
 management firewall (only managementCIDR reaches tcp 443 — the HTTPS API;
@@ -142,36 +194,163 @@ allowOpenManagement=true) no firewall is stamped.
 {{- define "site-router.cloudInitUserData" -}}
 {{- $ctx := .ctx -}}
 {{- $token := .token -}}
-{{- include "site-router.assertSafeVyOSInputs" $ctx -}}
-{{- $lines := list "#cloud-config" "vyos_config_commands:" -}}
-{{- $lines = append $lines (printf "  - set system host-name '%s'" $ctx.Release.Name) -}}
-{{/* R2: bring eth0 up over DHCP and start the HTTPS API /configure REST endpoints. Without an eth0 address the guest has no IP/routes and is unreachable, and `service https api keys` alone does NOT start the REST endpoints — `service https api rest` is required for the controller's /configure + /retrieve calls to answer. Both are validated as required on a cloud-init-capable VyOS image. NOTE: on the currently-referenced image cloud-init IGNORES vyos_config_commands, so these (and the whole seed) are inert there — the conformant-image swap is the T14 image follow-up — but they are mandatory for any image that honours the seed. Kept in lockstep with the base config above. */}}
-{{- $lines = append $lines "  - set interfaces ethernet eth0 address dhcp" -}}
-{{- $lines = append $lines (printf "  - set service https api keys id site-router-controller key '%s'" $token) -}}
-{{- $lines = append $lines "  - set service https api rest" -}}
-{{- $lines = append $lines "  - set service https listen-address 0.0.0.0" -}}
-{{- if $ctx.Values.managementCIDR -}}
-{{/* VyOS 1.5-rolling nftables firewall (validated live against the 2026.05.13-0044-rolling image): the management ACL lives under 'firewall ipv4 input filter', firewall 'state' is a multi-value leaf ('state established' / 'state related', not the old 'state established enable'), and a rule that sets a destination port must also set a protocol. Kept in lockstep with internal/vyos/render. */}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 5 action accept" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 5 state established" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 5 state related" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 action accept" -}}
-{{- $lines = append $lines (printf "  - set firewall ipv4 input filter rule 10 source address '%s'" $ctx.Values.managementCIDR) -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 protocol tcp" -}}
-{{/* HTTPS API (443) only — SSH (22) is not opened (no SSH service on the image, baked login locked); it stays behind the default-action drop. */}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 10 destination port '443'" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter default-action drop" -}}
-{{/* T08 guest security guards, seeded fail-closed from first boot BEFORE the controller can reach the router (it re-stamps the full set on its first reconcile). Grouped inside the managementCIDR block so the open-management escape hatch stays "no firewall at all". Boundary A: drop the management ports for IPsec-decrypted traffic — a packet decrypted by VyOS and addressed to the guest's own API does not cross the pod veth where Cilium enforces. §3: forward-chain default-deny (routed mode advertises specific remotes, never a default route out the tunnel). VyOS 1.5: the inbound ipsec matchers are 'match-ipsec-in'/'match-none-in' (bare 'match-ipsec'/'match-none' are ambiguous prefixes) and the drop rule needs an explicit protocol alongside its port; validated live and kept in lockstep with internal/vyos/render. */}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 ipsec match-ipsec-in" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 protocol tcp" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 destination port '22,443'" -}}
-{{- $lines = append $lines "  - set firewall ipv4 input filter rule 1 action drop" -}}
-{{- $lines = append $lines "  - set firewall ipv4 forward filter default-action drop" -}}
-{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 5 action accept" -}}
-{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 5 state established" -}}
-{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 5 state related" -}}
-{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 10 ipsec match-none-in" -}}
-{{- $lines = append $lines "  - set firewall ipv4 forward filter rule 10 action accept" -}}
+{{- $cfg := include "site-router.configBoot" (dict "ctx" $ctx "token" $token) | trim -}}
+#cloud-config
+write_files:
+  - path: /opt/vyatta/etc/config/config.boot
+    owner: root:vyattacfg
+    permissions: '0660'
+    content: |
+{{ $cfg | indent 6 }}
 {{- end -}}
-{{- join "\n" $lines -}}
+
+{{/*
+The complete VyOS config.boot dropped by cloud-init write_files (see the
+DELIVERY MECHANISM note above). Captured verbatim from VyOS `save` on the pinned
+image (flavor config.boot.default + the 23 management set-commands), so the
+curly-brace serialization is correct by construction — only host-name, the
+api-key and managementCIDR are substituted. The firewall block is emitted only
+when managementCIDR is set (open-management stays "no firewall at all"). Every
+baked default here is load-bearing and must be preserved: the locked `vyos`
+login (`encrypted-password "*"`) with no `service ssh`, the ttyS0 console, and
+the version footer (see IMAGE COUPLING). Keep the firewall rules in lockstep
+with internal/vyos/render and the assertions in tests/secret_cloudinit_test.yaml.
+*/}}
+{{- define "site-router.configBoot" -}}
+{{- $ctx := .ctx -}}
+{{- $token := .token -}}
+{{- include "site-router.assertSafeVyOSInputs" $ctx -}}
+{{- if $ctx.Values.managementCIDR }}
+firewall {
+    ipv4 {
+        forward {
+            filter {
+                default-action "drop"
+                rule 5 {
+                    action "accept"
+                    state "established"
+                    state "related"
+                }
+                rule 10 {
+                    action "accept"
+                    ipsec {
+                        match-none-in
+                    }
+                }
+            }
+        }
+        input {
+            filter {
+                default-action "drop"
+                rule 1 {
+                    action "drop"
+                    destination {
+                        port "22,443"
+                    }
+                    ipsec {
+                        match-ipsec-in
+                    }
+                    protocol "tcp"
+                }
+                rule 5 {
+                    action "accept"
+                    state "established"
+                    state "related"
+                }
+                rule 10 {
+                    action "accept"
+                    destination {
+                        port "443"
+                    }
+                    protocol "tcp"
+                    source {
+                        address "{{ $ctx.Values.managementCIDR }}"
+                    }
+                }
+            }
+        }
+    }
+}
+{{- end }}
+interfaces {
+    ethernet eth0 {
+        address "dhcp"
+        description "site-router uplink (pod network); managed by cloud-init and the site-router controller"
+    }
+    loopback lo {
+    }
+}
+service {
+    https {
+        api {
+            keys {
+                id site-router-controller {
+                    key "{{ $token }}"
+                }
+            }
+            rest {
+            }
+        }
+        listen-address "0.0.0.0"
+    }
+    ntp {
+        allow-client {
+            address "127.0.0.0/8"
+            address "169.254.0.0/16"
+            address "10.0.0.0/8"
+            address "172.16.0.0/12"
+            address "192.168.0.0/16"
+            address "::1/128"
+            address "fe80::/10"
+            address "fc00::/7"
+        }
+        server time1.vyos.net {
+        }
+        server time2.vyos.net {
+        }
+        server time3.vyos.net {
+        }
+    }
+}
+system {
+    config-management {
+        commit-revisions "100"
+    }
+    console {
+        device ttyS0 {
+            speed "115200"
+        }
+    }
+    host-name "{{ $ctx.Release.Name }}"
+    login {
+        operator-group default {
+            command-policy {
+                allow "*"
+            }
+        }
+        user vyos {
+            authentication {
+                encrypted-password "*"
+            }
+        }
+    }
+    option {
+        reboot-on-upgrade-failure "5"
+    }
+    syslog {
+        local {
+            facility all {
+                level "info"
+            }
+            facility local7 {
+                level "debug"
+            }
+        }
+    }
+}
+
+
+// Warning: Do not remove the following line.
+// vyos-config-version: "bgp@8:broadcast-relay@1:cluster@2:config-management@1:conntrack@6:conntrack-sync@2:container@3:dhcp-relay@2:dhcp-server@11:dhcpv6-server@6:dns-dynamic@4:dns-forwarding@4:firewall@20:flow-accounting@3:https@7:ids@2:interfaces@34:ipoe-server@4:ipsec@14:isis@3:l2tp@9:lldp@3:mdns@1:monitoring@2:nat@8:nat66@3:nhrp@1:ntp@3:openconnect@3:openvpn@5:ospf@2:pim@1:pki@1:policy@9:pppoe-server@12:pptp@5:qos@3:quagga@12:reverse-proxy@3:rip@1:rpki@2:snmp@3:ssh@3:sstp@6:system@33:vpp@6:vrf@4:vrrp@4:vyos-accel-ppp@2:wanloadbalance@4:webproxy@2"
+// Release version: 1.5-rolling-20260720
 {{- end -}}
