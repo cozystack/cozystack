@@ -2,7 +2,7 @@
 
 **Status:** Living document — updated quarterly by the maintainers.
 **Horizon:** May 2026 – May 2028 (two-year forward window).
-**Last updated:** 2026-07-16.
+**Last updated:** 2026-07-24.
 
 This document describes where Cozystack is heading. It is the authoritative
 public roadmap. The granular issue-level view lives in
@@ -132,8 +132,8 @@ Cozystack is shaped as a layered offering:
   restore.
 - `v1.4` — backup strategies, Flux 2.8, new `cozystack-ui`, cozy-tls,
   Redis TLS, app scheduling, CI/e2e hardening.
-- `v1.5` — shipped (latest stable line).
-- `v1.6` — in release-candidate.
+- `v1.5` — shipped (maintained line).
+- `v1.6` — shipped 2026-07-22 (latest stable line).
 
 ### 3.2 Roadmap items already completed
 
@@ -209,7 +209,7 @@ contract.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | Close in-flight items #1246 #1247 #1262. Cut `v1.5.0`. Publish `API Stability Policy` (alpha/beta/stable lanes, deprecation window). Scope the **GitOps Engine Abstraction** CzEP — decouple package delivery from the underlying engine so Flux remains the default while a second engine becomes feasible. |
+| 2026 Q3 | Close in-flight items #1246 #1247 #1262. Cut `v1.6.0`. Publish `API Stability Policy` (alpha/beta/stable lanes, deprecation window). Scope the **GitOps Engine Abstraction** CzEP — decouple package delivery from the underlying engine so Flux remains the default while a second engine becomes feasible. |
 | 2026 Q4 | Distroless images (#1261). Automated platform updates (#1266). Public **Release Trains** policy: `stable`, `fast`, `LTS`. Public support matrix for Kubernetes / host OS / Cilium / KubeVirt / storage backends / **GitOps engines**. **Argo CD experimental support** as an alternative GitOps engine — package model adapts `Package` / `PackageSource` to `Application` / `ApplicationSet` semantics; documented as `experimental` and opt-in at install time. |
 | 2027 Q1 | **Cozystack 2.0** — backwards-compatibility contract published; major API revision based on production feedback; HA control-plane improvements (stretched control plane, multi-AZ, etcd backup automation). **Argo CD support reaches alpha** — supported install path for greenfield clusters; not yet a migration target for existing Flux-based deployments. |
 | 2027 Q2 | `Platform Health API` covering operator, packages, GitOps engine (Flux or Argo CD), storage, networking, backups, ingress, auth. Explicit lifecycle states for apps, backups, restores, VMs, tenant clusters. **Argo CD support reaches beta** — feature parity with Flux for tenant app delivery, including `ApplicationSet` patterns for multi-tenant fan-out. |
@@ -597,7 +597,7 @@ documents, marketing assets, training content, and event materials.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (current: v1.4, v1.5, v1.6-rc; future: stable / LTS / fast). |
+| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (current: v1.4, v1.5, v1.6; future: stable / LTS / fast). |
 | 2026 Q3 | **Install & upgrade docs** brought to production quality for every supported host OS profile (Talos Tier-1; Ubuntu / Debian / Flatcar Tier-2). |
 | 2026 Q4 | **Auto-generated API reference** from CRDs and `cozystack-api` OpenAPI spec, published per release. Tested code samples — every code block in docs runs in CI against a live cluster, broken samples block release. |
 | 2026 Q4 | **Operator's Handbook** — production-grade runbook collection for common operations: cluster upgrades, tenant onboarding, backup restore, DR exercises, storage migration, network troubleshooting. |
