@@ -53,21 +53,50 @@ func Resource(resource string) schema.GroupResource {
 // Public helpers consumed by the apiserver wiring
 // -----------------------------------------------------------------------------
 
+// GroupOrDefault resolves the API group an application resource is served
+// in: an explicit group from ApplicationDefinition spec.application.group
+// wins, empty falls back to the built-in apps.cozystack.io group. All
+// consumers of config.ApplicationConfig.Group must resolve through this
+// helper so the back-compat default lives in one place.
+func GroupOrDefault(group string) string {
+	if group == "" {
+		return GroupName
+	}
+	return group
+}
+
 // RegisterDynamicTypes adds per-tenant “Application” kinds that are only known
-// at runtime from a config file.
+// at runtime from ApplicationDefinitions. Kinds land in the group their
+// ApplicationDefinition selected (default apps.cozystack.io); for every
+// non-default group encountered the group-version itself is registered too
+// (meta types and version priority), mirroring what install.Install does for
+// the default group at init time.
 func RegisterDynamicTypes(scheme *runtime.Scheme, cfg *config.ResourceConfig) error {
+	registeredGVs := map[schema.GroupVersion]bool{SchemeGroupVersion: true}
 	for _, res := range cfg.Resources {
 		kind := res.Application.Kind
+		gv := schema.GroupVersion{
+			Group:   GroupOrDefault(res.Application.Group),
+			Version: SchemeGroupVersion.Version,
+		}
 
-		gvk := SchemeGroupVersion.WithKind(kind)
+		if !registeredGVs[gv] {
+			metav1.AddToGroupVersion(scheme, gv)
+			if err := scheme.SetVersionPriority(gv); err != nil {
+				return err
+			}
+			registeredGVs[gv] = true
+		}
+
+		gvk := gv.WithKind(kind)
 		scheme.AddKnownTypeWithName(gvk, &Application{})
 		scheme.AddKnownTypeWithName(gvk.GroupVersion().WithKind(kind+"List"), &ApplicationList{})
 
-		gvkInternal := schema.GroupVersion{Group: GroupName, Version: runtime.APIVersionInternal}.WithKind(kind)
+		gvkInternal := schema.GroupVersion{Group: gv.Group, Version: runtime.APIVersionInternal}.WithKind(kind)
 		scheme.AddKnownTypeWithName(gvkInternal, &Application{})
 		scheme.AddKnownTypeWithName(gvkInternal.GroupVersion().WithKind(kind+"List"), &ApplicationList{})
 
-		klog.V(1).Infof("Registered dynamic kind: %s", kind)
+		klog.V(1).Infof("Registered dynamic kind: %s in group %s", kind, gv.Group)
 	}
 	return nil
 }

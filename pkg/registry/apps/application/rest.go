@@ -133,16 +133,22 @@ func NewREST(c client.Client, w client.WithWatch, config *config.Resource) *REST
 		klog.Errorf("Failed to build spec schema: %v", err)
 	}
 
+	// The group is per-ApplicationDefinition since ApplicationGroupDefinitions
+	// exist; it flows into the HelmRelease application.group label and every
+	// label-selector check below, so a kind served in a custom group only ever
+	// sees HelmReleases stamped with that group.
+	group := appsv1alpha1.GroupOrDefault(config.Application.Group)
+
 	return &REST{
 		c: c,
 		w: w,
 		gvr: schema.GroupVersionResource{
-			Group:    appsv1alpha1.GroupName,
+			Group:    group,
 			Version:  "v1alpha1",
 			Resource: config.Application.Plural,
 		},
 		gvk: schema.GroupVersion{
-			Group:   appsv1alpha1.GroupName,
+			Group:   group,
 			Version: "v1alpha1",
 		}.WithKind(config.Application.Kind),
 		kindName:      config.Application.Kind,
@@ -337,7 +343,7 @@ func (r *REST) List(ctx context.Context, options *metainternalversion.ListOption
 		klog.V(6).Infof("Field selector namespace %s doesn't match context namespace %s, returning empty list", fieldFilter.Namespace, namespace)
 		return &appsv1alpha1.ApplicationList{
 			TypeMeta: metav1.TypeMeta{
-				APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+				APIVersion: r.gvk.GroupVersion().String(),
 				Kind:       r.kindName + "List",
 			},
 		}, nil
@@ -776,7 +782,7 @@ func (r *REST) Watch(ctx context.Context, options *metainternalversion.ListOptio
 	bookmarker := registry.NewInitialEventsBookmarker(sendInitialEvents, options.ResourceVersion, func() runtime.Object {
 		app := &appsv1alpha1.Application{}
 		app.TypeMeta = metav1.TypeMeta{
-			APIVersion: appsv1alpha1.SchemeGroupVersion.String(),
+			APIVersion: r.gvk.GroupVersion().String(),
 			Kind:       r.kindName,
 		}
 		return app
@@ -1343,7 +1349,7 @@ func (r *REST) convertHelmReleaseToApplication(ctx context.Context, hr *helmv2.H
 
 	app := appsv1alpha1.Application{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: "apps.cozystack.io/v1alpha1",
+			APIVersion: r.gvk.GroupVersion().String(),
 			Kind:       r.kindName,
 		},
 		ObjectMeta: metav1.ObjectMeta{

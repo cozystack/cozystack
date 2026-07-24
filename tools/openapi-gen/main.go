@@ -144,7 +144,7 @@ func run() error {
 			singularName: res.Application.Singular,
 		}
 	}
-	if err := apiserver.InstallAppsAPIGroup(server, appsStorage); err != nil {
+	if err := apiserver.InstallAppsAPIGroup(server, appsv1alpha1.GroupName, appsStorage); err != nil {
 		return fmt.Errorf("install apps API group: %w", err)
 	}
 

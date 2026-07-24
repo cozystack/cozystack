@@ -19,6 +19,8 @@ package apiserver
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
@@ -40,6 +42,7 @@ import (
 
 	"github.com/cozystack/cozystack/pkg/apis/apps"
 	appsinstall "github.com/cozystack/cozystack/pkg/apis/apps/install"
+	appsv1alpha1 "github.com/cozystack/cozystack/pkg/apis/apps/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/apis/core"
 	coreinstall "github.com/cozystack/cozystack/pkg/apis/core/install"
 	"github.com/cozystack/cozystack/pkg/apis/sdn"
@@ -246,22 +249,36 @@ func (c completedConfig) New() (*CozyServer, error) {
 	}
 
 	// --- dynamically-configured, per-tenant resources ---
-	appsV1alpha1Storage := map[string]rest.Storage{}
-	for _, resConfig := range c.ResourceConfig.Resources {
-		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
-		appsV1alpha1Storage[resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
+	// Group the served resources by their API group: the default
+	// apps.cozystack.io plus any groups registered through
+	// ApplicationGroupDefinitions. The default group is always installed,
+	// even when it currently holds no resources, so aggregation discovery
+	// for the statically-registered APIService stays healthy.
+	storageByGroup := map[string]map[string]rest.Storage{
+		apps.GroupName: {},
 	}
-	if err := InstallAppsAPIGroup(s.GenericAPIServer, appsV1alpha1Storage); err != nil {
-		return nil, err
+	for _, resConfig := range c.ResourceConfig.Resources {
+		group := appsv1alpha1.GroupOrDefault(resConfig.Application.Group)
+		if storageByGroup[group] == nil {
+			storageByGroup[group] = map[string]rest.Storage{}
+		}
+		storage := applicationstorage.NewREST(cli, watchCli, &resConfig)
+		storageByGroup[group][resConfig.Application.Plural] = cozyregistry.RESTInPeace(storage)
+	}
+	for _, group := range slices.Sorted(maps.Keys(storageByGroup)) {
+		if err := InstallAppsAPIGroup(s.GenericAPIServer, group, storageByGroup[group]); err != nil {
+			return nil, err
+		}
 	}
 
 	return s, nil
 }
 
-// InstallAppsAPIGroup registers the apps.cozystack.io API group on the given
-// server using the provided storage map (plural name → rest.Storage).
-func InstallAppsAPIGroup(server *genericapiserver.GenericAPIServer, storage map[string]rest.Storage) error {
-	info := genericapiserver.NewDefaultAPIGroupInfo(apps.GroupName, Scheme, metav1.ParameterCodec, Codecs)
+// InstallAppsAPIGroup registers an application API group (the default
+// apps.cozystack.io or one registered via ApplicationGroupDefinition) on the
+// given server using the provided storage map (plural name → rest.Storage).
+func InstallAppsAPIGroup(server *genericapiserver.GenericAPIServer, group string, storage map[string]rest.Storage) error {
+	info := genericapiserver.NewDefaultAPIGroupInfo(group, Scheme, metav1.ParameterCodec, Codecs)
 	info.VersionedResourcesStorageMap["v1alpha1"] = storage
 	return server.InstallAPIGroup(&info)
 }
