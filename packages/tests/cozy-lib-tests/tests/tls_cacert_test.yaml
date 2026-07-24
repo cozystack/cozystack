@@ -28,13 +28,19 @@ tests:
           value: v1
       - equal:
           path: metadata.name
-          value: myrelease-ca-cert
+          value: myrelease.tenant-ca
       - equal:
           path: metadata.namespace
           value: tenant-acme
       - equal:
           path: type
           value: Opaque
+      # tenant-ca is the selector an ApplicationDefinition matches and the
+      # CA-extraction controller stamps; a helper anchor must carry it to converge
+      # with a projected one on both name and label.
+      - equal:
+          path: metadata.labels["internal.cozystack.io/tenant-ca"]
+          value: "true"
       - isNotNullOrEmpty:
           path: stringData["ca.crt"]
       # The trust anchor must never carry private key material. The helper
@@ -131,7 +137,15 @@ tests:
       # slip through to a tenant-readable trust anchor.
       caCert: |
         -----BEGIN CERTIFICATE-----
-        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
         -----END CERTIFICATE-----
         -----BEGIN PRIVATE KEY-----
         MIIExamplePrivateKeyThatMustNeverReachTenantsViaCABundle00000000
@@ -148,27 +162,212 @@ tests:
         this is not a certificate at all
     asserts:
       - failedTemplate:
-          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a PEM certificate (BEGIN CERTIFICATE)"
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
-  - it: accepts a certificate even when the literal text PRIVATE KEY appears outside a PEM header
+  # The three cases below carry a BEGIN CERTIFICATE line and no key header, so a
+  # header-only guard admitted them and rendered an anchor with nothing usable.
+  # The whole-value guard requires a COMPLETE, base64-bodied block instead.
+  - it: rejects certificate armour with no closing line
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBExampleCertificateBodyWithNoClosingLine0000000000000000000000
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  - it: rejects empty certificate armour
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # The guard rejects a body only for characters outside the base64 alphabet — it
+  # cannot check base64 validity itself. The trailing "!" is what makes this body
+  # illegal; drop it and the body is all-base64 and would be accepted.
+  - it: rejects certificate armour whose body carries characters base64 never uses
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        this is not base64 and never could be!
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # Documented gap: a body spelled in base64 characters passes this guard however
+  # meaningless. Only the Go controller's x509.ParseCertificate can refuse it.
+  - it: accepts armour around a base64-alphabet body it cannot decode (documented limit)
     templates:
       - templates/tests/tls-cacert-params.yaml
     set:
       useParams: true
-      name: my-ca-cert
-      namespace: tenant-acme
-      # "PRIVATE KEY" here is in a friendlyName line, not a PEM header — a free
-      # substring guard would wrongly reject this valid, key-free certificate.
+      name: my.tenant-ca
       caCert: |
-        Bag Attributes: friendlyName=acme PRIVATE KEY authority
         -----BEGIN CERTIFICATE-----
-        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        this is not base64 and never could be
+        -----END CERTIFICATE-----
+    asserts:
+      - isKind:
+          of: Secret
+
+  # PGP's header puts BLOCK after "PRIVATE KEY", so a guard anchored on the closing
+  # dashes would miss it; the guard stops at "PRIVATE KEY" precisely to catch this.
+  - it: refuses a PGP private key block next to a valid certificate
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        -----END CERTIFICATE-----
+        -----BEGIN PGP PRIVATE KEY BLOCK-----
+        lQOYBGaaaaaaExamplePgpPrivateKeyMustNeverReachTenants0000000000
+        -----END PGP PRIVATE KEY BLOCK-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must not contain private key material"
+
+  # An unquoted numeric scalar in values.yaml parses to a float64, and any string
+  # operation on it dies with a raw Go template error. The guard must fail closed
+  # AND say which field the author got wrong.
+  - it: fails closed with its own message on a numeric caCert
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: 12345
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # Coercion wart, pinned: `default ""` treats 0 as empty before printf runs, so a
+  # supplied zero reports "required". Fails closed either way — 0 is no certificate.
+  - it: reports a zero caCert as required, not as a bad certificate
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: 0
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert is required and must be a non-empty PEM"
+
+  - it: accepts a certificate chain of more than one block
+    templates:
+      - templates/tests/tls-cacert-params.yaml
+    set:
+      useParams: true
+      name: my.tenant-ca
+      # An intermediate chain is an ordinary trust anchor and must keep
+      # rendering: the tightened guard bounds the block SHAPE, not the count.
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBojCCAUegAwIBAgIUMUqqtF2pMghhaI9FEJwiX0S46MswCgYIKoZIzj0EAwIw
+        JTEjMCEGA1UEAwwaY296eS1saWItdGVzdC1pbnRlcm1lZGlhdGUwIBcNMjYwNzE2
+        MTYzNDQ2WhgPMjEyNjA2MjIxNjM0NDZaMCUxIzAhBgNVBAMMGmNvenktbGliLXRl
+        c3QtaW50ZXJtZWRpYXRlMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEePlhpS2d
+        Vaj6KcyvQfs96sNWDF+gGJDsNRXAEjPUUkBVZBdkQWVrch4f6ti7yxwrY8a9ZqJP
+        KIOB7HdvTJReeqNTMFEwHQYDVR0OBBYEFHbXOUxHp7KY7yfSQlLON+LKu68wMB8G
+        A1UdIwQYMBaAFHbXOUxHp7KY7yfSQlLON+LKu68wMA8GA1UdEwEB/wQFMAMBAf8w
+        CgYIKoZIzj0EAwIDSQAwRgIhAMgKiremKARWnyMIR4U8TXCs8nsJuYB1DjQcYYvP
+        KgyxAiEArfXXEHDpM1vBD4Nf58F98I+6RhN5yQHn7uokVrm88Cc=
+        -----END CERTIFICATE-----
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
         -----END CERTIFICATE-----
     asserts:
       - isKind:
           of: Secret
       - isNotNullOrEmpty:
           path: stringData["ca.crt"]
+
+  - it: rejects a certificate wrapped in a friendlyName preamble as a structural failure
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      # "PRIVATE KEY" sits in a friendlyName preamble line, not a PEM header, so
+      # the failure is the STRUCTURAL block error — proof the key guard, anchored
+      # to the header, does not false-positive on substring text.
+      caCert: |
+        Bag Attributes: friendlyName=acme PRIVATE KEY authority
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  # The whole-value anchor rejects a valid block carrying bytes before or after it,
+  # since the value is emitted verbatim. The controller strips such bytes by
+  # re-encoding; a Helm template can only refuse them.
+  - it: rejects a certificate preceded by a human-readable preamble
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      # What `openssl x509 -text` prints ahead of the PEM block.
+      caCert: |
+        Certificate:
+            Data:
+                Version: 3 (0x2)
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
+
+  - it: rejects a certificate trailed by arbitrary bytes
+    templates:
+      - templates/tests/tls-cacert.yaml
+    set:
+      caCert: |
+        -----BEGIN CERTIFICATE-----
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
+        -----END CERTIFICATE-----
+        and then some trailing bytes
+    asserts:
+      - failedTemplate:
+          errorMessage: "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)"
 
   - it: fails closed when name is empty
     templates:
@@ -179,7 +378,15 @@ tests:
       namespace: tenant-acme
       caCert: |
         -----BEGIN CERTIFICATE-----
-        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
         -----END CERTIFICATE-----
     asserts:
       - failedTemplate:
@@ -190,15 +397,23 @@ tests:
       - templates/tests/tls-cacert-params.yaml
     set:
       useParams: true
-      name: my-ca-cert
+      name: my.tenant-ca
       caCert: |
         -----BEGIN CERTIFICATE-----
-        MIIBExampleCertificateBodyOnlyNoPrivateKeyHeaderPresent0000000000
+        MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+        GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+        MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+        ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+        4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+        DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+        rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+        P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+        L/I7Ek4FlYbzy9kZu/MXqlE=
         -----END CERTIFICATE-----
     asserts:
       - equal:
           path: metadata.name
-          value: my-ca-cert
+          value: my.tenant-ca
       - notExists:
           path: metadata.namespace
 

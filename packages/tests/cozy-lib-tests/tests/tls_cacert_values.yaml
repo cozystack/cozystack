@@ -1,4 +1,16 @@
+# A REAL, self-signed CA certificate (EC P-256, long-dated), not a
+# certificate-shaped string. The regex guard cannot parse x509, so a fake body
+# would pass identically — keeping this real is what makes the suite assert
+# against something a verifier would actually accept.
 caCert: |
   -----BEGIN CERTIFICATE-----
-  MIIBExampleCACertificateOnlyNoPrivateKeyMaterialPresentHere00000000
+  MIIBjTCCATOgAwIBAgIUEVKlZMojk6oxsIdEnHzgqNSB5EQwCgYIKoZIzj0EAwIw
+  GzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTAgFw0yNjA3MTYxNjM0NDZaGA8y
+  MTI2MDYyMjE2MzQ0NlowGzEZMBcGA1UEAwwQY296eS1saWItdGVzdC1jYTBZMBMG
+  ByqGSM49AgEGCCqGSM49AwEHA0IABHYaDAyL+v09MqV1Yp1T1AE7Y6LHqBnVF2kH
+  4mzq8ewzoqb7EF/IY/acC4G514Lsi212vky2z+yk61EIWlgzqmGjUzBRMB0GA1Ud
+  DgQWBBReFu/b3ZdMzmFjrOTD8A8bFPX6fDAfBgNVHSMEGDAWgBReFu/b3ZdMzmFj
+  rOTD8A8bFPX6fDAPBgNVHRMBAf8EBTADAQH/MAoGCCqGSM49BAMCA0gAMEUCIQCj
+  P8IEUi9H4YcxOyAtGt22n6WCP8dqxP4p2QfkcRl6LAIgSOIMy4oHa5IJWREYdFt9
+  L/I7Ek4FlYbzy9kZu/MXqlE=
   -----END CERTIFICATE-----

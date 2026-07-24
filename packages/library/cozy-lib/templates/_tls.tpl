@@ -1,73 +1,41 @@
 {{/*
-=============================================================================
- TLS trust-anchor helpers
-=============================================================================
+cozy-lib.tls.caCertSecret renders the canonical CA-only trust-anchor Secret
+"<release>.tenant-ca", carrying ONLY ca.crt and never a private key.
 
-Per-app TLS in the Cozystack catalog issues a per-release, self-signed CA (via
-cert-manager or the app operator). A tenant that connects to such an endpoint
-needs the CA certificate (ca.crt) to verify the server — but nothing more. The
-objects that hold ca.crt today also hold private keys:
+Why a dedicated object: the Secrets that already hold ca.crt also hold keys —
+cert-manager's "<release>-ca" carries the CA key, the leaf "<release>-tls" the
+server key — so any RBAC that grants a tenant ca.crt through them leaks a key
+too. This helper emits ca.crt alone, labelled so the tenant reads it through the
+core.cozystack.io/tenantsecrets virtual resource the base tenant roles already
+grant (never through a raw core/v1 Secret).
 
-  - the cert-manager CA secret  <release>-ca   carries the CA private key
-    (tls.key) — full trust-chain compromise if leaked;
-  - the cert-manager leaf secret <release>-tls  carries the server private key
-    (tls.key) — server impersonation / MITM if leaked.
+Name is "<release>.tenant-ca", NOT "<release>-ca-cert": Percona Server for
+MongoDB already claims "<release>-ca-cert" with a key-bearing Secret of its own.
 
-So any RBAC path that hands a tenant ca.crt by granting read on one of those
-Secrets also hands over a private key. cozy-lib.tls.caCertSecret breaks that
-coupling: it renders a canonical trust-anchor object that carries ONLY ca.crt,
-labelled so tenants reach it through the core.cozystack.io/tenantsecrets API
-that the base tenant roles already grant — never through a Secret that contains
-tls.key.
-
-Delivery mechanism (grounded in the platform RBAC, not invented here):
-
-  - pkg/registry/core/tenantsecret/rest.go surfaces, under the virtual resource
-    core.cozystack.io/tenantsecrets, exactly the namespace Secrets labelled
-    internal.cozystack.io/tenantresource=true (TenantResourceLabelKey /
-    TenantResourceLabelValue in pkg/apis/core/v1alpha1/tenantresource_types.go).
-  - packages/system/cozystack-basics/templates/clusterroles.yaml grants
-    get/list/watch on core.cozystack.io/tenantsecrets to tenant ServiceAccounts
-    (cozy:tenant:base) and to use/admin/super-admin subjects (cozy:tenant:use:
-    base). No grant on raw core/v1 secrets is involved, so attaching the label
-    to a key-free object exposes the trust anchor without exposing any key.
-  - internal/backupcontroller/credentials_projector.go relies on the same rule
-    in reverse: it deliberately OMITS the label so its key-bearing projection
-    is NOT promoted to a TenantSecret. This helper is the positive counterpart —
-    a key-FREE object that is safe to promote.
-
-This is the chart-side shape every per-app TLS PR converges on; population of
-ca.crt stays the responsibility of whatever owns the PKI (the app operator, as
-the redis-operator fork does with its CA-only Opaque Secret, or a cert-manager
-chain resolved at the chart level). The helper itself is pure and value-driven
-so it renders deterministically and refuses, by construction and by guard, to
-carry a private key.
+This is the render-time path, for charts that hold the CA PEM as a value. Engines
+whose operator mints the CA asynchronously are served instead by the CA-extraction
+controller (internal/controller/cacert), which projects the same canonical object
+out of whatever Secret the engine produces — so a tenant learns exactly one name.
 */}}
 
 {{/*
-cozy-lib.tls.caCertSecret renders the canonical CA-only trust-anchor Secret.
-
-Invoked with a single dict argument (named parameters, not the (arg, $) list
-form, because it needs no global scope):
+Invoked with a single dict argument. A chart holding the CA PEM as a value calls
+it like this (there is no production caller yet — this is the pattern one uses):
 
   {{ include "cozy-lib.tls.caCertSecret" (dict
-       "name"      (printf "%s-ca-cert" .Release.Name)
+       "name"      (printf "%s.tenant-ca" .Release.Name)
        "namespace" .Release.Namespace
        "caCert"    $caCertPem
        "labels"    (dict "app.kubernetes.io/instance" .Release.Name)
   ) }}
 
 Parameters:
-  - name      (required) Secret name. Convention: "<release>-ca-cert".
-  - caCert    (required) the CA certificate chain in PEM. Must contain a
-              BEGIN CERTIFICATE PEM header and must NOT contain a
-              BEGIN...PRIVATE KEY PEM header; the helper fails closed on either
-              violation. Both checks are anchored to the PEM header line and are
-              case-insensitive, so they neither false-positive on certificate
-              body/comment text nor miss a lowercased hand-pasted header.
-  - namespace (optional) metadata.namespace.
-  - labels    (optional) extra labels merged onto the mandatory
-              internal.cozystack.io/tenantresource label (which always wins).
+  - name        (required) Secret name. Convention: "<release>.tenant-ca".
+  - caCert      (required) the CA chain in PEM. Must be one or more COMPLETE
+                certificate blocks and nothing else; the helper fails closed on a
+                private-key header or on any non-certificate bytes.
+  - namespace   (optional) metadata.namespace.
+  - labels      (optional) extra labels, merged onto the mandatory tenant labels.
   - annotations (optional) extra annotations.
 */}}
 {{- define "cozy-lib.tls.caCertSecret" -}}
@@ -78,23 +46,35 @@ Parameters:
 {{-   if eq $name "" -}}
 {{-     fail "cozy-lib.tls.caCertSecret: name is required" -}}
 {{-   end -}}
-{{-   $caCert := default "" .caCert -}}
+{{- /* Coerce to string first: an unquoted numeric YAML scalar (caCert: 12345)
+       parses to float64, and trim on it would die with a raw Go type error
+       instead of this helper's own fail message. (caCert: 0 reports "required",
+       not coerced — `default ""` treats 0 as empty; pinned by a test.) */ -}}
+{{-   $caCert := printf "%v" (default "" .caCert) -}}
 {{-   if eq (trim $caCert) "" -}}
 {{-     fail "cozy-lib.tls.caCertSecret: caCert is required and must be a non-empty PEM" -}}
 {{-   end -}}
-{{- /* Anchor both guards to the PEM header form, case-insensitively. A free
-       substring match would false-positive on a legitimate certificate whose
-       subject/comment text happens to contain "PRIVATE KEY", and would miss a
-       lowercase hand-pasted header. The (?i) header regex catches every key
-       variant (PKCS#8, RSA, EC, ENCRYPTED, OPENSSH, DSA) and only a real
-       BEGIN...PRIVATE KEY line, not arbitrary blob text. */ -}}
-{{-   if regexMatch "(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----" $caCert -}}
+{{- /* Reject private-key material, anchored to the PEM header and case-insensitive
+       so it neither false-positives on certificate body text nor misses a
+       lowercased header. Stops at "PRIVATE KEY", not the closing dashes, so PGP's
+       "-----BEGIN PGP PRIVATE KEY BLOCK-----" is still caught. */ -}}
+{{-   if regexMatch "(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY" $caCert -}}
 {{-     fail "cozy-lib.tls.caCertSecret: caCert must not contain private key material" -}}
 {{-   end -}}
-{{-   if not (regexMatch "(?i)-----BEGIN CERTIFICATE-----" $caCert) -}}
-{{-     fail "cozy-lib.tls.caCertSecret: caCert must contain a PEM certificate (BEGIN CERTIFICATE)" -}}
+{{- /* Require the WHOLE value (\A ... \z) to be complete certificate blocks and
+       whitespace, not merely to contain one, because ca.crt is emitted VERBATIM
+       below: preamble or trailing bytes (e.g. a raw DER/JWK key wearing no PEM
+       header) would otherwise ride into the tenant-readable anchor. This bounds
+       block SHAPE only — a Helm template has no x509 parser; the Go CA-extraction
+       controller does the full pem.Decode + x509 parse. */ -}}
+{{-   if not (regexMatch "(?i)\\A\\s*(-----BEGIN CERTIFICATE-----\\s+[A-Za-z0-9+/=][A-Za-z0-9+/=\\s]*-----END CERTIFICATE-----\\s*)+\\z" $caCert) -}}
+{{-     fail "cozy-lib.tls.caCertSecret: caCert must contain a complete PEM certificate block (BEGIN/END CERTIFICATE)" -}}
 {{-   end -}}
-{{-   $labels := merge (dict "internal.cozystack.io/tenantresource" "true") (default (dict) .labels) -}}
+{{- /* internal.cozystack.io/tenant-ca is the selector an ApplicationDefinition
+       matches and the CA-extraction controller stamps, so a helper-rendered
+       anchor must carry it to converge with a projected one. tenantresource is
+       rendered for shape but the lineage webhook recomputes it on admission. */ -}}
+{{-   $labels := merge (dict "internal.cozystack.io/tenant-ca" "true" "internal.cozystack.io/tenantresource" "true") (default (dict) .labels) -}}
 apiVersion: v1
 kind: Secret
 metadata:
