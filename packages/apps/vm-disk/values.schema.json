@@ -49,6 +49,19 @@
             }
           }
         },
+        "pvc": {
+          "description": "Clone an existing PersistentVolumeClaim.",
+          "type": "object",
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "description": "Name of the source PersistentVolumeClaim (in this disk's namespace).",
+              "type": "string"
+            }
+          }
+        },
         "upload": {
           "description": "Upload local image.",
           "type": "object"

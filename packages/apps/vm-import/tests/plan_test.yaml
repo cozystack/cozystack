@@ -1,0 +1,78 @@
+suite: vm-import migration plan
+release:
+  name: my-import
+  namespace: tenant-vmlab
+templates:
+  - templates/plan.yaml
+tests:
+  - it: renders no Plan when vms is empty
+    set:
+      vms: []
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: records adoption and target-namespace annotations, targeting its own namespace
+    set:
+      vms:
+        - id: vm-100
+    asserts:
+      - isKind:
+          of: Plan
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/adoption-enabled"]
+          value: "true"
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/target-namespace"]
+          value: tenant-vmlab
+      - equal:
+          path: spec.targetNamespace
+          value: tenant-vmlab
+
+  - it: confines a cross-tenant tenantNamespace to its own namespace on a tenant release
+    set:
+      vms:
+        - id: vm-100
+      tenantNamespace: tenant-other
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/target-namespace"]
+          value: tenant-vmlab
+
+  - it: raw-copy mode does not leak into a foreign tenant namespace
+    set:
+      vms:
+        - id: vm-100
+      skipGuestConversion: true
+      tenantNamespace: tenant-other
+    asserts:
+      - equal:
+          path: spec.targetNamespace
+          value: tenant-vmlab
+
+  - it: admin-directed import from a privileged namespace honors tenantNamespace
+    release:
+      name: my-import
+      namespace: cozy-vm-import
+    set:
+      vms:
+        - id: vm-100
+      skipGuestConversion: true
+      tenantNamespace: tenant-a
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/target-namespace"]
+          value: tenant-a
+      - equal:
+          path: spec.targetNamespace
+          value: tenant-a
+
+  - it: disables adoption when enableAdoption is false
+    set:
+      vms:
+        - id: vm-100
+      enableAdoption: false
+    asserts:
+      - equal:
+          path: metadata.annotations["vm-import.cozystack.io/adoption-enabled"]
+          value: "false"

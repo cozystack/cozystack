@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vm-adoption-controller
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: vm-adoption-controller
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels:
+      app: vm-adoption-controller
+  template:
+    metadata:
+      labels:
+        app: vm-adoption-controller
+    spec:
+      serviceAccountName: vm-adoption-controller
+      containers:
+      - name: controller
+        image: {{ required "values.image is required (run `make image` in packages/system/vm-adoption-controller)" .Values.image | quote }}
+        imagePullPolicy: IfNotPresent
+        args:
+        - -v=2
+        {{- if .Values.controller.watchNamespace }}
+        - --namespace={{ .Values.controller.watchNamespace }}
+        {{- end }}
+        - --watch-interval={{ .Values.controller.watchInterval }}
+        {{- if .Values.controller.namePrefix }}
+        - --name-prefix={{ .Values.controller.namePrefix }}
+        {{- end }}
+        - --default-instance-type={{ .Values.controller.defaultInstanceType }}
+        - --default-preference={{ .Values.controller.defaultPreference }}
+        ports:
+        - name: health
+          containerPort: 8081
+          protocol: TCP
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: health
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          {{- toYaml .Values.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          runAsUser: 65532

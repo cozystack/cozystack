@@ -32,6 +32,13 @@
       "matchStrings": ["clastix/kubectl:(?<currentValue>v[0-9]+\\.[0-9]+(?:\\.[0-9]+)?)@(?<currentDigest>sha256:[a-f0-9]+)"],
       "datasourceTemplate": "docker",
       "depNameTemplate": "docker.io/clastix/kubectl"
+    },
+    {
+      "customType": "regex",
+      "description": "Track and refresh the digest-pinned Forklift (kubev2v) operator and component images. These refs are substituted by the forklift-operator Makefile into the rendered templates/forklift-operator.yaml — neither a Dockerfile nor a go.mod dependency — and the helm-values manager is disabled repo-wide (see enabledManagers), so without this manager the @sha256 supply-chain pins would silently age. Both the Makefile (the seed) and the rendered manifest are tracked so a bump updates them together.",
+      "managerFilePatterns": ["/^packages/system/forklift-operator/Makefile$/", "/^packages/system/forklift-operator/templates/forklift-operator\\.yaml$/"],
+      "matchStrings": ["(?<depName>quay\\.io/kubev2v/[a-z0-9-]+):(?<currentValue>[\\w][\\w.-]*)@(?<currentDigest>sha256:[a-f0-9]+)"],
+      "datasourceTemplate": "docker"
     }
   ],
   "packageRules": [

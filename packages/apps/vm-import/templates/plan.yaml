@@ -1,0 +1,74 @@
+{{- if .Values.vms }}
+{{- /* Mirror the vm-adoption-controller resolveTargetNamespace guard: a
+       cross-namespace tenantNamespace is honored only for an admin-directed import
+       (a release that does NOT live in a tenant-* namespace). A release inside a
+       tenant-* namespace is confined to its own namespace, so a tenant cannot
+       direct the import at another tenant. */}}
+{{- $requested := .Values.tenantNamespace | default .Release.Namespace }}
+{{- $targetNamespace := .Release.Namespace }}
+{{- if and (ne $requested .Release.Namespace) (not (hasPrefix "tenant-" .Release.Namespace)) }}
+{{- $targetNamespace = $requested }}
+{{- end }}
+apiVersion: forklift.konveyor.io/v1beta1
+kind: Plan
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+  annotations:
+    vm-import.cozystack.io/adoption-enabled: {{ if hasKey .Values "enableAdoption" }}{{ .Values.enableAdoption | quote }}{{ else }}"true"{{ end }}
+    vm-import.cozystack.io/target-namespace: {{ $targetNamespace | quote }}
+    vm-import.cozystack.io/import-name: {{ .Release.Name | quote }}
+    {{- with .Values.instanceType }}
+    vm-import.cozystack.io/instance-type: {{ . | quote }}
+    {{- end }}
+    {{- with .Values.instanceProfile }}
+    vm-import.cozystack.io/instance-profile: {{ . | quote }}
+    {{- end }}
+spec:
+  warm: {{ default false .Values.warm }}
+  skipGuestConversion: {{ default false .Values.skipGuestConversion }}
+  xfsCompatibility: {{ default false .Values.xfsCompatibility }}
+  {{- with .Values.virtV2vImage }}
+  virtV2vImage: {{ . | quote }}
+  {{- end }}
+  provider:
+    source:
+      name: {{ .Release.Name }}-source
+      namespace: {{ .Release.Namespace }}
+    destination:
+      name: {{ .Release.Name }}-destination
+      namespace: {{ .Release.Namespace }}
+  {{- if or .Values.networkMap .Values.storageMap }}
+  map:
+    {{- if .Values.networkMap }}
+    network:
+      name: {{ .Release.Name }}
+      namespace: {{ .Release.Namespace }}
+    {{- end }}
+    {{- if .Values.storageMap }}
+    storage:
+      name: {{ .Release.Name }}
+      namespace: {{ .Release.Namespace }}
+    {{- end }}
+  {{- end }}
+  {{- if and .Values.skipGuestConversion .Values.tenantNamespace }}
+  {{- /* VDDK raw-copy needs no privileged conversion pod, so Forklift can copy
+         the disk straight into the tenant — the VM is then adopted in place,
+         avoiding a second cross-namespace clone. $targetNamespace is already
+         confined by the tenant guard above. */}}
+  targetNamespace: {{ $targetNamespace }}
+  {{- else }}
+  {{- /* virt-v2v conversion runs a privileged pod that a baseline tenant
+         forbids, so it stays in this (privileged) namespace; the
+         vm-adoption-controller then clones the disk into tenantNamespace. */}}
+  targetNamespace: {{ .Release.Namespace }}
+  {{- end }}
+  vms:
+    {{- range .Values.vms }}
+    - id: {{ .id | quote }}
+      {{- with .name }}
+      name: {{ . | quote }}
+      {{- end }}
+    {{- end }}
+{{- end }}

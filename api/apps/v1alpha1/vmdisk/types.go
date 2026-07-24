@@ -39,6 +39,8 @@ type Source struct {
 	Http *SourceHTTP `json:"http,omitempty"`
 	// Use image by name from default collection.
 	Image *SourceImage `json:"image,omitempty"`
+	// Clone an existing PersistentVolumeClaim.
+	Pvc *SourcePVC `json:"pvc,omitempty"`
 	// Upload local image.
 	Upload *SourceUpload `json:"upload,omitempty"`
 }
@@ -55,6 +57,11 @@ type SourceHTTP struct {
 
 type SourceImage struct {
 	// Name of the image to use.
+	Name string `json:"name"`
+}
+
+type SourcePVC struct {
+	// Name of the source PersistentVolumeClaim (in this disk's namespace).
 	Name string `json:"name"`
 }
 

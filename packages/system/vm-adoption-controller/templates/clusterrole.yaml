@@ -1,0 +1,40 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: vm-adoption-controller
+rules:
+# Watch VirtualMachines; delete the Forklift VM once it has been adopted
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachines"]
+  verbs: ["get", "list", "watch", "update", "patch", "delete"]
+
+# Read Forklift Plans and Migrations
+- apiGroups: ["forklift.konveyor.io"]
+  resources: ["plans", "migrations"]
+  verbs: ["get", "list", "watch"]
+
+# Create/manage/delete VMInstances and VMDisks (imported disks become managed VMDisks)
+- apiGroups: ["apps.cozystack.io"]
+  resources: ["vminstances", "vmdisks"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Clone DataVolumes into the tenant (cross-namespace adoption)
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes"]
+  verbs: ["get", "list", "watch", "update", "patch", "create"]
+
+# Authorize CDI cross-namespace clone (source PVC lives in the conversion namespace)
+- apiGroups: ["cdi.kubevirt.io"]
+  resources: ["datavolumes/source"]
+  verbs: ["create"]
+
+# Read source PVCs to size the cross-namespace clone
+- apiGroups: [""]
+  resources: ["persistentvolumeclaims"]
+  verbs: ["get", "list"]
+
+# Emit Events on imported VMs so adoption outcomes are visible via
+# `kubectl describe` / the dashboard, not only in the controller log
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]

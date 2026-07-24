@@ -1,0 +1,34 @@
+suite: vm-adoption-controller deployment
+release:
+  name: vm-adoption-controller
+  namespace: cozy-forklift
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: controller runs under a restrictive non-root securityContext
+    set:
+      image: example.com/vm-adoption-controller:test
+    asserts:
+      - equal:
+          path: spec.template.spec.serviceAccountName
+          value: vm-adoption-controller
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.runAsUser
+          value: 65532
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: fails to render without an image so the manifest never ships unpinned
+    asserts:
+      - failedTemplate:
+          errorMessage: "values.image is required (run `make image` in packages/system/vm-adoption-controller)"
