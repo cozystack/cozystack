@@ -61,10 +61,8 @@ type SourceImage struct {
 }
 
 type SourcePVC struct {
-	// Name of the source PersistentVolumeClaim.
+	// Name of the source PersistentVolumeClaim (in this disk's namespace).
 	Name string `json:"name"`
-	// Namespace of the source PVC (defaults to this disk's namespace).
-	Namespace string `json:"namespace,omitempty"`
 }
 
 type SourceUpload struct {

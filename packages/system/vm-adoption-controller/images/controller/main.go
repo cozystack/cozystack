@@ -527,6 +527,11 @@ func (c *AdoptionController) cloneDataVolume(ctx context.Context, srcNs, srcName
 // of a raw Forklift populator PVC. Size and StorageClass are inherited from the
 // source PVC. Idempotent. Returns the resulting DataVolume name to reference
 // from the VMInstance (`vm-disk-<vmDiskName>`).
+//
+// The tenant-facing vm-disk app only clones within its own namespace, so when
+// the source PVC is in another namespace the controller clones it into the
+// target namespace first (privileged) and the VMDisk then references that
+// in-namespace copy — the tenant API never carries a cross-namespace source.
 func (c *AdoptionController) ensureVMDisk(ctx context.Context, vmDiskNs, vmDiskName, srcPVCNs, srcPVCName string) (string, error) {
 	dvName := "vm-disk-" + vmDiskName
 	if len(dvName) > 63 {
@@ -544,9 +549,24 @@ func (c *AdoptionController) ensureVMDisk(ctx context.Context, vmDiskNs, vmDiskN
 	}
 	size, _, _ := unstructured.NestedString(srcPVC.Object, "spec", "resources", "requests", "storage")
 	sc, _, _ := unstructured.NestedString(srcPVC.Object, "spec", "storageClassName")
+
+	// The vm-disk app is tenant-facing and can only clone a PVC within its own
+	// namespace (source.pvc carries no namespace field, so a tenant cannot point
+	// it at another tenant). When the imported PVC lives in another namespace —
+	// e.g. the privileged conversion namespace on the virt-v2v path — the
+	// controller performs the cross-namespace clone itself first, so the VMDisk
+	// only ever references a PVC in its own namespace.
+	localSrc := srcPVCName
+	if srcPVCNs != vmDiskNs {
+		localSrc = vmDiskName + "-src"
+		if err := c.cloneDataVolume(ctx, srcPVCNs, srcPVCName, vmDiskNs, localSrc); err != nil {
+			return "", fmt.Errorf("pre-cloning %s/%s into %s: %w", srcPVCNs, srcPVCName, vmDiskNs, err)
+		}
+	}
+
 	spec := map[string]interface{}{
 		"source": map[string]interface{}{
-			"pvc": map[string]interface{}{"name": srcPVCName, "namespace": srcPVCNs},
+			"pvc": map[string]interface{}{"name": localSrc},
 		},
 	}
 	if size != "" {

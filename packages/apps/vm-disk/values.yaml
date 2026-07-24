@@ -14,9 +14,8 @@
 ## @typedef {struct} SourceDisk - Clone an existing vm-disk.
 ## @field {string} name - Name of the vm-disk to clone.
 
-## @typedef {struct} SourcePVC - Clone an existing PersistentVolumeClaim (e.g. a disk imported by vm-import). Used to adopt a migrated disk into a managed VMDisk.
-## @field {string} name - Name of the source PersistentVolumeClaim.
-## @field {string} [namespace] - Namespace of the source PVC (defaults to this disk's namespace).
+## @typedef {struct} SourcePVC - Clone an existing PersistentVolumeClaim in this disk's own namespace (e.g. a disk imported by vm-import). Used to adopt a migrated disk into a managed VMDisk.
+## @field {string} name - Name of the source PersistentVolumeClaim (in this disk's namespace).
 
 ## @typedef {struct} Source - The source image location used to create a disk.
 ## @field {*SourceImage} [image] - Use image by name from default collection.

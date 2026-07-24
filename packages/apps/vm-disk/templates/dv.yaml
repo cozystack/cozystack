@@ -36,7 +36,7 @@ spec:
     {{- else if hasKey .Values.source "pvc" }}
     pvc:
       name: {{ required "A valid .Values.source.pvc.name entry required!" .Values.source.pvc.name }}
-      namespace: {{ .Values.source.pvc.namespace | default $.Release.Namespace }}
+      namespace: {{ $.Release.Namespace }}
     {{- end }}
   {{- else }}
   source:
