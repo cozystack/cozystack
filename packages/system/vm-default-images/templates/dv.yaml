@@ -31,8 +31,24 @@ metadata:
 spec:
   contentType: kubevirt
   source:
+    {{- if .registryFromTag }}
+    {{- /*
+      Import a digest-pinned OCI containerDisk built in-repo (see
+      packages/system/vyos-router-image). registryFromTag names a .tag file in
+      THIS chart, holding `<ref>@sha256:<digest>`; the in-repo image build stamps
+      it (mirroring the talos -> bootbox/matchbox.tag convention). A digest pin is
+      why the artifact is shipped as a registry image rather than an HTTP qcow2 —
+      CDI's http importer cannot verify a sha256.
+    */}}
+    registry:
+      url: {{ printf "docker://%s" (required (printf "empty .tag file '%s' for image '%s'!" .registryFromTag .name) ($.Files.Get .registryFromTag | trim)) | quote }}
+    {{- else if .registry }}
+    registry:
+      url: {{ required (printf "A valid .registry entry required for image '%s'!" .name) .registry | quote }}
+    {{- else }}
     http:
       url: {{ required (printf "A valid .url entry required for image '%s'!" .name) .url | quote }}
+    {{- end }}
   storage:
     resources:
       requests:

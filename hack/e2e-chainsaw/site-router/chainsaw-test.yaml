@@ -1,0 +1,568 @@
+# Phase-1 acceptance gate for the site-router feature: a live two-VM topology
+# (gateway A under test + remote-site B) that asserts the routed inbound/outbound
+# flows, MSS clamp, namespace-route propagation, delete-propagation, and — the
+# GATE — the negative-security matrix (every forbidden flow dropped AND attributed
+# to the guard that dropped it).
+#
+# ── DEFERRED FROM CI ────────────────────────────────────────────────────────
+# This suite CANNOT run green in CI yet: the VyOS golden image is committed
+# DISABLED (T01) and the VyOS 1.5 firewall syntax is provisional (TODO(T13)). It
+# is therefore excluded from TIA selection AND from the full suite by an explicit
+# deferral in hack/select-e2e.sh, so the PR that adds it keeps CI green. It runs
+# only in the empirical validation, by hand:
+#     make test-chainsaw CHAINSAW_SUITES="site-router"
+# with the golden image published (or supplied via an uncommitted image override)
+# and the live-only script seams (_probe-lib.sh) implemented.
+#
+# ── ONE Test, not many ──────────────────────────────────────────────────────
+# The topology is expensive (two nested KubeVirt VMs + IPsec), so it is brought
+# up ONCE and every assertion runs against it as ordered steps; Chainsaw tears
+# down the applied CRs at cleanup. A single top-level catch attaches diagnostics.
+#
+# Conventions (docs/agents/e2e-testing.md): declarative asserts where the K8s API
+# models the state; imperative reachability only in self-contained script steps;
+# no test-level EXIT/RETURN traps; event-driven backstops (VMI IP, VM Ready,
+# tunnel-up gauge) precede every reachability script; filter-as-list condition
+# form; no number literals in JMESPath.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: site-router
+spec:
+  catch:
+    - events: {}
+    - describe:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        name: site-router-a
+    - describe:
+        apiVersion: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: site-router-a
+    - describe:
+        apiVersion: helm.toolkit.fluxcd.io/v2
+        kind: HelmRelease
+        name: vm-instance-remote-site-b
+    # The controller mediates routes / port_security and pushes VyOS config; its
+    # log is where a stuck reconcile (deny-set reject, PSK/api-key pending, VyOS
+    # ConfigureFailed, source-filter pending) surfaces.
+    - podLogs:
+        namespace: cozy-site-router
+        selector: app=site-router-controller
+        tail: 200
+    - script:
+        content: |
+          kubectl -n tenant-test get siterouter,helmrelease,datavolume,pvc,vmi,vm,svc,pods -o wide || true
+          echo "── namespace routes annotation ──"
+          kubectl get namespace tenant-test -o jsonpath='{.metadata.annotations.ovn\.kubernetes\.io/routes}' || true
+          echo
+          echo "── gateway Cilium policies ──"
+          kubectl -n tenant-test get ciliumnetworkpolicy -l apps.cozystack.io/application.name=a || true
+  steps:
+    # ── 1. Remote-site B ─────────────────────────────────────────────────────
+    - name: bring-up-remote-site-b
+      description: >-
+        Boot B, the second VyOS VM standing in for the external site (IPsec
+        initiator + remote client source). Generous bounds: B clones the VyOS
+        golden image and cold-boots a nested VM.
+      try:
+        - apply:
+            file: remote-site-b.yaml
+        - assert:
+            # 8m: golden-image clone (CDI) + nested VM cold boot.
+            timeout: 8m
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: vm-disk-remote-site-b
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            timeout: 6m
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: vm-instance-remote-site-b
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            timeout: 5m
+            resource:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: vm-instance-remote-site-b
+              (status.interfaces[0].ipAddress != null): true
+
+    # ── 2. A pre-route tenant pod (to prove the PendingRoutes surface) ────────
+    - name: create-pending-route-pod
+      description: >-
+        Create a tenant workload pod BEFORE A programs the namespace routes, so
+        it predates the route and the controller must surface it as pending.
+      try:
+        - apply:
+            file: pending-route-pod.yaml
+        - assert:
+            timeout: 2m
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: site-router-pending-probe
+              status:
+                phase: Running
+
+    # ── 3-5. Gateway A: apply, HR Ready, dataplane ───────────────────────────
+    - name: apply-site-router-a
+      try:
+        - apply:
+            file: site-router-a.yaml
+
+    - name: assert-a-helmrelease-ready
+      description: >-
+        The SiteRouter HelmRelease reaching Ready gates the whole downstream
+        chain: chart render, VM image clone + boot, and the controller mediation
+        (deny-set validate → routes → VyOS config push → source-filter confirm →
+        port_security relax). 8m covers the VyOS image clone + cold boot + the
+        first successful config push; a slower path is a real regression, not a
+        flake to widen.
+      try:
+        - assert:
+            timeout: 8m
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: site-router-a
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+
+    - name: assert-a-dataplane
+      description: Boot disk, PVC, VMI IP, VM Ready and the tunnel LoadBalancer address.
+      try:
+        - assert:
+            timeout: 6m
+            resource:
+              apiVersion: cdi.kubevirt.io/v1beta1
+              kind: DataVolume
+              metadata:
+                name: site-router-a-boot
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            timeout: 4m
+            resource:
+              apiVersion: v1
+              kind: PersistentVolumeClaim
+              metadata:
+                name: site-router-a-boot
+              status:
+                phase: Bound
+        - assert:
+            timeout: 5m
+            resource:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachineInstance
+              metadata:
+                name: site-router-a
+              (status.interfaces[0].ipAddress != null): true
+        - assert:
+            timeout: 5m
+            resource:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: site-router-a
+              status:
+                (conditions[?type == 'Ready']):
+                  - status: "True"
+        - assert:
+            # Native LoadBalancer tunnel endpoint (UDP 500 / NAT-T 4500). An
+            # assigned ingress address is the IPsec responder entry point.
+            timeout: 4m
+            resource:
+              apiVersion: v1
+              kind: Service
+              metadata:
+                name: site-router-a-tunnel
+              (status.loadBalancer.ingress[0] != null): true
+
+    # ── 6. Establish the tunnel and assert it is Up ──────────────────────────
+    - name: establish-tunnel
+      description: >-
+        Wire the two ends (A responder ⇄ B initiator) and assert the IPsec SA
+        comes up. Tunnel state is surfaced via the controller metric
+        site_router_tunnel_up (there is no CR status subresource in Phase 1, D9),
+        so this polls the metrics endpoint — an event-driven backstop before any
+        reachability script.
+      try:
+        - script:
+            timeout: 8m
+            content: |
+              set -eu
+              # A is the responder; its site-to-site peer config needs B's
+              # address, and B (the initiator) needs A's tunnel endpoint. Both are
+              # pod-network addresses only known at runtime.
+              B_IP=$(kubectl -n "$NAMESPACE" get vmi vm-instance-remote-site-b \
+                -o jsonpath='{.status.interfaces[0].ipAddress}')
+              A_TUNNEL=$(kubectl -n "$NAMESPACE" get svc site-router-a-tunnel \
+                -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+              [ -n "$B_IP" ] && [ -n "$A_TUNNEL" ] || { echo "could not resolve B_IP/A_TUNNEL"; exit 1; }
+
+              # Point A at B's address (triggers an HR re-render → controller re-push).
+              kubectl -n "$NAMESPACE" patch siterouter a --type merge \
+                -p "{\"spec\":{\"peer\":{\"address\":\"${B_IP}\"}}}"
+
+              # TODO(T13): configure B's guest (live) to dial A_TUNNEL with PSK
+              # cozystack-e2e-site-router-psk, forced UDP encapsulation, tunnel
+              # local 192.0.2.0/24 ↔ remote <cluster backend network>. Until B
+              # dials in, the tunnel-up poll below times out (fails loudly — no
+              # false green). See remote-site-b.yaml + _probe-lib.sh.
+
+              # Poll the controller tunnel-up gauge for peer A until it reads Up (1).
+              # site_router_tunnel_up{namespace,instance,peer} — instance="a".
+              trap '[ -n "${pf_pid:-}" ] && kill "$pf_pid" 2>/dev/null || true' EXIT
+              kubectl -n cozy-site-router port-forward deploy/site-router-controller 18080:8080 >/dev/null 2>&1 &
+              pf_pid=$!
+              timeout 30 sh -ec 'until nc -z localhost 18080; do sleep 1; done'
+              timeout 300 sh -ec '
+                until curl -sf localhost:18080/metrics \
+                  | grep -Eq "site_router_tunnel_up\{[^}]*instance=\"a\"[^}]*\} 1"; do
+                  sleep 5
+                done'
+              echo "tunnel A⇄B is Up (site_router_tunnel_up=1)"
+            check:
+              ($error == null): true
+
+    # ── 7. Namespace routes annotation programmed ────────────────────────────
+    - name: assert-namespace-routes-annotation
+      description: >-
+        The controller writes ovn.kubernetes.io/routes on the tenant namespace so
+        the return path to the remote site points at the gateway pod. contains()
+        (string arg — safe under v0.2.15) polls until B's remoteCIDR appears; the
+        `|| ''` guards a not-yet-present annotation (null) from erroring the assert.
+      try:
+        - assert:
+            timeout: 2m
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: tenant-test
+              (contains(metadata.annotations."ovn.kubernetes.io/routes" || '', '192.0.2.0/24')): true
+
+    # ── 8. Gateway port_security relaxed (D8) ────────────────────────────────
+    - name: assert-gateway-port-security-relaxed
+      description: >-
+        The controller relaxes ovn.kubernetes.io/port_security=false on the
+        gateway pod ONLY after confirming the guest tunnel-ingress source filter
+        is live (D8). The pod name is generated, so this selects by the KubeVirt
+        label and polls (a non-empty result AND value=false — never a vacuous
+        empty-list pass).
+        TODO(T13): this depends on the guest source-filter confirm, which depends
+        on the provisional VyOS 1.5 firewall syntax pushing successfully. Live
+        validation must also cover the port_security live-toggle question the
+        reconciler flags (D8): whether kube-ovn v1.15.10 reconciles the LSP
+        port_security field from an annotation flip on an already-wired port.
+      try:
+        - script:
+            timeout: 4m
+            content: |
+              set -eu
+              # Poll (deadline loop, no nested shell): the controller relaxes
+              # port_security only after the guest source filter is confirmed live.
+              end=$(( $(date +%s) + 180 ))
+              while :; do
+                v=$(kubectl -n "$NAMESPACE" get pod -l vm.kubevirt.io/name=site-router-a \
+                  -o jsonpath='{.items[0].metadata.annotations.ovn\.kubernetes\.io/port_security}' 2>/dev/null || true)
+                [ "$v" = "false" ] && break
+                [ "$(date +%s)" -ge "$end" ] && { echo "timeout: gateway pod port_security not relaxed (got '$v')"; exit 1; }
+                sleep 5
+              done
+              echo "gateway pod port_security relaxed (=false) after source-filter confirm"
+            check:
+              ($error == null): true
+
+    # ── 9. Pending-route surface ─────────────────────────────────────────────
+    - name: assert-pending-route-event
+      description: >-
+        The pod created in step 2 predates the route, so the controller surfaces
+        it (read-only) via a PendingRoutes Event on the HelmRelease naming the
+        lagging pod. It never rolls the pod — that is the tenant's decision.
+        TODO(T13): if the Event proves flaky live (dedup/expiry), the empirical
+        run may replace this with a controller-log grep.
+      try:
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: v1
+              kind: Event
+              reason: PendingRoutes
+              involvedObject:
+                kind: HelmRelease
+                name: site-router-a
+              (contains(message, 'site-router-pending-probe')): true
+
+    # ── 10. Fresh pod inherits the route ─────────────────────────────────────
+    - name: assert-fresh-pod-inherits-route
+      description: >-
+        A pod created AFTER the route inherits ovn.kubernetes.io/routes at CREATE
+        via the kube-ovn webhook — the reachable-after-roll half of the contract.
+      try:
+        - apply:
+            file: fresh-route-pod.yaml
+        - assert:
+            timeout: 2m
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: site-router-fresh-probe
+              (contains(metadata.annotations."ovn.kubernetes.io/routes" || '', '192.0.2.0/24')): true
+
+    # ── 11. Backend behind A (also a fresh-route pod) ────────────────────────
+    - name: create-backend
+      description: >-
+        agnhost /clientip behind A, created after the route so it inherits the
+        return path to B and can reply across the tunnel.
+      try:
+        - apply:
+            file: backend.yaml
+        - assert:
+            timeout: 3m
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: site-router-backend
+              status:
+                phase: Running
+                (containerStatuses[0].ready): true
+        - assert:
+            timeout: 1m
+            resource:
+              apiVersion: v1
+              kind: Pod
+              metadata:
+                name: site-router-backend
+              (contains(metadata.annotations."ovn.kubernetes.io/routes" || '', '192.0.2.0/24')): true
+
+    # ── 12. Inbound routed, source preserved (the routed contract) ───────────
+    - name: assert-inbound-source-preserved
+      description: >-
+        From B, reach the backend behind A through the tunnel; the backend's
+        /clientip must report B's REAL remote source (192.0.2.x), proving routed
+        mode preserves the source (no NAT). THE routed-mode contract.
+        TODO(T13): live — implement probe_from_b in _probe-lib.sh (drive B's
+        guest). Validate source preservation end to end against the live image.
+      try:
+        - script:
+            timeout: 5m
+            content: |
+              set -eu
+              . ./_probe-lib.sh
+              BACKEND_IP=$(kubectl -n "$NAMESPACE" get pod site-router-backend \
+                -o jsonpath='{.status.podIP}')
+              [ -n "$BACKEND_IP" ] || { echo "no backend pod IP"; exit 1; }
+              # curl http://$BACKEND_IP:8080/clientip from B, sourced 192.0.2.1,
+              # and confirm the returned client IP is in B's site range.
+              observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip")
+              case "$observed" in
+                192.0.2.*) echo "source preserved: backend saw $observed" ;;
+                *) echo "FAIL: backend saw '$observed', expected a 192.0.2.x source (NAT / not routed)"; exit 1 ;;
+              esac
+            check:
+              ($error == null): true
+
+    # ── 13. MSS clamp (multi-MB transfer does not stall) ─────────────────────
+    - name: assert-mss-clamp
+      description: >-
+        A multi-MB transfer B → backend across the tunnel must complete without
+        stalling — the TCP MSS clamp (overlay MTU − 40) preventing PMTU black-holes.
+        TODO(T13): live — implement the bulk transfer from B's guest; a stall
+        (hang until timeout) is the failure signal.
+      try:
+        - script:
+            timeout: 5m
+            content: |
+              set -eu
+              . ./_probe-lib.sh
+              BACKEND_IP=$(kubectl -n "$NAMESPACE" get pod site-router-backend \
+                -o jsonpath='{.status.podIP}')
+              # Transfer several MB B → backend and require completion within the
+              # step timeout (a stalled clamp hangs). See _probe-lib.sh.
+              transfer_from_b "$BACKEND_IP" 8080 8
+              echo "multi-MB transfer across the tunnel completed (MSS clamp effective)"
+            check:
+              ($error == null): true
+
+    # ── 14. Negative-security matrix — THE GATE ──────────────────────────────
+    - name: negative-security
+      description: >-
+        From B, every forbidden flow MUST be dropped AND attributed to the guard
+        that dropped it (Hubble flow verdict for the Cilium-layer drops, VyOS
+        firewall rule counters for the guest-layer drops) — the design requires
+        establishing the responsible guard, not merely absence of connectivity.
+        The one allowed flow (declared remote source → intended same-tenant
+        destination) must pass with source preserved.
+        TODO(T13): live — implement probe_from_b / hubble_dropped /
+        guest_counter_incremented in _probe-lib.sh against the live gateway,
+        Hubble, and the VyOS management API. The stubs fail loudly, so this GATE
+        can never pass vacuously.
+      try:
+        - script:
+            timeout: 10m
+            content: |
+              set -eu
+              . ./_probe-lib.sh
+
+              # Resolve concrete targets.
+              GW_IP=$(kubectl -n "$NAMESPACE" get pod -l vm.kubevirt.io/name=site-router-a \
+                -o jsonpath='{.items[0].status.podIP}')
+              BACKEND_IP=$(kubectl -n "$NAMESPACE" get pod site-router-backend \
+                -o jsonpath='{.status.podIP}')
+              NODE_IP=$(kubectl get nodes \
+                -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
+              API_CLUSTERIP=$(kubectl -n default get svc kubernetes -o jsonpath='{.spec.clusterIP}')
+              # A pod outside tenant-test (another tenant / a system namespace).
+              OTHER_POD_IP=$(kubectl -n cozy-system get pods \
+                -o jsonpath='{.items[?(@.status.podIP)].status.podIP}' | awk '{print $1}')
+
+              # ── DROP cases: <desc> <guard-check> <proto> <dst> [port] ─────────
+              # 1. Source OUTSIDE remoteCIDRs → guest TUNNEL-INGRESS source filter
+              #    (default-action drop): decrypted, source not in the allow-list.
+              PROBE_SRC=198.51.100.7 \
+                assert_dropped "source outside remoteCIDRs" \
+                  "guest_counter_incremented TUNNEL-INGRESS default-action" \
+                  tcp "$BACKEND_IP" 8080
+
+              # 2. Another tenant's pod → Cilium tenant isolation (POLICY_DENIED):
+              #    dest is in the pod CIDR so the guest dest-constraint admits it;
+              #    the pod-layer identity policy is what drops it.
+              assert_dropped "another tenant's pod" \
+                "hubble_dropped $OTHER_POD_IP POLICY_DENIED" \
+                tcp "$OTHER_POD_IP" 8080
+
+              # 3. Node address → guest TUNNEL-INGRESS dest-constraint (node/join
+              #    CIDR is not a tenant network → default-action drop).
+              assert_dropped "node address" \
+                "guest_counter_incremented TUNNEL-INGRESS default-action" \
+                tcp "$NODE_IP" 10250
+
+              # 4. Kubernetes API ClusterIP → Cilium (reserved:kube-apiserver
+              #    identity denies the routed source).
+              assert_dropped "kubernetes API" \
+                "hubble_dropped $API_CLUSTERIP POLICY_DENIED" \
+                tcp "$API_CLUSTERIP" 443
+
+              # 5. 169.254.0.0/16 incl. metadata → gateway egressDeny CNP
+              #    (explicit toCIDR 169.254.0.0/16). The drop is enforced by the
+              #    guard whether or not the endpoint is routable in the sandbox.
+              assert_dropped "link-local / metadata 169.254.169.254" \
+                "hubble_dropped 169.254.169.254 POLICY_DENIED" \
+                tcp 169.254.169.254 80
+
+              # 6. VyOS management API over the tunnel → guest Boundary-A drop
+              #    (firewall input rule 1: ipsec-match dest-port 22,443 → drop).
+              assert_dropped "VyOS management API over the tunnel (443)" \
+                "guest_counter_incremented input 1" \
+                tcp "$GW_IP" 443
+              assert_dropped "VyOS management API over the tunnel (22)" \
+                "guest_counter_incremented input 1" \
+                tcp "$GW_IP" 22
+
+              # 7. Arbitrary world destination → guest forward default-deny +
+              #    TUNNEL-INGRESS dest-constraint (no default route in routed mode).
+              assert_dropped "arbitrary world destination" \
+                "guest_counter_incremented forward default-action" \
+                tcp 203.0.113.10 443
+
+              # ── ALLOW case: declared remote source → intended tenant dest ─────
+              # Reachable AND source preserved (192.0.2.x observed at the backend).
+              observed=$(probe_from_b_stdout http "$BACKEND_IP" 8080 "/clientip")
+              case "$observed" in
+                192.0.2.*) echo "OK [allowed flow]: backend reachable, source preserved ($observed)" ;;
+                *) echo "FAIL [allowed flow]: expected reachable with 192.0.2.x source, got '$observed'"; exit 1 ;;
+              esac
+
+              echo "negative-security GATE: all forbidden flows dropped + attributed; allowed flow preserved"
+            check:
+              ($error == null): true
+
+    # ── 15. Delete-propagation ───────────────────────────────────────────────
+    - name: assert-delete-propagation
+      description: >-
+        Deleting the instance must withdraw the namespace route, restore the
+        gateway pod's port_security, tear down the HR + VM, and leak no policies.
+        The delete op waits for the SiteRouter to fully disappear (the finalizer
+        runs the ordered teardown). error: on installed GVKs (HR, VM, CNP) is safe
+        here — the types exist, so it asserts absence rather than failing on an
+        unknown kind.
+      try:
+        - delete:
+            timeout: 5m
+            ref:
+              apiVersion: apps.cozystack.io/v1alpha1
+              kind: SiteRouter
+              name: a
+        # Route withdrawn (B's remoteCIDR no longer in the namespace annotation).
+        - assert:
+            timeout: 2m
+            resource:
+              apiVersion: v1
+              kind: Namespace
+              metadata:
+                name: tenant-test
+              (contains(metadata.annotations."ovn.kubernetes.io/routes" || '', '192.0.2.0/24')): false
+        # HelmRelease + VM torn down.
+        - error:
+            timeout: 3m
+            resource:
+              apiVersion: helm.toolkit.fluxcd.io/v2
+              kind: HelmRelease
+              metadata:
+                name: site-router-a
+        - error:
+            timeout: 3m
+            resource:
+              apiVersion: kubevirt.io/v1
+              kind: VirtualMachine
+              metadata:
+                name: site-router-a
+        # No leaked gateway Cilium policies.
+        - error:
+            timeout: 2m
+            resource:
+              apiVersion: cilium.io/v2
+              kind: CiliumNetworkPolicy
+              metadata:
+                name: site-router-a-gateway-egress-deny
+        - error:
+            timeout: 2m
+            resource:
+              apiVersion: cilium.io/v2
+              kind: CiliumNetworkPolicy
+              metadata:
+                name: site-router-a-gateway-ingress
+        # port_security restore: the finalizer restores it on the live pod BEFORE
+        # dropping the finalizer, then the VM is torn down — so once the pod is
+        # gone the relaxed port is gone too. This asserts the D8 invariant is not
+        # LEFT violated: no surviving gateway pod may carry port_security=false.
+        - script:
+            timeout: 1m
+            content: |
+              set -eu
+              stuck=$(kubectl -n "$NAMESPACE" get pod -l vm.kubevirt.io/name=site-router-a \
+                -o jsonpath='{range .items[?(@.metadata.annotations.ovn\.kubernetes\.io/port_security=="false")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+              [ -z "$stuck" ] || { echo "FAIL: gateway pod(s) left with port_security=false after delete: $stuck"; exit 1; }
+              echo "no surviving gateway pod carries a relaxed port_security (D8 restored)"
+            check:
+              ($error == null): true
+# B (VMDisk/VMInstance), the backend, and the probe pods were all chainsaw-applied
+# and are reclaimed automatically at cleanup — no explicit teardown needed.

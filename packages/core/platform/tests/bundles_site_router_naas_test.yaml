@@ -1,0 +1,102 @@
+suite: site-router installed by the naas bundle
+templates:
+  - templates/bundles/naas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # The site-router feature is only useful once its app catalog registration
+  # AND its mediation controller are installed. Both must ride the naas bundle
+  # (the NaaS analog of vpn-application); if either regresses to being defined
+  # as a PackageSource but never instantiated by a bundle, the feature silently
+  # does not install. It also needs the IaaS bundle (KubeVirt/CDI) to run its
+  # gateway VM, so both entries are additionally gated on bundles.iaas.enabled.
+  # Guard both packages and both gates.
+  - it: emits the site-router application and controller Packages when naas and iaas are enabled
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: true
+        iaas:
+          enabled: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+          any: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+          any: true
+
+  # NaaS can be enabled on isp-hosted (or isp-full without IaaS); site-router
+  # requires KubeVirt + CDI, so without the IaaS bundle it would be
+  # dependency-blocked forever. Gate it out entirely rather than emit a package
+  # that can never become Ready.
+  - it: emits neither site-router Package when naas is enabled but iaas is not
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: true
+        iaas:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+        not: true
+
+  - it: emits neither site-router Package when naas is disabled
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: false
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+        not: true
+
+  - it: honours the disabledPackages opt-out for the site-router packages
+    set:
+      bundles:
+        system:
+          variant: isp-full
+        naas:
+          enabled: true
+        iaas:
+          enabled: true
+        disabledPackages:
+          - cozystack.site-router-application
+          - cozystack.site-router-controller
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-application
+        not: true
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.site-router-controller
+        not: true

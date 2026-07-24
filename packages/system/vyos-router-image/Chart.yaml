@@ -1,0 +1,4 @@
+apiVersion: v2
+name: cozy-vyos-router-image
+description: Build-only package that produces the VyOS 1.5-rolling site-router appliance qcow2 (consumed by vm-default-images). Not deployed as a HelmRelease.
+version: 0.0.0 # Placeholder, the actual version will be automatically set during the build process

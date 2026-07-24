@@ -167,3 +167,20 @@ images:
       version: "3.21"
     architecture: amd64
     description: "Alpine Linux 3.21 cloud image (cloud-init)"
+  ## VyOS 1.5-rolling router appliance for the site-router app (NoCloud cloud-init + HTTPS API).
+  ## Built reproducibly in-repo (packages/system/vyos-router-image) and published as a
+  ## digest-pinned OCI containerDisk on the cozystack GHCR by the CI build-vyos job. The ref +
+  ## @sha256 digest live in images/vyos-router-disk.tag, stamped by that build (mirroring the
+  ## talos -> bootbox/matchbox.tag convention); the committed .tag carries a placeholder digest
+  ## until a build stamps the real one, and a not-yet-published import is a background CDI retry,
+  ## not a HelmRelease failure. Consumed via CDI's registry importer so the boot disk is pinned by
+  ## digest (an HTTP qcow2 cannot be). See packages/apps/site-router/docs/image-lifecycle.md.
+  - name: vyos-router
+    registryFromTag: images/vyos-router-disk.tag
+    storage: 12Gi
+    os:
+      family: Linux
+      name: VyOS
+      version: "1.5-rolling"
+    architecture: amd64
+    description: "VyOS 1.5-rolling router appliance (NoCloud cloud-init + HTTPS API) for site-router"

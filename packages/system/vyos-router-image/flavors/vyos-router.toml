@@ -1,0 +1,225 @@
+# VyOS 1.5-rolling "site-router" appliance flavor.
+#
+# Consumed by vyos-build's build-vyos-image (github.com/vyos/vyos-build, rolling
+# branch) via `--architecture amd64 vyos-router`. hack/build-qcow2.sh copies this
+# file into the pinned vyos-build checkout's data/build-flavors/ before the build,
+# so the positional flavor argument resolves to "vyos-router".
+#
+# ── How this actually boots and configures (traced through the pinned sources) ──
+#
+# build-vyos-image builds an ISO, then (for a non-iso image_format) runs
+# scripts/image-build/raw_image.py::create_raw_image, which produces a properly
+# INSTALLED disk: an EFI + ext4 root partition pair, the squashfs copied under
+# boot/<version>/, a `persistence.conf` of "/ union", and GRUB installed. So the
+# qcow2 is a real installed VyOS, not a live ISO booted off disk.
+#
+# On first boot two things cooperate to configure the guest, and BOTH need the
+# pieces this flavor adds:
+#
+#   1. vyos-1x's `vyos-router` init (src/init/vyos-router::init_bootfile) copies
+#      /usr/share/vyos/config.boot.default -> /opt/vyatta/etc/config.boot.default
+#      -> /opt/vyatta/etc/config/config.boot when no config.boot exists yet, then
+#      loads it. `default_config` below is written by build-vyos-image to
+#      /usr/share/vyos/config.boot.default (directories['data'] in vyos.defaults
+#      is '/usr/share/vyos/'), so it is the genuine first-boot config for the disk
+#      image — not merely an installer seed. The official cloud tooling ships the
+#      same file (vyos-build tools/cloud-init/AWS/config.boot.default), confirming
+#      a baked default config is the cloud-image pattern, not belt-and-suspenders.
+#
+#   2. cloud-init applies the chart's NoCloud seed. The `cloud-init` package on
+#      the VyOS rolling mirror is VyOS's fork (github.com/vyos/vyos-cloud-init,
+#      version 22.1-*~bddeb) and wins over Debian's by the rolling apt pin
+#      (data/live-build-config/archives/vyos-dev.pref.chroot: "Pin: release
+#      n=rolling / Pin-Priority: 999"; the mirror's Release Codename is "rolling").
+#      That fork ships /etc/cloud/cloud.cfg + /etc/cloud/cloud.cfg.d/10_vyos.cfg
+#      (setup.py installs config/cloud.cfg.d/*), and 10_vyos.cfg registers the
+#      VyOS cloud-init modules — cloud_config_modules: vyos_ifupdown, vyos,
+#      write_files, vyos_userdata, vyos_install — and sets distro: debian. The
+#      `vyos_userdata` module (cloudinit/config/cc_vyos_userdata.py) reads the
+#      chart's `vyos_config_commands`, loads the base config from
+#      /opt/vyatta/etc/config/config.boot if present else
+#      /usr/share/vyos/config.boot.default, applies the `set` commands on top, and
+#      writes /opt/vyatta/etc/config/config.boot. So the seed is applied on top of
+#      `default_config` — the two are a matched pair.
+#
+# ── What the stock flavor was missing (the live-boot-test failures) ────────────
+#
+#   D1  DATASOURCE. The fork's cloud.cfg (rendered from cloud.cfg.tmpl for the
+#       debian variant) sets NO `datasource_list`, and 10_vyos.cfg does not set one
+#       either, so cloud-init falls back to ds-identify probing. In a KubeVirt/QEMU
+#       guest that probe does not positively select a datasource, cloud-init
+#       no-ops, and `vyos_userdata` never runs -> the NoCloud seed is inert. Every
+#       official cloud image instead FORCES its datasource: the AWS tooling drops
+#       /etc/cloud/cloud.cfg.d/90_dpkg.cfg with `datasource_list: [ Ec2 ]`. The
+#       KubeVirt analogue is `datasource_list: [ NoCloud ]`, dropped below. NoCloud
+#       then reads KubeVirt's `cloudInitNoCloud` disk by its default fs label
+#       `cidata` (cc_vyos DataSourceNoCloud fs_label default), so the chart seed is
+#       read on first boot.
+#   D2  GUEST AGENT. Rolling removed the VM guest agents from the generic flavor
+#       (vyos-build commit "flavors: T6942: remove VM guest agents from the generic
+#       flavor"); the 1.4/sagitta generic + cloud flavors list `qemu-guest-agent`.
+#       Added below so the VMI reports AgentConnected and is introspectable.
+#   D3  SERIAL CONSOLE. `boot_settings.console_type` defaults to `tty` (tty0/VGA)
+#       in scripts/image-build/defaults.py, and raw_image.py bakes that into the
+#       installed image's GRUB/kernel console via grub.set_console_type -> the
+#       KubeVirt serial console (`virtctl console`, ttyS0) is silent. Set to `ttyS`
+#       below (a value grub.set_console_type documents: tty|ttyS|ttyAMA) so GRUB
+#       and the kernel log to ttyS0. `default_config` additionally puts a getty on
+#       ttyS0 once VyOS config loads, so the serial console works end to end.
+#   D4  nginx log dir. /var/log/nginx must exist or nginx (the :443 HTTPS-API
+#       listener) fails to start. Created below via [[includes_chroot]].
+#
+# NOTE (TOML): bare top-level keys (image_format, disk_size, packages,
+# default_config) must precede the [boot_settings] table, which must precede the
+# [[includes_chroot]] array-of-tables — once a table header is opened, later keys
+# belong to that table.
+
+# Produce a qcow2 disk (build-vyos-image runs `qemu-img convert -f raw -O qcow2`).
+image_format = ["qcow2"]
+
+# Virtual disk size (GiB). Matches the 12Gi CDI import headroom the site-router
+# boot DataVolume requests (packages/apps/site-router/templates/dv.yaml) and the
+# vm-default-images vyos-router entry — a qcow2 is sparse, so the on-registry
+# artifact stays ~1 GiB regardless.
+disk_size = 10
+
+# cloud-init: pulls VyOS's forked cloud-init from the rolling mirror (see the
+# header — it carries the vyos_userdata/write_files/vyos modules that apply the
+# chart's `vyos_config_commands`). qemu-guest-agent (D2): the KubeVirt guest agent
+# so the VMI reports AgentConnected; it is pulled from the Debian mirror (not on
+# the VyOS mirror) and enabled by its own debhelper systemd unit.
+packages = ["cloud-init", "qemu-guest-agent"]
+
+# The baked-in first-boot config (see header point 1). Derived from the VyOS
+# canonical default (vyos-1x data/config.boot.default; cf. vyos-build
+# tools/cloud-init/AWS/config.boot.default) with the appliance hardening the
+# site-router security model requires (S2):
+#
+#   - NO SSH service. The reference appliances open SSH on all interfaces; on this
+#     appliance the pod-network NIC is reachable by any same-namespace tenant
+#     workload, and the management firewall opens 22 from the whole pod CIDR — so
+#     a baked SSH service + the well-known `vyos`/`vyos` login would let any tenant
+#     SSH in and reconfigure the gateway outside the controller. The SSH service is
+#     therefore not enabled here, and the management firewall opens ONLY the HTTPS
+#     API (443). The controller drives the router solely over that API.
+#   - The baked `vyos` login is LOCKED (encrypted-password "*", an invalid hash),
+#     so the well-known credential authenticates on no surface. Debug access is via
+#     `virtctl console` (the KubeVirt serial console, gated by cluster RBAC — never
+#     the pod network); a break-glass credential is injected out of band, there is
+#     no shared secret baked into the image.
+#
+# eth0 over DHCP (so the guest is reachable even before cloud-init runs) and the
+# ttyS0 getty (D3) are baked here. The HTTPS API is intentionally NOT baked: the
+# chart's cloud-init seed owns it (it carries the controller api key), keeping the
+# image and its first-boot config a matched pair (docs/image-lifecycle.md). The
+# seed's `vyos_config_commands` re-apply eth0/console idempotently on top of this.
+# The `user vyos` account below is LOCKED: encrypted-password "*" is an invalid
+# crypt hash, so no password authenticates it on any surface (there is no SSH
+# service, and the serial-console login prompt rejects it). The well-known
+# vyos/vyos credential the reference appliance shipped is gone; break-glass
+# console debug uses an out-of-band credential baked into nothing here.
+#
+# IMPORTANT: this is VyOS curly-brace config (ConfigTree), which has NO `#`
+# comments — a `#` line is a parse error ("Failed to parse config: Syntax
+# error") that aborts cc_vyos / cc_vyos_userdata on first boot, leaving the
+# seed unapplied and the guest unreachable. Keep all rationale in TOML comments
+# out here, never inside the default_config string.
+default_config = """
+interfaces {
+    ethernet eth0 {
+        address dhcp
+        description "site-router uplink (pod network); managed by cloud-init and the site-router controller"
+    }
+    loopback lo {
+    }
+}
+service {
+    ntp {
+        allow-client {
+            address "127.0.0.0/8"
+            address "169.254.0.0/16"
+            address "10.0.0.0/8"
+            address "172.16.0.0/12"
+            address "192.168.0.0/16"
+            address "::1/128"
+            address "fe80::/10"
+            address "fc00::/7"
+        }
+        server time1.vyos.net {
+        }
+        server time2.vyos.net {
+        }
+        server time3.vyos.net {
+        }
+    }
+}
+system {
+    config-management {
+        commit-revisions "100"
+    }
+    console {
+        device ttyS0 {
+            speed 115200
+        }
+    }
+    host-name "vyos"
+    login {
+        operator-group default {
+            command-policy {
+                allow "*"
+            }
+        }
+        user vyos {
+            authentication {
+                encrypted-password "*"
+            }
+        }
+    }
+    option {
+        reboot-on-upgrade-failure 5
+    }
+    syslog {
+        local {
+            facility all {
+                level "info"
+            }
+            facility local7 {
+                level "debug"
+            }
+        }
+    }
+}
+"""
+
+# D3: build the installed image's GRUB + kernel console on ttyS0 (the KubeVirt
+# serial console) instead of the tty0/VGA default. raw_image.py passes
+# console_type to grub.set_console_type and writes console_num/console_speed into
+# the GRUB vars, so `console=ttyS0,115200` lands on the kernel cmdline and GRUB's
+# terminal — making `virtctl console` show boot output and a login prompt.
+[boot_settings]
+console_type = "ttyS"
+console_num = "0"
+console_speed = "115200"
+
+# D1: force the NoCloud datasource so KubeVirt's cloudInitNoCloud userdata (the
+# chart's `vyos_config_commands` seed) is read on first boot, instead of relying
+# on ds-identify probing that no-ops in a KubeVirt guest. Mirrors the official AWS
+# cloud tooling's /etc/cloud/cloud.cfg.d/90_dpkg.cfg (`datasource_list: [ Ec2 ]`).
+# Lexically after the fork's 10_vyos.cfg / 20_vyos_install.cfg (cloud-init reads
+# cloud.cfg.d in lexical order, later files overriding), so this datasource_list
+# wins; the package ships nothing in the 90+ range.
+[[includes_chroot]]
+path = "etc/cloud/cloud.cfg.d/90_datasource.cfg"
+data = """# Managed by the cozystack site-router image flavor.
+# Force the NoCloud datasource: KubeVirt attaches the chart's cloud-init userdata
+# as a disk labelled `cidata`, which NoCloud reads by default.
+datasource_list: [ NoCloud ]
+"""
+
+# D4: guarantee the nginx log directory exists so the HTTPS API listener starts.
+# includes_chroot writes files into the rootfs; an empty .keep materialises the
+# directory. nginx opens its logs as root before dropping privileges, so a
+# root-owned directory is sufficient.
+[[includes_chroot]]
+path = "var/log/nginx/.keep"
+data = ""

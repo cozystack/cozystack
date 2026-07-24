@@ -1,0 +1,69 @@
+{{- /*
+  Gateway VyOS VirtualMachine, rendered directly (not via the vm-instance chart)
+  so we control blockSize (DRBD 4Kn), the cloud-init NoCloud seed and the stable
+  firmware UUID. Single-homed on the tenant default pod network (Phase-1 routed
+  mode): the tunnel endpoint and the routed forwarding both ride the pod NIC.
+*/ -}}
+apiVersion: kubevirt.io/v1
+kind: VirtualMachine
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  runStrategy: Always
+  template:
+    metadata:
+      annotations:
+        kubevirt.io/allow-pod-bridge-network-live-migration: "true"
+        # A router forwards packets whose source IP is not its own pod IP, so
+        # OVN per-port anti-spoof (port_security) must be OFF on the gateway port.
+        # kube-ovn v1.15.10 only reconciles the logical-switch-port port_security
+        # field at pod CREATE — flipping the annotation on a live virt-launcher pod
+        # does NOT take effect (validated live) — so it is baked here on the pod
+        # template and the virt-launcher pod is born with it. The controller
+        # VERIFIES this annotation (it no longer patches live) and gates its Ready
+        # progression on the guest tunnel-ingress source filter, which is the
+        # sole compensating control (see docs/security-model.md, D8-ordering).
+        ovn.kubernetes.io/port_security: "false"
+      labels:
+        {{- include "site-router.selectorLabels" . | nindent 8 }}
+    spec:
+      domain:
+        cpu:
+          cores: {{ .Values.resources.cpu | int64 }}
+          sockets: 1
+          threads: 1
+        memory:
+          guest: {{ .Values.resources.memory }}
+        firmware:
+          uuid: {{ include "site-router.stableUuid" . }}
+        devices:
+          disks:
+          - name: boot
+            disk:
+              bus: virtio
+            blockSize:
+              custom:
+                logical: 512
+                physical: 4096
+            bootOrder: 1
+          - name: cloudinitdisk
+            disk: {}
+          interfaces:
+          - name: default
+            bridge: {}
+        machine:
+          type: ""
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: boot
+        dataVolume:
+          name: {{ .Release.Name }}-boot
+      - name: cloudinitdisk
+        cloudInitNoCloud:
+          secretRef:
+            name: {{ .Release.Name }}-cloud-init
+      networks:
+      - name: default
+        pod: {}

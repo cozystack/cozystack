@@ -1,0 +1,1055 @@
+/*
+Copyright 2026 The Cozystack Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+// Package render maps a fully-resolved SiteRouter routed configuration
+// into VyOS configuration operations consumed by the vyos.Client.
+//
+// The render is pure: it has no I/O and produces a deterministic slice
+// of vyos.Operation values from a fully-resolved Inputs struct. The
+// SiteRouter controller is responsible for resolving HelmRelease values,
+// discovered NIC devices and Secret-backed credentials into Inputs
+// before calling Render.
+//
+// Scope is the Phase-1 routed feature set (DECISIONS.md D3/D12):
+// interfaces, management firewall, IPsec site-to-site (forced UDP
+// encapsulation), static routes and BGP, plus the two net-new domains
+// (MSS clamp, tunnel-ingress source allow-list). NAT/DNAT (Phase 2
+// site-gateway) and HA/VRRP (Phase 4) are deliberately absent.
+package render
+
+import (
+	"strconv"
+	"strings"
+
+	"github.com/cozystack/cozystack/internal/vyos"
+)
+
+const (
+	// ikeGroupName / espGroupName are the constant group names used for
+	// every tunnel. Per-tunnel parameters live inside the per-tunnel
+	// proposal, so reusing a single group name is fine and keeps the
+	// VyOS tree compact.
+	ikeGroupName = "ROUTER-IKE"
+	espGroupName = "ROUTER-ESP"
+)
+
+// IKEVersion is the IKE key-exchange version emitted for the ike-group.
+type IKEVersion string
+
+const (
+	IKEVersionV1 IKEVersion = "ikev1"
+	IKEVersionV2 IKEVersion = "ikev2"
+)
+
+// Interface is one desired VyOS ethernet interface. Addressing is
+// resolved by the controller before Render: an uplink uses DHCP, a
+// routed/LAN interface carries a static Address plus the NetworkCIDR it
+// belongs to (the CIDR supplies the mask suffix).
+type Interface struct {
+	// Name is the human-facing interface name; it is emitted as the VyOS
+	// interface description and is the key for the device map.
+	Name string
+
+	// Uplink selects DHCP addressing when true (the interface facing the
+	// cluster / tunnel underlay).
+	Uplink bool
+
+	// Address is the static IPv4 address for a routed interface, e.g.
+	// "10.0.0.1" (no mask). Ignored when Uplink is true. Empty means the
+	// controller has not resolved an address yet — the address op is
+	// skipped and the reconciler requeues.
+	Address string
+
+	// NetworkCIDR is the CIDR the Address belongs to, e.g. "10.0.0.0/24".
+	// Only its mask suffix ("/24") is used. Empty (unresolved network)
+	// skips the address op rather than emitting an invalid maskless set.
+	NetworkCIDR string
+}
+
+// InterfaceStatus is a controller-discovered name → kernel-device
+// binding (from `show interfaces detail` MAC matching). It overrides
+// the positional device guess and drives removed-interface cleanup.
+type InterfaceStatus struct {
+	// Name matches an Interface.Name.
+	Name string
+
+	// Device is the discovered kernel device (e.g. "eth0"). Empty means
+	// discovery has not resolved this interface yet.
+	Device string
+}
+
+// StaticRoute is one `protocols static route` entry.
+type StaticRoute struct {
+	Description string
+	Destination string // CIDR, e.g. "192.168.50.0/24"
+	NextHop     string // IPv4 next-hop address
+}
+
+// IKEParams carries the IKE proposal for a tunnel. Zero-valued fields
+// fall back to the design defaults in normaliseIKE.
+type IKEParams struct {
+	Version    IKEVersion
+	Encryption string
+	Hash       string
+	DhGroup    int
+	Lifetime   int
+}
+
+// ESPParams carries the ESP proposal for a tunnel. Zero-valued fields
+// fall back to the design defaults in normaliseESP.
+type ESPParams struct {
+	Encryption string
+	Hash       string
+	PfsGroup   int
+	Lifetime   int
+}
+
+// IPSecTunnel is one site-to-site IPsec tunnel. The Phase-1 schema keeps
+// tunnel.type a single-value enum ("ipsec"); only ipsec is implemented
+// here (DECISIONS.md D12), so the type is implicit.
+type IPSecTunnel struct {
+	Description   string
+	PeerAddress   string
+	PSK           string
+	LocalSubnets  []string
+	RemoteSubnets []string
+	IKE           *IKEParams
+	ESP           *ESPParams
+}
+
+// BGPTimers carries the per-neighbor keepalive/hold timers.
+type BGPTimers struct {
+	Keepalive int
+	Hold      int
+}
+
+// BGPPeer is one BGP neighbor.
+type BGPPeer struct {
+	Description        string
+	PeerAddress        string
+	PeerAsn            int64
+	AdvertisedNetworks []string
+	Timers             *BGPTimers
+}
+
+// BGPConfig is the router-wide BGP configuration.
+type BGPConfig struct {
+	Asn      int64
+	RouterID string
+	Peers    []BGPPeer
+}
+
+// Inputs contains everything Render needs to produce VyOS operations.
+// It is fully resolved: the controller substitutes discovered devices,
+// resolved addresses and Secret-backed credentials before calling Render.
+type Inputs struct {
+	// Interfaces is the ordered desired-state interface list. Index
+	// position seeds the positional device map (eth0, eth1, …).
+	Interfaces []Interface
+
+	// DiscoveredInterfaces carries the controller's MAC-discovery result.
+	// A non-empty Device overrides the positional guess and drives
+	// removed-interface cleanup.
+	DiscoveredInterfaces []InterfaceStatus
+
+	// StaticRoutes are rendered under `protocols static route`.
+	StaticRoutes []StaticRoute
+
+	// Tunnels are site-to-site IPsec tunnels. Empty disables IPsec (and
+	// the IKE/ESP firewall accept rules).
+	Tunnels []IPSecTunnel
+
+	// BGP is the optional BGP configuration (nil disables BGP).
+	BGP *BGPConfig
+
+	// BGPPasswords resolves BGPPeer.PeerAddress → its MD5 password. Kept
+	// out of the peer struct so the credential source can change without
+	// touching the render contract.
+	BGPPasswords map[string]string
+
+	// ExternalIP is the IPv4 address the router advertises on its uplink;
+	// used as the local-address of IPsec tunnels. Empty leaves the field
+	// unset and lets VyOS auto-detect.
+	ExternalIP string
+
+	// ManagementCIDR is the CIDR the controller reaches VyOS from. The
+	// renderer emits firewall input rules accepting the HTTPS API (443) only
+	// from this CIDR; everything else is dropped. Empty disables the firewall
+	// block — only safe in test environments (fail-closed at the flag).
+	ManagementCIDR string
+
+	// --- Net-new Phase-1 fields (render implemented in Phase B) ---
+
+	// OverlayMTU is the tunnel-path overlay MTU that the TCP MSS clamp is
+	// derived from. Zero selects DefaultOverlayMTU.
+	OverlayMTU int
+
+	// TunnelDevice is the resolved VyOS kernel device carrying tunnel /
+	// forwarded traffic (discovered at runtime — never hardcoded). Both
+	// the MSS clamp and the tunnel-ingress source filter attach to it.
+	TunnelDevice string
+
+	// RemoteCIDRs is the set of declared remote subnets. The
+	// tunnel-ingress source filter accepts traffic sourced from these and
+	// drops everything else arriving on TunnelDevice.
+	RemoteCIDRs []string
+
+	// TenantNetworkCIDRs is the set of tenant-reachable cluster networks a
+	// decrypted tunnel packet is allowed to be destined for — the cluster pod
+	// (+ service) CIDR(s) the controller reads from the cozy-system/cozystack
+	// ConfigMap. Each TUNNEL-INGRESS source-accept is additionally constrained to
+	// a destination in this set, so a packet with a valid remote source but a
+	// WORLD / non-tenant destination is NOT accepted: a jumped-chain accept is a
+	// terminal verdict, so a source-only accept would forward a valid-source
+	// packet to ANY destination, bypassing renderForwardFilter's §3 default-drop
+	// and turning the gateway into unintended internet egress. Empty leaves the
+	// source-accepts unconstrained — the controller always resolves it in
+	// production (from clusterNetworks, which falls back to the platform
+	// defaults); only the render's own unit tests omit it.
+	TenantNetworkCIDRs []string
+}
+
+const (
+	// DefaultOverlayMTU is the design default overlay MTU for the IPsec
+	// tunnel path used when Inputs.OverlayMTU is unset.
+	DefaultOverlayMTU = 1320
+
+	// MSSClampOverhead is the IPv4 + TCP header overhead (20 + 20)
+	// subtracted from the overlay MTU to derive the TCP MSS clamp value.
+	// 1320 - 40 = 1280 (the design default clamp).
+	MSSClampOverhead = 40
+
+	// TunnelIngressRuleSet is the name of the platform-owned firewall rule set
+	// that holds the tunnel-ingress source allow-list. Post-M2 redesign it is
+	// reached only via a `firewall forward` ipsec-match jump (renderForwardFilter),
+	// never a per-interface inbound binding. The name/path is unchanged so the
+	// controller's confirmSourceFilterActive Retrieve stays valid.
+	TunnelIngressRuleSet = "TUNNEL-INGRESS"
+
+	// tunnelMgmtDropRule is the `firewall input` rule number of the Boundary-A
+	// drop (T08 §4): IPsec-decrypted traffic addressed to the guest's own
+	// management ports is dropped before any accept rule (rule 1 evaluates
+	// first). Unexported — only the render and its delete-then-set reference it.
+	tunnelMgmtDropRule = "1"
+)
+
+// Render returns the full set of VyOS operations needed to realise the
+// routed SiteRouter configuration. The slice has two halves: idempotent
+// `delete` ops on controller-managed subtrees first, then `set` ops that
+// recreate the desired configuration. VyOS applies the batch in a single
+// transaction, so the net effect is "replace the subtree".
+//
+// This is the only way to make spec-shrinks (removed IPSec tunnel,
+// removed BGP peer, removed static route) take effect — without the
+// leading deletes the old VyOS rules would linger as zombies.
+//
+// Interface-level removals are handled via DiscoveredInterfaces: entries
+// whose name no longer appears in Interfaces but that carry a discovered
+// device get their address and description deleted
+// (renderRemovedInterfaceCleanup).
+func Render(in Inputs) []vyos.Operation {
+	ops := make([]vyos.Operation, 0, 64)
+	ops = append(ops, deleteManagedSubtrees(in)...)
+	ops = append(ops, renderRemovedInterfaceCleanup(in)...)
+	ops = append(ops, renderInterfaces(in)...)
+	ops = append(ops, renderManagementFirewall(in)...)
+	ops = append(ops, renderTunnelManagementDrop(in)...)
+	ops = append(ops, renderMSSClamp(in)...)
+	ops = append(ops, renderTunnelIngressFilter(in)...)
+	ops = append(ops, renderForwardFilter(in)...)
+	ops = append(ops, renderStaticRoutes(in)...)
+	ops = append(ops, renderIPSec(in)...)
+	ops = append(ops, renderBGP(in)...)
+
+	return ops
+}
+
+// deleteManagedSubtrees emits idempotent `delete` ops for every subtree
+// this renderer fully owns. VyOS treats `delete` on a non-existent path
+// as a no-op, so emitting these unconditionally is safe on a fresh
+// router and a no-op once the controller has applied the same operations
+// before.
+//
+// Subtree boundary rationale:
+//
+//   - "firewall input" — fully controller-managed (management ACL).
+//   - "protocols static route" — every route comes from StaticRoutes.
+//   - "protocols bgp" — entire subtree, including system-as, neighbors,
+//     and address-family entries.
+//   - "vpn ipsec" — entire subtree (ike-group ROUTER-IKE, esp-group
+//     ROUTER-ESP, every site-to-site peer).
+//
+// NAT is out of scope for the routed Phase 1 (DECISIONS.md D3): no
+// `nat source`/`nat destination` op is ever emitted — neither set nor
+// delete — so the managed-subtree deletes carry no nat paths.
+//
+// We do NOT delete "interfaces ethernet": the VM NICs are created
+// elsewhere and removing the ethernet subtree would orphan the addresses
+// VyOS pulled in via cloud-init.
+func deleteManagedSubtrees(in Inputs) []vyos.Operation {
+	ops := []vyos.Operation{
+		{Op: vyos.OpDelete, Path: []string{"protocols", "static", "route"}},
+		{Op: vyos.OpDelete, Path: []string{"protocols", "bgp"}},
+		{Op: vyos.OpDelete, Path: []string{"vpn", "ipsec"}},
+	}
+
+	// firewall/input is only owned by the controller when ManagementCIDR
+	// is set (renderManagementFirewall emits the chain). With an empty
+	// ManagementCIDR (`--allow-open-management` test path), the renderer
+	// emits no firewall rules — deleting the chain would silently wipe
+	// any rules an operator added manually. Skip the delete in that case.
+	// firewall/input is controller-owned when the management ACL (ManagementCIDR)
+	// OR the Boundary-A tunnel-management drop (TunnelDevice) is stamped. With
+	// both absent the chain is left alone so operator-added rules survive a no-op
+	// Configure. When the management ACL is present the whole chain is
+	// deleted+rebuilt (the Boundary-A rule is re-added by renderTunnelManagementDrop);
+	// when only the Boundary-A drop is present its single rule is cleaned up on
+	// its own so a config that later drops the tunnel does not strand it.
+	if in.ManagementCIDR != "" {
+		ops = append(ops,
+			vyos.Operation{Op: vyos.OpDelete, Path: inputFilterPath()},
+		)
+	} else if in.TunnelDevice != "" {
+		ops = append(ops,
+			vyos.Operation{Op: vyos.OpDelete, Path: inputFilterPath("rule", tunnelMgmtDropRule)},
+		)
+	}
+
+	// Net-new platform-owned domains: clear the tunnel-ingress source allow-list
+	// (the named rule set) and the whole guest forward-chain filter before
+	// re-rendering, so a shrunk RemoteCIDRs list leaves no stale accept rule and
+	// no stale forward jump (delete-then-set). Only fired when a tunnel device is
+	// resolved (the feature is otherwise off). The M2 pod-NIC-inbound binding is
+	// gone — the guard is now a `firewall forward` ipsec-match jump, so there is
+	// no per-interface binding to delete. Paths use the VyOS 1.5 `firewall ipv4`
+	// family via the shared helpers (validated live; see forwardFilterPath).
+	if in.TunnelDevice != "" {
+		ops = append(ops,
+			vyos.Operation{Op: vyos.OpDelete, Path: tunnelIngressPath()},
+			vyos.Operation{Op: vyos.OpDelete, Path: forwardFilterPath()},
+		)
+	}
+
+	return ops
+}
+
+// interfaceDeviceMap maps an interface name to its bound ethN device. The
+// base mapping is positional (eth0 is the first interface, and so on) —
+// correct at first boot, where NICs are attached in spec order and the
+// kernel names them sequentially. Once the controller's MAC discovery has
+// populated DiscoveredInterfaces, the discovered binding overrides the
+// positional guess: it is normative and survives reordering and kernel
+// device-name reuse after hot-plug.
+func interfaceDeviceMap(in Inputs) map[string]string {
+	m := make(map[string]string, len(in.Interfaces))
+
+	for i := range in.Interfaces {
+		m[in.Interfaces[i].Name] = "eth" + strconv.Itoa(i)
+	}
+
+	for i := range in.DiscoveredInterfaces {
+		st := &in.DiscoveredInterfaces[i]
+		if st.Device == "" {
+			continue
+		}
+
+		if _, ok := m[st.Name]; ok {
+			m[st.Name] = st.Device
+		}
+	}
+
+	return m
+}
+
+// renderRemovedInterfaceCleanup emits delete ops for interfaces that were
+// removed from the desired list but whose discovered device binding is
+// still recorded in DiscoveredInterfaces. Without the cleanup the freed
+// device keeps its address/description, and a future hot-plugged NIC that
+// reuses the kernel name would silently inherit them.
+//
+// Two guards keep this safe:
+//
+//   - entries without a discovered device are skipped — guessing
+//     positionally could delete a live interface;
+//   - devices that a current interface has been re-bound to are skipped —
+//     the live interface's own set ops would fight the delete inside the
+//     same transaction.
+func renderRemovedInterfaceCleanup(in Inputs) []vyos.Operation {
+	if len(in.DiscoveredInterfaces) == 0 {
+		return nil
+	}
+
+	live := interfaceDeviceMap(in)
+
+	claimed := make(map[string]bool, len(live))
+	for _, dev := range live {
+		claimed[dev] = true
+	}
+
+	var ops []vyos.Operation
+
+	for i := range in.DiscoveredInterfaces {
+		st := &in.DiscoveredInterfaces[i]
+		if st.Device == "" || claimed[st.Device] {
+			continue
+		}
+
+		if _, ok := live[st.Name]; ok {
+			continue
+		}
+
+		ops = append(ops,
+			vyos.Operation{Op: vyos.OpDelete, Path: []string{"interfaces", "ethernet", st.Device, "address"}},
+			vyos.Operation{Op: vyos.OpDelete, Path: []string{"interfaces", "ethernet", st.Device, "description"}},
+		)
+	}
+
+	return ops
+}
+
+func renderInterfaces(in Inputs) []vyos.Operation {
+	ops := make([]vyos.Operation, 0, len(in.Interfaces)*2)
+
+	devs := interfaceDeviceMap(in)
+
+	for i := range in.Interfaces {
+		iface := &in.Interfaces[i]
+		dev := devs[iface.Name]
+
+		ops = append(ops, set([]string{"interfaces", "ethernet", dev, "description"}, iface.Name))
+
+		if iface.Uplink {
+			ops = append(ops, set([]string{"interfaces", "ethernet", dev, "address"}, "dhcp"))
+
+			continue
+		}
+
+		// Routed/LAN interface: emit the static address only when the
+		// controller has resolved both the address and the network mask.
+		// A missing value surfaces as drift (the reconciler requeues),
+		// not as an invalid maskless `set` VyOS would reject.
+		if iface.Address == "" {
+			continue
+		}
+
+		mask := cidrMaskSuffix(iface.NetworkCIDR)
+		if mask == "" {
+			continue
+		}
+
+		ops = append(ops, set(
+			[]string{"interfaces", "ethernet", dev, "address"},
+			iface.Address+mask,
+		))
+	}
+
+	return ops
+}
+
+// cidrMaskSuffix turns "10.0.0.0/24" into "/24" (including the slash).
+// Returns "" when the input does not contain a slash.
+func cidrMaskSuffix(cidr string) string {
+	if idx := strings.Index(cidr, "/"); idx >= 0 {
+		return cidr[idx:]
+	}
+
+	return ""
+}
+
+// renderManagementFirewall emits VyOS firewall rules that:
+//
+//  1. Accept established/related return traffic (rule 5).
+//  2. Accept the HTTPS API (443) from Inputs.ManagementCIDR (rule 10). SSH
+//     (22) is deliberately NOT opened — the appliance disables SSH and locks
+//     the baked login, so the pod network cannot reach a shell.
+//  3. Accept IKE (UDP 500, NAT-T UDP 4500) and ESP (IP protocol 50)
+//     when Tunnels is non-empty (rules 20/21/22).
+//  4. Accept BGP (TCP 179) from every configured BGP peer
+//     (one rule per peer starting at 30).
+//  5. Drop everything else.
+//
+// Without the protocol-specific accept rules in (3) and (4) the
+// controller would render `vpn ipsec site-to-site peer …` and
+// `protocols bgp …` configuration but the firewall it itself stamps
+// would block the underlying packets — tunnels would never come up and
+// BGP sessions would sit in Idle forever.
+func renderManagementFirewall(in Inputs) []vyos.Operation {
+	if in.ManagementCIDR == "" {
+		return nil
+	}
+
+	// VyOS 1.5-rolling: the `firewall input` global-input hook is now
+	// `firewall ipv4 input filter` (via inputFilterPath) and firewall `state`
+	// is a multi-value leaf (`state established` / `state related`), not the
+	// old `state established enable`. Validated live against the shipped image.
+	ops := make([]vyos.Operation, 0, 16)
+
+	// Rule 5: accept established/related sessions BEFORE any other accept
+	// rule. Without it every Configure (which always replays the input
+	// chain) tears down the controller's own in-flight HTTPS session. The
+	// cloud-init seed must agree on this part of the chain.
+	ops = append(ops,
+		set(inputFilterPath("rule", "5", "action"), "accept"),
+		set(inputFilterPath("rule", "5", "state"), "established"),
+		set(inputFilterPath("rule", "5", "state"), "related"),
+	)
+
+	// Rule 10: management-CIDR allow rule for the HTTPS API (443) only. SSH (22)
+	// is NOT opened: the appliance ships with no SSH service and the well-known
+	// vyos login locked, and the controller drives the router solely over the
+	// HTTPS API — so 22 stays behind the default-action drop. Console debug is via
+	// `virtctl console` (cluster-RBAC-gated), never the pod network.
+	ops = append(ops,
+		set(inputFilterPath("rule", "10", "action"), "accept"),
+		set(inputFilterPath("rule", "10", "source", "address"), in.ManagementCIDR),
+		set(inputFilterPath("rule", "10", "protocol"), "tcp"),
+		set(inputFilterPath("rule", "10", "destination", "port"), "443"),
+	)
+
+	ops = append(ops, renderIPSecFirewallAccept(in)...)
+	ops = append(ops, renderBGPFirewallAccept(in)...)
+
+	ops = append(ops,
+		set(inputFilterPath("default-action"), "drop"),
+	)
+
+	return ops
+}
+
+// renderIPSecFirewallAccept emits IKE (UDP 500), NAT-T (UDP 4500) and ESP
+// (IP protocol 50) accept rules when Tunnels is non-empty. A router
+// without IPsec keeps the tighter firewall.
+func renderIPSecFirewallAccept(in Inputs) []vyos.Operation {
+	if len(in.Tunnels) == 0 {
+		return nil
+	}
+
+	return []vyos.Operation{
+		set(inputFilterPath("rule", "20", "action"), "accept"),
+		set(inputFilterPath("rule", "20", "protocol"), "udp"),
+		set(inputFilterPath("rule", "20", "destination", "port"), "500"),
+		set(inputFilterPath("rule", "21", "action"), "accept"),
+		set(inputFilterPath("rule", "21", "protocol"), "udp"),
+		set(inputFilterPath("rule", "21", "destination", "port"), "4500"),
+		set(inputFilterPath("rule", "22", "action"), "accept"),
+		set(inputFilterPath("rule", "22", "protocol"), "esp"),
+	}
+}
+
+// renderBGPFirewallAccept emits a per-peer TCP 179 accept rule for every
+// configured BGP peer, source-restricted to the peer's IPv4 address. A
+// peer that was deleted from spec has its firewall hole closed on the
+// next reconcile via deleteManagedSubtrees.
+func renderBGPFirewallAccept(in Inputs) []vyos.Operation {
+	if in.BGP == nil {
+		return nil
+	}
+
+	ops := make([]vyos.Operation, 0, len(in.BGP.Peers)*4)
+	ruleNum := 30
+
+	for i := range in.BGP.Peers {
+		peer := &in.BGP.Peers[i]
+		if peer.PeerAddress == "" {
+			continue
+		}
+
+		n := strconv.Itoa(ruleNum)
+		ops = append(ops,
+			set(inputFilterPath("rule", n, "action"), "accept"),
+			set(inputFilterPath("rule", n, "source", "address"), peer.PeerAddress),
+			set(inputFilterPath("rule", n, "protocol"), "tcp"),
+			set(inputFilterPath("rule", n, "destination", "port"), "179"),
+		)
+		ruleNum += 10
+	}
+
+	return ops
+}
+
+// --- Net-new Phase-1 render domains -------------------------------------
+//
+// The renderers below implement Phase-1 requirements absent from the
+// upstream VyOS-router reference implementation (T02) plus the T08 guest
+// security guards. Each isolates the VyOS-version-specific leaf path in a
+// single helper (mssClampOp; tunnelIngressPath for the source allow-list;
+// forwardFilterPath / inputFilterPath for the forward default-deny, the
+// ipsec-match jump and the Boundary-A management drop; the force-encapsulation
+// leaf lives in renderIPSec) so the syntax can be swapped in one place once the
+// live push validates it against the shipped image.
+
+// renderMSSClamp emits a TCP MSS clamp on the resolved tunnel device,
+// derived from the overlay MTU (OverlayMTU, defaulting to
+// DefaultOverlayMTU) minus the IPv4+TCP header overhead. The design
+// default is MTU 1320 → clamp 1280. Without a resolved TunnelDevice there
+// is nothing to clamp.
+func renderMSSClamp(in Inputs) []vyos.Operation {
+	if in.TunnelDevice == "" {
+		return nil
+	}
+
+	mtu := in.OverlayMTU
+	if mtu == 0 {
+		mtu = DefaultOverlayMTU
+	}
+
+	clamp := mtu - MSSClampOverhead
+
+	return []vyos.Operation{mssClampOp(in.TunnelDevice, strconv.Itoa(clamp))}
+}
+
+// mssClampOp is the single place that emits the version-specific MSS-clamp
+// leaf path. The device is caller-resolved (never hardcoded).
+//
+// VyOS 1.5-rolling: the TCP MSS clamp is NOT under `firewall` at all (both
+// `firewall options ...` and `firewall ipv4 options ...` are rejected as
+// invalid paths on the shipped image). It lives on the interface itself:
+// `interfaces ethernet <dev> ip adjust-mss <value>`. Validated live against
+// the 2026.05.13-0044-rolling image.
+func mssClampOp(dev, clamp string) vyos.Operation {
+	return set([]string{"interfaces", "ethernet", dev, "ip", "adjust-mss"}, clamp)
+}
+
+// renderTunnelIngressFilter renders the platform-owned tunnel-ingress source
+// allow-list into the named rule set TUNNEL-INGRESS: established/related return
+// traffic is accepted (rule 5), each declared remote CIDR is accepted by source
+// address (rules 10, 20, …), and everything else is dropped by the rule-set
+// default-action. The rule set only takes effect via renderForwardFilter's
+// ipsec-match jump — it is NOT bound to any interface (see the M2 redesign
+// note there). The controller confirms this named set is live before flipping
+// the instance Ready (T08); its Retrieve path is TUNNEL-INGRESS, unchanged.
+//
+// Requires a resolved TunnelDevice; without one the feature is off. An empty
+// RemoteCIDRs list is deliberately NOT an early return: deleteManagedSubtrees
+// has already removed the old rule set, so returning nothing would leave the
+// forward jump pointing at an empty target (fail-OPEN — decrypted traffic would
+// fall through). Instead the established/related accept and the default-action
+// drop are still emitted — a resolved tunnel with no declared remotes fails
+// CLOSED (drop all decrypted traffic except return) rather than open.
+func renderTunnelIngressFilter(in Inputs) []vyos.Operation {
+	if in.TunnelDevice == "" {
+		return nil
+	}
+
+	ops := make([]vyos.Operation, 0, len(in.RemoteCIDRs)*2+4)
+
+	// Rule 5: accept established/related return traffic before any source match.
+	// VyOS 1.5 `state` is a multi-value leaf (validated live), not the old
+	// `state established enable`.
+	ops = append(ops,
+		set(tunnelIngressPath("rule", "5", "action"), "accept"),
+		set(tunnelIngressPath("rule", "5", "state"), "established"),
+		set(tunnelIngressPath("rule", "5", "state"), "related"),
+	)
+
+	// One accept per (declared remote CIDR × tenant-reachable cluster network),
+	// numbered from 10 with step 10 (gaps leave room for manual debugging
+	// interventions). Each accept matches source ∈ remoteCIDR AND destination ∈
+	// tenant network: a jumped-chain accept is a terminal verdict, so without the
+	// destination constraint a valid-source packet to ANY destination — including
+	// the world — would be forwarded, bypassing renderForwardFilter's §3
+	// default-drop and making the gateway unintended internet egress. A decrypted
+	// packet to a non-tenant destination matches no accept and falls through to the
+	// default-action drop. When TenantNetworkCIDRs is empty (render unit tests
+	// only — the controller always resolves it) the accept stays source-only.
+	rule := 10
+	for _, cidr := range in.RemoteCIDRs {
+		if len(in.TenantNetworkCIDRs) == 0 {
+			n := strconv.Itoa(rule)
+			ops = append(ops,
+				set(tunnelIngressPath("rule", n, "action"), "accept"),
+				set(tunnelIngressPath("rule", n, "source", "address"), cidr),
+			)
+			rule += 10
+			continue
+		}
+		for _, tenantNet := range in.TenantNetworkCIDRs {
+			n := strconv.Itoa(rule)
+			ops = append(ops,
+				set(tunnelIngressPath("rule", n, "action"), "accept"),
+				set(tunnelIngressPath("rule", n, "source", "address"), cidr),
+				set(tunnelIngressPath("rule", n, "destination", "address"), tenantNet),
+			)
+			rule += 10
+		}
+	}
+
+	// Drop everything that is not an accepted (source ∈ remoteCIDR AND dest ∈
+	// tenant network) decrypted flow — including a valid-source packet to a
+	// non-tenant / world destination (the destination-constrained accepts above).
+	//
+	// The destination-constrained accept (`rule N source address <cidr>` +
+	// `rule N destination address <net>`) and this default-action drop are
+	// validated live against the shipped VyOS 1.5 image (a full render-equivalent
+	// config commits cleanly). The T13 negative-security suite still confirms on
+	// the live gateway that a valid-source / world-destination packet is dropped.
+	ops = append(ops, set(tunnelIngressPath("default-action"), "drop"))
+
+	return ops
+}
+
+// renderForwardFilter renders the guest forward-chain filter — the M2 redesign
+// of how the tunnel-ingress source allow-list is applied, plus the §3
+// default-deny. The old design bound TUNNEL-INGRESS to the pod-NIC INBOUND hook
+// (`interfaces ethernet <dev> firewall in name`), which dropped locally-
+// originated tenant→remote egress before IPsec: a cluster source (e.g.
+// 10.244.x.x) is never a member of remoteCIDRs, so the source allow-list's
+// default-drop black-holed it. The redesign filters ONLY IPsec-decrypted
+// ingress:
+//
+//   - default-action drop — routed mode advertises specific remote networks and
+//     never a default route, so forwarding is denied by default (§3 tunnel→world
+//     default-deny); only the recognised flows below pass;
+//   - rule 5 accepts established/related return traffic;
+//   - rule 10 matches non-IPsec traffic (`ipsec match-none`) and accepts it, so
+//     locally-originated (plaintext, pre-IPsec) tenant→remote egress is NOT
+//     subject to the source-filter drop;
+//   - rule 20 matches IPsec-decrypted traffic (`ipsec match-ipsec`) and jumps to
+//     TUNNEL-INGRESS, so the source allow-list + its default-drop apply to
+//     decrypted-from-tunnel traffic ONLY.
+//
+// Requires a resolved TunnelDevice. The forward-filter + ipsec-match leaf syntax
+// is validated against VyOS 1.5-rolling and shared via the single-point
+// forwardFilterPath helper; it is VyOS-version-specific and centralized there so
+// a future image whose syntax differs is a one-place change.
+func renderForwardFilter(in Inputs) []vyos.Operation {
+	if in.TunnelDevice == "" {
+		return nil
+	}
+
+	return []vyos.Operation{
+		// §3 default-deny tunnel→world.
+		set(forwardFilterPath("default-action"), "drop"),
+		// Established/related return traffic (both directions). VyOS 1.5 `state`
+		// is a multi-value leaf (validated live).
+		set(forwardFilterPath("rule", "5", "action"), "accept"),
+		set(forwardFilterPath("rule", "5", "state"), "established"),
+		set(forwardFilterPath("rule", "5", "state"), "related"),
+		// Non-IPsec (local egress) — accepted, NOT subject to the source-filter
+		// drop. This is the M2 fix. VyOS 1.5 spells the inbound non-IPsec matcher
+		// `match-none-in` (bare `match-none` is an ambiguous prefix).
+		set(forwardFilterPath("rule", "10", "ipsec", "match-none-in"), ""),
+		set(forwardFilterPath("rule", "10", "action"), "accept"),
+		// IPsec-decrypted ingress — source-filtered via the named rule set. VyOS
+		// 1.5 spells the inbound-IPsec matcher `match-ipsec-in` (validated live).
+		set(forwardFilterPath("rule", "20", "ipsec", "match-ipsec-in"), ""),
+		set(forwardFilterPath("rule", "20", "action"), "jump"),
+		set(forwardFilterPath("rule", "20", "jump-target"), TunnelIngressRuleSet),
+	}
+}
+
+// renderTunnelManagementDrop renders Boundary A (T08 §4): a local-input drop of
+// the management ports (SSH 22, HTTPS API 443) for IPsec-decrypted traffic. A
+// packet decrypted by VyOS and addressed to the guest itself does not cross the
+// pod veth where Cilium enforces, so the guest must drop it. Matching the
+// IPsec-decrypted property (rather than an interface) covers every tunnel
+// interface, including any created dynamically, with a single rule. It is gated
+// on a resolved TunnelDevice and is emitted regardless of ManagementCIDR — a
+// decrypted packet to the API must be dropped even on the open-management path.
+func renderTunnelManagementDrop(in Inputs) []vyos.Operation {
+	if in.TunnelDevice == "" {
+		return nil
+	}
+
+	// VyOS 1.5 (validated live): the inbound-IPsec matcher is `match-ipsec-in`,
+	// and a rule that sets a destination port MUST also set a protocol or the
+	// commit fails ("Protocol must be defined if specifying a port"). The guest
+	// management ports (SSH 22, HTTPS API 443) are both TCP.
+	return []vyos.Operation{
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "ipsec", "match-ipsec-in"), ""),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "protocol"), "tcp"),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "destination", "port"), "22,443"),
+		set(inputFilterPath("rule", tunnelMgmtDropRule, "action"), "drop"),
+	}
+}
+
+// tunnelIngressPath / forwardFilterPath / inputFilterPath are the single places
+// that emit the version-specific base paths for, respectively, the named source
+// allow-list rule set, the guest forward-chain filter (§3 default-deny + the
+// ipsec-match jump), and the local-input chain (Boundary A + the management
+// ACL).
+//
+// VyOS 1.5-rolling nftables firewall (validated live against the
+// 2026.05.13-0044-rolling image): the flat 1.4-style family (`firewall name`,
+// `firewall forward`, `firewall input`) is rejected as invalid; every rule set
+// and base chain lives under `firewall ipv4 {name <NAME>,forward filter,input
+// filter}`. The ipsec matchers are `ipsec match-ipsec-in` / `ipsec match-none-in`
+// (bare `match-ipsec`/`match-none` are ambiguous prefixes), and firewall `state`
+// is a multi-value leaf (`state established` / `state related`), not the old
+// `state established enable`. The controller's tunnelIngressRulesetPath /
+// tunnelIngressForwardPath are flipped in lockstep.
+func tunnelIngressPath(sub ...string) []string {
+	return append([]string{"firewall", "ipv4", "name", TunnelIngressRuleSet}, sub...)
+}
+
+func forwardFilterPath(sub ...string) []string {
+	return append([]string{"firewall", "ipv4", "forward", "filter"}, sub...)
+}
+
+func inputFilterPath(sub ...string) []string {
+	return append([]string{"firewall", "ipv4", "input", "filter"}, sub...)
+}
+
+func renderStaticRoutes(in Inputs) []vyos.Operation {
+	ops := make([]vyos.Operation, 0, len(in.StaticRoutes)*2)
+
+	for i := range in.StaticRoutes {
+		r := &in.StaticRoutes[i]
+
+		base := []string{"protocols", "static", "route", r.Destination}
+
+		ops = append(ops, set(append(base, "next-hop", r.NextHop), ""))
+
+		if r.Description != "" {
+			ops = append(ops, set(append(base, "description"), r.Description))
+		}
+	}
+
+	return ops
+}
+
+func renderIPSec(in Inputs) []vyos.Operation {
+	if len(in.Tunnels) == 0 {
+		return nil
+	}
+
+	ops := make([]vyos.Operation, 0, len(in.Tunnels)*10)
+
+	for i := range in.Tunnels {
+		t := &in.Tunnels[i]
+
+		// PSK is a plain field on the tunnel. An optional Description
+		// cannot serve as a stable map key because admission permits
+		// empty and duplicate descriptions; the resulting map overwrite
+		// would silently swap PSKs between tunnels.
+		if t.PSK == "" {
+			// Should be unreachable: validation requires PSK non-empty.
+			// Skip defensively to avoid emitting a tunnel without auth,
+			// which would silently widen the surface.
+			continue
+		}
+
+		ike := normaliseIKE(t.IKE)
+		esp := normaliseESP(t.ESP)
+
+		ops = append(ops,
+			set([]string{"vpn", "ipsec", "ike-group", ikeGroupName, "proposal", "1", "dh-group"}, strconv.Itoa(ike.DhGroup)),
+			set([]string{"vpn", "ipsec", "ike-group", ikeGroupName, "proposal", "1", "encryption"}, ike.Encryption),
+			set([]string{"vpn", "ipsec", "ike-group", ikeGroupName, "proposal", "1", "hash"}, ike.Hash),
+			set([]string{"vpn", "ipsec", "ike-group", ikeGroupName, "lifetime"}, strconv.Itoa(ike.Lifetime)),
+			set([]string{"vpn", "ipsec", "ike-group", ikeGroupName, "key-exchange"}, string(ike.Version)),
+
+			set([]string{"vpn", "ipsec", "esp-group", espGroupName, "proposal", "1", "encryption"}, esp.Encryption),
+			set([]string{"vpn", "ipsec", "esp-group", espGroupName, "proposal", "1", "hash"}, esp.Hash),
+			set([]string{"vpn", "ipsec", "esp-group", espGroupName, "pfs"}, "dh-group"+strconv.Itoa(esp.PfsGroup)),
+			set([]string{"vpn", "ipsec", "esp-group", espGroupName, "lifetime"}, strconv.Itoa(esp.Lifetime)),
+		)
+
+		// VyOS 1.5 site-to-site peer model (validated live against the shipped
+		// image): the peer key is an alphanumeric NAME, not the IP — an IP with
+		// dots is rejected ("Peer connection name must be alphanumeric"). The
+		// remote IP goes in `remote-address`, and the PSK is no longer inline under
+		// the peer (`authentication pre-shared-secret` was removed); it lives in the
+		// global `vpn ipsec authentication psk <name>` subtree, matched to the peer
+		// by id.
+		peerName := sanitisePeerName(t.Description, i)
+		peer := []string{"vpn", "ipsec", "site-to-site", "peer", peerName}
+
+		// Global PSK for this peer, matched by the remote address as id.
+		ops = append(ops,
+			set([]string{"vpn", "ipsec", "authentication", "psk", peerName, "secret"}, t.PSK),
+			set([]string{"vpn", "ipsec", "authentication", "psk", peerName, "id"}, t.PeerAddress),
+		)
+
+		ops = append(ops,
+			set(append(peer, "authentication", "mode"), "pre-shared-secret"),
+			set(append(peer, "remote-address"), t.PeerAddress),
+			set(append(peer, "ike-group"), ikeGroupName),
+			set(append(peer, "default-esp-group"), espGroupName),
+		)
+
+		// Forced ESP-in-UDP (NAT-T) on every peer, unconditionally: native ESP is
+		// dropped pod-to-pod by Cilium conntrack, so the tunnel must always
+		// encapsulate in UDP regardless of whether a NAT is detected. VyOS 1.5
+		// renamed the per-peer leaf `force-encapsulation` → `force-udp-encapsulation`
+		// (a value-less flag; validated live).
+		ops = append(ops, set(append(peer, "force-udp-encapsulation"), ""))
+
+		// local-address is REQUIRED in VyOS 1.5 — the commit fails with "Missing
+		// local-address or dhcp-interface on site-to-site peer" without it. Use the
+		// resolved uplink IP when known, else "any" (the Phase-1 responder binds to
+		// whatever the pod NIC carries).
+		localAddr := in.ExternalIP
+		if localAddr == "" {
+			localAddr = "any"
+		}
+		ops = append(ops, set(append(peer, "local-address"), localAddr))
+
+		// Tunnels are numbered starting at 1; pair local and remote
+		// subnets 1-to-1. If counts differ, surplus entries are ignored.
+		n := min(len(t.LocalSubnets), len(t.RemoteSubnets))
+		for j := range n {
+			tun := strconv.Itoa(j + 1)
+			ops = append(ops,
+				set(append(peer, "tunnel", tun, "local", "prefix"), t.LocalSubnets[j]),
+				set(append(peer, "tunnel", tun, "remote", "prefix"), t.RemoteSubnets[j]),
+			)
+		}
+	}
+
+	return ops
+}
+
+func renderBGP(in Inputs) []vyos.Operation {
+	bgp := in.BGP
+	if bgp == nil {
+		return nil
+	}
+
+	asn := strconv.FormatInt(bgp.Asn, 10)
+	ops := make([]vyos.Operation, 0, len(bgp.Peers)*4)
+
+	if bgp.RouterID != "" {
+		ops = append(ops, set([]string{"protocols", "bgp", "parameters", "router-id"}, bgp.RouterID))
+	}
+
+	for i := range bgp.Peers {
+		p := &bgp.Peers[i]
+		neigh := []string{"protocols", "bgp", "neighbor", p.PeerAddress}
+
+		ops = append(ops, set(append(neigh, "remote-as"), strconv.FormatInt(p.PeerAsn, 10)))
+
+		if pw, ok := in.BGPPasswords[p.PeerAddress]; ok {
+			ops = append(ops, set(append(neigh, "password"), pw))
+		}
+
+		if p.Timers != nil {
+			ops = append(ops,
+				set(append(neigh, "timers", "keepalive"), strconv.Itoa(p.Timers.Keepalive)),
+				set(append(neigh, "timers", "holdtime"), strconv.Itoa(p.Timers.Hold)),
+			)
+		}
+
+		for _, cidr := range p.AdvertisedNetworks {
+			ops = append(ops, set([]string{
+				"protocols", "bgp", "address-family", "ipv4-unicast", "network", cidr,
+			}, ""))
+		}
+	}
+
+	// Local AS lives on the BGP root in VyOS 1.4+ (no per-neighbor
+	// local-as). Emitting at the end keeps the configure order
+	// parent → children.
+	ops = append(ops, set([]string{"protocols", "bgp", "system-as"}, asn))
+
+	return ops
+}
+
+// normaliseIKE returns IKE parameters with the design defaults
+// substituted for any zero-valued fields.
+func normaliseIKE(p *IKEParams) IKEParams {
+	out := IKEParams{}
+	if p != nil {
+		out = *p
+	}
+
+	if out.Version == "" {
+		out.Version = IKEVersionV2
+	}
+
+	if out.Encryption == "" {
+		out.Encryption = "aes256"
+	}
+
+	if out.Hash == "" {
+		out.Hash = "sha256"
+	}
+
+	if out.DhGroup == 0 {
+		out.DhGroup = 14
+	}
+
+	if out.Lifetime == 0 {
+		out.Lifetime = 28800
+	}
+
+	return out
+}
+
+// normaliseESP returns ESP parameters with the design defaults
+// substituted for any zero-valued fields.
+func normaliseESP(p *ESPParams) ESPParams {
+	out := ESPParams{}
+	if p != nil {
+		out = *p
+	}
+
+	if out.Encryption == "" {
+		out.Encryption = "aes256"
+	}
+
+	if out.Hash == "" {
+		out.Hash = "sha256"
+	}
+
+	if out.PfsGroup == 0 {
+		out.PfsGroup = 14
+	}
+
+	if out.Lifetime == 0 {
+		out.Lifetime = 3600
+	}
+
+	return out
+}
+
+// PeerName returns the VyOS site-to-site peer connection name that Render emits
+// for the tunnel at index idx with the given description. It is the identity the
+// runtime SA observation reports (vyos.IPSecObservation.PeerName), so a caller
+// seeding a configured-but-down tunnel gauge uses it to match the live-up series.
+func PeerName(description string, idx int) string {
+	return sanitisePeerName(description, idx)
+}
+
+// sanitisePeerName turns a tunnel description into a valid VyOS 1.5 site-to-site
+// peer name: alphanumerics, hyphen and underscore only (VyOS rejects a peer key
+// with dots — e.g. an IP address — as "Peer connection name must be
+// alphanumeric"). Every other rune is replaced with a hyphen. An empty or
+// fully-stripped description falls back to peer<index> so the name is never
+// empty. The controller sets Description to the instance name (an RFC1123 label),
+// which already satisfies the rule; the sanitisation is a defensive backstop.
+func sanitisePeerName(desc string, idx int) string {
+	var b strings.Builder
+	for _, r := range desc {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		return "peer" + strconv.Itoa(idx)
+	}
+	return name
+}
+
+// set is the canonical way to construct an OpSet operation. Keeps the
+// renderer free of repetitive struct literals.
+func set(path []string, value string) vyos.Operation {
+	return vyos.Operation{Op: vyos.OpSet, Path: path, Value: value}
+}

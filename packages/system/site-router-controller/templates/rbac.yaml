@@ -1,0 +1,46 @@
+kind: ClusterRole
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: apps.cozystack.io:site-router-controller
+rules:
+# Discover and reconcile SiteRouter instances. They are Flux HelmReleases
+# labeled apps.cozystack.io/application.kind=SiteRouter, spread across tenant
+# namespaces (hence cluster-wide). The controller reads spec.values and patches
+# the instance's finalizer + status; it never rewrites the HelmRelease spec
+# (that would fight Flux's helm-controller).
+- apiGroups: ["helm.toolkit.fluxcd.io"]
+  resources: ["helmreleases"]
+  verbs: ["get", "list", "watch", "patch"]
+# Discover the gateway VM's virt-launcher pod (via lineage labels) and, in T07,
+# relax ovn.kubernetes.io/port_security on it with a single-key merge patch.
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch", "patch"]
+# Program the kube-ovn return routes: the controller patches
+# ovn.kubernetes.io/routes on the tenant namespace and the kube-ovn webhook
+# propagates it to pods (T07).
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "watch", "patch"]
+# Read the per-instance PSK / api-key Secrets (VyOS HTTPS API token) and the
+# tunnel LoadBalancer Service (external address); read-only.
+- apiGroups: [""]
+  resources: ["secrets", "services"]
+  verbs: ["get", "list", "watch"]
+# Read the gateway VirtualMachineInstance for NIC MAC discovery (resolving the
+# kernel device the tunnel/source-filter bind to); a single get, best-effort.
+- apiGroups: ["kubevirt.io"]
+  resources: ["virtualmachineinstances"]
+  verbs: ["get"]
+# Read the cozy-system/cozystack ConfigMap for the cluster network CIDRs used by
+# the remote-CIDR deny-set validation; read-only.
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list", "watch"]
+# Leader election (--leader-elect).
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create", "patch"]

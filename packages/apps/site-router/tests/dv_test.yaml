@@ -1,0 +1,82 @@
+suite: site-router boot DataVolume
+
+# T04/T11 — the boot disk is a CDI DataVolume. By default it clones the
+# cozystack-owned VyOS golden image PVC (cozy-public/vm-default-images-vyos-router,
+# per T01/D5), matching the vm-disk PVC-clone pattern. An http source override
+# (image.enabled + image.url) lets the final empirical run point at an image URL
+# when no golden image is committed. storageClass is pinned to `replicated`
+# (DRBD/LINSTOR) so the boot disk is live-migratable.
+
+templates:
+  - templates/dv.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: renders a DataVolume named <release>-boot
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: metadata.name
+          value: site-router-test-boot
+      - equal:
+          path: spec.contentType
+          value: kubevirt
+
+  - it: default source clones the VyOS golden image PVC in cozy-public
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.source.pvc.name
+          value: vm-default-images-vyos-router
+      - equal:
+          path: spec.source.pvc.namespace
+          value: cozy-public
+      - notExists:
+          path: spec.source.http
+
+  - it: storageClass is pinned to replicated
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  # R1 — the request is 12Gi, not the 10Gi virtual size of the VyOS qcow2: CDI's
+  # filesystem-import scratch (decompressed image + ~5.5% fs overhead) overflows a
+  # request equal to the virtual size ("virtual image size larger than reported
+  # available storage"), which fails the boot-disk import live on VyOS 1.5-rolling.
+  - it: requests 12Gi to fit the CDI filesystem-import scratch over the 10Gi image
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 12Gi
+
+  - it: http override sources the boot disk from image.url
+    set:
+      image:
+        enabled: true
+        url: https://images.example.test/vyos-1.5-rolling.qcow2
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.source.http.url
+          value: https://images.example.test/vyos-1.5-rolling.qcow2
+      - notExists:
+          path: spec.source.pvc

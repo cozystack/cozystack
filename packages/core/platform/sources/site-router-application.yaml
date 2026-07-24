@@ -1,0 +1,42 @@
+---
+apiVersion: cozystack.io/v1alpha1
+kind: PackageSource
+metadata:
+  name: cozystack.site-router-application
+spec:
+  sourceRef:
+    kind: OCIRepository
+    name: cozystack-packages
+    namespace: cozy-system
+    path: /
+  variants:
+    - name: default
+      dependsOn:
+        # kube-ovn + Cilium: the router VM attaches to the tenant pod network.
+        - cozystack.networking
+        # KubeVirt runs the gateway VirtualMachine (templates/vm.yaml).
+        - cozystack.kubevirt
+        # CDI provisions the boot DataVolume (templates/dv.yaml).
+        - cozystack.kubevirt-cdi
+        # vm-default-images creates the cozy-public/vm-default-images-vyos-router PVC
+        # the default SiteRouter boot DataVolume clones (templates/dv.yaml); without
+        # it the clone source is absent and the VM never boots. No cycle:
+        # vm-default-images depends only on networking + kubevirt-cdi.
+        - cozystack.vm-default-images
+        # cozystack-engine ships the ApplicationDefinition CRD rendered by the *-rd component below.
+        - cozystack.cozystack-engine
+        # site-router-controller mediates kube-ovn routing/port-security and pushes
+        # VyOS config; installed before SiteRouter instances so they reconcile.
+        - cozystack.site-router-controller
+      libraries:
+        - name: cozy-lib
+          path: library/cozy-lib
+      components:
+        - name: site-router
+          path: apps/site-router
+          libraries: ["cozy-lib"]
+        - name: site-router-rd
+          path: system/site-router-rd
+          install:
+            namespace: cozy-system
+            releaseName: site-router-rd

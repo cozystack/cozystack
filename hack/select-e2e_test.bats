@@ -153,6 +153,43 @@
     [ "$(echo "$output" | wc -w)" -gt 5 ]
 }
 
+@test "site-router is deferred: a site-router app diff selects nothing" {
+    # The site-router suite is authored but its golden image is not yet published,
+    # so it is in DEFERRED_SUITES and stripped from selection. A change to the
+    # site-router app must therefore select NOTHING (not the failing suite, and —
+    # because it has no other app dependents — nothing else either).
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/apps/site-router/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+}
+
+@test "site-router is deferred: editing its own suite selects nothing" {
+    # A per-suite edit normally selects exactly that suite; a deferred suite must
+    # be stripped even on its own edit, so the PR that adds it keeps CI green.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "hack/e2e-chainsaw/site-router/chainsaw-test.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ -z "$output" ]
+}
+
+@test "site-router is deferred: excluded from the full suite" {
+    # The full-suite escalation must not drag the deferred suite in either.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/cilium/values.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    [ "$(echo "$output" | wc -w)" -gt 5 ]
+    if echo "$output" | grep -wq site-router; then
+        echo "site-router is deferred and must not appear in the full suite; got: $output" >&2
+        exit 1
+    fi
+}
 @test "backup example harness edit selects its app suite" {
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT

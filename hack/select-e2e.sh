@@ -27,6 +27,32 @@ full_suite_pattern='^(packages/library/|packages/core/|api/|cmd/|internal/|hack/
 all_apps=$(find hack/e2e-chainsaw -mindepth 2 -maxdepth 2 -name chainsaw-test.yaml 2>/dev/null \
   | sed -e 's,^hack/e2e-chainsaw/,,' -e 's,/chainsaw-test\.yaml$,,' | sort)
 
+# Suites present on disk but NOT YET runnable in CI: their prerequisites are not
+# committed, so they cannot pass and must never be selected — not by TIA, not by
+# a direct per-suite edit, and not by the full-suite escalation. The exclusion is
+# applied to the FINAL output (strip_deferred), so it wins on every path while
+# leaving the dependency-graph logic untouched. Run a deferred suite by hand:
+#   make test-chainsaw CHAINSAW_SUITES="<name>"
+#
+# TODO: enable TIA selection of `site-router` once the VyOS golden image is
+# published (uncomment the vyos-router entry in packages/system/vm-images) and
+# the VyOS 1.5 firewall syntax is validated by the T13 empirical run — then
+# delete it from DEFERRED_SUITES. The src_to_suites mapping below is already
+# correct and needs no change at that point.
+DEFERRED_SUITES="site-router"
+
+# strip_deferred removes DEFERRED_SUITES entries from a space-separated suite
+# list (mirrors the while-read idiom used for the final intersection below).
+strip_deferred() {
+  echo "$1" | tr ' ' '\n' | grep -v '^$' | while read -r s; do
+    skip=0
+    for d in $DEFERRED_SUITES; do
+      [ "$s" = "$d" ] && skip=1
+    done
+    [ "$skip" = 0 ] && echo "$s"
+  done | paste -sd ' ' -
+}
+
 # PackageSource name -> Chainsaw suite name(s). Most *-application sources map
 # by stripping the suffix; explicit overrides for the few that don't.
 src_to_suites() {
@@ -34,6 +60,13 @@ src_to_suites() {
     postgres-application) echo postgres ;;
     vm-instance-application) echo vminstance ;;
     kubernetes-application) echo "kubernetes-latest kubernetes-previous kubernetes-oidc-system kubernetes-oidc-customconfig" ;;
+    # The Go types module is `siterouter` (no hyphen, Go package rule) but the
+    # Chainsaw suite dir is `site-router`. The suffix-strip default already
+    # yields `site-router`; pin it explicitly so the mapping is documented and
+    # stays correct if the default ever changes. NOTE: `site-router` is currently
+    # in DEFERRED_SUITES (stripped from the final output) until its golden image
+    # ships — this mapping is correct and simply has no CI effect until then.
+    site-router-application) echo site-router ;;
     external-dns) echo external-dns ;;
     *-application) echo "${1%-application}" ;;
     *) echo "$1" ;;
@@ -128,7 +161,7 @@ while IFS= read -r file; do
 done < "$CHANGED"
 
 if [ "$trigger_full" = 1 ]; then
-  echo "$all_apps" | paste -sd ' ' -
+  strip_deferred "$(echo "$all_apps" | paste -sd ' ' -)"
   exit 0
 fi
 
@@ -174,8 +207,8 @@ done | paste -sd ' ' -)
 # silently skip E2E. Fall back to full suite so a path inside the graph is
 # never silently dropped.
 if [ -z "$final_apps" ]; then
-  echo "$all_apps" | paste -sd ' ' -
+  strip_deferred "$(echo "$all_apps" | paste -sd ' ' -)"
   exit 0
 fi
 
-echo "$final_apps"
+strip_deferred "$final_apps"

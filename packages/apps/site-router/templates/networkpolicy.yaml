@@ -1,0 +1,82 @@
+{{- /*
+  Platform-owned Cilium policies for the gateway VM (T08). Two net-new policies
+  — all existing cozystack policies are additive allow-only, there is NO
+  default-deny, and egressDeny is unused. Both are namespaced CiliumNetworkPolicy
+  scoped to the gateway endpoint via the KubeVirt-managed vm.kubevirt.io/name
+  label (the same selector service.yaml uses, reliably present on the
+  virt-launcher pod), NOT endpointSelector {} — they must never touch unrelated
+  tenant pods.
+
+  1. egressDeny — the FIRST egressDeny in the repo. Cilium deny rules take
+     precedence over allow rules regardless of policy scope (CNP vs CCNP), so a
+     namespaced egressDeny composes correctly with the tenant's allow-only
+     baseline (allow-external-communication's egress toEntities world) — deny
+     WINS. Denies link-local 169.254.0.0/16 (incl. the metadata endpoint
+     169.254.169.254), plus operator-supplied management/node ranges. Cilium's
+     identity model already blocks direct access to unrelated tenants / nodes /
+     the API; this adds the explicit link-local + management deny identity does
+     not cover.
+
+  2. gateway ingress (Boundary B) — selecting the gateway endpoint makes it
+     ingress-default-deny-except-listed in Cilium. Admits ONLY the public tunnel
+     responder ports (UDP 500/4500) from the world and the controller's identity
+     (namespace cozy-site-router, app site-router-controller) on the HTTPS API
+     port (443). The API port is never world-open.
+
+     RESIDUAL (documented, T14 hardening — not done here): Cilium allow rules are
+     additive, so the tenant baseline's broad allow-external/internal-communication
+     ingress still reaches the gateway. Fully realising Boundary B would require
+     excluding the gateway endpoint from the tenant baseline (a shared
+     packages/apps/tenant change with broad blast radius). In Phase 1 the guest
+     VyOS firewall (Boundary A + the local-input management drop + the
+     forward-chain guards) is the real backstop for the management API and the
+     tunnel; this gateway CNP is the pod-boundary layer on top.
+*/ -}}
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-gateway-egress-deny
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      vm.kubevirt.io/name: {{ .Release.Name }}
+  egressDeny:
+  - toCIDR:
+    - "169.254.0.0/16"
+    {{- range (.Values.security | default dict).egressDenyCIDRs }}
+    - {{ . | quote }}
+    {{- end }}
+---
+apiVersion: cilium.io/v2
+kind: CiliumNetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-gateway-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  endpointSelector:
+    matchLabels:
+      vm.kubevirt.io/name: {{ .Release.Name }}
+  ingress:
+  # Public IPsec responder ports from the world (the remote peer dials in).
+  - fromEntities:
+    - world
+    toPorts:
+    - ports:
+      - port: "500"
+        protocol: UDP
+      - port: "4500"
+        protocol: UDP
+  # The controller identity reaches the HTTPS management API only.
+  - fromEndpoints:
+    - matchLabels:
+        "k8s:io.kubernetes.pod.namespace": cozy-site-router
+        "k8s:app": site-router-controller
+    toPorts:
+    - ports:
+      - port: "443"
+        protocol: TCP

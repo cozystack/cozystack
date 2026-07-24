@@ -201,6 +201,14 @@ func (r *REST) Create(ctx context.Context, obj runtime.Object, createValidation 
 		return nil, apierrors.NewBadRequest(err.Error())
 	}
 
+	// SiteRouter deny-set admission: reject a tunnel whose remoteCIDRs overlap a
+	// cluster-owned network (synchronous Forbidden naming the offending CIDR and
+	// colliding network). A no-op for every other kind — generic app-instance
+	// admission is unchanged (D9/D10).
+	if err := r.validateSiteRouterRemoteCIDRs(ctx, app); err != nil {
+		return nil, err
+	}
+
 	r.warnLegacyPresets(app)
 
 	// Run the genericapiserver-supplied validating admission chain
@@ -546,6 +554,12 @@ func (r *REST) Update(ctx context.Context, name string, objInfo rest.UpdatedObje
 		if qErrs := r.validateTenantResourceQuotas(ctx, app); len(qErrs) > 0 {
 			return nil, false, apierrors.NewInvalid(r.gvk.GroupKind(), app.Name, qErrs)
 		}
+	}
+
+	// SiteRouter deny-set admission on edit too: adding a cluster-overlapping
+	// remoteCIDR is rejected synchronously the same way a create is (D9/D10).
+	if err := r.validateSiteRouterRemoteCIDRs(ctx, app); err != nil {
+		return nil, false, err
 	}
 
 	r.warnLegacyPresets(app)
