@@ -134,7 +134,7 @@ jobs:
       # Checkout & login once
       - name: Checkout code
         if: steps.check_release.outputs.release_exists == 'false'
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
           fetch-tags:  true
@@ -373,7 +373,7 @@ jobs:
       # contents. The Create changelog branch step below resets the file
       # onto a fresh branch from origin/main for the PR.
       - name: Checkout release tag
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ steps.tag.outputs.tag }}
           fetch-depth: 0
@@ -563,7 +563,7 @@ jobs:
             core.setOutput('version', version);  // 0.22.0
 
       - name: Checkout website repo
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: cozystack/website
           token: ${{ steps.app-token.outputs.token }}
