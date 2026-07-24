@@ -170,3 +170,16 @@
     output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources") || true
     [ -z "$output" ]
 }
+
+@test "tenant-projection writer policy change selects the cacert suite" {
+    # The cacert suite is the writer policy's only live deny/allow proof. A change
+    # confined to cozystack-basics (which ships that policy) must run it and must
+    # not escalate to the full suite.
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cp -r packages/core/platform/sources "$tmp/sources"
+    echo "packages/system/cozystack-basics/templates/tenant-projection-writer-policy.yaml" > "$tmp/diff"
+    output=$(hack/select-e2e.sh "$tmp/diff" "$tmp/sources")
+    echo "$output" | grep -wq cacert
+    [ "$(echo "$output" | wc -w)" -le 5 ]
+}

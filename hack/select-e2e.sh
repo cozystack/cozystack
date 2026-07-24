@@ -157,6 +157,10 @@ for s in $all_sources; do
   case "$app" in
     *-application) final="$final $(src_to_suites "$app")" ;;
     external-dns) final="$final external-dns" ;;
+    # cozystack-basics ships the tenant-projection writer policy, whose only live
+    # deny/allow proof is the cacert suite. A change confined to that policy must
+    # run it — the *-application filter would otherwise drop cozystack-basics.
+    cozystack-basics) final="$final cacert" ;;
   esac
 done
 

@@ -18,7 +18,7 @@ hack/e2e-chainsaw/
 └── ...
 ```
 
-Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `qdrant`, `clickhouse`, `kafka`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `kubernetes-latest`, `kubernetes-previous`, `kubernetes-oidc-system`, `kubernetes-oidc-customconfig`, `securitygroup`.
+Suites: `postgres`, `bucket`, `mariadb`, `mongodb`, `redis`, `qdrant`, `clickhouse`, `kafka`, `etcd`, `openbao`, `harbor`, `foundationdb`, `external-dns`, `kuberture`, `vminstance`, `gateway`, `kubernetes-latest`, `kubernetes-previous`, `kubernetes-oidc-system`, `kubernetes-oidc-customconfig`, `securitygroup`, `cacert`.
 
 ## What Chainsaw buys over the BATS suite
 

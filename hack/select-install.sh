@@ -77,6 +77,7 @@ suite_to_source() {
       echo cozystack.kubernetes-application ; return ;;
     vminstance) echo cozystack.vm-instance-application ; return ;;
     securitygroup) echo cozystack.securitygroup-controller ; return ;;
+    cacert) echo cozystack.cozystack-basics ; return ;;
   esac
   for cand in "cozystack.$1-application" "cozystack.$1"; do
     if echo "$NODES" | grep -Fxq "$cand"; then echo "$cand"; return; fi
