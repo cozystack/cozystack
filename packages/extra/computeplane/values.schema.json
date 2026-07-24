@@ -1,0 +1,151 @@
+{
+  "title": "Chart Values",
+  "type": "object",
+  "properties": {
+    "nodeGroups": {
+      "description": "Worker node groups of the ComputePlane cluster (cluster shape only — the security posture is fixed by the module and cannot be overridden through this knob; note that unlisted `NodeGroup` fields pass through to the wrapped chart unvalidated). Same structure as the `kubernetes` application's `nodeGroups`. When left empty, the wrapped `kubernetes` chart emits its default scale-from-zero `md0` group with `roles: [ingress-nginx]`, so the cluster sits idle until a pending Pod (e.g. the ingress-nginx controller) triggers the cluster-autoscaler. Supplied groups are authoritative (not merged with the default), so at least one of them must carry `roles: [ingress-nginx]` — enforced at render time.",
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "diskSize",
+          "instanceType",
+          "maxReplicas",
+          "minReplicas"
+        ],
+        "properties": {
+          "diskSize": {
+            "description": "System disk size for the worker VM. Carries the Talos OS image, kubelet state, containerd image cache, and any local-path PVCs.",
+            "default": "20Gi",
+            "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "x-kubernetes-int-or-string": true
+          },
+          "gpus": {
+            "description": "List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).",
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "name"
+              ],
+              "properties": {
+                "name": {
+                  "description": "Name of GPU, such as \"nvidia.com/AD102GL_L40S\".",
+                  "type": "string",
+                  "x-cozystack-options": {
+                    "source": "gpu"
+                  }
+                }
+              }
+            }
+          },
+          "instanceType": {
+            "description": "Virtual machine instance type.",
+            "type": "string",
+            "default": "u1.medium",
+            "x-cozystack-options": {
+              "source": "instancetype"
+            }
+          },
+          "kubelet": {
+            "description": "Kubelet resource reservations for this node group.",
+            "type": "object",
+            "properties": {
+              "evictionHardMemory": {
+                "description": "Hard eviction threshold for memory (absolute like 200Mi or percentage like 7%).",
+                "type": "string",
+                "default": "7%"
+              },
+              "evictionSoftMemory": {
+                "description": "Soft eviction threshold for memory (absolute like 1Gi or percentage like 10%).",
+                "type": "string",
+                "default": "10%"
+              },
+              "kubeReservedCpu": {
+                "description": "CPU reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+                "type": "string"
+              },
+              "kubeReservedMemory": {
+                "description": "Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.",
+                "type": "string"
+              },
+              "systemReservedCpu": {
+                "description": "CPU reserved for host OS. Auto-computed from instanceType if empty.",
+                "type": "string"
+              },
+              "systemReservedMemory": {
+                "description": "Memory reserved for host OS. Auto-computed from instanceType if empty.",
+                "type": "string"
+              }
+            }
+          },
+          "maxReplicas": {
+            "description": "Maximum number of replicas.",
+            "type": "integer",
+            "default": 10
+          },
+          "minReplicas": {
+            "description": "Minimum number of replicas.",
+            "type": "integer",
+            "default": 0
+          },
+          "resources": {
+            "description": "Explicit CPU and memory for each worker node, as an alternative to `instanceType` sizing. Set both `cpu` and `memory` together or neither.",
+            "type": "object",
+            "properties": {
+              "cpu": {
+                "description": "CPU available.",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              },
+              "memory": {
+                "description": "Memory (RAM) available.",
+                "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "x-kubernetes-int-or-string": true
+              }
+            }
+          },
+          "roles": {
+            "description": "List of node roles. At least one group must carry `ingress-nginx` — the module pins the ingress-nginx addon on, and its controller only schedules onto nodes with that role (enforced at render time).",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "storageClass": {
+            "description": "StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass of the wrapped kubernetes app.",
+            "type": "string",
+            "x-cozystack-options": {
+              "source": "storageclass"
+            }
+          }
+        }
+      }
+    }
+  }
+}

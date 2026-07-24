@@ -31,6 +31,11 @@
       "type": "boolean",
       "default": false
     },
+    "computeplane": {
+      "description": "Deploy own ComputePlane — a single-tenant, Cozystack-managed cluster for untrusted-code applications. The tenant receives no admin kubeconfig for it. Automatic routing of catalog applications onto it (placement: ComputePlane) is a planned follow-up and is not available yet; until it lands, external catalogs target the cluster via its computeplane-cluster-admin-kubeconfig Secret. See design-proposals/compute-plane in cozystack/community.",
+      "type": "boolean",
+      "default": false
+    },
     "schedulingClass": {
       "description": "The name of a SchedulingClass CR to apply scheduling constraints for this tenant's workloads.",
       "type": "string",

@@ -1,0 +1,3 @@
+{{- if ne .Release.Name .Chart.Name }}
+{{- fail (printf "The name of the release MUST BE %s" .Chart.Name) }}
+{{- end -}}

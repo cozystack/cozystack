@@ -1,0 +1,81 @@
+suite: proxied ingress Service gates on the addon, not on hosts
+# exposeMethod defaults to Proxied while addons.ingressNginx.enabled defaults
+# to false, so the Service must render only when the addon is actually on —
+# otherwise every cluster without ingress-nginx grows a Service whose selector
+# (node-role.kubernetes.io/ingress-nginx) matches no pods, and kubernetes-rd
+# surfaces it in the tenant dashboard advertising ports that route nowhere.
+# The Service intentionally does NOT require `hosts`: a ComputePlane app's
+# per-app management Ingress routes to it without the module knowing app hosts
+# in advance.
+templates:
+  - templates/ingress.yaml
+release:
+  name: kubernetes-alice
+  namespace: tenant-alice
+set:
+  _namespace:
+    ingress: tenant-root
+    etcd: tenant-root
+tests:
+  - it: renders nothing when the addon is disabled (default)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders the Service (and no Ingress) when enabled with Proxied and no hosts
+    set:
+      addons:
+        ingressNginx:
+          enabled: true
+          exposeMethod: Proxied
+          hosts: []
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: kubernetes-alice-ingress-nginx
+
+  - it: renders Ingress and Service when enabled with Proxied and hosts
+    set:
+      addons:
+        ingressNginx:
+          enabled: true
+          exposeMethod: Proxied
+          hosts: ["app.example.com"]
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  # Deliberate behaviour change pinned: hosts with the addon disabled used to
+  # render the Ingress; "the addon is off" now means nothing renders at all.
+  - it: renders nothing when hosts are set but the addon is disabled
+    set:
+      addons:
+        ingressNginx:
+          enabled: false
+          exposeMethod: Proxied
+          hosts: ["app.example.com"]
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The addon HelmRelease itself gates on _namespace.etcd (the etcd-less
+  # render collapses to the awaiting-etcd beacon), so the Service must too —
+  # otherwise an etcd-less tenant with the addon pinned on (ComputePlane)
+  # gets the selector-less Service by another route.
+  - it: renders nothing on an etcd-less tenant even with the addon enabled
+    set:
+      _namespace:
+        ingress: tenant-root
+        etcd: ""
+      addons:
+        ingressNginx:
+          enabled: true
+          exposeMethod: Proxied
+          hosts: []
+    asserts:
+      - hasDocuments:
+          count: 0

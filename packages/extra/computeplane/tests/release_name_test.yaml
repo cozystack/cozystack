@@ -1,0 +1,25 @@
+suite: computeplane module refuses a non-canonical release name
+# The module release name must equal the chart name: the aggregated API
+# rebuilds HelmRelease specs without spec.releaseName, so the release name is
+# always the object name — and the object name is what the ComputePlane
+# ApplicationDefinition (release.prefix "") maps onto. A stray release name
+# (e.g. the historical computeplane-module) would collide with that mapping,
+# so the guard fails the render loudly.
+templates:
+  - templates/check-release-name.yaml
+tests:
+  - it: rejects a suffixed release name
+    release:
+      name: computeplane-module
+      namespace: tenant-alice
+    asserts:
+      - failedTemplate:
+          errorPattern: "The name of the release MUST BE computeplane"
+
+  - it: accepts the canonical release name
+    release:
+      name: computeplane
+      namespace: tenant-alice
+    asserts:
+      - hasDocuments:
+          count: 0

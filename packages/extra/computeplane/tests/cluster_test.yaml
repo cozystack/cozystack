@@ -1,0 +1,136 @@
+suite: computeplane module renders the operator-owned cluster HelmRelease
+# The module wraps the ordinary apps/kubernetes chart with operator-fixed
+# values (design-proposals/compute-plane in cozystack/community). These pins
+# are the contract:
+#   - the cluster HelmRelease is named computeplane-cluster and sets NO
+#     spec.releaseName (the aggregated API cannot represent releaseName, so
+#     both the module and cluster releases must derive from object names);
+#     the derived release name makes Kamaji write the admin kubeconfig to
+#     computeplane-cluster-admin-kubeconfig, which placement: ComputePlane
+#     applications consume and computeplane-rd withholds from tenants;
+#   - the Cozystack-enablement addons (certManager/ingressNginx) are inline
+#     spec.values, so nothing injected via valuesFrom can disable them; no
+#     in-cluster Flux — consumer HelmReleases reconcile from the management
+#     cluster via spec.kubeConfig;
+#   - the chart comes from this package's own source-only ExternalArtifact,
+#     keeping the module self-contained.
+templates:
+  - templates/cluster.yaml
+release:
+  name: computeplane
+  namespace: tenant-alice
+tests:
+  - it: derives the cluster release name from the object name (kubeconfig contract)
+    asserts:
+      - equal:
+          path: metadata.name
+          value: computeplane-cluster
+      - notExists:
+          path: spec.releaseName
+      - equal:
+          path: spec.chartRef.name
+          value: cozystack-computeplane-application-kubevirt-kubernetes
+      - equal:
+          path: spec.chartRef.kind
+          value: ExternalArtifact
+
+  - it: pins the Cozystack-enablement addons as inline values
+    asserts:
+      - notExists:
+          path: spec.values.addons.fluxcd
+      - equal:
+          path: spec.values.addons.certManager.enabled
+          value: true
+      - equal:
+          path: spec.values.addons.ingressNginx.enabled
+          value: true
+      - equal:
+          path: spec.values.addons.ingressNginx.exposeMethod
+          value: Proxied
+      # The kubernetes app emits child HelmReleases and a talos-reconcile Job
+      # that cannot become Ready until worker nodes exist — the parent must
+      # not block on them.
+      - equal:
+          path: spec.install.disableWait
+          value: true
+      - equal:
+          path: spec.upgrade.disableWait
+          value: true
+
+  - it: leaves nodeGroups to the wrapped chart's default when unset
+    asserts:
+      - notExists:
+          path: spec.values.nodeGroups
+
+  - it: passes the curated nodeGroups knob through as cluster shape
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+    asserts:
+      - equal:
+          path: spec.values.nodeGroups.md0.maxReplicas
+          value: 3
+      - equal:
+          path: spec.values.nodeGroups.md0.instanceType
+          value: u1.large
+
+  # Supplied nodeGroups are authoritative (not merged with the wrapped chart's
+  # default md0), while the module pins ingress-nginx on — groups without the
+  # role would leave the controller Pending forever, so the render must refuse.
+  - it: rejects nodeGroups without an ingress-nginx role
+    set:
+      nodeGroups:
+        gpu0:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: []
+    asserts:
+      - failedTemplate:
+          errorPattern: "at least one nodeGroup must carry roles"
+
+  - it: accepts nodeGroups when any group carries the ingress-nginx role
+    set:
+      nodeGroups:
+        gpu0:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: []
+        edge:
+          minReplicas: 1
+          maxReplicas: 1
+          instanceType: u1.medium
+          diskSize: 20Gi
+          roles: ["ingress-nginx"]
+    asserts:
+      - equal:
+          path: spec.values.nodeGroups.edge.roles[0]
+          value: ingress-nginx
+
+  # The generator does not emit additionalProperties: false, so unlisted
+  # NodeGroup fields are NOT rejected by the schema — they pass through to the
+  # wrapped chart unvalidated. Pinned deliberately (and stated in the README);
+  # if the generator ever learns to close the object, this test should flip to
+  # asserting rejection.
+  - it: passes unlisted nodeGroup fields through to the wrapped chart
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: u1.large
+          diskSize: 32Gi
+          roles: ["ingress-nginx"]
+          maxUnhealthy: 40%
+    asserts:
+      - equal:
+          path: spec.values.nodeGroups.md0.maxUnhealthy
+          value: 40%

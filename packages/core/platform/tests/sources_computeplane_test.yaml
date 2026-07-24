@@ -1,0 +1,62 @@
+suite: computeplane package source and iaas bundle wiring
+# The computeplane package is self-contained: it re-declares apps/kubernetes
+# as its own source-only component (the module's cluster HelmRelease points at
+# cozystack-computeplane-application-kubevirt-kubernetes), while the wrapped
+# chart's child addon HelmReleases still reference the kubernetes-application
+# artifacts — hence the hard dependsOn edge. See
+# design-proposals/compute-plane in cozystack/community.
+templates:
+  - templates/sources.yaml
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: declares the self-contained kubevirt variant with the kubernetes re-source
+    template: templates/sources.yaml
+    documentSelector:
+      path: metadata.name
+      value: cozystack.computeplane-application
+    asserts:
+      - equal:
+          path: spec.variants[0].name
+          value: kubevirt
+      - contains:
+          path: spec.variants[0].dependsOn
+          content: cozystack.kubernetes-application
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: kubernetes
+            path: apps/kubernetes
+            libraries: ["cozy-lib"]
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: computeplane
+            path: extra/computeplane
+      - contains:
+          path: spec.variants[0].components
+          content:
+            name: computeplane-rd
+            path: system/computeplane-rd
+            install:
+              namespace: cozy-system
+              releaseName: computeplane-rd
+
+  - it: ships in the iaas bundle with the kubevirt variant
+    template: templates/bundles/iaas.yaml
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+        iaas:
+          enabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.computeplane-application
+    asserts:
+      - equal:
+          path: spec.variant
+          value: kubevirt
