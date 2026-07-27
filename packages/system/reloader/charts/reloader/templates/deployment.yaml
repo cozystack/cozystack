@@ -161,6 +161,17 @@ spec:
         ports:
         - name: http
           containerPort: 9090
+        {{- /*
+        cozystack (patches/deployment-startup-probe.diff): the upstream chart
+        renders no startupProbe, which leaves a slow first start no grace period
+        of its own. Why that matters and how the budget was chosen is documented
+        next to the knob, in the package values.yaml. Rendered with `with`, so an
+        unset value emits nothing and the template stays upstream-compatible.
+        */}}
+        {{- with .Values.reloader.deployment.startupProbe }}
+        startupProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         livenessProbe:
           httpGet:
             path: /live
