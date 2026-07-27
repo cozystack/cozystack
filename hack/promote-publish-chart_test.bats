@@ -50,8 +50,16 @@ _chart_fixture() {
 echo "$*" >>"$FIXLOG_SKOPEO"
 case "$1" in
   inspect)
-    # Existence probe: succeeds only when the fixture says a chart is published.
-    [ -f "$FIXPUB" ] || exit 1
+    # Existence probe. FIXPROBEERR injects a registry failure verbatim; without
+    # it the probe reports the real GHCR wording for an absent manifest.
+    if [ -n "${FIXPROBEERR:-}" ]; then
+      echo "$FIXPROBEERR" >&2
+      exit 1
+    fi
+    if [ ! -f "$FIXPUB" ]; then
+      echo 'time="..." level=fatal msg="Error parsing image name \"docker://ghcr.io/cozystack/cozystack/cozy-installer:9.9.9\": reading manifest 9.9.9 in ghcr.io/cozystack/cozystack/cozy-installer: manifest unknown"' >&2
+      exit 1
+    fi
     echo '{"schemaVersion":2}'
     ;;
 esac
@@ -186,6 +194,31 @@ SHIM
   env -u REGISTRY FORCE_CHART=1 "$ROOT/hack/promote-publish-chart.sh" v9.9.9
   grep -q '^push ' "$FIXLOG_HELM"
   [ -f "$FIXPUSHED" ]
+}
+
+@test "a probe failure that is not a missing manifest aborts instead of pushing" {
+  _chart_fixture
+  cd "$FIX"
+
+  # skopeo exits 1 for everything: an absent manifest, a 403, an expired token,
+  # a DNS failure. Reading any of those as "not published yet" would push
+  # unconditionally and move the stable chart tag onto fresh bytes — under
+  # exactly the flaky conditions that make a promotion need re-running. These
+  # are the real GHCR/skopeo wordings for a forbidden repository and an
+  # unreachable registry.
+  for err in \
+    'level=fatal msg="fetching manifest 9.9.9 in ghcr.io/cozystack/cozystack/cozy-installer: Requesting bearer token: received unexpected HTTP status: 403 Forbidden"' \
+    'level=fatal msg="pinging container registry ghcr.io: Get \"https://ghcr.io/v2/\": dial tcp: connect: connection refused"' \
+    'level=fatal msg="received unexpected HTTP status: 500 Internal Server Error"'
+  do
+    : >"$FIXLOG_HELM"
+    rc=0
+    FIXPROBEERR="$err" env -u REGISTRY "$ROOT/hack/promote-publish-chart.sh" v9.9.9 \
+      >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ]
+    ! grep -q '^push ' "$FIXLOG_HELM"
+    [ ! -f "$FIXPUSHED" ]
+  done
 }
 
 @test "the latest chart tag moves only when MOVE_LATEST is set" {
