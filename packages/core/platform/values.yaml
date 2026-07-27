@@ -55,12 +55,14 @@ preflight:
   # check whose blocking behaviour is not yet trusted enough to hard-block an
   # existing customer's upgrade.
   #
-  # linstor is advisory by default: its parsing of live `linstor -m` output
-  # relies on LINBIT REST API field values (connection_status/disk_state) that
-  # have not yet been confirmed against a live controller in e2e. Until that
-  # evidence exists (see cozystack-pr-test), a wrong assumption there must warn,
-  # never hard-block a healthy upgrade. Once e2e confirms the semantics, a
-  # follow-up removes linstor from this default and lets it gate.
+  # linstor is advisory by default. Its parsing of live `linstor -m` output
+  # relies on LINBIT REST API fields (connection_status/disk_state): the field
+  # NAMES are confirmed on a live healthy controller, but the FAULTY-state
+  # detection (the denylist of bad disk_states) has not yet been exercised
+  # against a genuinely degraded cluster. Until that e2e evidence exists (see
+  # cozystack-pr-test), a wrong assumption there must warn, never hard-block a
+  # healthy upgrade. Once e2e confirms the faulty-state path, a follow-up
+  # removes linstor from this default and lets it gate.
   advisoryChecks: [linstor]
 # Bundle deployment configuration
 bundles:
