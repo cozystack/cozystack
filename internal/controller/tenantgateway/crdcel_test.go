@@ -55,6 +55,39 @@ type admissionCheck struct {
 	schema     apiservervalidation.SchemaValidator
 }
 
+// v1alpha1SpecSchema returns the generated CRD's v1alpha1 spec schema,
+// failing the test when no such version carries one.
+//
+// Every caller reads a marker off this schema to prove the marker
+// generated. Searching for the version inline instead puts the
+// assertions inside the search loop, where a renamed or dropped version
+// skips the body and the test reports green having checked nothing —
+// the precise regression these tests exist to catch. Returning through
+// one helper that fails on absence makes that outcome unreachable.
+func v1alpha1SpecSchema(t *testing.T) *apiextensionsv1.JSONSchemaProps {
+	t.Helper()
+
+	raw, err := os.ReadFile(crdPath)
+	if err != nil {
+		t.Fatalf("read CRD: %v", err)
+	}
+	var crd apiextensionsv1.CustomResourceDefinition
+	if err := yaml.Unmarshal(raw, &crd); err != nil {
+		t.Fatalf("unmarshal CRD: %v", err)
+	}
+	for i := range crd.Spec.Versions {
+		v := &crd.Spec.Versions[i]
+		if v.Name != "v1alpha1" || v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
+			continue
+		}
+		if p, ok := v.Schema.OpenAPIV3Schema.Properties["spec"]; ok {
+			return &p
+		}
+	}
+	t.Fatal("v1alpha1 spec schema not found in CRD")
+	return nil
+}
+
 // specValidator compiles the spec schema the way the apiserver
 // evaluates an incoming object: structural validation plus the CEL
 // rules against the per-request runtime budget.
@@ -67,28 +100,7 @@ type admissionCheck struct {
 func specValidator(t *testing.T) *admissionCheck {
 	t.Helper()
 
-	raw, err := os.ReadFile(crdPath)
-	if err != nil {
-		t.Fatalf("read CRD: %v", err)
-	}
-	var crd apiextensionsv1.CustomResourceDefinition
-	if err := yaml.Unmarshal(raw, &crd); err != nil {
-		t.Fatalf("unmarshal CRD: %v", err)
-	}
-
-	var specProps *apiextensionsv1.JSONSchemaProps
-	for i := range crd.Spec.Versions {
-		v := &crd.Spec.Versions[i]
-		if v.Name != "v1alpha1" || v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
-			continue
-		}
-		if p, ok := v.Schema.OpenAPIV3Schema.Properties["spec"]; ok {
-			specProps = &p
-		}
-	}
-	if specProps == nil {
-		t.Fatal("v1alpha1 spec schema not found in CRD")
-	}
+	specProps := v1alpha1SpecSchema(t)
 	if len(specProps.XValidations) == 0 {
 		t.Fatal("spec schema carries no x-kubernetes-validations; the XValidation markers did not generate")
 	}
@@ -315,27 +327,12 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 // names become admissible, render two tls-<name> listeners, and get the
 // Gateway rejected wholesale.
 func TestPassthroughListenerNameUniquenessIsEnforcedBySchema(t *testing.T) {
-	raw, err := os.ReadFile(crdPath)
-	if err != nil {
-		t.Fatalf("read CRD: %v", err)
+	field := v1alpha1SpecSchema(t).Properties["tlsPassthroughListeners"]
+	if field.XListType == nil || *field.XListType != "map" {
+		t.Fatalf("tlsPassthroughListeners x-kubernetes-list-type=%v, want map; duplicate names would be admissible", field.XListType)
 	}
-	var crd apiextensionsv1.CustomResourceDefinition
-	if err := yaml.Unmarshal(raw, &crd); err != nil {
-		t.Fatalf("unmarshal CRD: %v", err)
-	}
-	for i := range crd.Spec.Versions {
-		v := &crd.Spec.Versions[i]
-		if v.Name != "v1alpha1" || v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
-			continue
-		}
-		spec := v.Schema.OpenAPIV3Schema.Properties["spec"]
-		field := spec.Properties["tlsPassthroughListeners"]
-		if field.XListType == nil || *field.XListType != "map" {
-			t.Fatalf("tlsPassthroughListeners x-kubernetes-list-type=%v, want map; duplicate names would be admissible", field.XListType)
-		}
-		if len(field.XListMapKeys) != 1 || field.XListMapKeys[0] != "name" {
-			t.Fatalf("tlsPassthroughListeners x-kubernetes-list-map-keys=%v, want [name]", field.XListMapKeys)
-		}
+	if len(field.XListMapKeys) != 1 || field.XListMapKeys[0] != "name" {
+		t.Fatalf("tlsPassthroughListeners x-kubernetes-list-map-keys=%v, want [name]", field.XListMapKeys)
 	}
 }
 
@@ -353,27 +350,11 @@ func TestPassthroughListenerNameUniquenessIsEnforcedBySchema(t *testing.T) {
 func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
 	const gatewayAPIListenerCap = 64
 
-	raw, err := os.ReadFile(crdPath)
-	if err != nil {
-		t.Fatalf("read CRD: %v", err)
+	field := v1alpha1SpecSchema(t).Properties["tlsPassthroughListeners"]
+	if field.MaxItems == nil {
+		t.Fatal("tlsPassthroughListeners has no maxItems; the cap is unbounded")
 	}
-	var crd apiextensionsv1.CustomResourceDefinition
-	if err := yaml.Unmarshal(raw, &crd); err != nil {
-		t.Fatalf("unmarshal CRD: %v", err)
-	}
-	var maxItems int64
-	for i := range crd.Spec.Versions {
-		v := &crd.Spec.Versions[i]
-		if v.Name != "v1alpha1" || v.Schema == nil || v.Schema.OpenAPIV3Schema == nil {
-			continue
-		}
-		spec := v.Schema.OpenAPIV3Schema.Properties["spec"]
-		field := spec.Properties["tlsPassthroughListeners"]
-		if field.MaxItems == nil {
-			t.Fatal("tlsPassthroughListeners has no maxItems; the cap is unbounded")
-		}
-		maxItems = *field.MaxItems
-	}
+	maxItems := *field.MaxItems
 
 	listeners := make([]gatewayv1alpha1.TLSPassthroughListener, 0, maxItems)
 	for i := int64(0); i < maxItems; i++ {
