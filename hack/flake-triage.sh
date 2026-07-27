@@ -1,22 +1,29 @@
 #!/usr/bin/env bash
 # hack/flake-triage.sh — tell a deterministic E2E regression apart from an
-# intermittent flake across consecutive `main` runs, and stop retry-to-green
-# from masking a regression.
+# intermittent flake across consecutive `main` runs.
 #
-# Why this exists: a chainsaw case that fails on attempt 1 and passes on a
-# re-run leaves the run green, so a case that has actually regressed on `main`
-# reads as "just a flake" and nobody bisects it. This tool reads the failure
-# set of EVERY attempt of each run (not just the final green one), so a
-# case that failed on any attempt counts as failed for that run, and then
-# classifies per case:
+# Why this exists: a case that has actually regressed on `main` reads as "just a
+# flake" and nobody bisects it (cozystack/cozystack#3229 sat red on main for
+# three consecutive nightlies while treated as noise). Per case:
 #
 #   REGRESSION — failed on the last N consecutive (non-infra) main runs. This
 #                is not a flake; it is a deterministic break that landed in a
-#                bounded commit window. Auto-opens/updates a tracking issue.
+#                bounded commit window. Auto-opens/updates a tracking issue, and
+#                auto-closes it once the case stops regressing across the window.
 #   FLAKE      — fails intermittently within the window (streak below the
-#                regression threshold). Tracked, not paged.
-#   (passing)  — never failed in the window; emits nothing, closes a stale
-#                auto-issue if one exists.
+#                regression threshold). Tracked in the run log, not paged.
+#   (passing)  — never failed in the window; emits nothing.
+#
+# The robust core signal is the streak across separate `main` runs (distinct
+# run ids, e.g. successive nightlies): #3229 was three separate nightly runs, so
+# a window of TRIAGE_WINDOW runs catches it regardless of within-run retries.
+# As an additional best-effort defence against within-run retry-to-green
+# (attempt 1 red, a re-run of the failed job green under the SAME run id), the
+# triage step also unions the failed set across every `chainsaw-report` artifact
+# a run retains, so a first-attempt failure still counts for that run WHEN
+# GitHub keeps a per-attempt artifact. That per-attempt retention is a best-
+# effort enhancement, not a correctness dependency: the cross-run streak stands
+# on its own if only the latest attempt's artifact survives.
 #
 # An "infra" run (more than TRIAGE_INFRA_FAIL_RATIO% of all cases failed in the
 # same run, e.g. a cluster-wide apiserver/CNI outage) is a whole-environment
@@ -54,7 +61,9 @@ parse_report() {
     /<testcase/ {
       flush()
       name=""
-      if (match($0, /name="[^"]*"/)) name=substr($0, RSTART+6, RLENGTH-7)
+      # Anchor on a leading space so `classname="…"` (no space before `name`)
+      # cannot be matched instead of the real `name="…"` attribute.
+      if (match($0, / name="[^"]*"/)) name=substr($0, RSTART+7, RLENGTH-8)
       infail=0; open=1
       if ($0 ~ /\/>/) { print "PASS\t" name; open=0 }   # self-closed testcase = pass
       next
@@ -171,7 +180,7 @@ triage() {
     done
     [ -f "$work/parsed.$id.raw" ] || continue
     # Merge attempts: FAIL wins over PASS for the same case.
-    awk -F'\t' '{ if($1=="FAIL"){f[$2]=1} else if(!($2 in s)){p[$2]=1} s[$2]=1 }
+    awk -F'\t' '{ if($1=="FAIL"){f[$2]=1} s[$2]=1 }
                 END{ for(c in s) print (c in f ? "FAIL":"PASS") "\t" c }' \
       "$work/parsed.$id.raw" | sort -u > "$rf"
     run_files+=("$rf"); run_ids+=("$id")
@@ -183,38 +192,70 @@ triage() {
   classify "${run_files[@]}" > "$verdicts" || true
   echo "triage: classification ->"; cat "$verdicts" >&2 || true
 
-  # Manage issues per REGRESSION case.
+  # Manage issues: open/update for REGRESSION cases; then close any open
+  # auto-issue whose case is no longer regressing across the window.
+  local regressed="$work/regressed"; : > "$regressed"
   local kind case extra
   while IFS=$'\t' read -r kind case extra; do
     case "$kind" in
-      REGRESSION) triage_upsert_issue "$case" "$extra" "${run_ids[*]}" ;;
+      REGRESSION) printf '%s\n' "$case" >> "$regressed"
+                  triage_upsert_issue "$case" "$extra" "${run_ids[*]}" ;;
       FLAKE)      : ;;  # tracked in the run log; no page. Extend here if desired.
     esac
   done < "$verdicts"
+
+  triage_close_resolved "$regressed"
 }
 
-# Open or update the per-case tracking issue (idempotent via title + marker).
+# List every open auto-issue (matched by the "[flake-triage]" title prefix) and
+# close the ones whose case is no longer in the current REGRESSION set, so a
+# fixed regression does not leave its tracker open forever.
+triage_close_resolved() {
+  local regressed="$1"
+  local n title c
+  while IFS=$'\t' read -r n title; do
+    [ -n "$n" ] || continue
+    c=$(printf '%s' "$title" | sed -E 's/.*`([^`]*)`.*/\1/')   # case is backtick-quoted in the title
+    [ -n "$c" ] || continue
+    if ! grep -qxF -- "$c" "$regressed" 2>/dev/null; then
+      gh issue close "$n" --repo "$TRIAGE_REPO" \
+        --comment "Auto-closing: \`${c}\` is no longer classified as a regression across the last ${TRIAGE_WINDOW} \`main\` runs (now passing or only intermittent). It reopens automatically if it regresses again. ${TRIAGE_MARKER}" \
+        >/dev/null 2>&1 || true
+      echo "triage: closed resolved issue #$n for $c" >&2
+    fi
+  done < <(gh issue list --repo "$TRIAGE_REPO" --state open \
+            --search 'flake-triage in:title' --limit 200 \
+            --json number,title \
+            --jq '.[] | select(.title|startswith("[flake-triage]")) | [(.number|tostring), .title] | @tsv' \
+            2>/dev/null || true)
+}
+
+# Open or update the per-case tracking issue. Idempotency keys on the title
+# prefix + the backtick-quoted case name (robust: GitHub full-text search
+# tokenizes punctuation away, so a body-marker search is unreliable).
 triage_upsert_issue() {
   local case="$1" streak="$2" run_id_list="$3"
   local title="[flake-triage] E2E case \`${case}\` regressed on main (${streak} consecutive runs)"
   local existing
-  existing=$(gh issue list --repo "$TRIAGE_REPO" --state open --search "$TRIAGE_MARKER $case in:body" \
-    --json number,title --jq ".[] | select(.title | contains(\"\`${case}\`\")) | .number" 2>/dev/null | head -1 || true)
+  existing=$(gh issue list --repo "$TRIAGE_REPO" --state open --search 'flake-triage in:title' \
+    --limit 200 --json number,title \
+    --jq ".[] | select((.title|startswith(\"[flake-triage]\")) and (.title|contains(\"\`${case}\`\"))) | .number" \
+    2>/dev/null | head -1 || true)
   local body
   body=$(cat <<EOF
 ${TRIAGE_MARKER}
 
 Automated triage: the E2E chainsaw case \`${case}\` failed on **${streak}** consecutive
-\`main\` runs (attempt-any, so retry-to-green did not hide it). That crosses the
-deterministic-regression threshold (\`TRIAGE_REGRESSION_STREAK=${TRIAGE_REGRESSION_STREAK}\`),
-so this is being tracked as a regression, not a flake.
+\`main\` runs, which crosses the deterministic-regression threshold
+(\`TRIAGE_REGRESSION_STREAK=${TRIAGE_REGRESSION_STREAK}\`), so it is tracked as a
+regression, not a flake.
 
 Sampled main runs (newest last): ${run_id_list}
 
 Next step: bisect the commit window between the last green and first red run for
 this case, and capture the failing component's logs from a repro. This issue is
-maintained by \`hack/flake-triage.sh\`; it auto-closes when the case is green
-again across the window.
+maintained by \`hack/flake-triage.sh\`; it auto-closes once the case stops
+regressing across the last ${TRIAGE_WINDOW} \`main\` runs.
 EOF
 )
   if [ -n "$existing" ]; then
