@@ -33,6 +33,23 @@ migrations:
   # Reset it to false once the upgrade is through, or the next platform upgrade
   # that adds an etcd migration will skip its snapshot too.
   etcdAdoptSkipBackup: false
+# Upgrade preflight health gate. Runs as a pre-upgrade hook BEFORE the schema
+# migrations and refuses to start an upgrade on an unhealthy cluster, so a
+# broken storage/node state is surfaced up front instead of mid-rollout. It
+# reuses migrations.image. See templates/preflight-hook.yaml.
+preflight:
+  # Master toggle. When false the pre-upgrade gate is not rendered at all.
+  enabled: true
+  # Proceed past FAILING checks anyway. Leave false. Set true ONLY when the
+  # degraded state is expected and you accept the risk (e.g. a deliberately
+  # diskless/tie-breaker LINSTOR layout, or an in-progress resync): the gate
+  # then downgrades failures to warnings and logs the override for the audit
+  # trail. Prefer fixing what a check reports, or skipping that single check
+  # via skipChecks, over blanket-overriding every check.
+  override: false
+  # Skip individual checks by id (e.g. [linstor, nodes-ready]) instead of
+  # overriding the whole gate. Empty runs every check.
+  skipChecks: []
 # Bundle deployment configuration
 bundles:
   system:
