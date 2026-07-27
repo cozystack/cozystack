@@ -13,9 +13,12 @@ live `linstor` exec on every Flux HelmRelease reconcile. Being a pre-upgrade
 (not pre-install) hook, it also never runs on a fresh install, where there is
 no prior state to protect and no LINSTOR to query.
 
-Unlike the migration hook this binds a SCOPED ClusterRole (read nodes/pods,
-exec into the linstor-controller) rather than cluster-admin: a read-only health
-probe has no reason to hold write access to the whole cluster.
+Unlike the migration hook this binds a ClusterRole limited to the verbs the
+checks need (read nodes/pods/deployments, create pods/exec) rather than
+cluster-admin: a read-only health probe has no reason to hold write access to
+the whole cluster. Note that pods/exec cannot be narrowed to a single pod in
+RBAC (pod names are generated), so the exec grant is necessarily cluster-wide;
+it is used only to exec into the linstor-controller.
 */ -}}
 {{- $pf := .Values.preflight | default dict }}
 {{- if dig "enabled" true $pf }}
@@ -97,7 +100,9 @@ rules:
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["get", "list"]
-  # Needed to run `linstor` inside the live controller pod.
+  # Needed to run `linstor` inside the live controller pod. RBAC cannot scope
+  # exec to a single pod (pod names are generated), so this is cluster-wide
+  # create on pods/exec; the checks only ever exec into linstor-controller.
   - apiGroups: [""]
     resources: ["pods/exec"]
     verbs: ["create"]
