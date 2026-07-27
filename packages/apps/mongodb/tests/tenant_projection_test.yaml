@@ -51,15 +51,22 @@ tests:
           path: spec.projections[0].sourceKey
           value: ca.crt
 
-  # The invariants the lineage chain depends on. No ownerReferences, so the
-  # helm-label fallback resolves the application; no namespace and no
-  # chart-added labels, because Flux's own label is the entire attribution
-  # path. Pinned so a future edit adding any of them reddens here instead of
-  # silently breaking tenant reads.
-  - it: carries no ownerReferences, namespace or chart-added labels
+  # THE invariant, and the only one here that breaks something. The controller
+  # resolves the owning application by walking to the sentinel's
+  # helm.toolkit.fluxcd.io/name label; an ownerReference short-circuits that
+  # walk, and the tenant silently stops receiving the anchor.
+  - it: carries no ownerReferences, so the lineage walk reaches the release
     asserts:
       - notExists:
           path: metadata.ownerReferences
+
+  # Conformance to the shape Flux and the controller expect, not an invariant:
+  # an explicit namespace or a chart-added label does not break the walk by
+  # itself. Kept separate so the test above keeps its meaning — a single test
+  # named for three unrelated properties reads as though all three were
+  # load-bearing.
+  - it: sets no namespace and adds no labels of its own
+    asserts:
       - notExists:
           path: metadata.namespace
       - notExists:

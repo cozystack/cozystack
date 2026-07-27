@@ -50,13 +50,13 @@ TLS mode is set to `preferTLS`, which means the MongoDB server accepts both TLS 
 
 ### Retrieving the CA bundle
 
-The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, created for every release and delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
+The trust anchor is published as `mongodb-<name>.tenant-ca`: an object holding `ca.crt` and nothing else, created for every release and delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant. Every object below is named after the Helm release rather than the `MongoDB` resource, so a `MongoDB` named `catest` gives `mongodb-catest.tenant-ca`, `mongodb-catest-ssl`, and so on; `<release>` stands for `mongodb-<name>` throughout.
 
 The chart declares where it is lifted from by rendering a `TenantProjection` naming `<release>-ssl`. That is the source rather than the operator's `<release>-ca-cert` because it is the name this chart sets in `spec.secrets.ssl`, the operator writes it on both its cert-manager path and its self-signed fallback, and its `ca.crt` carries the merged old and new CA through a rotation. Only `ca.crt` is ever published; the server private key alongside it stays where it is.
 
 ```bash
 kubectl --context <ctx> --namespace <tenant> \
-  get tenantsecret <release>.tenant-ca \
+  get tenantsecret mongodb-<name>.tenant-ca \
   --output jsonpath='{.data.ca\.crt}' | base64 --decode
 ```
 
@@ -72,11 +72,11 @@ Write the trust anchor to a file, then read the connection string out of `<relea
 
 ```bash
 kubectl --context <ctx> --namespace <tenant> \
-  get tenantsecret <release>.tenant-ca \
+  get tenantsecret mongodb-<name>.tenant-ca \
   --output jsonpath='{.data.ca\.crt}' | base64 --decode > ca.crt
 
 kubectl --context <ctx> --namespace <tenant> \
-  get secret <release>-credentials \
+  get secret mongodb-<name>-credentials \
   --output jsonpath='{.data.uri}' | base64 --decode
 ```
 
