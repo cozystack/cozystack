@@ -230,11 +230,11 @@ _make_tree() {
   #
   # Scope, so the name does not overclaim: this pins WHICH FILES the rewrite
   # visits, not that every ref inside them is successfully rewritten. The sed
-  # itself only runs outside --dry-run (it needs skopeo) and is a literal
-  # "<src>/" substring replace, so it still cannot rewrite a host split into a
-  # sibling `registry:` key (keycloak-operator) or one without a trailing slash
-  # (kubeovn's global.registry.address). That is a known gap recorded in
-  # docs/agents/image-refs.md, not something this test covers.
+  # itself only runs outside --dry-run (it needs skopeo), so it still cannot
+  # rewrite a host split into a sibling `registry:` key (keycloak-operator).
+  # That is a known gap recorded in docs/agents/image-refs.md, not something
+  # this test covers; the whole-value shape (kubeovn) is covered by the
+  # dedicated test below.
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
   _make_tree "$tmp/tree"
@@ -245,4 +245,45 @@ _make_tree() {
   echo "$files" | grep -q '/system/foo/values.yaml$'
   echo "$files" | grep -q '/system/tagfile/images/thing.tag$'
   echo "$files" | grep -q '/system/multus/templates/multus-daemonset-thick.yml$'
+}
+
+@test "the host rewrite reaches a host that is the whole scalar value" {
+  # kubeovn keeps its host in global.registry.address with the repository in a
+  # sibling key, so there is no trailing slash for the literal "<src>/" replace
+  # to match. The image was mirrored, the host was not rewritten, and the
+  # published tree kept pointing at the private CI registry. Dormant while the
+  # image was built in cozystack/kubeovn-chart; live once it is built here.
+  #
+  # Needs a skopeo stub because the sed only runs outside --dry-run. Scope: this
+  # covers the whole-value shape only. keycloak-operator splits the host at a
+  # different boundary (`registry: iad.ocir.io`), where no single key holds
+  # SRC_REGISTRY, and is still unfixed — see docs/agents/image-refs.md.
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_tree "$tmp/tree"
+
+  # The stub must answer `inspect` with the source digest: the script verifies
+  # every dest tag resolves to it and aborts before the rewrite otherwise.
+  mkdir -p "$tmp/bin"
+  {
+    echo '#!/bin/sh'
+    echo 'case "$1" in'
+    printf '  inspect) echo "sha256:%s" ;;\n' "$D"
+    echo '  *) exit 0 ;;'
+    echo 'esac'
+  } > "$tmp/bin/skopeo"
+  chmod +x "$tmp/bin/skopeo"
+
+  PATH="$tmp/bin:$PATH" hack/nightly-mirror.sh 0.0.0-nightly.test "$tmp/tree"
+
+  # the whole-value host is rewritten, and the repository beside it is untouched
+  grep -q '^    address: ghcr.io/cozystack/cozystack$' "$tmp/tree/system/globalreg/values.yaml"
+  grep -q '^      repository: globalreg$' "$tmp/tree/system/globalreg/values.yaml"
+  ! grep -q 'iad.ocir.io' "$tmp/tree/system/globalreg/values.yaml"
+
+  # a contiguous ref is still rewritten exactly once, not double-prefixed
+  grep -q '^image: ghcr.io/cozystack/cozystack/foo:main@sha256:' "$tmp/tree/system/foo/values.yaml"
+
+  # third-party hosts are left alone
+  grep -q 'docker.io/clastix/kubectl' "$tmp/tree/system/third/values.yaml"
 }
