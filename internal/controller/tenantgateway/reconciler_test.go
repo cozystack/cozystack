@@ -2353,56 +2353,92 @@ func TestReconcile_TLSRouteOnPassthroughServiceTerminatesNothing(t *testing.T) {
 // not have to be hostile to reach it: the shipped default publishes
 // "api", "vm-exportproxy" and "cdi-uploadproxy", so an app named after
 // one of them is enough.
+// Both spec fields feed the suppressed set, and each is its own loop, so
+// each subtest pins one of them. Covering only the services leg let the
+// listeners leg be deleted with the suite still green.
 func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T) {
-	s := newScheme(t)
-	tgw := &gatewayv1alpha1.TenantGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
-		Spec: gatewayv1alpha1.TenantGatewaySpec{
-			Apex:                   "foo.example.com",
-			CertMode:               gatewayv1alpha1.CertModeHTTP01,
-			GatewayClassName:       "cilium",
-			TLSPassthroughServices: []string{"api"},
+	const hostname = "api.foo.example.com"
+	sources := []struct {
+		name      string
+		services  []string
+		listeners []gatewayv1alpha1.TLSPassthroughListener
+	}{
+		{
+			name:     "tlsPassthroughServices",
+			services: []string{"api"},
+		},
+		{
+			// Native port, so this one does not even collide on 443.
+			// It is suppressed because the hostname belongs to the
+			// backend that terminates it.
+			name:      "tlsPassthroughListeners",
+			listeners: []gatewayv1alpha1.TLSPassthroughListener{{Name: "api", Port: 5432, Hostname: hostname}},
 		},
 	}
-	route := httpRouteAttached("api", "tenant-foo", "api.foo.example.com")
-
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, route).
-		Build()
-
-	r := &Reconciler{Client: c, Scheme: s}
-	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	gw := &gatewayv1.Gateway{}
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
-		t.Fatalf("get Gateway: %v", err)
-	}
-	var onPort443 []string
-	for _, l := range gw.Spec.Listeners {
-		if l.Port == 443 && l.Hostname != nil && string(*l.Hostname) == "api.foo.example.com" {
-			onPort443 = append(onPort443, string(l.Name)+"/"+string(l.Protocol))
-		}
-	}
-	if len(onPort443) != 1 {
-		t.Errorf("port 443 carries %d listeners for api.foo.example.com (%v), want only the passthrough one", len(onPort443), onPort443)
-	}
-
-	certs := &cmv1.CertificateList{}
-	if err := c.List(context.TODO(), certs); err != nil {
-		t.Fatalf("list certs: %v", err)
-	}
-	for i := range certs.Items {
-		for _, dns := range certs.Items[i].Spec.DNSNames {
-			if dns == "api.foo.example.com" {
-				t.Errorf("Certificate %s orders api.foo.example.com, which a passthrough listener already serves", certs.Items[i].Name)
+	for _, src := range sources {
+		t.Run(src.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:                    "foo.example.com",
+					CertMode:                gatewayv1alpha1.CertModeHTTP01,
+					GatewayClassName:        "cilium",
+					TLSPassthroughServices:  src.services,
+					TLSPassthroughListeners: src.listeners,
+				},
 			}
-		}
+			route := httpRouteAttached("api", "tenant-foo", hostname)
+
+			c := fake.NewClientBuilder().
+				WithScheme(s).
+				WithObjects(tgw, route).
+				WithStatusSubresource(tgw, route).
+				Build()
+
+			r := &Reconciler{Client: c, Scheme: s}
+			if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+			}); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			gw := &gatewayv1.Gateway{}
+			if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+				t.Fatalf("get Gateway: %v", err)
+			}
+			var passthrough bool
+			for _, l := range gw.Spec.Listeners {
+				if l.Hostname == nil || string(*l.Hostname) != hostname {
+					continue
+				}
+				if l.Protocol == gatewayv1.HTTPSProtocolType {
+					t.Errorf("listener %s terminates %s, which a passthrough listener already holds", l.Name, hostname)
+				}
+				if l.Protocol == gatewayv1.TLSProtocolType {
+					passthrough = true
+				}
+			}
+			// Assert on the protocol rather than counting listeners on
+			// the port: a spec that rendered the terminate listener and
+			// dropped the passthrough one would keep the count at one
+			// and pass a count-based check.
+			if !passthrough {
+				t.Errorf("no passthrough listener for %s, so the absence of a terminate listener proves nothing: %+v", hostname, gw.Spec.Listeners)
+			}
+
+			certs := &cmv1.CertificateList{}
+			if err := c.List(context.TODO(), certs); err != nil {
+				t.Fatalf("list certs: %v", err)
+			}
+			for i := range certs.Items {
+				for _, dns := range certs.Items[i].Spec.DNSNames {
+					if dns == hostname {
+						t.Errorf("Certificate %s orders %s, which a passthrough listener already serves", certs.Items[i].Name, hostname)
+					}
+				}
+			}
+		})
 	}
 }
 
