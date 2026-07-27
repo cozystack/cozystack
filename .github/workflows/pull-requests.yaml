@@ -377,7 +377,20 @@ jobs:
       # pr.patch e2e applies — already reflect the overlay. A missing artifact
       # (build-main not yet green) is a no-op: packages keep their committed
       # refs (prior behaviour). See hack/overlay-main-images.sh.
+      #
+      # ONLY for PRs based on main. On a release-line PR the committed refs are
+      # not stale — they are that line's released digests, which is exactly what
+      # its charts are written against. Overlaying main's images there deploys
+      # main's binaries onto a release branch's charts, and the mismatch grows
+      # with every commit main gains: #3437 (a one-line change on release-1.6)
+      # failed install deterministically because main's cozystack-controller
+      # served an aggregated OpenAPI its charts could not validate against
+      # (`unknown model in reference: …v1alpha1.OptionSpec`), which reads as a
+      # broken PR while nothing in the PR is broken. Retargeting the overlay at a
+      # per-line artifact is not possible today: build-main.yaml publishes only
+      # cozystack-packages:main, with no release-* equivalent.
       - name: Pull current-main packages tree
+        if: github.base_ref == 'main'
         run: |
           rm -rf _out/mainpkgs
           mkdir -p _out/mainpkgs
@@ -391,6 +404,10 @@ jobs:
         # so an unexpected failure must degrade to the committed refs (prior
         # behaviour), never block the PR. overlay-main-images.sh already handles
         # the expected paths (missing artifact, drift, absent unit) internally.
+        # Guarded on the base branch for the same reason as the pull above; the
+        # script would treat the absent artifact as a no-op anyway, but a
+        # release-line PR should not depend on that to avoid main's images.
+        if: github.base_ref == 'main'
         run: |
           hack/overlay-main-images.sh _out/mainpkgs "$BUILD_MATRIX" "$PR_TOUCHED" \
             || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"

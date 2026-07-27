@@ -147,3 +147,32 @@
   grep -q 'present:main@sha256:bbbb' packages/apps/present/images/present.tag
   [ ! -e packages/apps/ghost/images/ghost.tag ]
 }
+
+# ── workflow wiring ─────────────────────────────────────────────────────────
+# The script is only half the mechanism; WHEN the workflow invokes it decides
+# which branch's images a PR gets. Both steps must be gated on the base branch,
+# so a release-line PR keeps that line's committed digests instead of running
+# main's binaries against its charts.
+
+@test "the overlay steps are gated on a main base branch" {
+  root=$(pwd)
+  wf="$root/.github/workflows/pull-requests.yaml"
+  [ -f "$wf" ]
+
+  # Executable lines only: a commented-out guard must not satisfy this.
+  code="$(grep -v '^[[:space:]]*#' "$wf")"
+
+  # Each overlay step name must be followed by the base-branch guard before the
+  # step's `run:` — assert per step, so adding a third unguarded step is caught.
+  for step in "Pull current-main packages tree" "Overlay current-main refs for unbuilt packages"; do
+    block="$(printf '%s\n' "$code" | awk -v s="      - name: $step" '
+      $0 == s { inside = 1; next }
+      /^      - name: / { inside = 0 }
+      inside')"
+    [ -n "$block" ] || { echo "step not found in $wf: $step" >&2; exit 1; }
+    printf '%s\n' "$block" | grep -qF "if: github.base_ref == 'main'" || {
+      echo "step '$step' is not gated on the base branch; a release-line PR would" >&2
+      echo "get main's images overlaid onto that line's charts." >&2
+      exit 1; }
+  done
+}
