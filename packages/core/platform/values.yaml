@@ -50,6 +50,18 @@ preflight:
   # Skip individual checks by id (e.g. [linstor, nodes-ready]) instead of
   # overriding the whole gate. Empty runs every check.
   skipChecks: []
+  # Checks whose FAILURES are downgraded to non-blocking warnings: the check
+  # still runs and reports, it just does not block the upgrade. Use this for a
+  # check whose blocking behaviour is not yet trusted enough to hard-block an
+  # existing customer's upgrade.
+  #
+  # linstor is advisory by default: its parsing of live `linstor -m` output
+  # relies on LINBIT REST API field values (connection_status/disk_state) that
+  # have not yet been confirmed against a live controller in e2e. Until that
+  # evidence exists (see cozystack-pr-test), a wrong assumption there must warn,
+  # never hard-block a healthy upgrade. Once e2e confirms the semantics, a
+  # follow-up removes linstor from this default and lets it gate.
+  advisoryChecks: [linstor]
 # Bundle deployment configuration
 bundles:
   system:

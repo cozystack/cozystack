@@ -63,6 +63,10 @@ spec:
               value: "{{ if eq (toString (dig "override" false $pf)) "true" }}true{{ else }}false{{ end }}"
             - name: PREFLIGHT_SKIP
               value: {{ join "," (dig "skipChecks" (list) $pf) | quote }}
+            # Advisory checks warn instead of blocking. linstor is advisory by
+            # default until its live -m field semantics are e2e-verified.
+            - name: PREFLIGHT_ADVISORY
+              value: {{ join "," (dig "advisoryChecks" (list "linstor") $pf) | quote }}
       restartPolicy: Never
 ---
 apiVersion: rbac.authorization.k8s.io/v1

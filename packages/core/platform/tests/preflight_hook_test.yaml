@@ -63,6 +63,13 @@ tests:
       - equal:
           path: spec.template.spec.containers[0].env[1].value
           value: ""
+      # linstor is advisory by default until its live -m semantics are e2e-verified.
+      - equal:
+          path: spec.template.spec.containers[0].env[2].name
+          value: PREFLIGHT_ADVISORY
+      - equal:
+          path: spec.template.spec.containers[0].env[2].value
+          value: linstor
 
   - it: renders override=true only for an affirmative value
     set:

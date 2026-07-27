@@ -14,6 +14,12 @@
 #   PREFLIGHT_OVERRIDE    - "true" downgrades every FAIL to a warning and
 #                           proceeds; the operator has accepted the risk
 #   PREFLIGHT_SKIP        - space/comma list of check ids to skip entirely
+#   PREFLIGHT_ADVISORY    - space/comma list of check ids whose FAILURES are
+#                           downgraded to non-blocking warnings. Unlike skip the
+#                           check still RUNS and reports; it just does not gate.
+#                           Used for checks whose live semantics are not yet
+#                           verified enough to hard-block an existing customer's
+#                           upgrade (see the linstor check).
 #   PREFLIGHT_CHECKS_DIR  - directory of check scripts (default /preflight/checks)
 #
 # Each check exits: 0 = OK, 2 = FAIL (gate), 3 = N/A. Any other non-zero exit is
@@ -25,6 +31,7 @@ CHECKS_DIR="${PREFLIGHT_CHECKS_DIR:-/preflight/checks}"
 ENABLED="${PREFLIGHT_ENABLED:-true}"
 OVERRIDE="${PREFLIGHT_OVERRIDE:-false}"
 SKIP="${PREFLIGHT_SKIP:-}"
+ADVISORY="${PREFLIGHT_ADVISORY:-}"
 
 # Passed through to the LINSTOR check; centralised here so all checks agree.
 export LINSTOR_NS="${LINSTOR_NS:-cozy-linstor}"
@@ -35,11 +42,14 @@ if [ "$ENABLED" != "true" ]; then
   exit 0
 fi
 
-# Normalise the skip list: accept both comma- and space-separated ids.
+# Normalise the id lists: accept both comma- and space-separated ids.
 SKIP=$(printf '%s' "$SKIP" | tr ',' ' ')
-is_skipped() {
-  for s in $SKIP; do
-    [ "$s" = "$1" ] && return 0
+ADVISORY=$(printf '%s' "$ADVISORY" | tr ',' ' ')
+in_list() {
+  needle=$1
+  shift
+  for s in "$@"; do
+    [ "$s" = "$needle" ] && return 0
   done
   return 1
 }
@@ -50,13 +60,15 @@ ok_checks=""
 na_checks=""
 skip_checks=""
 fail_checks=""
+advisory_checks=""
 
 for chk in "$CHECKS_DIR"/*; do
   [ -f "$chk" ] || continue
   # id = filename with the numeric ordering prefix and .sh suffix stripped.
   id=$(basename "$chk" | sed 's/^[0-9]*-//; s/\.sh$//')
 
-  if is_skipped "$id"; then
+  # shellcheck disable=SC2086  # SKIP/ADVISORY are intentionally word-split into args
+  if in_list "$id" $SKIP; then
     echo "--- SKIP (operator-skipped via preflight.skipChecks): $id"
     skip_checks="$skip_checks $id"
     continue
@@ -69,16 +81,25 @@ for chk in "$CHECKS_DIR"/*; do
   case "$rc" in
     0) ok_checks="$ok_checks $id" ;;
     3) na_checks="$na_checks $id" ;;
-    *) fail_checks="$fail_checks $id" ;;
+    *)
+      # shellcheck disable=SC2086  # ADVISORY is intentionally word-split into args
+      if in_list "$id" $ADVISORY; then
+        echo "    (advisory: $id reported a problem but is non-blocking by config; not gating the upgrade)"
+        advisory_checks="$advisory_checks $id"
+      else
+        fail_checks="$fail_checks $id"
+      fi
+      ;;
   esac
 done
 
 echo ""
 echo "===== PREFLIGHT SUMMARY ====="
-echo "  OK:       ${ok_checks:- (none)}"
-echo "  N/A:      ${na_checks:- (none)}"
-echo "  skipped:  ${skip_checks:- (none)}"
-echo "  FAILED:   ${fail_checks:- (none)}"
+echo "  OK:                     ${ok_checks:- (none)}"
+echo "  N/A:                    ${na_checks:- (none)}"
+echo "  skipped:                ${skip_checks:- (none)}"
+echo "  advisory (non-blocking):${advisory_checks:- (none)}"
+echo "  FAILED (blocking):      ${fail_checks:- (none)}"
 
 if [ -n "$fail_checks" ]; then
   if [ "$OVERRIDE" = "true" ]; then
@@ -102,5 +123,10 @@ if [ -n "$fail_checks" ]; then
 fi
 
 echo ""
-echo "Preflight passed — cluster is healthy, proceeding with the upgrade."
+if [ -n "$advisory_checks" ]; then
+  echo "Preflight passed (blocking checks). Advisory checks reported problems"
+  echo "(${advisory_checks} ) but are non-blocking; review the warnings above."
+else
+  echo "Preflight passed — cluster is healthy, proceeding with the upgrade."
+fi
 exit 0

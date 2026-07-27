@@ -40,6 +40,9 @@ prep() {
   export PREFLIGHT_ENABLED=true
   export PREFLIGHT_OVERRIDE=false
   export PREFLIGHT_SKIP=""
+  # Baseline enforces every check (advisory empty), so the blocking-path tests
+  # below stay meaningful. Advisory behaviour is exercised explicitly.
+  export PREFLIGHT_ADVISORY=""
   export FAKE_LINSTOR_PRESENT=1
   export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n1"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"True"}]}}]}'
   export FAKE_LINSTOR_NODES_JSON='[[{"name":"n1","connection_status":"ONLINE"}]]'
@@ -84,6 +87,26 @@ run_pf() {
   [ "$RC" -eq 1 ]
   grep -q "n2" "$WORK/out"
   grep -q "linstor" "$WORK/out"
+}
+
+@test "an advisory linstor failure warns but does not block the upgrade" {
+  prep
+  export PREFLIGHT_ADVISORY="linstor"
+  export FAKE_LINSTOR_VOL_JSON='[[{"name":"pvc-a","volumes":[{"state":{"disk_state":"Inconsistent"}}]}]]'
+  run_pf
+  [ "$RC" -eq 0 ]
+  grep -qi "advisory" "$WORK/out"
+}
+
+@test "an advisory check does not mask a blocking check from another check" {
+  prep
+  export PREFLIGHT_ADVISORY="linstor"
+  # linstor is advisory, but a NotReady node (nodes-ready, enforcing) still blocks.
+  export FAKE_LINSTOR_VOL_JSON='[[{"name":"pvc-a","volumes":[{"state":{"disk_state":"Inconsistent"}}]}]]'
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n2"},"spec":{},"status":{"conditions":[{"type":"Ready","status":"False"}]}}]}'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -q "nodes-ready" "$WORK/out"
 }
 
 @test "LINSTOR not installed is a graceful N/A, not a failure" {

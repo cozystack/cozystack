@@ -19,8 +19,11 @@
 # SCHEMA NOTE: parsing uses `linstor -m` (machine/JSON output — the stable API
 # contract) and recursive descent (`.. | objects`), so it is independent of the
 # -m array nesting. The connection_status / disk_state field values are LINBIT
-# REST API v1 values; confirm them against a live controller in e2e before this
-# gate is trusted to hard-block a production upgrade.
+# REST API v1 values that have NOT yet been confirmed against a live controller
+# in e2e. Because of that, this check is ADVISORY by default (see
+# preflight.advisoryChecks in values.yaml): a wrong assumption here warns but
+# does not hard-block a healthy upgrade. Once cozystack-pr-test confirms the
+# field names/values on a live controller, a follow-up flips it to enforcing.
 #
 # Exit codes (the preflight runner contract):
 #   0 - OK
