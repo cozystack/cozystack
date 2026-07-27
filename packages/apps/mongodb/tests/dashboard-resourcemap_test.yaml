@@ -110,56 +110,78 @@ tests:
   # may ever be granted to a tenant. The trust anchor is delivered instead as the
   # key-free <release>.tenant-ca projection, via core.cozystack.io/tenantsecrets
   # — a label-gated path, so it needs no grant in this Role either.
+  #
+  # The four tests below pick the Role with documentSelector rather than
+  # documentIndex, and each pairs its notContains with a positive assertion on
+  # the same path. Both halves are load-bearing and neither substitutes for the
+  # other: notContains passes when the path does not resolve, so on its own it
+  # goes green against the WRONG document (reorder the template) and green when
+  # the path moves (reorder the rules). Indexing survives neither; selecting
+  # survives the first; the positive anchor catches the second.
 
   - it: Role does not grant the key-bearing TLS secrets
     release:
       name: test-mongodb
       namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
     asserts:
       - notContains:
           path: rules[1].resourceNames
           content: test-mongodb-ca-cert
-        documentIndex: 0
       - notContains:
           path: rules[1].resourceNames
           content: test-mongodb-ssl
-        documentIndex: 0
       - equal:
           path: rules[1].resourceNames
           value:
             - test-mongodb-credentials
-        documentIndex: 0
 
   - it: Role does not grant the key-bearing TLS secrets when external is enabled
     release:
       name: test-mongodb
       namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
     set:
       external: true
     asserts:
       - notContains:
           path: rules[1].resourceNames
           content: test-mongodb-ca-cert
-        documentIndex: 0
       - notContains:
           path: rules[1].resourceNames
           content: test-mongodb-ssl
-        documentIndex: 0
+      - equal:
+          path: rules[1].resourceNames
+          value:
+            - test-mongodb-credentials
 
   - it: Role does not grant the tenant-ca projection by name
     release:
       name: test-mongodb
       namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
     asserts:
       - notContains:
           path: rules[1].resourceNames
           content: test-mongodb.tenant-ca
-        documentIndex: 0
+      - equal:
+          path: rules[1].resourceNames
+          value:
+            - test-mongodb-credentials
 
   - it: Role has exactly three rules
     release:
       name: test-mongodb
       namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
     asserts:
       # The secret assertions above are all anchored to rules[1]. Without this,
       # a fourth rule granting secrets by name would satisfy every one of them
@@ -167,12 +189,14 @@ tests:
       - lengthEqual:
           path: rules
           count: 3
-        documentIndex: 0
 
   - it: the secrets rule grants secrets and nothing wider
     release:
       name: test-mongodb
       namespace: tenant-test
+    documentSelector:
+      path: kind
+      value: Role
     asserts:
       # Every other assertion here constrains resourceNames. None constrained
       # `resources`, so mutating this rule to ["*"] would grant every resource
@@ -182,12 +206,10 @@ tests:
           path: rules[1].resources
           value:
             - secrets
-        documentIndex: 0
       - equal:
           path: rules[1].apiGroups
           value:
             - ""
-        documentIndex: 0
       # The other two rules are pinned for the same reason. Neither names a
       # key-bearing Secret today, so widening one leaks nothing immediately —
       # but a rule mutated to ["*"] would grant every resource kind for the
@@ -197,12 +219,10 @@ tests:
           path: rules[0].resources
           value:
             - services
-        documentIndex: 0
       - equal:
           path: rules[2].resources
           value:
             - workloadmonitors
-        documentIndex: 0
       # verbs is the fourth axis of an RBAC rule and the last one left open.
       # Widening it does not leak a key while resourceNames stays narrow, but
       # it is the same widening class the assertions above close, and the Role
@@ -210,12 +230,9 @@ tests:
       - equal:
           path: rules[0].verbs
           value: ["get", "list", "watch"]
-        documentIndex: 0
       - equal:
           path: rules[1].verbs
           value: ["get", "list", "watch"]
-        documentIndex: 0
       - equal:
           path: rules[2].verbs
           value: ["get", "list", "watch"]
-        documentIndex: 0
