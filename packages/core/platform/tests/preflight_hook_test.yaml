@@ -15,6 +15,11 @@ kubernetesProvider:
         version: "v1"
         resource: "configmaps"
       namespaced: true
+    "v1/Namespace":
+      gvr:
+        version: "v1"
+        resource: "namespaces"
+      namespaced: false
   objects:
     - kind: ConfigMap
       apiVersion: v1
@@ -23,6 +28,12 @@ kubernetesProvider:
         namespace: cozy-system
       data:
         version: "52"
+    # Present so the namespaced pods/exec Role (gated on this namespace's
+    # existence) renders and can be asserted.
+    - kind: Namespace
+      apiVersion: v1
+      metadata:
+        name: cozy-linstor
 tests:
   - it: renders the preflight Job as a pre-upgrade hook at weight 0 (before migrations at weight 1)
     documentSelector:
@@ -130,12 +141,19 @@ tests:
           path: spec.template.spec.containers[0].env[1].value
           value: linstor,nodes-ready
 
-  - it: binds a scoped ClusterRole (nodes/pods read + pods/exec), not cluster-admin
+  - it: keeps only read verbs in the ClusterRole (no pods/exec, no cluster-admin)
     documentSelector:
       path: kind
       value: ClusterRole
     asserts:
       - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes"]
+            verbs: ["get", "list"]
+      # The privileged verb must NOT be cluster-wide.
+      - notContains:
           path: rules
           content:
             apiGroups: [""]
@@ -147,6 +165,21 @@ tests:
             apiGroups: ["*"]
             resources: ["*"]
             verbs: ["*"]
+
+  - it: scopes pods/exec to a namespaced Role in cozy-linstor
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: cozy-linstor
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["pods/exec"]
+            verbs: ["create"]
 
   - it: emits nothing when preflight is disabled
     set:
