@@ -12,7 +12,10 @@
 # negated pipeline). Run with: hack/cozytest.sh hack/flake-triage_test.bats
 
 SCRIPT=hack/flake-triage.sh
-TAB=$'\t'
+# POSIX tab: cozytest.sh runs this file under `#!/bin/sh` (dash on CI), which has
+# no ANSI-C `$'\t'` quoting. Command substitution strips trailing newlines only,
+# so the tab survives.
+TAB=$(printf '\t')
 
 # Write a run file (parse-format PASS/FAIL lines) from "FAIL:a PASS:b …" tokens.
 _mkrun() {
