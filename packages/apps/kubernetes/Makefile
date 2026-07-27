@@ -20,19 +20,30 @@ update:
 
 image: image-ubuntu-container-disk image-kubevirt-cloud-provider image-kubevirt-csi-driver image-cluster-autoscaler
 
+# One container disk per Kubernetes minor. Each build spends ~4-5min inside a
+# libguestfs appliance installing that minor's kubelet/kubeadm into its own copy
+# of the cloud image, and the versions share no per-version work, so build them
+# concurrently: the serial loop this replaced spent ~28min of the Build job's
+# 30min budget on this target alone. The sub-make carries its own -j so the root
+# `make build` stays serial, and buildkit dedups the shared guestfish and
+# cloud-image stages across the concurrent solves. --output-sync=target groups
+# each version's log under its target name -- six interleaved buildx progress
+# streams are unreadable otherwise.
 image-ubuntu-container-disk:
-	$(foreach ver,$(KUBERNETES_VERSIONS), \
-		docker buildx build images/ubuntu-container-disk \
-			--build-arg KUBERNETES_VERSION=$(ver) \
-			--tag $(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG) \
-			$(if $(filter 1,$(PUBLISH_VERSIONED)),--tag $(REGISTRY)/ubuntu-container-disk:$(ver)) \
-			$(call cache-args,ubuntu-container-disk,$(ver)-buildcache) \
-			--metadata-file images/ubuntu-container-disk-$(ver).json \
-			$(BUILDX_ARGS) && \
-		echo "$(REGISTRY)/ubuntu-container-disk:$(ver)-$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk-$(ver).json -o json -r)" \
-			> images/ubuntu-container-disk-$(ver).tag && \
-		rm -f images/ubuntu-container-disk-$(ver).json; \
-	)
+	$(MAKE) -j$(words $(KUBERNETES_VERSIONS)) --output-sync=target \
+		$(addprefix image-ubuntu-container-disk-,$(KUBERNETES_VERSIONS))
+
+image-ubuntu-container-disk-%:
+	docker buildx build images/ubuntu-container-disk \
+		--build-arg KUBERNETES_VERSION=$* \
+		--tag $(REGISTRY)/ubuntu-container-disk:$*-$(IMAGE_TAG) \
+		$(if $(filter 1,$(PUBLISH_VERSIONED)),--tag $(REGISTRY)/ubuntu-container-disk:$*) \
+		$(call cache-args,ubuntu-container-disk,$*-buildcache) \
+		--metadata-file images/ubuntu-container-disk-$*.json \
+		$(BUILDX_ARGS)
+	echo "$(REGISTRY)/ubuntu-container-disk:$*-$(IMAGE_TAG)@$$(yq e '."containerimage.digest"' images/ubuntu-container-disk-$*.json -o json -r)" \
+		> images/ubuntu-container-disk-$*.tag
+	rm -f images/ubuntu-container-disk-$*.json
 
 image-kubevirt-cloud-provider:
 	docker buildx build images/kubevirt-cloud-provider \

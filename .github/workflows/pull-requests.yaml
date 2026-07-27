@@ -33,12 +33,17 @@ jobs:
     # buildkit; concurrent build jobs serialize on buildkit's single-writer bbolt
     # cache lock + exporter mutex and stall to the 30-min timeout (proven via a
     # live SIGUSR1 goroutine dump). One VM per job => one buildkit per job => that
-    # contention is severed by construction. `make build` is serial (one image at
-    # a time), so a small shape suffices -- 4cpu/16gb, not the 24cpu the e2e job
-    # uses -- and it leans on the warm mode=max cache (#2938) to stay under the
-    # 30-min wall. The `debug` label still routes to self-hosted for the
-    # breakpoint path. Phase 0.5 of #2937.
-    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-4cpu-16gb-x86-64' }}
+    # contention is severed by construction. Phase 0.5 of #2937.
+    #
+    # 24cpu/96gb rather than the 4cpu/16gb this used to run on: `make build` is
+    # still serial across images, but this branch is the only one that still
+    # builds ubuntu-container-disk, and it does so once per Kubernetes minor with
+    # no shared build cache to warm it (main dropped the image in 39cdc8866, six
+    # days before release-1.5 was cut, so nothing writes its :*-buildcache refs).
+    # Those six builds now run concurrently, and each drives its own libguestfs
+    # appliance -- ~9gb of RAM and a core apiece, which the small shape cannot
+    # give. The `debug` label still routes to self-hosted for the breakpoint path.
+    runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
     timeout-minutes: 30
     permissions:
       contents: read
