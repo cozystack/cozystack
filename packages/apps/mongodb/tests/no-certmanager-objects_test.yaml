@@ -13,10 +13,10 @@ suite: chart renders no cert-manager objects
 # `any: true` is REQUIRED on every containsDocument below, and its absence is
 # not a style difference. Without it the matcher asserts that EVERY rendered
 # document matches, so negating it yields "not every document is a
-# Certificate" — true of any chart rendering more than one object, and this
-# one renders eight, which makes all four negatives below pass unconditionally.
-# The vacuity control is the guard against that: it fails if the negated form
-# ever stops discriminating.
+# Certificate" — true of any chart rendering more than one object, which this
+# one always does, so all four negatives below would pass unconditionally. The
+# vacuity control is the guard against that: it fails if the negated form ever
+# stops discriminating.
 
 release:
   name: mg-test
