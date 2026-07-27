@@ -23,33 +23,33 @@ permissions:
   contents: read
 
 jobs:
+  # Git-side finalization: cut the write-once tags, ensure the maintenance
+  # branch, publish the release. The registry side effects live in the separate
+  # `registry` job below so that a failure there can be re-run on its own,
+  # without re-entering any of the ref-mutating steps here.
   finalize:
     name: Finalize Release
-    # Runs skopeo + helm against GHCR (the promotion's registry side effects),
-    # so it needs an ephemeral VM runner with those tools, not the self-hosted
-    # pool.
     runs-on: [oracle-vm-4cpu-16gb-x86-64]
     permissions:
       contents: write
-      packages: write
 
-    # Finalize now both cuts the write-once tags AND performs the promotion's
-    # registry side effects (retag rc->stable, move :latest, publish the stable
-    # chart), so restrict who can trigger it: the PR must be merged, carry the
-    # `release` label, AND be authored by the release bot (promote-rc.yaml opens
-    # it as cozystack-ci[bot]). Merge rights already gate this; asserting the
-    # author additionally closes the "name a branch release-X.Y.Z, get the label
-    # applied, merge it" hole.
+    # Consumed by the `registry` job. make_latest is deliberately NOT recomputed
+    # there: the release's `latest` flag and the images' :latest tag must be the
+    # same decision, so it is made once, here, and passed on.
+    outputs:
+      tag: ${{ steps.get_tag.outputs.tag }}
+      make_latest: ${{ steps.publish.outputs.make_latest }}
+
+    # This job cuts the write-once tags and publishes the release, and gates the
+    # registry job below, so restrict who can trigger it: the PR must be merged,
+    # carry the `release` label, AND be authored by the release bot
+    # (promote-rc.yaml opens it as cozystack-ci[bot]). Merge rights already gate
+    # this; asserting the author additionally closes the "name a branch
+    # release-X.Y.Z, get the label applied, merge it" hole.
     if: |
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'release') &&
       github.event.pull_request.user.login == 'cozystack-ci[bot]'
-
-    env:
-      # The registry promotion writes to: component images and the cozy-installer
-      # chart. GHCR — the release registry tags.yaml builds rc images into — NOT
-      # the OCIR CI registry. Must match hack/promote-retag.sh's default.
-      REGISTRY: ghcr.io/cozystack/cozystack
 
     steps:
       - name: Generate GitHub App token
@@ -385,16 +385,81 @@ jobs:
               console.log(`✅ Restored ${maxRelease.tag} as latest release`);
             }
 
-      # ── Transactional promotion: the registry side effects run HERE, after the
-      #    stable tag is cut and the release is published — i.e. after the promote
-      #    PR's e2e passed and the PR merged. promote-rc.yaml did none of this at
-      #    dispatch time, so an abandoned promotion left no stable-named bytes.
+  # ── Transactional promotion: the registry side effects run HERE, after the
+  #    stable tag is cut and the release is published — i.e. after the promote
+  #    PR's e2e passed and the PR merged. promote-rc.yaml did none of this at
+  #    dispatch time, so an abandoned promotion left no stable-named bytes.
+  #
+  #    Why a separate job rather than more steps on `finalize`: this is the part
+  #    that fails. It touches 40+ external repositories over a network, and
+  #    v1.6.0 — the first release to run it — died partway through, leaving 32
+  #    images untagged and the chart unpublished AFTER the tag and the GitHub
+  #    release had become irreversible. Recovery is therefore a first-class
+  #    requirement, and the recovery mechanism is GitHub's own "Re-run failed
+  #    jobs": as its own job this replays without re-entering tag creation or
+  #    release publication, and every operation it performs is idempotent
+  #    (promote-retag.sh skips a tag already at the expected digest and refuses
+  #    to move one that is not; promote-publish-chart.sh compares an already
+  #    published chart by content).
+  #
+  #    Two things make that re-run able to carry a FIX, not merely a retry.
+  #    First, all the logic lives in hack/ scripts rather than in this file.
+  #    Second, those scripts are checked out from `main` at run time (see below),
+  #    so a correction landed after the failure is picked up — whereas the run's
+  #    own workflow file and the release tree are, correctly, frozen at the
+  #    commit that failed.
+  registry:
+    name: Promote Registry Artifacts
+    needs: finalize
+    # Prereleases never reach here — promote-rc.yaml opens a release PR only for
+    # a stable promotion — but the guard is kept explicit: an rc must not take a
+    # stable image tag or publish a stable chart.
+    if: ${{ !contains(needs.finalize.outputs.tag, '-') }}
+    # Runs skopeo + helm against GHCR, so it needs an ephemeral VM runner with
+    # those tools, not the self-hosted pool.
+    runs-on: [oracle-vm-4cpu-16gb-x86-64]
+    permissions:
+      contents: read # Check out the release tree and the promotion scripts.
+      packages: write # Push the image tags and the chart being promoted.
+
+    env:
+      # The registry promotion writes to: component images and the cozy-installer
+      # chart. GHCR — the release registry tags.yaml builds rc images into — NOT
+      # the OCIR CI registry. Must match hack/promote-retag.sh's default.
+      REGISTRY: ghcr.io/cozystack/cozystack
+
+    steps:
+      # The release tree: the merge commit finalize tagged, i.e. the rc's digests
+      # with the tag string rewritten to stable. This is release content and must
+      # stay pinned to the commit under promotion — never re-resolved to a branch
+      # tip. No git ref is written from this job, so the credential is dropped.
+      - name: Checkout release tree
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
+      # The promotion tooling, from `main` rather than from the release tree.
+      # These scripts are CI machinery, not shipped release content, and taking
+      # them from the branch is what makes a re-run of a failed promotion able to
+      # apply a fix: land the correction on main, press "Re-run failed jobs", and
+      # the corrected script runs against the same frozen release tree. Taking
+      # them from the merge commit instead would pin a re-run to the very code
+      # that failed, which is exactly how v1.6.0 ended up being repaired by hand.
       #
-      #    The checked-out merge commit is the promoted stable tree: the rc's
-      #    digests with the tag string rewritten to stable. skopeo retags those
-      #    digests to the stable image tag; helm packages+pushes the stable chart.
+      # The cost is that a broken promotion script on main breaks the next
+      # release even when the merge commit carried a good one; hack/*_test.bats
+      # runs on main under `make unit-tests` to keep that honest.
+      - name: Checkout promotion scripts from main
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: main
+          path: .promote-scripts
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Set up toolchain (skopeo, yq, helm)
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         run: |
           command -v yq >/dev/null \
             || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
@@ -404,7 +469,6 @@ jobs:
             || curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
       - name: Login to registry (GHCR)
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         env:
           GHCR_USER:  ${{ github.actor }}
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -415,48 +479,25 @@ jobs:
       # Retag every rc image/digest to the stable tag. No rebuild — bit-for-bit
       # the e2e-tested rc. :latest moves only when this stable is the newest
       # published version, gated by the SAME make_latest decision the release got.
+      #
+      # The script comes from .promote-scripts (main) while the working directory
+      # is the release tree, so it reads the released digest pins and applies the
+      # current promotion logic. promote-retag.sh resolves its own helper
+      # relative to $0 and scans `packages` relative to the working directory,
+      # which is exactly this split; keep that property if either moves.
       - name: Retag rc images to stable
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         env:
-          STABLE_TAG:  ${{ steps.get_tag.outputs.tag }}
-          MOVE_LATEST: ${{ steps.publish.outputs.make_latest == 'true' && '1' || '0' }}
-        run: ./hack/promote-retag.sh "${STABLE_TAG}"
+          STABLE_TAG:  ${{ needs.finalize.outputs.tag }}
+          MOVE_LATEST: ${{ needs.finalize.outputs.make_latest == 'true' && '1' || '0' }}
+        run: ./.promote-scripts/hack/promote-retag.sh "${STABLE_TAG}"
 
       # Publish the stable cozy-installer OCI chart — the documented install path
       # (`helm upgrade --install cozystack oci://…/cozy-installer --version X.Y.Z`).
-      # The retag above covers component images + the cozystack-packages artifact,
-      # but the chart is a separate OCI artifact referenced in no values.yaml, so
-      # the stable install 404s (manifest unknown) unless it is published here.
-      # No rebuild: the chart is packaged from the merged stable tree, which pins
-      # the retagged images + artifact by digest; only the chart's version and
-      # its platformVersion default are stamped.
+      # Same split as the retag above: main's script, the release tree's chart
+      # sources. See hack/promote-publish-chart.sh for why an already-published
+      # chart is compared by content instead of being re-pushed.
       - name: Publish stable cozy-installer chart
-        if: ${{ !contains(steps.get_tag.outputs.tag, '-') }}
         env:
-          TAG:         ${{ steps.get_tag.outputs.tag }}
-          MAKE_LATEST: ${{ steps.publish.outputs.make_latest }}
-        run: |
-          set -eu
-          STABLE_VERSION="${TAG#v}"
-          # Bake the correct platform version into the chart's DEFAULT values so
-          # the primary `helm --install --version X.Y.Z` path reports the stable
-          # version in telemetry — the operator image itself still carries the rc
-          # version baked at build time, and this env override is what corrects
-          # it. Done on the working tree only (never committed): committing it
-          # would leak platformVersion=vX.Y.Z onto main/the release line when the
-          # promote PR merges, mis-stamping the next rc built from that branch.
-          export STABLE_VERSION
-          yq -i '.cozystackOperator.platformVersion = "v" + strenv(STABLE_VERSION)' \
-            packages/core/installer/values.yaml
-          PKG="$(helm package packages/core/installer \
-            --version "${STABLE_VERSION}" --app-version "${STABLE_VERSION}" | awk '{print $NF}')"
-          helm push "$PKG" "oci://${REGISTRY}"
-          rm -f "$PKG"
-          # cozy-installer:latest tracks the newest stable, matching the image
-          # :latest and the release's `latest` flag — never moved by a patch on
-          # an older line.
-          if [ "${MAKE_LATEST}" = "true" ]; then
-            skopeo copy --multi-arch all \
-              "docker://${REGISTRY}/cozy-installer:${STABLE_VERSION}" \
-              "docker://${REGISTRY}/cozy-installer:latest"
-          fi
+          STABLE_TAG:  ${{ needs.finalize.outputs.tag }}
+          MOVE_LATEST: ${{ needs.finalize.outputs.make_latest == 'true' && '1' || '0' }}
+        run: ./.promote-scripts/hack/promote-publish-chart.sh "${STABLE_TAG}"
