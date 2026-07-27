@@ -3,6 +3,9 @@
 # the preflight checks touch, driven by FAKE_* env knobs the tests set:
 #
 #   FAKE_NODES_JSON         - stdout for `kubectl get nodes -o json`
+#   FAKE_NODES_FAIL         - when "1", `kubectl get nodes` exits non-zero
+#                             (models an API-server blip so the fail-closed path
+#                             of the nodes-ready check can be exercised)
 #   FAKE_LINSTOR_PRESENT    - 1 (deploy exists) / 0 (absent) for the presence probe
 #   FAKE_LINSTOR_NODES_JSON - stdout for `linstor -m node list` (via kubectl exec)
 #   FAKE_LINSTOR_VOL_JSON   - stdout for `linstor -m volume list` (via kubectl exec)
@@ -14,6 +17,7 @@ args="$*"
 
 case "$args" in
   *"get nodes"*)
+    [ "${FAKE_NODES_FAIL:-0}" = "1" ] && { echo "fake kubectl: get nodes failed" >&2; exit 1; }
     printf '%s' "${FAKE_NODES_JSON:-{\"items\":[]}}"
     exit 0
     ;;

@@ -109,6 +109,23 @@ run_pf() {
   grep -q "nodes-ready" "$WORK/out"
 }
 
+@test "a node reporting no Ready condition at all blocks the upgrade" {
+  prep
+  export FAKE_NODES_JSON='{"items":[{"metadata":{"name":"n1"},"spec":{},"status":{"conditions":[]}}]}'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -q "n1" "$WORK/out"
+  grep -q "nodes-ready" "$WORK/out"
+}
+
+@test "a failure to list nodes fails closed, not open" {
+  prep
+  export FAKE_NODES_FAIL=1
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -q "nodes-ready" "$WORK/out"
+}
+
 @test "LINSTOR not installed is a graceful N/A, not a failure" {
   prep
   export FAKE_LINSTOR_PRESENT=0

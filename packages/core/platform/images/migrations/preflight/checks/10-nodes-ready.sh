@@ -23,9 +23,13 @@ nodes_json=$(kubectl get nodes -o json 2>/dev/null) || {
   exit 2
 }
 
+# A node is NOT ready unless it carries a Ready condition explicitly set to
+# "True". Keying on the presence of Ready=="True" (rather than on Ready!="True")
+# also flags a node that reports NO Ready condition at all — a brand-new or
+# partially-registered node — instead of passing it vacuously.
 not_ready=$(printf '%s' "$nodes_json" | jq -r '
   .items[]
-  | select(any(.status.conditions[]?; .type == "Ready" and .status != "True"))
+  | select((any(.status.conditions[]?; .type == "Ready" and .status == "True")) | not)
   | .metadata.name' 2>/dev/null || true)
 
 if [ -n "$not_ready" ]; then
