@@ -165,7 +165,9 @@ triage() {
     # Union failed cases across every chainsaw-report artifact this run has
     # (one per attempt): a case is FAIL for the run if it failed on ANY attempt.
     : > "$work/union.$id.fail"; : > "$work/union.$id.all"
-    local aids; aids=$(gh api "repos/$TRIAGE_REPO/actions/runs/$id/artifacts" \
+    # --paginate: a run can retain more than the default 30 artifacts (33 seen
+    # in this repo), so an un-paginated fetch could drop a chainsaw-report.
+    local aids; aids=$(gh api --paginate "repos/$TRIAGE_REPO/actions/runs/$id/artifacts?per_page=100" \
       --jq '.artifacts[] | select(.name|test("chainsaw-report")) | .id' 2>/dev/null || true)
     local aid
     for aid in $aids; do
@@ -218,10 +220,13 @@ triage_close_resolved() {
     c=$(printf '%s' "$title" | sed -E 's/.*`([^`]*)`.*/\1/')   # case is backtick-quoted in the title
     [ -n "$c" ] || continue
     if ! grep -qxF -- "$c" "$regressed" 2>/dev/null; then
-      gh issue close "$n" --repo "$TRIAGE_REPO" \
+      if gh issue close "$n" --repo "$TRIAGE_REPO" \
         --comment "Auto-closing: \`${c}\` is no longer classified as a regression across the last ${TRIAGE_WINDOW} \`main\` runs (now passing or only intermittent). It reopens automatically if it regresses again. ${TRIAGE_MARKER}" \
-        >/dev/null 2>&1 || true
-      echo "triage: closed resolved issue #$n for $c" >&2
+        >/dev/null 2>&1; then
+        echo "triage: closed resolved issue #$n for $c" >&2
+      else
+        echo "triage: WARN failed to close issue #$n for $c (gh error)" >&2
+      fi
     fi
   done < <(gh issue list --repo "$TRIAGE_REPO" --state open \
             --search 'flake-triage in:title' --limit 200 \
@@ -259,12 +264,18 @@ regressing across the last ${TRIAGE_WINDOW} \`main\` runs.
 EOF
 )
   if [ -n "$existing" ]; then
-    gh issue comment "$existing" --repo "$TRIAGE_REPO" --body "$body" >/dev/null 2>&1 || true
-    echo "triage: updated issue #$existing for $case" >&2
+    if gh issue comment "$existing" --repo "$TRIAGE_REPO" --body "$body" >/dev/null 2>&1; then
+      echo "triage: updated issue #$existing for $case" >&2
+    else
+      echo "triage: WARN failed to update issue #$existing for $case (gh error)" >&2
+    fi
   else
-    gh issue create --repo "$TRIAGE_REPO" \
-      --title "$title" --body "$body" --label "$TRIAGE_LABEL" >/dev/null 2>&1 || true
-    echo "triage: opened issue for $case" >&2
+    if gh issue create --repo "$TRIAGE_REPO" \
+      --title "$title" --body "$body" --label "$TRIAGE_LABEL" >/dev/null 2>&1; then
+      echo "triage: opened issue for $case" >&2
+    else
+      echo "triage: WARN failed to open issue for $case (gh error)" >&2
+    fi
   fi
 }
 
