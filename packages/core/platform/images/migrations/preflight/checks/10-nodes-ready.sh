@@ -32,10 +32,16 @@ fi
 # "True". Keying on the presence of Ready=="True" (rather than on Ready!="True")
 # also flags a node that reports NO Ready condition at all — a brand-new or
 # partially-registered node — instead of passing it vacuously.
-not_ready=$(printf '%s' "$nodes_json" | jq -r '
+# Fail CLOSED on a jq parse error: a malformed or schema-incompatible response
+# from a "successful" kubectl call must not be silently turned into an empty
+# result that reads as "all nodes Ready". Capture jq stderr and gate on its exit.
+if ! not_ready=$(printf '%s' "$nodes_json" | jq -r '
   .items[]
   | select((any(.status.conditions[]?; .type == "Ready" and .status == "True")) | not)
-  | .metadata.name' 2>/dev/null || true)
+  | .metadata.name' 2>&1); then
+  pf_log "cannot parse 'kubectl get nodes' output as expected JSON ($not_ready) — refusing to assume the cluster is healthy"
+  exit 2
+fi
 
 if [ -n "$not_ready" ]; then
   pf_log "the following nodes are NOT Ready:"

@@ -73,11 +73,16 @@ if ! nodes_json=$(lx node list); then
   pf_log "cannot query LINSTOR nodes (see the kubectl error above)"
   exit 2
 fi
-offline=$(printf '%s' "$nodes_json" | jq -r '
+# Fail CLOSED on a jq parse error (see the nodes-ready check): a malformed
+# response must not collapse into an empty "all online" result.
+if ! offline=$(printf '%s' "$nodes_json" | jq -r '
   .. | objects
   | select(has("connection_status"))
   | select(.connection_status != "ONLINE")
-  | .name' 2>/dev/null || true)
+  | .name' 2>&1); then
+  pf_log "cannot parse LINSTOR node list output as expected JSON ($offline)"
+  exit 2
+fi
 
 if [ -n "$offline" ]; then
   pf_log "the following LINSTOR satellites are NOT online:"
@@ -92,11 +97,14 @@ if ! vol_json=$(lx volume list); then
   pf_log "cannot query LINSTOR volumes (see the kubectl error above)"
   exit 2
 fi
-faulty=$(printf '%s' "$vol_json" | jq -r '
+if ! faulty=$(printf '%s' "$vol_json" | jq -r '
   [ .. | objects | (.disk_state? // empty) ]
   | map(ascii_upcase)
   | map(select(. == "INCONSISTENT" or . == "FAILED" or . == "DUNKNOWN" or . == "OUTDATED"))
-  | unique | .[]' 2>/dev/null || true)
+  | unique | .[]' 2>&1); then
+  pf_log "cannot parse LINSTOR volume list output as expected JSON ($faulty)"
+  exit 2
+fi
 
 if [ -n "$faulty" ]; then
   pf_log "faulty DRBD volume state(s) present on the cluster:"

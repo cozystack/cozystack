@@ -21,7 +21,14 @@ args="$*"
 case "$args" in
   *"get nodes"*)
     [ "${FAKE_NODES_FAIL:-0}" = "1" ] && { echo "fake kubectl: get nodes failed" >&2; exit 1; }
-    printf '%s' "${FAKE_NODES_JSON:-{\"items\":[]}}"
+    # Explicit default (not an inline ${:-...}); a '}' inside a parameter-default
+    # word closes the expansion and appends a stray brace, producing invalid
+    # JSON.
+    if [ -n "${FAKE_NODES_JSON:-}" ]; then
+      printf '%s' "$FAKE_NODES_JSON"
+    else
+      printf '%s' '{"items":[]}'
+    fi
     exit 0
     ;;
   *"get deploy"*"linstor-controller"*)

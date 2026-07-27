@@ -127,6 +127,32 @@ run_pf() {
   grep -q "nodes-ready" "$WORK/out"
 }
 
+@test "malformed 'kubectl get nodes' JSON fails closed, not open" {
+  prep
+  # A successful kubectl call returning unparseable output must NOT collapse into
+  # an empty "all Ready" result and permit the upgrade.
+  export FAKE_NODES_JSON='this is not json'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -qi "cannot parse" "$WORK/out"
+}
+
+@test "malformed LINSTOR node JSON fails closed (enforcing)" {
+  prep
+  export FAKE_LINSTOR_NODES_JSON='not json'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -qi "cannot parse LINSTOR node" "$WORK/out"
+}
+
+@test "malformed LINSTOR volume JSON fails closed (enforcing)" {
+  prep
+  export FAKE_LINSTOR_VOL_JSON='not json'
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -qi "cannot parse LINSTOR volume" "$WORK/out"
+}
+
 @test "LINSTOR not installed is a graceful N/A, not a failure" {
   prep
   export FAKE_LINSTOR_PRESENT=0
