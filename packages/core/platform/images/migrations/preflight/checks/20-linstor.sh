@@ -39,14 +39,19 @@ PF_CHECK=linstor
 LINSTOR_NS="${LINSTOR_NS:-cozy-linstor}"
 LINSTOR_DEPLOY="${LINSTOR_DEPLOY:-linstor-controller}"
 
-if ! kubectl get deploy --namespace "$LINSTOR_NS" "$LINSTOR_DEPLOY" >/dev/null 2>&1; then
+if ! kubectl --request-timeout=30s get deploy --namespace "$LINSTOR_NS" "$LINSTOR_DEPLOY" >/dev/null 2>&1; then
   pf_log "LINSTOR not installed (no deploy/$LINSTOR_DEPLOY in $LINSTOR_NS); skipping"
   exit 3
 fi
 
 # lx runs the linstor CLI inside the controller pod in machine-readable mode.
+# --request-timeout bounds the exec: a wedged controller (the very state this
+# check targets) must not hang the pre-upgrade hook. A timeout makes lx exit
+# non-zero, which the check treats as a query failure (exit 2); since linstor is
+# advisory by default the runner then downgrades that to a warning rather than
+# letting the hang block the upgrade.
 lx() {
-  kubectl exec --namespace "$LINSTOR_NS" "deploy/$LINSTOR_DEPLOY" -- linstor -m "$@"
+  kubectl --request-timeout=30s exec --namespace "$LINSTOR_NS" "deploy/$LINSTOR_DEPLOY" -- linstor -m "$@"
 }
 
 # --- satellites all ONLINE ---------------------------------------------------

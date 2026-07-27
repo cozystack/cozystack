@@ -45,6 +45,11 @@ spec:
   # failed Job in place so the operator can read exactly which check blocked the
   # upgrade (it is cleaned up before the next upgrade attempt).
   backoffLimit: 0
+  # Backstop so the gate cannot wedge the pre-upgrade hook indefinitely. The
+  # per-call `kubectl --request-timeout` bounds each check to seconds, so a
+  # healthy run finishes far under this; the deadline only fires on a
+  # pathological hang the request timeouts somehow did not bound.
+  activeDeadlineSeconds: 300
   template:
     metadata:
       labels:
@@ -55,6 +60,14 @@ spec:
         - name: preflight
           image: {{ .Values.migrations.image }}
           command: ["/preflight/run-preflight.sh"]
+          # Read-only health probe: it never needs privilege escalation or any
+          # Linux capability, so drop them all.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
           env:
             # Only affirmative "true" takes the override; a stringified value
             # from the Package CR JSON or an unrecognised token resolves to

@@ -45,6 +45,17 @@ tests:
       - equal:
           path: spec.backoffLimit
           value: 0
+      # Backstop so a hung check cannot wedge the pre-upgrade hook forever.
+      - equal:
+          path: spec.activeDeadlineSeconds
+          value: 300
+      # Read-only probe: no privilege escalation, no Linux capabilities.
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
 
   - it: passes override=false and empty skip by default
     documentSelector:

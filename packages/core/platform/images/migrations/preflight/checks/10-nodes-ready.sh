@@ -18,8 +18,10 @@ PF_CHECK=nodes-ready
 # shellcheck source=../lib/preflight-lib.sh
 . "$(dirname "$0")/../lib/preflight-lib.sh"
 
-nodes_json=$(kubectl get nodes -o json 2>/dev/null) || {
-  pf_log "cannot list nodes (kubectl get nodes failed) — refusing to assume the cluster is healthy"
+# --request-timeout bounds the call so a wedged API server cannot hang the
+# pre-upgrade hook: a timeout exits non-zero here and fails closed (exit 2).
+nodes_json=$(kubectl --request-timeout=30s get nodes -o json 2>/dev/null) || {
+  pf_log "cannot list nodes (kubectl get nodes failed or timed out) — refusing to assume the cluster is healthy"
   exit 2
 }
 
