@@ -1,0 +1,34 @@
+#!/bin/sh
+# Fake kubectl for hack/upgrade-preflight.bats. Mocks only the cluster boundary
+# the preflight checks touch, driven by FAKE_* env knobs the tests set:
+#
+#   FAKE_NODES_JSON         - stdout for `kubectl get nodes -o json`
+#   FAKE_LINSTOR_PRESENT    - 1 (deploy exists) / 0 (absent) for the presence probe
+#   FAKE_LINSTOR_NODES_JSON - stdout for `linstor -m node list` (via kubectl exec)
+#   FAKE_LINSTOR_VOL_JSON   - stdout for `linstor -m volume list` (via kubectl exec)
+#
+# Matching is on the flattened argument string so the tests do not depend on
+# flag ordering.
+set -eu
+args="$*"
+
+case "$args" in
+  *"get nodes"*)
+    printf '%s' "${FAKE_NODES_JSON:-{\"items\":[]}}"
+    exit 0
+    ;;
+  *"get deploy"*"linstor-controller"*)
+    [ "${FAKE_LINSTOR_PRESENT:-1}" = "1" ] && exit 0 || exit 1
+    ;;
+  *"exec"*"linstor"*"node list"*)
+    printf '%s' "${FAKE_LINSTOR_NODES_JSON:-[]}"
+    exit 0
+    ;;
+  *"exec"*"linstor"*"volume list"*)
+    printf '%s' "${FAKE_LINSTOR_VOL_JSON:-[]}"
+    exit 0
+    ;;
+esac
+
+echo "fake kubectl: unhandled args: $args" >&2
+exit 3
