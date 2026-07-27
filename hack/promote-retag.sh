@@ -82,15 +82,45 @@ ref_repo() {
 }
 ref_digest() { printf '%s' "${1##*@}"; }               # sha256:...
 
+# manifest_digest <ref> — the digest of <ref>'s raw manifest, or empty output if
+# the tag is PROVEN not to exist. Anything else is indeterminate and returns
+# non-zero, which under `set -e` aborts the promotion before it writes.
+#
+# The three states matter because the caller turns "empty" into "not published,
+# safe to copy over". Inferring that from a failure — or from a successful
+# response with no bytes — is how a rate-limit or a proxy hiccup gets read as
+# permission to overwrite released bytes. Absence has to be proven by the
+# registry saying so.
 manifest_digest() {
   _ref="$1"
   _manifest="$(mktemp)"
-  # Hash the raw bytes so this works for images and OCI artifacts alike. A
-  # file preserves inspect's status without relying on non-POSIX pipefail.
-  if skopeo inspect --raw "docker://$_ref" >"$_manifest" 2>/dev/null; then
-    printf 'sha256:%s' "$(sha256sum "$_manifest" | cut -d' ' -f1)"
+  _mderr="$(mktemp)"
+  # Hash the raw bytes so this works for images and OCI artifacts alike. Files
+  # preserve inspect's status without relying on non-POSIX pipefail.
+  if skopeo inspect --raw "docker://$_ref" >"$_manifest" 2>"$_mderr"; then
+    if [ -s "$_manifest" ]; then
+      printf 'sha256:%s' "$(sha256sum "$_manifest" | cut -d' ' -f1)"
+      rm -f "$_manifest" "$_mderr"
+      return 0
+    fi
+    # Exit 0 with no bytes — a registry answering 200 with an empty body. Not a
+    # digest (hashing nothing yields sha256:e3b0c442…, which looks real and
+    # belongs to no manifest) and not proof of absence either, so refuse to
+    # decide rather than let the caller copy over whatever is really there.
+    echo "::error::skopeo inspect of ${_ref} succeeded but returned no manifest bytes; refusing to decide whether that tag exists" >&2
+    rm -f "$_manifest" "$_mderr"
+    return 1
   fi
-  rm -f "$_manifest"
+  # Non-zero. Only a registry that says the manifest is unknown proves absence;
+  # 429/5xx/auth/network failures all also exit non-zero with no bytes, and
+  # reading those as "not published" is exactly the fail-open this guards.
+  if grep -qiE 'manifest unknown|manifest not known|manifest for [^ ]* not found|not found|404' "$_mderr"; then
+    rm -f "$_manifest" "$_mderr"
+    return 0
+  fi
+  echo "::error::skopeo inspect of ${_ref} failed and did not report the manifest as unknown, so it cannot be treated as unpublished: $(tr '\n' ' ' <"$_mderr")" >&2
+  rm -f "$_manifest" "$_mderr"
+  return 1
 }
 
 copy() {

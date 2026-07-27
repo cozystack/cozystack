@@ -40,8 +40,21 @@ printf '%s\n' "$*" >>"$MOCK_SKOPEO_LOG"
 case "$1" in
   inspect)
     [ "$2" = "--raw" ]
-    if [ "$MOCK_MISSING_ONCE" = "1" ] && [ ! -f "$MOCK_STATE" ]; then
+    # An indeterminate failure: non-zero, no bytes, and the registry never says
+    # the manifest is unknown. Must NOT read as "tag absent".
+    if [ "${MOCK_TRANSIENT_ERROR:-0}" = "1" ]; then
+      echo "Error: reading manifest from docker://${3:-?}: received unexpected HTTP status: 429 Too Many Requests" >&2
       exit 1
+    fi
+    if [ "$MOCK_MISSING_ONCE" = "1" ] && [ ! -f "$MOCK_STATE" ]; then
+      # Absence as a registry actually reports it — the script requires proof,
+      # not merely a non-zero exit.
+      echo "Error: reading manifest from docker://${3:-?}: manifest unknown" >&2
+      exit 1
+    fi
+    # A registry answering 200 with an empty body: exit 0, no bytes.
+    if [ "${MOCK_EMPTY_MANIFEST:-0}" = "1" ]; then
+      exit 0
     fi
     printf '%s' "$MOCK_MANIFEST"
     ;;
@@ -267,4 +280,84 @@ EOF
   grep -q '^copy --multi-arch all ' "$tmp/skopeo.log"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
   grep -q 'Retagged image refs to v1.6.0' "$tmp/out"
+}
+
+@test "existing stable tag at a different digest is refused, not moved" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_registry_mocks "$tmp"
+
+  # The stable tag already exists (MOCK_MISSING_ONCE=0) but resolves to a
+  # manifest other than the rc's: released bytes must never be overwritten.
+  published='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"},"layers":[]}'
+  rc_manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:2222222222222222222222222222222222222222222222222222222222222222"},"layers":[]}'
+  published_digest="sha256:$(printf '%s' "$published" | sha256sum | cut -d' ' -f1)"
+  rc_digest="sha256:$(printf '%s' "$rc_manifest" | sha256sum | cut -d' ' -f1)"
+  ref="example.com/cozystack/cozystack-packages:v1.6.0-rc.1@${rc_digest}"
+
+  rc=0
+  REGISTRY="example.com/cozystack" MOCK_REF="$ref" MOCK_MANIFEST="$published" \
+    MOCK_MISSING_ONCE=0 MOCK_STATE="$tmp/state" MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+    PATH="$tmp/bin:/usr/bin:/bin" hack/promote-retag.sh v1.6.0 \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q "already exists at '${published_digest}'; refusing to move it to '${rc_digest}'" "$tmp/err"
+  # The refusal must happen BEFORE any write.
+  ! grep -q '^copy ' "$tmp/skopeo.log"
+  [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
+}
+
+@test "a zero-exit empty manifest refuses to decide and never writes" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_registry_mocks "$tmp"
+
+  manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"},"layers":[]}'
+  digest="sha256:$(printf '%s' "$manifest" | sha256sum | cut -d' ' -f1)"
+  ref="example.com/cozystack/cozystack-packages:v1.6.0-rc.1@${digest}"
+
+  rc=0
+  REGISTRY="example.com/cozystack" MOCK_REF="$ref" MOCK_MANIFEST="$manifest" \
+    MOCK_EMPTY_MANIFEST=1 MOCK_MISSING_ONCE=0 MOCK_STATE="$tmp/state" \
+    MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+    PATH="$tmp/bin:/usr/bin:/bin" hack/promote-retag.sh v1.6.0 \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+
+  # A 200 with an empty body proves nothing: the tag may hold released bytes this
+  # promotion must not overwrite. So the script must abort BEFORE any copy —
+  # reading "no bytes" as "not published" is what would turn a proxy hiccup into
+  # an overwrite of a published stable tag.
+  [ "$rc" -ne 0 ]
+  grep -q 'returned no manifest bytes' "$tmp/err"
+  ! grep -q '^copy ' "$tmp/skopeo.log"
+  [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
+  # The empty-input hash must never appear: that is the guard being absent.
+  ! grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"
+}
+
+@test "a transient registry failure is not read as an unpublished tag" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _make_registry_mocks "$tmp"
+
+  manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444"},"layers":[]}'
+  digest="sha256:$(printf '%s' "$manifest" | sha256sum | cut -d' ' -f1)"
+  ref="example.com/cozystack/cozystack-packages:v1.6.0-rc.1@${digest}"
+
+  # 429 during finalize: non-zero exit, no bytes, no "manifest unknown". The old
+  # shape of this helper made that indistinguishable from an absent tag and
+  # proceeded to copy over it; finalize retags ~42 refs with no retry wrapper, so
+  # a single rate-limit was enough to reach that path.
+  rc=0
+  REGISTRY="example.com/cozystack" MOCK_REF="$ref" MOCK_MANIFEST="$manifest" \
+    MOCK_TRANSIENT_ERROR=1 MOCK_MISSING_ONCE=0 MOCK_STATE="$tmp/state" \
+    MOCK_SKOPEO_LOG="$tmp/skopeo.log" \
+    PATH="$tmp/bin:/usr/bin:/bin" hack/promote-retag.sh v1.6.0 \
+    >"$tmp/out" 2>"$tmp/err" || rc=$?
+
+  [ "$rc" -ne 0 ]
+  grep -q 'cannot be treated as unpublished' "$tmp/err"
+  grep -q '429' "$tmp/err"
+  ! grep -q '^copy ' "$tmp/skopeo.log"
 }
