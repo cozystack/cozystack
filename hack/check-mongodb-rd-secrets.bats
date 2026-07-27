@@ -6,9 +6,10 @@
 # <release>-ssl / <release>-ssl-internal holding server private keys. The tenant
 # must receive only the key-free <release>.tenant-ca projection, reached by
 # label. These names are the contract between this file and the operator, and
-# nothing else in the repo checks them: the declaration is pruned at admission
-# until the CA-extraction controller ships, so a drifted name would surface as
-# an empty trust anchor with nothing red.
+# nothing else in the repo checks them at this level.
+#
+# The declaration that names the extraction source is a TenantProjection the
+# chart renders, covered by packages/apps/mongodb/tests/tenant_projection_test.yaml.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 COZYRDS="$REPO_ROOT/packages/system/mongodb-rd/cozyrds/mongodb.yaml"
@@ -19,22 +20,6 @@ COZYRDS="$REPO_ROOT/packages/system/mongodb-rd/cozyrds/mongodb.yaml"
 # $0 is not a usable fallback either, since it expands to the runner's own path
 # and would silently scan the wrong file.
 SELF="$REPO_ROOT/hack/check-mongodb-rd-secrets.bats"
-
-@test "mongodb-rd cozyrds declares the operator's CA secret as the trust-anchor source" {
-  grep -q 'sourceSecretName: "{{ .release }}-ca-cert"' "$COZYRDS"
-}
-
-@test "mongodb-rd cozyrds reads ca.crt from that source, never a key" {
-  grep -q "sourceKey: ca.crt" "$COZYRDS"
-  # Written as explicit if/exit rather than `! grep ...`. POSIX exempts a
-  # negated command from `set -e`, so a non-final `! grep` line can fail and
-  # the body carries on regardless — the assertion would be dead, and the last
-  # one alive only by accident of position.
-  if grep -qE "sourceKey: (tls|ca)\.key" "$COZYRDS"; then
-    echo "sourceKey names private key material" >&2
-    exit 1
-  fi
-}
 
 @test "mongodb-rd checks use the set -e-safe negation form" {
   # Guards the pattern itself, so the next negated assertion added here cannot
@@ -98,9 +83,8 @@ SELF="$REPO_ROOT/hack/check-mongodb-rd-secrets.bats"
   # Matched on the suffix over the parsed resourceNames lists, not on a literal
   # spelling: the same object can be written "mongodb-{{ .name }}-ca-cert" or
   # "{{ .release }}-ca-cert", and a grep pinned to either form misses the other.
-  # Walking the yq path also confines the check to grants — sourceSecretName
-  # names the same CA secret legitimately, as an extraction source rather than
-  # a tenant grant, and never appears on this path.
+  # Walking the yq path also confines the check to grants, so a legitimate
+  # mention of one of these names elsewhere in the file cannot trip it.
   leaks="$(yq '[.spec.secrets.include[].resourceNames[]?
     | select(test("-(ca-cert|ssl|ssl-internal|ssl-old|ssl-internal-old)$"))]
     | length' "$COZYRDS")"

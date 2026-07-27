@@ -61,13 +61,13 @@ spec:
           status:
             readyReplicas: 1
 
-  # The ApplicationDefinition declares the trust-anchor source by name
-  # (<release>-ca-cert, key ca.crt). Nothing else in the repo checks that this
-  # is what the operator actually produces: the declaration and any unit
-  # fixture would encode the same assumption and so cannot catch each other
-  # being wrong. This step is the independent witness — a Percona rename of
-  # either the Secret or the key breaks it here rather than silently producing
-  # an empty trust anchor.
+  # The TenantProjection declares the trust-anchor source by name
+  # (<release>-ssl, key ca.crt). Nothing else in the repo checks that this is
+  # what the operator actually produces: the sentinel and any unit fixture
+  # would encode the same assumption and so cannot catch each other being
+  # wrong. This step is the independent witness — a Percona change to either
+  # the Secret name or the key breaks it here rather than silently producing an
+  # empty trust anchor.
   - name: verify-ca-cert-source-shape
     try:
     - assert:
@@ -76,7 +76,7 @@ spec:
           apiVersion: v1
           kind: Secret
           metadata:
-            name: mongodb-test-ca-cert
+            name: mongodb-test-ssl
           (data."ca.crt" != null): true
 
   # The README tells operators no manual cleanup of the TLS Secrets is needed,

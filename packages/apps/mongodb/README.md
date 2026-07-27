@@ -50,9 +50,9 @@ TLS mode is set to `preferTLS`, which means the MongoDB server accepts both TLS 
 
 ### Retrieving the CA bundle
 
-> **Requires the CA-extraction controller.** This chart declares where its trust anchor comes from, but the platform component that publishes `<release>.tenant-ca` ships separately. Until it is present the projection is not created and the command below returns `NotFound`; the TLS configuration itself is unaffected. On a cluster without it, a tenant has no key-free path to the CA — the operator's `<release>-ca-cert` is deliberately not granted, because it carries the CA private key.
+> **Requires the CA-extraction controller.** The chart renders a `TenantProjection` naming `<release>-ssl` as the extraction source, and the platform controller that reads it publishes `<release>.tenant-ca`. Where the controller is absent the sentinel is inert and no trust anchor appears; nothing else about the release is affected. A tenant gets a key-free path to the CA by no other route, because every Secret that holds one also holds a private key.
 >
-> **Requires cert-manager.** The declared source is the `<release>-ca-cert` Secret, which the operator creates only on its cert-manager path. Without cert-manager the operator falls back to issuing certificates itself, producing no `<release>-ca-cert` at all and embedding `ca.crt` inside the leaf Secrets instead — so the declared source resolves to nothing and no trust anchor is published. Cozystack ships cert-manager as a platform component, so this affects only clusters where it has been removed.
+> `<release>-ssl` is the source rather than the operator's `<release>-ca-cert` because it is the name this chart sets in `spec.secrets.ssl`, the operator writes it on both its cert-manager path and its self-signed fallback, and its `ca.crt` carries the merged old and new CA through a rotation. Only `ca.crt` is ever published; the server private key alongside it stays where it is.
 
 The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
 
@@ -137,7 +137,7 @@ When the MongoDB release is uninstalled, the operator finalizers reclaim release
 - TLS secrets `<release>-ssl`, `<release>-ssl-internal`, and `<release>-ca-cert`, along with the cert-manager `Issuer` and `Certificate` objects the operator creates. The cascade works out either way on the `--enable-certificate-owner-ref` fork: with the flag the Certificate owns the Secret and the CR owns the Certificate; without it (the default Cozystack ships) the operator makes the CR the direct owner of the Secret.
 
   > **The Secret ownerReference is applied at reconcile time, not at creation.** cert-manager creates these Secrets unowned, and the operator patches the CR reference on afterwards, in `WaitForCerts`. Two paths skip the patch: a dry-run reconcile returns before it, and a Secret already present under the same name whose `cert-manager.io/certificate-name` annotation does not match is counted toward success and returned on without being patched. So a Secret that predates the release at one of these names — from a restore-from-backup, a rename, or a manual recreate — can stay unowned and survive uninstall. The finalizer does not cover the gap: it enumerates only the users, `internal-<release>`, `internal-<release>-users`, and encryption-key Secrets, and no TLS Secret is on that list. After deleting a release, confirm `<release>-ca-cert` is gone rather than assuming it — it holds the CA private key, and an orphan of it is the one leak this chart's TLS posture exists to prevent.
-- The `<release>.tenant-ca` projection, where the CA-extraction controller is present to publish it, since it is owner-referenced to the release's HelmRelease.
+- The `<release>.tenant-ca` projection, where the CA-extraction controller is present to publish it, since it is owner-referenced to the `TenantProjection` the chart renders.
 
 **Not reclaimed automatically:**
 
