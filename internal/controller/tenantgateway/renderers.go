@@ -209,6 +209,40 @@ var reservedGatewayPorts = map[int32]struct{}{80: {}, 443: {}}
 // Gateway, so renderGateway checks the assembled total against it.
 const maxGatewayListeners = 64
 
+// passthroughHostnames returns every hostname a passthrough listener on
+// this Gateway claims: "<svc>.<apex>" for each TLSPassthroughServices
+// entry and the declared Hostname of each TLSPassthroughListeners entry.
+// Both render from the spec alone, with no route involved, so the set is
+// known before any claim is collected.
+//
+// A hostname in this set must never also get an HTTPS-terminate
+// listener. The two would carry the same hostname on the same port,
+// which leaves both Conflicted and serving nothing, and the terminate
+// side would order a certificate for a hostname whose backend already
+// presents its own.
+//
+// Matching is exact, where validateTLSPassthroughListeners compares
+// declared hostnames by SNI overlap. So a "*.db.<apex>" entry
+// suppresses nothing for a published "pg.db.<apex>": the terminate
+// listener renders on 443 and the passthrough one on its own port,
+// both matching that SNI. On the pinned Cilium that is the
+// cross-port ambiguity of cilium#42898, the same hazard the overlap
+// rule rejects between two declared entries. The limit is deliberate
+// rather than complete: widening this to hostnamesOverlap would let
+// one wildcard entry withdraw the HTTPS listener of every app beneath
+// it, which is a bigger behaviour than the collision it prevents and
+// wants its own decision.
+func passthroughHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{} {
+	out := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners))
+	for _, svc := range tgw.Spec.TLSPassthroughServices {
+		out[svc+"."+tgw.Spec.Apex] = struct{}{}
+	}
+	for _, pl := range tgw.Spec.TLSPassthroughListeners {
+		out[pl.Hostname] = struct{}{}
+	}
+	return out
+}
+
 // validateTLSPassthroughListeners enforces the cross-field invariants on
 // spec.tlsPassthroughListeners that the CRD schema cannot express on its
 // own: DNS-1123 label names unique across the list AND not colliding

@@ -133,10 +133,43 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	if err != nil {
 		return fmt.Errorf("collect attached hostnames: %w", err)
 	}
-	winners, losers := resolveHostnameOwners(claims)
+	_, losers := resolveHostnameOwners(claims)
 
-	dynHostnames := make([]string, 0, len(winners))
-	for h := range winners {
+	// A hostname earns an HTTPS-terminate listener and a Gateway-issued
+	// certificate when an HTTPRoute claims it and no passthrough
+	// listener already holds it. Both halves matter, and neither is the
+	// hostname's conflict winner:
+	//
+	// A TLSRoute attaches to a passthrough listener, where the backend
+	// presents its own certificate and the Gateway terminates nothing.
+	// Terminating its hostname ordered a certificate nobody serves and
+	// added a second listener beside the passthrough one.
+	//
+	// The passthrough listeners render from the spec alone, so the
+	// collision does not need a TLSRoute to appear — an HTTPRoute
+	// claiming <svc>.<apex> for a tlsPassthroughServices entry produces
+	// the same pair. Deciding on the claiming route's kind would leave
+	// that half open.
+	//
+	// Asking whether any claimant is an HTTPRoute, rather than whether
+	// the winner is one, keeps a TLSRoute from starving an HTTPRoute of
+	// its listener: resolveHostnameOwners ranks by namespace and name
+	// with no notion of kind, and records same-namespace losers nowhere,
+	// so a TLSRoute that merely sorted first would take the hostname
+	// while the HTTPRoute still reported Accepted=True.
+	//
+	// Ownership still decides who is Accepted: claims and allRefs carry
+	// TLSRoutes untouched, so conflict resolution and RouteParentStatus
+	// are unaffected.
+	reserved := passthroughHostnames(tgw)
+	dynHostnames := make([]string, 0, len(claims))
+	for h, refs := range claims {
+		if _, isPassthrough := reserved[h]; isPassthrough {
+			continue
+		}
+		if !slices.ContainsFunc(refs, func(ref routeRef) bool { return ref.kind == routeKindHTTP }) {
+			continue
+		}
 		dynHostnames = append(dynHostnames, h)
 	}
 	sort.Strings(dynHostnames)
@@ -729,16 +762,24 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // given TenantGateway. The result is owned by the TenantGateway via
 // controllerutil.SetControllerReference so cascade delete works.
 //
-// dynHostnames is the deduplicated list of hostnames pulled from
-// HTTPRoutes / TLSRoutes attached to this Gateway. In HTTP-01 mode
-// each becomes an HTTPS listener with its own per-listener cert. In
-// DNS-01 mode dynHostnames is expected to be empty (collector returns
-// nothing) — the wildcard listener handles all subdomains.
+// dynHostnames is the deduplicated list of hostnames owned by an
+// HTTPRoute attached to this Gateway. In HTTP-01 mode each becomes an
+// HTTPS listener with its own per-listener cert. In DNS-01 mode
+// dynHostnames is expected to be empty (collector returns nothing) —
+// the wildcard listener handles all subdomains. Hostnames owned by a
+// TLSRoute are excluded upstream in runReconcileSteps: they belong to a
+// passthrough listener, which terminates nothing and needs no cert.
 //
-// Every listener is gated by an unspoofable namespace selector
-// (kubernetes.io/metadata.name In [...]) so only the publishing
-// tenant namespace plus the TenantGateway.Spec.AttachedNamespaces
-// list (cozy-* platform namespaces) can attach routes. This is
+// Every listener is gated by a namespace selector, but not the same
+// one. The port-80 listener pins an unspoofable
+// kubernetes.io/metadata.name In [...] list naming the tenant
+// namespace and the ACME challenge namespace. Every other listener
+// selects on namespace.cozystack.io/gateway, which the controller
+// stamps on the tenant namespace and on each
+// TenantGateway.Spec.AttachedNamespaces entry (cozy-* platform
+// namespaces), and which the tenant chart also stamps on every
+// inheriting child tenant namespace — so the attach set is the whole
+// inheriting subtree, not just the tenant plus the admin list. This is
 // Layer 1 of the security model documented in
 // packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {

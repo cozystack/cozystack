@@ -62,8 +62,14 @@ type routeRef struct {
 // resolveHostnameOwners groups hostnames by owner-route and decides
 // who wins when more than one route claims the same hostname.
 // Returns:
-//   - winners: hostname -> the routeRef that should produce a listener.
+//   - winners: hostname -> the routeRef that owns it.
 //   - losers: routeRef -> []hostname for which this route is NOT the winner.
+//
+// Ownership decides route status, not what gets rendered. A hostname
+// carries at most one listener however many routes claim it, and
+// runReconcileSteps derives that from the claims themselves, so a
+// winner of the wrong kind cannot take a terminate listener away from
+// an HTTPRoute that also claimed the name.
 //
 // Rule: cozy-* namespace beats anything else; within the same priority
 // tier the route with the lexicographically smallest namespace/name
