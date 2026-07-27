@@ -198,10 +198,14 @@ const passthroughListenerPrefix = "tls-"
 // its own listeners: 80 (the http listener carrying the ACME challenge
 // and the http->https redirect) and 443 (the HTTPS-terminate listeners
 // and the layer-7 TLSPassthroughServices listeners). A native-port
-// passthrough listener must avoid both — a TLS listener sharing port 80
-// with the HTTP listener is a protocol conflict, and one on 443 clashes
-// with the terminate listeners; either makes the Gateway API reject the
-// listener set wholesale.
+// passthrough listener must avoid both: a TLS listener on port 80
+// alongside the HTTP listener, or on 443 alongside a terminate listener
+// for the same hostname, is a protocol conflict. Gateway API admits
+// either — its listener uniqueness rule keys on (port, protocol,
+// hostname), so differing protocols are distinct — and the conflict
+// surfaces as Conflicted on the listeners, which then serve nothing.
+// Rejecting the entry up front turns that into a per-field error on
+// TenantGateway status instead.
 var reservedGatewayPorts = map[int32]struct{}{80: {}, 443: {}}
 
 // maxGatewayListeners mirrors the MaxItems Gateway API declares on
@@ -216,10 +220,33 @@ const maxGatewayListeners = 64
 // known before any claim is collected.
 //
 // A hostname in this set must never also get an HTTPS-terminate
-// listener. The two would carry the same hostname on the same port,
-// which leaves both Conflicted and serving nothing, and the terminate
-// side would order a certificate for a hostname whose backend already
-// presents its own.
+// listener. For a TLSPassthroughServices entry the two would sit on
+// port 443 with one hostname between them, which Gateway API admits and
+// then marks Conflicted so neither serves. A TLSPassthroughListeners
+// entry is on its own port and does not collide that way, and is
+// suppressed anyway for two reasons: the declared hostname belongs to
+// the backend, which presents its own certificate for it, so a
+// Gateway-issued one is an ACME order for a name the Gateway does not
+// serve; and the pinned Cilium selects a passthrough backend by SNI
+// alone across ports (cilium#42898), so the same SNI answering on both
+// a terminate and a passthrough listener is the ambiguity
+// validateTLSPassthroughListeners already refuses between two
+// passthrough entries.
+//
+// The cost is that an HTTPRoute claiming a hostname declared here gets
+// no listener while still reporting Accepted=True, because
+// resolveHostnameOwners records no loser for it. Nothing hostile is
+// needed to reach that: tlsPassthroughServices is a chart value shipped
+// defaulted to api, vm-exportproxy and cdi-uploadproxy, so a tenant app
+// named after one of them collides with a platform default.
+//
+// Suppression is not what breaks the hostname. Before this filter the
+// same collision rendered a terminate and a passthrough listener on
+// port 443 under one hostname, which Gateway API admits and then leaves
+// Conflicted, so the hostname was equally unserved and the route
+// equally green. What is lost is the Conflicted condition on the
+// Gateway, the one place the collision was visible. Reporting it on the
+// route wants a condition of its own.
 //
 // Matching is exact, where validateTLSPassthroughListeners compares
 // declared hostnames by SNI overlap. So a "*.db.<apex>" entry

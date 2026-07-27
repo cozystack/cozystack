@@ -2823,8 +2823,8 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 // TestReconcile_TLSPassthroughListenerInvalidRejected proves the
 // layer-4 passthrough validation is wired into the render path: a spec
 // with two listeners on the same port makes Reconcile fail loudly
-// rather than emitting a Gateway with clashing listeners the Gateway
-// API would reject wholesale.
+// rather than emitting a Gateway whose clashing listeners Gateway API
+// admits and then leaves Conflicted, serving nothing.
 func TestReconcile_TLSPassthroughListenerInvalidRejected(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
@@ -2852,8 +2852,10 @@ func TestReconcile_TLSPassthroughListenerInvalidRejected(t *testing.T) {
 // TestReconcile_TLSPassthroughListenerPort80Rejected proves the wired
 // path rejects a passthrough listener on port 80: renderGateway always
 // renders the http listener there, so a TLS listener on 80 is a
-// protocol conflict on a shared port that the Gateway API rejects
-// wholesale.
+// protocol conflict on a shared port. Gateway API admits the pair —
+// its uniqueness rule keys on (port, protocol, hostname) — and leaves
+// both listeners Conflicted, which is why the entry has to be refused
+// here instead.
 func TestReconcile_TLSPassthroughListenerPort80Rejected(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
