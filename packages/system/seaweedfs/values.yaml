@@ -18,9 +18,12 @@ seaweedfs:
   # empty set beside the running one while the data stayed on `data1-seaweedfs-volume-*`.
   # Pinning the chart name restores the pre-4.31 names, so the running workloads
   # and their volumes are adopted across the bump. extra/seaweedfs does NOT override
-  # this per release — it relies on this pin — and guards the one case the pin
-  # cannot serve (a tenant installed fresh on 1.5.x, whose data is on the renamed
-  # volumes) by refusing to render.
+  # this per release — it relies on this pin. The cases the pin cannot serve (a
+  # tenant installed fresh on 1.5.x, whose data is on the renamed volumes, and a
+  # live D-split duplicate) refuse to render in templates/naming-guard.yaml — the
+  # guard MUST live in this chart, because a platform upgrade re-renders this
+  # chart directly from its ExternalArtifact without re-rendering extra/seaweedfs.
+  # The guard also refuses to render at all if this pin is ever lifted.
   fullnameOverride: seaweedfs
   master:
     # 30 GB per volume × 10 GiB PVC = 0 → rounded to 1 maxVolume per

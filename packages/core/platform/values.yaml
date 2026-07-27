@@ -5,8 +5,16 @@ sourceRef:
   path: /
 migrations:
   enabled: false
+  # The image digest is NOT hand-edited alongside targetVersion. The release
+  # build rebuilds the migrations image from this same source tree (which carries
+  # migrations/<N>) and restamps this pin in the same commit via
+  # `make image-migrations` (yq --inplace) — so image and targetVersion are only
+  # consistent at a release tag, not mid-PR. The digest below therefore lags
+  # targetVersion in-tree by design; run-migrations.sh refuses to advance past a
+  # migration file missing from the image (exit 1), so a stale pin fails loudly
+  # rather than silently skipping the SeaweedFS database hand-over.
   image: ghcr.io/cozystack/cozystack/platform-migrations:v1.5.2@sha256:5d601b0709c578945f2e04d655b77d29008c94666a4350e67960c9f6bf9d2bde
-  targetVersion: 45
+  targetVersion: 46
 # Bundle deployment configuration
 bundles:
   system:
