@@ -55,6 +55,8 @@ hack/seaweedfs-naming-audit.sh                 # whole cluster
 hack/seaweedfs-naming-audit.sh tenant-foo      # or named namespaces
 ```
 
+**Read the exit code, not just the table.** The audit fails closed: any error it cannot interpret — a kubectl call that fails, a Helm release payload it cannot decode — makes it print `FATAL` and exit non-zero, and the table it printed up to that point is incomplete. A non-zero exit means you do not yet know the state of the fleet, so none of the steps below may be taken on the strength of it. Only a zero exit means the table is the whole answer; an empty table with exit 0 is a genuinely clean fleet.
+
 It mutates nothing. Earlier revisions of this runbook inlined the classification as a shell snippet here; it is a tested script now (`hack/seaweedfs-naming-audit.bats`), because it is what the chart's refusal hands you to and acting on it deletes PVCs. Two inline versions shipped wrong — one whose selector matched both generations at once and so inverted its own primary rule, one that could not see a long instance name at all — so it is not a snippet any more.
 
 It reports one class per SeaweedFS instance, matching exactly what the chart's guard decides:
@@ -297,7 +299,7 @@ Do **not** start by deleting PVCs. If the duplicate ever served, they may hold o
 
    Never delete `data1-seaweedfs-volume-*` here — those are the live data PVCs of the authoritative set. (For an `S-damaged` tenant it is the other way round; that is Step 2a's job, and it has its own precondition check.)
 
-5. **Re-run the audit.** The tenant must now read `L` (or `S`, if you are on the Step 2 path). Only then upgrade.
+5. **Re-run the audit.** The tenant must now read `L` (or `S`, if you are on the Step 2 path), and the audit must exit zero — a `FATAL` here means the re-check never completed, not that the tenant is fine. Only then upgrade.
 
    ```sh
    hack/seaweedfs-naming-audit.sh "$ns"
