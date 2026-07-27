@@ -221,6 +221,96 @@ spec:
             name: mongodb-test-ssl-internal
           (metadata.labels."internal.cozystack.io/tenantresource" != 'true'): true
 
+  # The negatives above are all satisfied by an absent label, so they say
+  # nothing about the anchor a tenant is supposed to get. This is the positive:
+  # the sentinel converged, the controller lifted the right certificate, and
+  # the registry serves it.
+  #
+  # tenant-ca is stamped by the controller; tenantresource is the LINEAGE
+  # WEBHOOK's verdict, computed from the ApplicationDefinition's secrets.include
+  # selector. It is "true" only if the whole chain held, and nothing short of a
+  # live cluster proves that link.
+  - name: verify-tenant-ca-projection
+    try:
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: mongodb-test.tenant-ca
+            labels:
+              internal.cozystack.io/tenant-ca: "true"
+              internal.cozystack.io/tenantresource: "true"
+          type: Opaque
+    # Deterministic once the assert above passes, so no retry.
+    - script:
+        content: |
+          set -eu
+
+          # Exactly one key, and it is ca.crt. The source carries a private key,
+          # so any second key is a leak in the making.
+          keys=$(kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca \
+            -o go-template='{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}' | sort | tr '\n' ' ')
+          if [ "$keys" != "ca.crt " ]; then
+            echo "projection must hold exactly ca.crt, holds: $keys" >&2
+            exit 1
+          fi
+
+          # It lifted the right certificate. This is what pins the declared
+          # source to reality: if Percona renames the Secret or the key, the
+          # controller finds nothing and this fails.
+          #
+          # Compared by fingerprint, not raw PEM — the controller re-encodes
+          # ca.crt from the DER it parsed, so a header or column-width change at
+          # the source would redden a byte comparison of a correct projection.
+          src=$(kubectl -n "$NAMESPACE" get secret mongodb-test-ssl -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ -z "$src" ]; then
+            echo "mongodb-test-ssl has no ca.crt — the declared source name or key is wrong" >&2
+            exit 1
+          fi
+          proj=$(kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if [ "$(echo "$src" | openssl x509 -noout -fingerprint -sha256)" \
+             != "$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)" ]; then
+            echo "projection does not carry the operator's CA certificate" >&2
+            exit 1
+          fi
+
+          # The point of the whole exercise: the source carries a private key,
+          # the projection must not. Asserting the source really does hold
+          # tls.key keeps this honest — if the operator ever stopped storing it
+          # there, the check below would pass while proving nothing.
+          if ! kubectl -n "$NAMESPACE" get secret mongodb-test-ssl \
+            -o go-template='{{if .data}}{{range $k, $v := .data}}{{$k}}{{"\n"}}{{end}}{{end}}' | grep -qx 'tls.key'; then
+            echo "mongodb-test-ssl no longer carries tls.key — this check has stopped proving anything" >&2
+            exit 1
+          fi
+          if kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d | grep -qi 'BEGIN .*PRIVATE KEY'; then
+            echo "projection carries PEM private key material" >&2
+            exit 1
+          fi
+
+          # The delivery path the README tells a tenant to use, run as the
+          # command the README prints. Everything above reads the raw Secret,
+          # which only an admin can do.
+          anchor=$(kubectl -n "$NAMESPACE" get tenantsecret mongodb-test.tenant-ca \
+            -o jsonpath='{.data.ca\.crt}' | base64 -d)
+          if ! echo "$anchor" | grep -q 'BEGIN CERTIFICATE'; then
+            echo "the trust anchor is not served through core.cozystack.io/tenantsecrets" >&2
+            exit 1
+          fi
+
+          # And the negative that gives the positive its meaning: the registry
+          # must not serve the key-bearing Secrets. If either starts resolving,
+          # the label path has stopped gating on the platform's verdict.
+          for s in mongodb-test-ssl mongodb-test-ca-cert; do
+            if kubectl -n "$NAMESPACE" get tenantsecret "$s" >/dev/null 2>&1; then
+              echo "key-bearing $s is being served as a tenant secret" >&2
+              exit 1
+            fi
+          done
+
   # The -old snapshots are operator scratch state that the operator removes
   # itself once the merged CA has landed, not residue needing manual cleanup.
   # A settled install must therefore leave none behind. This is a weak witness
