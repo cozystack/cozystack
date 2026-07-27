@@ -112,7 +112,7 @@ spec:
           kind: Secret
           metadata:
             name: mongodb-test-ca-cert
-          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'])): 1
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
     - assert:
         timeout: 5m
         resource:
@@ -120,7 +120,7 @@ spec:
           kind: Secret
           metadata:
             name: mongodb-test-ssl
-          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'])): 1
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
     - assert:
         timeout: 5m
         resource:
@@ -128,7 +128,7 @@ spec:
           kind: Secret
           metadata:
             name: mongodb-test-ssl-internal
-          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'])): 1
+          (length(metadata.ownerReferences[?kind == 'PerconaServerMongoDB'] || `[]`)): 1
 
   # The Secrets the operator creates for TLS all carry private key material and
   # must never be reachable by a tenant. The chart tests pin this at render
@@ -276,8 +276,9 @@ spec:
             exit 1
           fi
           proj=$(kubectl -n "$NAMESPACE" get secret mongodb-test.tenant-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
-          if [ "$(echo "$src" | openssl x509 -noout -fingerprint -sha256)" \
-             != "$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)" ]; then
+          src_fp=$(echo "$src" | openssl x509 -noout -fingerprint -sha256)
+          proj_fp=$(echo "$proj" | openssl x509 -noout -fingerprint -sha256)
+          if [ "$src_fp" != "$proj_fp" ]; then
             echo "projection does not carry the operator's CA certificate" >&2
             exit 1
           fi

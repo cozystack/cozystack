@@ -64,8 +64,6 @@ kubectl --context <ctx> --namespace <tenant> \
 
 It is reached through `tenantsecrets` rather than by reading the Secret directly, and that is deliberate: `tenantsecrets` surfaces only objects the platform has vouched for, whereas a direct grant on the name would convey whatever happens to occupy that name.
 
-> **Name clash worth knowing.** The shared `cozy-lib` TLS helper documents `<release>-ca-cert` as the conventional name for a **key-free** trust anchor. For MongoDB that exact name is already taken by the operator's **key-bearing** CA Secret. The same string therefore sits on opposite sides of the boundary depending on the engine — which is why this chart declares its source by name and publishes under the distinct `<release>.tenant-ca` instead of adopting the convention.
-
 > **Warning:** The CA rotates. The operator issues it with a 365-day duration and cert-manager renews it roughly 30 days before expiry, so a bundle copied once will stop verifying within a year. Re-read `<release>.tenant-ca` on a schedule (or mount it and let the kubelet refresh it) instead of baking `ca.crt` into a client image, ConfigMap, or truststore built at release time.
 
 ### Verifying a connection
