@@ -50,11 +50,9 @@ TLS mode is set to `preferTLS`, which means the MongoDB server accepts both TLS 
 
 ### Retrieving the CA bundle
 
-> **Requires the CA-extraction controller.** The chart renders a `TenantProjection` naming `<release>-ssl` as the extraction source, and the platform controller that reads it publishes `<release>.tenant-ca`. Where the controller is absent the sentinel is inert and no trust anchor appears; nothing else about the release is affected. A tenant gets a key-free path to the CA by no other route, because every Secret that holds one also holds a private key.
->
-> `<release>-ssl` is the source rather than the operator's `<release>-ca-cert` because it is the name this chart sets in `spec.secrets.ssl`, the operator writes it on both its cert-manager path and its self-signed fallback, and its `ca.crt` carries the merged old and new CA through a rotation. Only `ca.crt` is ever published; the server private key alongside it stays where it is.
+The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, created for every release and delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
 
-The trust anchor is published as `<release>.tenant-ca`: an object holding `ca.crt` and nothing else, delivered to tenants through the `core.cozystack.io/tenantsecrets` API that the base tenant roles already grant.
+The chart declares where it is lifted from by rendering a `TenantProjection` naming `<release>-ssl`. That is the source rather than the operator's `<release>-ca-cert` because it is the name this chart sets in `spec.secrets.ssl`, the operator writes it on both its cert-manager path and its self-signed fallback, and its `ca.crt` carries the merged old and new CA through a rotation. Only `ca.crt` is ever published; the server private key alongside it stays where it is.
 
 ```bash
 kubectl --context <ctx> --namespace <tenant> \

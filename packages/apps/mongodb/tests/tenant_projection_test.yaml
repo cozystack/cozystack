@@ -34,6 +34,11 @@ tests:
   # The source is the leaf Secret, not the operator's <release>-ca-cert. That
   # one exists only on the cert-manager path and holds a single CA rather than
   # the merged old+new bundle the operator maintains through a rotation.
+  #
+  # This name is only correct because the CR asks the operator for that same
+  # Secret. The other half is pinned in tls_test.yaml ("spec.secrets.ssl
+  # references the operator-managed leaf secret by default"); rename one without
+  # the other and the projection never becomes ready.
   - it: declares a CACert projection of the operator-issued leaf Secret
     asserts:
       - equal:
@@ -61,9 +66,12 @@ tests:
           path: metadata.labels
 
   # Unlike qdrant, the sentinel is ungated: the operator mints the CA whatever
-  # the chart asks for, so there is no plaintext release to skip. Pinned
-  # against a future edit that copies a gate over from another engine and
-  # leaves these releases with no trust anchor.
+  # the chart asks for, so there is no plaintext release to skip.
+  #
+  # This is the only case that catches a gate keyed on `external` being TRUE —
+  # every other test here renders with the default `external: false` and stays
+  # green through one. Engines that do gate derive the condition from external
+  # access, so that is the shape a gate copied from one of them would take.
   - it: renders regardless of external access or sharding
     set:
       external: true

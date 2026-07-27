@@ -10,6 +10,12 @@ spec:
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: mongodb-test
+  # The controller writes its verdict into the sentinel's status conditions
+  # (SourceNotFound, SourceRejected, ProjectionCollision, ...). Without this a
+  # failed projection surfaces only as an absent Secret, with no reason.
+  - describe:
+      apiVersion: internal.cozystack.io/v1alpha1
+      kind: TenantProjection
   - podLogs:
       selector: app.kubernetes.io/instance=mongodb-test
       tail: 50
@@ -68,7 +74,7 @@ spec:
   # wrong. This step is the independent witness — a Percona change to either
   # the Secret name or the key breaks it here rather than silently producing an
   # empty trust anchor.
-  - name: verify-ca-cert-source-shape
+  - name: verify-trust-anchor-source-shape
     try:
     - assert:
         timeout: 5m
@@ -304,7 +310,7 @@ spec:
           # And the negative that gives the positive its meaning: the registry
           # must not serve the key-bearing Secrets. If either starts resolving,
           # the label path has stopped gating on the platform's verdict.
-          for s in mongodb-test-ssl mongodb-test-ca-cert; do
+          for s in mongodb-test-ssl mongodb-test-ssl-internal mongodb-test-ca-cert; do
             if kubectl -n "$NAMESPACE" get tenantsecret "$s" >/dev/null 2>&1; then
               echo "key-bearing $s is being served as a tenant secret" >&2
               exit 1
