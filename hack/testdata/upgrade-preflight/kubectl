@@ -6,7 +6,10 @@
 #   FAKE_NODES_FAIL         - when "1", `kubectl get nodes` exits non-zero
 #                             (models an API-server blip so the fail-closed path
 #                             of the nodes-ready check can be exercised)
-#   FAKE_LINSTOR_PRESENT    - 1 (deploy exists) / 0 (absent) for the presence probe
+#   FAKE_LINSTOR_PRESENT    - 1 (deploy exists) / 0 (absent, NotFound) for the probe
+#   FAKE_LINSTOR_DEPLOY_ERR - when "1", the deploy probe fails with a non-NotFound
+#                             error (models RBAC/timeout so the "not installed"
+#                             vs "could not ask" distinction can be tested)
 #   FAKE_LINSTOR_NODES_JSON - stdout for `linstor -m node list` (via kubectl exec)
 #   FAKE_LINSTOR_VOL_JSON   - stdout for `linstor -m volume list` (via kubectl exec)
 #
@@ -22,7 +25,15 @@ case "$args" in
     exit 0
     ;;
   *"get deploy"*"linstor-controller"*)
-    [ "${FAKE_LINSTOR_PRESENT:-1}" = "1" ] && exit 0 || exit 1
+    if [ "${FAKE_LINSTOR_DEPLOY_ERR:-0}" = "1" ]; then
+      echo 'Error from server (Forbidden): deployments.apps "linstor-controller" is forbidden' >&2
+      exit 1
+    fi
+    if [ "${FAKE_LINSTOR_PRESENT:-1}" = "1" ]; then
+      exit 0
+    fi
+    echo 'Error from server (NotFound): deployments.apps "linstor-controller" not found' >&2
+    exit 1
     ;;
   *"exec"*"linstor"*"node list"*)
     printf '%s' "${FAKE_LINSTOR_NODES_JSON:-[]}"

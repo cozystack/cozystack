@@ -18,12 +18,12 @@
 #
 # SCHEMA NOTE: parsing uses `linstor -m` (machine/JSON output — the stable API
 # contract) and recursive descent (`.. | objects`), so it is independent of the
-# -m array nesting. The connection_status / disk_state field values are LINBIT
-# REST API v1 values that have NOT yet been confirmed against a live controller
-# in e2e. Because of that, this check is ADVISORY by default (see
-# preflight.advisoryChecks in values.yaml): a wrong assumption here warns but
-# does not hard-block a healthy upgrade. Once cozystack-pr-test confirms the
-# field names/values on a live controller, a follow-up flips it to enforcing.
+# -m array nesting. The connection_status / disk_state field names were
+# confirmed on a live controller (node objects carry connection_status="ONLINE";
+# volume objects carry disk_state with values such as UpToDate/Diskless). This
+# check is ADVISORY by default (see preflight.advisoryChecks in values.yaml)
+# until its FAULTY-state detection is also exercised against a genuinely
+# degraded cluster in e2e; a follow-up then flips it to enforcing.
 #
 # Exit codes (the preflight runner contract):
 #   0 - OK
@@ -39,26 +39,40 @@ PF_CHECK=linstor
 LINSTOR_NS="${LINSTOR_NS:-cozy-linstor}"
 LINSTOR_DEPLOY="${LINSTOR_DEPLOY:-linstor-controller}"
 
-if ! kubectl --request-timeout=30s get deploy --namespace "$LINSTOR_NS" "$LINSTOR_DEPLOY" >/dev/null 2>&1; then
-  pf_log "LINSTOR not installed (no deploy/$LINSTOR_DEPLOY in $LINSTOR_NS); skipping"
-  exit 3
+# Probe for the controller. Distinguish "genuinely not installed" (NotFound →
+# N/A) from "could not ask" (RBAC / timeout / API error → FAIL): treating a
+# failed query as "not installed" would silently skip a check the cluster
+# actually needs, so only a real NotFound is an N/A.
+if probe_out=$(kubectl_t get deploy --namespace "$LINSTOR_NS" "$LINSTOR_DEPLOY" 2>&1); then
+  : # installed, continue
+else
+  case "$probe_out" in
+    *NotFound* | *"not found"*)
+      pf_log "LINSTOR not installed (no deploy/$LINSTOR_DEPLOY in $LINSTOR_NS); skipping"
+      exit 3
+      ;;
+    *)
+      pf_log "cannot determine LINSTOR state (kubectl get deploy failed): $probe_out"
+      exit 2
+      ;;
+  esac
 fi
 
-# lx runs the linstor CLI inside the controller pod in machine-readable mode.
-# --request-timeout bounds the exec: a wedged controller (the very state this
-# check targets) must not hang the pre-upgrade hook. A timeout makes lx exit
-# non-zero, which the check treats as a query failure (exit 2); since linstor is
-# advisory by default the runner then downgrades that to a warning rather than
-# letting the hang block the upgrade.
+# lx runs the linstor CLI inside the controller pod in machine-readable mode,
+# bounded by kubectl_t so a wedged controller (the very state this check targets)
+# cannot hang the pre-upgrade hook. kubectl stderr is not silenced so a query
+# failure surfaces its real cause in the Job log. Because linstor is advisory by
+# default, a query failure (exit 2) is downgraded to a warning by the runner
+# rather than blocking the upgrade.
 lx() {
-  kubectl --request-timeout=30s exec --namespace "$LINSTOR_NS" "deploy/$LINSTOR_DEPLOY" -- linstor -m "$@"
+  kubectl_t exec --namespace "$LINSTOR_NS" "deploy/$LINSTOR_DEPLOY" -- linstor -m "$@"
 }
 
 # --- satellites all ONLINE ---------------------------------------------------
-nodes_json=$(lx node list 2>/dev/null) || {
-  pf_log "cannot query LINSTOR nodes (kubectl exec ... linstor node list failed)"
+if ! nodes_json=$(lx node list); then
+  pf_log "cannot query LINSTOR nodes (see the kubectl error above)"
   exit 2
-}
+fi
 offline=$(printf '%s' "$nodes_json" | jq -r '
   .. | objects
   | select(has("connection_status"))
@@ -74,10 +88,10 @@ if [ -n "$offline" ]; then
 fi
 
 # --- no faulty DRBD volume states --------------------------------------------
-vol_json=$(lx volume list 2>/dev/null) || {
-  pf_log "cannot query LINSTOR volumes (kubectl exec ... linstor volume list failed)"
+if ! vol_json=$(lx volume list); then
+  pf_log "cannot query LINSTOR volumes (see the kubectl error above)"
   exit 2
-}
+fi
 faulty=$(printf '%s' "$vol_json" | jq -r '
   [ .. | objects | (.disk_state? // empty) ]
   | map(ascii_upcase)

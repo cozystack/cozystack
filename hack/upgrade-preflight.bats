@@ -29,6 +29,7 @@
 FAKEBIN="$PWD/hack/testdata/upgrade-preflight"
 PF="$PWD/packages/core/platform/images/migrations/preflight/run-preflight.sh"
 CHECKS="$PWD/packages/core/platform/images/migrations/preflight/checks"
+LIB="$PWD/packages/core/platform/images/migrations/preflight/lib"
 
 # prep resets PATH/env to a fully healthy scenario. Tests override individual
 # FAKE_* knobs afterwards to model a specific fault.
@@ -131,6 +132,31 @@ run_pf() {
   export FAKE_LINSTOR_PRESENT=0
   run_pf
   [ "$RC" -eq 0 ]
+}
+
+@test "a LINSTOR query failure is a FAIL, not a false 'not installed' skip" {
+  prep
+  # deploy probe fails with a non-NotFound error (RBAC/timeout): the check must
+  # NOT swallow it as "not installed"; it must fail closed so a real inability
+  # to determine health blocks (enforcing baseline) instead of passing.
+  export FAKE_LINSTOR_DEPLOY_ERR=1
+  run_pf
+  [ "$RC" -eq 1 ]
+  grep -qi "cannot determine LINSTOR state" "$WORK/out"
+}
+
+@test "no kubectl call uses --request-timeout (it breaks in-cluster config in the image)" {
+  # Regression guard: --request-timeout in the pinned kubectl falls back to
+  # localhost:8080 instead of the in-cluster ServiceAccount config, which fails
+  # every call on a healthy cluster. Bounding is done with a timeout wrapper.
+  # Match the invocation form "kubectl --request-timeout" so the lib comment
+  # that names the flag as forbidden does not trip the guard. An explicit
+  # return-on-match is used because a bare "! grep" would not fail the test
+  # under set -e.
+  if grep -rn 'kubectl --request-timeout' "$CHECKS" "$LIB"; then
+    echo "found a kubectl --request-timeout invocation; use the kubectl_t timeout wrapper instead" >&2
+    return 1
+  fi
 }
 
 @test "override proceeds past a failing check" {

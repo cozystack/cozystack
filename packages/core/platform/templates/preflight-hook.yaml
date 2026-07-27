@@ -48,10 +48,10 @@ spec:
   # failed Job in place so the operator can read exactly which check blocked the
   # upgrade (it is cleaned up before the next upgrade attempt).
   backoffLimit: 0
-  # Backstop so the gate cannot wedge the pre-upgrade hook indefinitely. The
-  # per-call `kubectl --request-timeout` bounds each check to seconds, so a
-  # healthy run finishes far under this; the deadline only fires on a
-  # pathological hang the request timeouts somehow did not bound.
+  # Backstop so the gate cannot wedge the pre-upgrade hook indefinitely. Each
+  # check bounds its own kubectl calls with a `timeout` wrapper, so a healthy
+  # run finishes far under this; the deadline only fires on a pathological hang
+  # the per-call timeouts somehow did not bound.
   activeDeadlineSeconds: 300
   template:
     metadata:

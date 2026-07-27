@@ -18,12 +18,15 @@ PF_CHECK=nodes-ready
 # shellcheck source=../lib/preflight-lib.sh
 . "$(dirname "$0")/../lib/preflight-lib.sh"
 
-# --request-timeout bounds the call so a wedged API server cannot hang the
-# pre-upgrade hook: a timeout exits non-zero here and fails closed (exit 2).
-nodes_json=$(kubectl --request-timeout=30s get nodes -o json 2>/dev/null) || {
-  pf_log "cannot list nodes (kubectl get nodes failed or timed out) — refusing to assume the cluster is healthy"
+# kubectl stderr is intentionally NOT silenced: on failure the real API error
+# (forbidden, connection refused, timeout) must reach the Job log so the
+# operator can see WHY the gate could not verify the cluster, instead of a bare
+# "failed" line. kubectl_t bounds the call so a wedged API server cannot hang
+# the hook; a timeout exits non-zero here and fails closed (exit 2).
+if ! nodes_json=$(kubectl_t get nodes -o json); then
+  pf_log "cannot list nodes (kubectl get nodes failed or timed out; see the kubectl error above) — refusing to assume the cluster is healthy"
   exit 2
-}
+fi
 
 # A node is NOT ready unless it carries a Ready condition explicitly set to
 # "True". Keying on the presence of Ready=="True" (rather than on Ready!="True")
