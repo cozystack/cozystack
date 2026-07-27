@@ -2,22 +2,35 @@
 # Unit tests for hack/flake-triage.sh — the pure `parse` and `classify` halves
 # (the `triage` subcommand is GitHub I/O and is not unit-tested here).
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the
-# relative `hack/flake-triage.sh` calls resolve against that cwd. Each @test
-# runs under `set -e`, so negative assertions use `if cmd; then …; false; fi`
-# rather than a `!`-negated pipeline (which set -e ignores).
+# Harness note: the CI path is hack/cozytest.sh, NOT real bats (see the same
+# note in hack/nightly-mirror_test.bats / hack/select-e2e_test.bats). There is
+# no bats `run`, `$status`, `$output`, `skip`, or setup()/teardown(); each @test
+# is a shell function run under `set -eu -x`, so any non-zero exit aborts the
+# test (that IS the exit-0 assertion). Capture output with `out=$(cmd)` (a
+# failing cmd aborts under set -e) and assert with plain `[ … ]` / `grep`; a
+# negative assertion uses `if cmd; then …; false; fi` (set -e ignores a `!`-
+# negated pipeline). Run with: hack/cozytest.sh hack/flake-triage_test.bats
 
 SCRIPT=hack/flake-triage.sh
 TAB=$'\t'
+
+# Write a run file (parse-format PASS/FAIL lines) from "FAIL:a PASS:b …" tokens.
+_mkrun() {
+  local f="$1"; shift
+  : > "$f"
+  local tok
+  for tok in "$@"; do
+    printf '%s\t%s\n' "${tok%%:*}" "${tok#*:}" >> "$f"
+  done
+}
 
 # --- parse -----------------------------------------------------------------
 
 @test "parse: self-closed testcase is a PASS" {
   tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
   printf '<testsuite><testcase name="alpha" time="1.0"/></testsuite>\n' > "$tmp"
-  run "$SCRIPT" parse "$tmp"
-  [ "$status" -eq 0 ]
-  [ "$output" = "PASS${TAB}alpha" ]
+  out=$("$SCRIPT" parse "$tmp")
+  [ "$out" = "PASS${TAB}alpha" ]
 }
 
 @test "parse: <failure> and <error> children are FAILs, plain close is a PASS" {
@@ -34,24 +47,20 @@ TAB=$'\t'
   </testcase>
 </testsuite>
 XML
-  run "$SCRIPT" parse "$tmp"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -qx "FAIL${TAB}beta"
-  echo "$output" | grep -qx "FAIL${TAB}gamma"
-  echo "$output" | grep -qx "PASS${TAB}delta"
+  out=$("$SCRIPT" parse "$tmp")
+  printf '%s\n' "$out" | grep -qx "FAIL${TAB}beta"
+  printf '%s\n' "$out" | grep -qx "FAIL${TAB}gamma"
+  printf '%s\n' "$out" | grep -qx "PASS${TAB}delta"
+}
+
+@test "parse: a classname attribute before name is not mistaken for the name" {
+  tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
+  printf '<testsuite><testcase classname="suite" name="real" time="0.1"/></testsuite>\n' > "$tmp"
+  out=$("$SCRIPT" parse "$tmp")
+  [ "$out" = "PASS${TAB}real" ]
 }
 
 # --- classify: regression vs flake -----------------------------------------
-
-# Helper: write a run file (parse-format PASS/FAIL lines) from "FAIL:a PASS:b …".
-_mkrun() {
-  local f="$1"; shift
-  : > "$f"
-  local tok
-  for tok in "$@"; do
-    printf '%s\t%s\n' "${tok%%:*}" "${tok#*:}" >> "$f"
-  done
-}
 
 @test "classify: a case failing the last 3 consecutive runs is a REGRESSION" {
   d=$(mktemp -d); trap 'rm -rf "$d"' EXIT
@@ -59,10 +68,9 @@ _mkrun() {
   _mkrun "$d/r1" FAIL:x PASS:y
   _mkrun "$d/r2" FAIL:x PASS:y
   _mkrun "$d/r3" FAIL:x PASS:y
-  TRIAGE_REGRESSION_STREAK=3 run "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -qx "REGRESSION${TAB}x${TAB}3"
-  if echo "$output" | grep -q "REGRESSION${TAB}y"; then echo "FAIL: y is not a regression"; false; fi
+  out=$(TRIAGE_REGRESSION_STREAK=3 "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3")
+  printf '%s\n' "$out" | grep -qx "REGRESSION${TAB}x${TAB}3"
+  if printf '%s\n' "$out" | grep -q "REGRESSION${TAB}y"; then echo "FAIL: y is not a regression"; false; fi
 }
 
 @test "classify: a case that passed on the newest run is not a regression (flake at most)" {
@@ -72,10 +80,9 @@ _mkrun() {
   _mkrun "$d/r1" FAIL:x PASS:y PASS:z PASS:w
   _mkrun "$d/r2" FAIL:x PASS:y PASS:z PASS:w
   _mkrun "$d/r3" PASS:x PASS:y PASS:z PASS:w
-  TRIAGE_REGRESSION_STREAK=3 run "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3"
-  [ "$status" -eq 0 ]
-  if echo "$output" | grep -q "REGRESSION"; then echo "FAIL: newest-green case must not be a regression"; false; fi
-  echo "$output" | grep -qx "FLAKE${TAB}x${TAB}2/3"
+  out=$(TRIAGE_REGRESSION_STREAK=3 "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3")
+  if printf '%s\n' "$out" | grep -q "REGRESSION"; then echo "FAIL: newest-green case must not be a regression"; false; fi
+  printf '%s\n' "$out" | grep -qx "FLAKE${TAB}x${TAB}2/3"
 }
 
 @test "classify: a broken streak (fail,fail after an intervening pass) stays a FLAKE" {
@@ -86,10 +93,9 @@ _mkrun() {
   _mkrun "$d/r2" PASS:x PASS:y PASS:z PASS:w
   _mkrun "$d/r3" FAIL:x PASS:y PASS:z PASS:w
   _mkrun "$d/r4" FAIL:x PASS:y PASS:z PASS:w
-  TRIAGE_REGRESSION_STREAK=3 run "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3" "$d/r4"
-  [ "$status" -eq 0 ]
-  if echo "$output" | grep -q "REGRESSION"; then echo "FAIL: broken streak must not be a regression"; false; fi
-  echo "$output" | grep -qx "FLAKE${TAB}x${TAB}3/4"
+  out=$(TRIAGE_REGRESSION_STREAK=3 "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3" "$d/r4")
+  if printf '%s\n' "$out" | grep -q "REGRESSION"; then echo "FAIL: broken streak must not be a regression"; false; fi
+  printf '%s\n' "$out" | grep -qx "FLAKE${TAB}x${TAB}3/4"
 }
 
 # --- classify: infra-outage guard ------------------------------------------
@@ -103,9 +109,8 @@ _mkrun() {
   _mkrun "$d/r2" FAIL:x FAIL:y FAIL:z FAIL:w   # 4/4 failed => infra
   _mkrun "$d/r3" FAIL:x PASS:y PASS:z PASS:w
   _mkrun "$d/r4" FAIL:x PASS:y PASS:z PASS:w
-  TRIAGE_REGRESSION_STREAK=3 TRIAGE_INFRA_FAIL_RATIO=50 \
-    run "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3" "$d/r4"
-  [ "$status" -eq 0 ]
-  echo "$output" | grep -q "INFRA${TAB}r2"
-  echo "$output" | grep -qx "REGRESSION${TAB}x${TAB}3"
+  out=$(TRIAGE_REGRESSION_STREAK=3 TRIAGE_INFRA_FAIL_RATIO=50 \
+    "$SCRIPT" classify "$d/r1" "$d/r2" "$d/r3" "$d/r4")
+  printf '%s\n' "$out" | grep -q "INFRA${TAB}r2"
+  printf '%s\n' "$out" | grep -qx "REGRESSION${TAB}x${TAB}3"
 }
