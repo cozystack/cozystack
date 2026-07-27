@@ -86,11 +86,39 @@ helm package packages/core/installer \
 PKG="$WORKDIR/fresh/cozy-installer-${STABLE_VERSION}.tgz"
 [ -f "$PKG" ] || { echo "helm package did not produce $PKG" >&2; exit 1; }
 
-# `--raw` is load-bearing: a Helm OCI artifact is not a container image, and the
-# image-shaped `skopeo inspect` rejects it on media type. Fetching the manifest
-# raw is media-type agnostic, so this existence probe works for charts and would
-# work for any other artifact type.
-if skopeo inspect --raw "docker://${CHART_REF}:${STABLE_VERSION}" >/dev/null 2>&1; then
+# Is this version already published? `--raw` is load-bearing: a Helm OCI artifact
+# is not a container image, and the image-shaped `skopeo inspect` rejects it on
+# media type. Fetching the manifest raw is media-type agnostic, so this probe
+# works for charts and would work for any other artifact type.
+#
+# The probe must fail CLOSED. skopeo exits 1 for everything — a genuinely absent
+# manifest, a 403, an expired token, a DNS failure, a registry 5xx — so treating
+# any non-zero exit as "not published yet" would turn a transient network error
+# into an unconditional `helm push`, silently bypassing the content comparison
+# below and moving the stable chart tag onto freshly packaged bytes. That is the
+# opposite of what this script exists to guarantee, and it would happen under
+# exactly the flaky conditions that cause a promotion to be re-run in the first
+# place. So classify the failure: only an explicitly missing manifest (or a
+# repository that does not exist yet, which is the first-ever push) counts as
+# absent; anything else aborts with the registry's own diagnostic.
+PROBE_LOG="$WORKDIR/probe.log"
+PROBE_RC=0
+skopeo inspect --raw "docker://${CHART_REF}:${STABLE_VERSION}" \
+  >/dev/null 2>"$PROBE_LOG" || PROBE_RC=$?
+
+if [ "$PROBE_RC" -eq 0 ]; then
+  PUBLISHED=1
+elif grep -qiE 'manifest unknown|manifest not found|name unknown|repository name not known' \
+  "$PROBE_LOG"; then
+  PUBLISHED=0
+else
+  echo "::error::Could not determine whether cozy-installer:${STABLE_VERSION} is already published (skopeo exit ${PROBE_RC})." >&2
+  echo "::error::Refusing to push blind — a push here would overwrite a published chart. Fix the registry access and re-run." >&2
+  cat "$PROBE_LOG" >&2
+  exit 1
+fi
+
+if [ "$PUBLISHED" -eq 1 ]; then
   helm pull "oci://${CHART_REF}" \
     --version "$STABLE_VERSION" --destination "$WORKDIR/published" >/dev/null
   tar -xzf "$PKG" -C "$WORKDIR/fresh-tree"
