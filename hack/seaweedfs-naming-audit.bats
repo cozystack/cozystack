@@ -172,13 +172,34 @@ EOF
 # chart.metadata.name (as real Helm payloads carry it). Defaults to a cozy-seaweedfs
 # release so the audit confirms the tenant; pass another chart name for a non-
 # SeaweedFS release, or the literal EMPTY for a chartless {} payload.
+#
+# Three payload SHAPES beyond the default compact one, because the chart-name
+# extraction is now fatal on a miss and every shape below is something a
+# re-serializer or a user's values could produce:
+#   SPACED  whitespace around the JSON punctuation (json.dumps' default)
+#   PRETTY  indented and MULTI-LINE (jq . / yq -o=json), which a line-based
+#           matcher cannot read at all unless newlines are folded first
+#   DECOY   a real cozy-seaweedfs chart PLUS a values subtree that spells
+#           chart.metadata.name with a different value. Helm marshals "config"
+#           (the values) AFTER "chart", so a last-match extraction returns the
+#           decoy and silently declares the tenant non-SeaweedFS.
 _release_blob() {
   _rb_name=${1:-cozy-seaweedfs}
-  if [ "$_rb_name" = EMPTY ]; then
-    _rb_json='{}'
-  else
-    _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"'"$_rb_name"'"}}}'
-  fi
+  case "$_rb_name" in
+    EMPTY)  _rb_json='{}' ;;
+    SPACED) _rb_json='{"name": "seaweedfs-system", "chart": {"metadata": {"name": "cozy-seaweedfs", "version": "1.0.0"}}}' ;;
+    PRETTY) _rb_json='{
+  "name": "seaweedfs-system",
+  "chart": {
+    "metadata": {
+      "name": "cozy-seaweedfs",
+      "version": "1.0.0"
+    }
+  }
+}' ;;
+    DECOY)  _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"cozy-seaweedfs"}},"config":{"chart":{"metadata":{"name":"decoy-not-seaweedfs"}}}}' ;;
+    *)      _rb_json='{"name":"seaweedfs-system","chart":{"metadata":{"name":"'"$_rb_name"'"}}}' ;;
+  esac
   printf '%s' "$_rb_json" | gzip | base64 | base64 | tr -d '\n'
 }
 
@@ -212,6 +233,10 @@ _write_fake_kubectl() {
     cat <<'FAKE'
 verb=${1:-}; res=${2:-}; args="$*"
 fail() { echo "fake kubectl: $1 (real error)" >&2; exit 1; }
+# Anything this fake does not model must NOT look like a successful empty
+# answer: that is the fail-open shape the audited script exists to reject, and
+# it would let a new query added to the script pass these goldens unnoticed.
+unmodelled() { echo "fake kubectl: unmodelled invocation: $args" >&2; exit 97; }
 if [ "$verb $res" = "get ns" ]; then
   [ "$FAIL" = ns ] && fail "get ns"
   printf 'namespace/tenant-test\n'; exit 0
@@ -247,7 +272,7 @@ if [ "$verb $res" = "get pvc" ]; then
     *data1-seaweedfs-volume-1*)        [ "$FAIL" = pvcget ] && fail "pvc GET"; printf 'pv-legacy2\n'; exit 0 ;;
     *data1-seaweedfs-volume-0*)        [ "$FAIL" = pvcget ] && fail "pvc GET"; printf 'pv-legacy\n'; exit 0 ;;
   esac
-  exit 0
+  unmodelled
 fi
 if [ "$verb $res" = "get sts" ]; then
   [ "$FAIL" = sts ] && fail "sts LIST"
@@ -260,9 +285,9 @@ if [ "$verb $res" = "get pv" ]; then
     *pv-legacy*)  [ "$ABSENT_PV" = pv-legacy ]  && exit 0; printf '2020-01-01T00:00:00Z\n'; exit 0 ;;
     *pv-renamed*) [ "$ABSENT_PV" = pv-renamed ] && exit 0; printf '2020-06-01T00:00:00Z\n'; exit 0 ;;
   esac
-  exit 0
+  unmodelled
 fi
-exit 0
+unmodelled
 FAKE
   } > "$1/kubectl"
   chmod +x "$1/kubectl"
@@ -396,7 +421,10 @@ _expected_mixed_overlap() {
   echo "rc=$rc"; echo "$out"
   [ "$rc" -ne 0 ]
   printf '%s\n' "$out" | grep -q 'FATAL'
-  printf '%s\n' "$out" | grep -q 'no chart name'
+  printf '%s\n' "$out" | grep -q 'could not read the chart name'
+  # The diagnostic must name the path it looked at, so a future Helm payload
+  # format change is diagnosable as such instead of reading as real corruption.
+  printf '%s\n' "$out" | grep -q '\.chart\.metadata\.name'
 }
 
 @test "a present release secret for a non-SeaweedFS chart is a silent legitimate skip" {
@@ -506,4 +534,72 @@ _expected_mixed_overlap() {
   [ "$rc" -eq 0 ]
   diff "$d/want" "$d/got"
   rm -rf "$d"
+}
+
+@test "a whitespace-spaced Helm payload still classifies the tenant" {
+  # The chart-name read is FATAL on a miss, so any payload shape a re-serializer
+  # can produce must parse. Byte-compare against the same golden as the compact
+  # payload: the shape must make no difference to the report at all.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob SPACED)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"
+  [ "$rc" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "a pretty-printed multi-line Helm payload still classifies the tenant" {
+  # Line-based sed/grep cannot see across newlines at all, so this shape is the
+  # one that fails hardest without the newline fold -- and jq/yq re-serialization
+  # is exactly how a payload would arrive indented.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob PRETTY)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"
+  [ "$rc" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "a values subtree spelling chart.metadata.name cannot shadow the real chart" {
+  # Helm marshals "config" (the user's values) AFTER "chart", so a LAST-match
+  # extraction returns the decoy, the release reads as non-SeaweedFS, and the
+  # tenant vanishes from the report with exit 0 -- a false clean, the failure this
+  # whole script exists to prevent. First-match extraction is what stops it.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" "" "" "$(_release_blob DECOY)" "persistentvolumeclaim/data1-seaweedfs-volume-0"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  printf '%s\n' "$out" > "$d/got"
+  _expected_L > "$d/want"
+  echo "rc=$rc"; echo "--- got ---"; cat "$d/got"
+  [ "$rc" -eq 0 ]
+  # The decoy name must never reach the report.
+  [ "$(printf '%s\n' "$out" | grep -c 'decoy-not-seaweedfs')" -eq 0 ]
+  diff "$d/want" "$d/got"
+  rm -rf "$d"
+}
+
+@test "fails closed when the by-name PVC GET hits a real error" {
+  # pv_epoch resolves each claim's bound PV by name before reading the PV's age.
+  # A real error there (RBAC/timeout) must abort: silently dropping the claim
+  # shrinks the observed vintage range, which is what produces a wrong "candidate
+  # duplicate" verdict. The PV half of this pair was already covered; this is the
+  # PVC half, whose fake FAIL mode existed with no test behind it.
+  d=$(mktemp -d)
+  _write_fake_kubectl "$d" pvcget "" "$(_release_blob)" "$(_pvcs_mixed)"
+  rc=0
+  out=$(PATH="$d:$PATH" SEAWEEDFS_AUDIT_LIB=0 sh "$PWD/hack/seaweedfs-naming-audit.sh" tenant-test 2>&1) || rc=$?
+  rm -rf "$d"
+  echo "rc=$rc"; echo "$out"
+  [ "$rc" -ne 0 ]
+  printf '%s\n' "$out" | grep -q 'FATAL'
+  printf '%s\n' "$out" | grep -q "get PVC '"
 }

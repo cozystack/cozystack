@@ -191,11 +191,33 @@ system_releases() {
       # the very false-clean this guard exists to stop -- so it is FATAL. A present
       # but different chart name is a real, non-SeaweedFS release and stays a
       # legitimate skip, filtered exactly as before by the cozy-seaweedfs test.
-      # ("chart" is the release struct's only such key -- vendored subcharts nest
-      # under "dependencies" -- so this match is unambiguous.)
+      #
+      # Two properties make this match trustworthy, and both are load-bearing now
+      # that a miss is FATAL:
+      #
+      #   * FIRST match, not last. Helm's Release marshals "chart" before
+      #     "config" (the user's values), so a values subtree that happens to
+      #     spell chart.metadata.name sits LATER in the payload -- and a greedy
+      #     `sed 's/.*"chart"...'` would return that decoy instead of the real
+      #     chart. A wrong name reads downstream as "not SeaweedFS" and drops a
+      #     real release from the report: the exact silent false-clean this guard
+      #     exists to stop. `grep -o | head -1` takes the leftmost match.
+      #   * The chart -> metadata -> name key path stays ADJACENT. A looser "any
+      #     'name' after 'metadata'" matches chart.templates[].name, which Helm
+      #     serializes immediately after metadata on EVERY healthy release, so it
+      #     would return a template path for every tenant.
+      #
+      # Newlines are folded first so a pretty-printed payload parses at all (sed
+      # and grep are line-based), and whitespace around the punctuation is
+      # tolerated. Failing loudly on a payload this cannot read is the safe
+      # direction -- over-strictness stops the runbook, over-looseness lets it
+      # delete data -- so the message says what shape was expected.
       if [ -n "$_sr_json" ]; then
-        _sr_chart=$(printf '%s' "$_sr_json" | sed -n 's/.*"chart":{"metadata":{"name":"\([^"]*\)".*/\1/p' | head -1)
-        [ -n "$_sr_chart" ] || { audit_fatal "secret 'sh.helm.release.v1.$rel.v$rev' in namespace '$1' decoded to a payload with no chart name (corrupt Helm release)."; return 1; }
+        _sr_chart=$(printf '%s' "$_sr_json" | tr '\n' ' ' \
+          | grep -o '"chart"[[:space:]]*:[[:space:]]*{[[:space:]]*"metadata"[[:space:]]*:[[:space:]]*{[[:space:]]*"name"[[:space:]]*:[[:space:]]*"[^"]*"' \
+          | head -1 \
+          | sed -n 's/.*"\([^"]*\)"$/\1/p')
+        [ -n "$_sr_chart" ] || { audit_fatal "could not read the chart name of secret 'sh.helm.release.v1.$rel.v$rev' in namespace '$1' at .chart.metadata.name (expected 'name' as metadata's first key; a corrupt Helm release, or a payload format this parser does not handle)."; return 1; }
         if [ "$_sr_chart" = cozy-seaweedfs ]; then printf '%s\n' "$rel"; fi
       fi
       break
@@ -209,7 +231,16 @@ first_deployed() {
   _fd_revs=$(revisions "$1" "$2") || return $?
   for rev in $_fd_revs; do
     _fd_json=$(release_json "$1" "$2" "$rev") || return $?
-    ts=$(printf '%s' "$_fd_json" | sed -n 's/.*"first_deployed":"\([^"]*\)".*/\1/p' | head -1)
+    # Same extraction discipline as the chart name above: fold newlines so a
+    # pretty-printed payload parses at all, tolerate whitespace around the
+    # punctuation, and take the FIRST match (.info precedes .config, so a values
+    # subtree cannot shadow the real timestamp). A miss here is not fatal -- the
+    # caller degrades to the documented safe fallback -- but a WRONG timestamp
+    # would silently change a vintage verdict, which is worse than none.
+    ts=$(printf '%s' "$_fd_json" | tr '\n' ' ' \
+      | grep -o '"first_deployed"[[:space:]]*:[[:space:]]*"[^"]*"' \
+      | head -1 \
+      | sed -n 's/.*"\([^"]*\)"$/\1/p')
     if [ -n "$ts" ]; then date -u -d "$(printf '%s' "$ts" | cut -c1-19)" +%s 2>/dev/null; return; fi
   done
 }
