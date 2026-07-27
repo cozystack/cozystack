@@ -2638,7 +2638,12 @@ func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
 			}
 
 			r := &Reconciler{Scheme: newScheme(t)}
-			gw, err := r.renderGateway(tgw, []string{"app.foo.example.com"}, m.childApexes)
+			// Two published hostnames, not one: the HTTP-01 branch
+			// renders its per-app listeners from this list, so a single
+			// entry leaves that loop emitting one listener, where no
+			// two pointers can be equal and the assertion below holds
+			// no matter how the renderer builds them.
+			gw, err := r.renderGateway(tgw, []string{"app.foo.example.com", "www.foo.example.com"}, m.childApexes)
 			if err != nil {
 				t.Fatalf("renderGateway: %v", err)
 			}
