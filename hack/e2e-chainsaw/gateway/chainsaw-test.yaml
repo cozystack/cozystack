@@ -487,7 +487,90 @@ spec:
             exit 1
           fi
           echo "$out" | grep -qi "ValidatingAdmissionPolicy"
-          echo "$out" | grep -qi "hostnames must equal"
+          # Matches the apex-comparison half of the message, which is common to
+          # every denial this policy issues. Pinning the leading words instead
+          # would break whenever the message grows a clause for another shape.
+          echo "$out" | grep -qi "must equal the namespace"
+        check:
+          ($error == null): true
+  # A route that declares no hostname at all is the one shape the expression
+  # used to skip: it opened with `!has(object.spec.hostnames) ||`, so such a
+  # route satisfied the first operand and was admitted without a single
+  # hostname being compared. That route is not inert — under Gateway API it
+  # inherits the hostnames of the listener it attaches to, and parentRefs may
+  # name a Gateway in another namespace, so it ends up covering whatever that
+  # listener covers.
+  #
+  # Both empty shapes are probed because they reach the hole by different
+  # routes and one guard does not imply the other: the field being absent is
+  # caught by has(), while an explicitly empty list satisfies has() and then
+  # passes because all() over an empty list is vacuously true. Dropping either
+  # term from the CEL re-admits the whole shape, and the unit suite can only
+  # pin that the terms are present in the expression — this step is what proves
+  # the apiserver acts on them.
+  #
+  # HTTPRoute carries both cases; TLSRoute contributes only the absent one,
+  # because at v1 the CRD schema requires spec.hostnames and rejects an empty
+  # list on minItems, leaving the deprecated v1alpha2 the only version where a
+  # hostname-less TLSRoute reaches admission at all. Scripted rather than an
+  # apply/expect pair so the grep can prove the VAP did the denying: a bare
+  # "the apply failed" assertion would be satisfied by a typo in the manifest.
+  - name: hostname-less-route-denied
+    try:
+    - script:
+        content: |
+          set -eu
+          # deny <case> <kind> <name> reads a manifest on stdin and expects the
+          # VAP to reject it, mirroring the deny() helper in the Ingress suite.
+          deny() {
+            kubectl -n "$NAMESPACE" delete "$2" "$3" --ignore-not-found >/dev/null
+            out=$(kubectl apply -n "$NAMESPACE" -f - 2>&1) && rc=0 || rc=$?
+            echo "case=$1 rc=$rc out=$out"
+            if [ "$rc" -eq 0 ]; then
+              kubectl -n "$NAMESPACE" delete "$2" "$3" --ignore-not-found
+              echo "BUG: admission accepted $1" >&2
+              exit 1
+            fi
+            echo "$out" | grep -qi "ValidatingAdmissionPolicy"
+            echo "$out" | grep -qi "must declare spec.hostnames"
+          }
+          deny httproute-hostnames-absent httproute route-nohost-probe <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-nohost-probe
+          spec:
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+          deny httproute-hostnames-empty httproute route-emptyhost-probe <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: route-emptyhost-probe
+          spec:
+            hostnames: []
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+          deny tlsroute-hostnames-absent tlsroute route-tls-nohost-probe <<'EOF'
+          apiVersion: gateway.networking.k8s.io/v1alpha2
+          kind: TLSRoute
+          metadata:
+            name: route-tls-nohost-probe
+          spec:
+            rules:
+            - backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
         check:
           ($error == null): true
   - name: own-apex-route-allowed
@@ -665,8 +748,42 @@ spec:
     try:
     - apply:
         file: gw-route-probe.yaml
-  - name: assert-route-accepted
-    try:
+    # The route is scripted rather than declared in gw-route-probe.yaml
+    # because it needs the tenant apex interpolated. This suite runs in
+    # tenant-test, which cozystack-route-hostname-policy matches, so a
+    # route naming no hostname is denied; the apex is read from the
+    # namespace label rather than hardcoded so the suite still passes on
+    # a dev cluster whose host differs from CI's. Same reason and same
+    # shape as own-apex-route-allowed above.
+    - script:
+        content: |
+          set -eu
+          ns="$NAMESPACE"
+          apex=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.namespace\.cozystack\.io/host}')
+          [ -n "$apex" ] || { echo "SETUP FAILURE: $ns lacks the namespace.cozystack.io/host label" >&2; exit 1; }
+          kubectl apply -n "$ns" -f - <<EOF
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          metadata:
+            name: httproute-probe
+          spec:
+            hostnames:
+            - "parentref-probe.${apex}"
+            parentRefs:
+            - name: gateway-route-probe
+              sectionName: http
+            rules:
+            - matches:
+              - path:
+                  type: PathPrefix
+                  value: /
+              backendRefs:
+              - name: kubernetes
+                namespace: default
+                port: 443
+          EOF
+        check:
+          ($error == null): true
     - assert:
         timeout: 3m
         resource:
@@ -686,6 +803,19 @@ spec:
             name: httproute-probe
           (status.parents[0].conditions[?type == 'Accepted']):
           - status: "True"
+    # Creation and assertions share one step so this reclaim covers both.
+    # It is needed because chainsaw reclaims what it applied from a file
+    # but not what a script created, and the suite runs in one long-lived
+    # namespace. finally runs at the end of its own step, so splitting
+    # the assertions into a later step would delete the route before they
+    # ran, and hanging the reclaim off that later step would leak the
+    # route whenever this one failed after the apply.
+    finally:
+    - delete:
+        ref:
+          apiVersion: gateway.networking.k8s.io/v1
+          kind: HTTPRoute
+          name: httproute-probe
 ---
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
