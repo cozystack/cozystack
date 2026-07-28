@@ -36,7 +36,7 @@ type ConfigSpec struct {
 	// +kubebuilder:default:=""
 	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="storageClass is immutable"
 	StorageClass string `json:"storageClass"`
-	// ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images.
+	// ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.
 	// +kubebuilder:default:="v24.9"
 	Version Version `json:"version"`
 	// Size of Persistent Volume for logs.
