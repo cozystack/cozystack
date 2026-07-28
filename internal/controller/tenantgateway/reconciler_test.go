@@ -790,6 +790,417 @@ func TestReconcile_RendersHTTPToHTTPSRedirectRoute(t *testing.T) {
 	}
 }
 
+// TestReconcile_RedirectRouteDeclaresApexHostnames pins the redirect
+// route's hostnames to the tenant apex plus its wildcard. Two
+// independent reasons, and the first one is why this test must never be
+// relaxed into "hostnames may be empty":
+//
+// The route lands in a tenant-* namespace, where
+// cozystack-route-hostname-policy requires spec.hostnames to be present
+// and non-empty and to stay inside the namespace apex. A hostname-less
+// redirect is denied at admission, reconcileHTTPToHTTPSRedirect returns
+// that error, and because it runs before the status update the
+// TenantGateway never reaches Ready — so dropping these hostnames does
+// not merely widen a match, it stops reconciliation and takes the
+// plaintext protection with it.
+//
+// Second, naming the apex is what makes the redirect's coverage
+// explicit. Both entries are needed and neither is redundant: under
+// Gateway API a wildcard hostname is a suffix match that spans any
+// number of labels, so "*.foo.example.com" covers "a.foo.example.com"
+// and "a.b.foo.example.com" alike, but it does NOT cover the bare
+// "foo.example.com" — that is what the first entry is for. (The
+// HTTPRoute CRD puts it as: a match for `*.example.com` matches both
+// `test.example.com` and `foo.test.example.com`, but not
+// `example.com`.) Do not "simplify" this to the wildcard alone.
+func TestReconcile_RedirectRouteDeclaresApexHostnames(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("expected redirect HTTPRoute cozystack-http-redirect: %v", err)
+	}
+	want := []gatewayv1.Hostname{"foo.example.com", "*.foo.example.com"}
+	if len(got.Spec.Hostnames) != len(want) {
+		t.Fatalf("redirect hostnames=%v, want %v — an empty or short list is denied by cozystack-route-hostname-policy in a tenant-* namespace", got.Spec.Hostnames, want)
+	}
+	for i := range want {
+		if got.Spec.Hostnames[i] != want[i] {
+			t.Errorf("redirect hostnames[%d]=%q, want %q", i, got.Spec.Hostnames[i], want[i])
+		}
+	}
+}
+
+// TestReconcile_RedirectRouteIsNotAHostnameClaim pins the other half of
+// giving the redirect route hostnames: collectHostnameClaims must skip
+// it. The two changes are inseparable — hostnames on a route that
+// parentRefs this Gateway would otherwise read as an app publishing
+// them, and in HTTP-01 mode each claim provisions an HTTPS listener plus
+// a per-listener Certificate. The "*.<apex>" entry would then ask
+// listeners and certificates for them, which fails.
+//
+// The reconcile runs with the controller's redirect as the ONLY route, so
+// anything provisioned here came from it. The positive assertions matter
+// as much as the negative ones: without them this test would pass against
+// a reconcile that did nothing at all.
+//
+// It must reconcile TWICE, and that is the whole reason this test is
+// shaped the way it is. runReconcileSteps calls collectHostnameClaims
+// before it creates the redirect route, so during the first pass
+// the redirect route does not exist yet and cannot be counted as a claim
+// no matter what the filter does. A single-reconcile version of this test
+// passes with the filter deleted — it looks like a guard and guards
+// nothing. Keep both passes.
+func TestReconcile_RedirectRouteIsNotAHostnameClaim(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	// First pass creates the redirect route; second pass is the one that
+	// sees it in the cluster-wide List inside collectHostnameClaims.
+	for pass := 1; pass <= 2; pass++ {
+		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+		}); err != nil {
+			t.Fatalf("unexpected error on reconcile pass %d: %v", pass, err)
+		}
+	}
+
+	// Positive anchor: the redirect route really was rendered, with the
+	// hostnames whose exclusion is under test.
+	redirect := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, redirect); err != nil {
+		t.Fatalf("expected redirect HTTPRoute: %v", err)
+	}
+	if len(redirect.Spec.Hostnames) == 0 {
+		t.Fatal("redirect route has no hostnames; this test cannot prove they are excluded from claims")
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("expected Gateway: %v", err)
+	}
+	// Positive anchor: the port-80 listener the redirect attaches to is
+	// present, so the Gateway really was reconciled.
+	var sawHTTP bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Name == "http" {
+			sawHTTP = true
+			continue
+		}
+		host := ""
+		if l.Hostname != nil {
+			host = string(*l.Hostname)
+		}
+		t.Errorf("unexpected listener %q (hostname %q) provisioned from the redirect route's hostnames", l.Name, host)
+	}
+	if !sawHTTP {
+		t.Error("no http listener on the Gateway; the reconcile did not get far enough for this test to mean anything")
+	}
+
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list Certificates: %v", err)
+	}
+	for i := range certs.Items {
+		t.Errorf("unexpected Certificate %q for %v: the redirect route's hostnames reached the claim set", certs.Items[i].Name, certs.Items[i].Spec.DNSNames)
+	}
+}
+
+// TestReconcile_ForgedControllerLabelsStillClaimHostnames bounds the
+// exclusion above to the one object it is for.
+//
+// The claim set feeds more than certificate provisioning: it also drives
+// resolveHostnameOwners and updateRouteStatuses, which is where a route
+// losing a cross-namespace hostname race gets Accepted=False with
+// Reason=HostnameConflict. So skipping a route is not a harmless
+// self-exclusion — a route that escapes the claim set also escapes being
+// marked a loser. Keying the exclusion on labels alone would let any
+// route wearing two publicly-readable labels opt out of that, so it is
+// keyed on the namespace and name the controller renders instead, which
+// identify exactly one object.
+//
+// This route carries both controller labels and attaches to the Gateway,
+// and must still be counted: an HTTPS listener for its hostname proves
+// it reached the claim set.
+func TestReconcile_ForgedControllerLabelsStillClaimHostnames(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	forged := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "not-the-redirect",
+			Namespace: "tenant-foo",
+			Labels: map[string]string{
+				cozystackManagedByLabel:   cozystackManagedByValue,
+				cozystackTenantGatewayKey: "cozystack",
+			},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"app.foo.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{{
+					Group: ptrGroup(gatewayv1.GroupName),
+					Kind:  ptrKind("Gateway"),
+					Name:  gatewayv1.ObjectName("cozystack"),
+				}},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, forged).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1.HTTPRoute{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("expected Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "app.foo.example.com" {
+			return
+		}
+	}
+	t.Errorf("no listener for app.foo.example.com: a route wearing the controller's labels was excluded from hostname claims, so it also escapes HostnameConflict marking; listeners=%+v", gw.Spec.Listeners)
+}
+
+// TestReconcile_ForgedRedirectNameStillClaimsHostnames closes the other
+// half of the exclusion's identity check.
+//
+// Namespace and name alone name a slot, not an object. A route planted
+// under the reserved <tgw>-http-redirect name that this controller does
+// not own would be skipped by the exclusion, and skipping happens in
+// collectHostnameClaims, which runs before updateRouteStatuses; the
+// takeover refusal in reconcileHTTPToHTTPSRedirect only fires after
+// both. So for every reconcile the planted route would sit outside
+// conflict resolution and never be marked Accepted=False on a lost
+// hostname race, while the Gateway keeps whatever listeners an earlier
+// successful pass already created for it.
+//
+// Requiring the controller OwnerReference as well cannot fail open on
+// the real route: renderHTTPRedirect sets it through
+// SetControllerReference before the route is ever created.
+func TestReconcile_ForgedRedirectNameStillClaimsHostnames(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	// Same namespace and name as the controller's route, no ownerRef.
+	forged := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack-http-redirect",
+			Namespace: "tenant-foo",
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"squat.foo.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{{
+					Group: ptrGroup(gatewayv1.GroupName),
+					Kind:  ptrKind("Gateway"),
+					Name:  gatewayv1.ObjectName("cozystack"),
+				}},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, forged).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1.HTTPRoute{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	// The reconcile is expected to fail on the takeover refusal. That is
+	// the loud half of the protection and it is not what this test is
+	// about; the point is what happened before it, while claims were
+	// being collected.
+	_, _ = r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("expected Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "squat.foo.example.com" {
+			return
+		}
+	}
+	t.Errorf("no listener for squat.foo.example.com: a route occupying the reserved redirect name but not owned by this TenantGateway was excluded from hostname claims, so it also escapes HostnameConflict marking; listeners=%+v", gw.Spec.Listeners)
+}
+
+// TestReconcile_OtherControllerOwnedRouteStillClaimsHostnames pins the
+// name half of the exclusion, which ownership alone does not cover.
+//
+// Today the redirect is the only route this controller creates, so
+// dropping the name check would not change any behaviour and no other
+// test notices. That equivalence is a property of the current code, not
+// of the check: the moment a second controller-owned route appears, an
+// ownership-only test would silently exclude it from hostname claims
+// too, which is the bug this exclusion is narrow to avoid. The route
+// here stands in for that future one.
+func TestReconcile_OtherControllerOwnedRouteStillClaimsHostnames(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo", UID: "tgw-uid-1"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	controller := true
+	// Owned by this TenantGateway, in its namespace, but not the redirect.
+	other := &gatewayv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "cozystack-some-other-route",
+			Namespace: "tenant-foo",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: gatewayv1alpha1.GroupVersion.String(),
+				Kind:       "TenantGateway",
+				Name:       "cozystack",
+				UID:        "tgw-uid-1",
+				Controller: &controller,
+			}},
+		},
+		Spec: gatewayv1.HTTPRouteSpec{
+			Hostnames: []gatewayv1.Hostname{"other.foo.example.com"},
+			CommonRouteSpec: gatewayv1.CommonRouteSpec{
+				ParentRefs: []gatewayv1.ParentReference{{
+					Group: ptrGroup(gatewayv1.GroupName),
+					Kind:  ptrKind("Gateway"),
+					Name:  gatewayv1.ObjectName("cozystack"),
+				}},
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw, other).
+		WithStatusSubresource(tgw, &gatewayv1.Gateway{}, &gatewayv1.HTTPRoute{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("expected Gateway: %v", err)
+	}
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname != nil && string(*l.Hostname) == "other.foo.example.com" {
+			return
+		}
+	}
+	t.Errorf("no listener for other.foo.example.com: a controller-owned route that is not the redirect was excluded from hostname claims; listeners=%+v", gw.Spec.Listeners)
+}
+
+// TestReconcile_EmptyApexFailsWithNamedError covers the failure mode
+// that naming the apex on the redirect route introduced.
+//
+// Spec.Apex became load-bearing for admission the moment the redirect
+// started deriving hostnames from it. An empty apex renders
+// hostnames ["", "*."], and both fail the HTTPRoute CRD's minLength and
+// pattern, so the create is rejected and the reconcile dies on an
+// apiserver validation error that says nothing about which field is at
+// fault. Before the redirect carried hostnames an empty apex reached
+// Ready, so this is a narrowing this branch is responsible for closing.
+//
+// MinLength=1 on the field is the real guard and it stops this at
+// admission. This check is the second layer, for the window where the
+// CRD in the cluster is older than the controller binary: the two are
+// rolled out separately, so the controller cannot assume the field
+// validation it needs is already present. It must fail on its own terms
+// and name the field.
+func TestReconcile_EmptyApexFailsWithNamedError(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw, &gatewayv1.Gateway{}).Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	_, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	})
+	if err == nil {
+		t.Fatal("reconcile succeeded with an empty apex; the redirect route would be rejected by the apiserver on an unreadable schema error")
+	}
+	if !strings.Contains(err.Error(), "apex") {
+		t.Errorf("error %q does not name the offending field; an operator reading this cannot tell that spec.apex is empty", err)
+	}
+
+	// The route must not have been written with the broken hostnames.
+	got := &gatewayv1.HTTPRoute{}
+	if getErr := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack-http-redirect", Namespace: "tenant-foo"}, got); getErr == nil {
+		t.Errorf("redirect HTTPRoute was created with hostnames %v despite the empty apex", got.Spec.Hostnames)
+	}
+}
+
+// TestRenderHTTPRedirect_RejectsEmptyApex pins the guard at the renderer
+// so it survives a refactor of the reconcile order above it.
+func TestRenderHTTPRedirect_RejectsEmptyApex(t *testing.T) {
+	s := newScheme(t)
+	r := &Reconciler{Scheme: s}
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec:       gatewayv1alpha1.TenantGatewaySpec{Apex: ""},
+	}
+	if _, err := r.renderHTTPRedirect(tgw); err == nil {
+		t.Fatal("renderHTTPRedirect accepted an empty apex")
+	} else if !strings.Contains(err.Error(), "apex") {
+		t.Errorf("error %q does not name the apex field", err)
+	}
+
+	tgw.Spec.Apex = "foo.example.com"
+	if _, err := r.renderHTTPRedirect(tgw); err != nil {
+		t.Errorf("renderHTTPRedirect rejected a valid apex: %v", err)
+	}
+}
+
 // TestReconcile_GatewayUpdatePreservesForeignLabels pins the
 // label-merge contract: a Gateway carrying labels written by other
 // actors (Cilium operator, kubectl label, future controllers) keeps

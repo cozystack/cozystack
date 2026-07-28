@@ -212,7 +212,10 @@ func (r *Reconciler) markFailed(ctx context.Context, tgw *gatewayv1alpha1.Tenant
 // 80 do not silently reach app backends. App-owned HTTPRoutes
 // attaching by hostname without sectionName otherwise pick up the
 // HTTP listener too — Harbor / dashboard / keycloak credentials in
-// the clear. The redirect HTTPRoute matches any host on path /.
+// the clear. The redirect HTTPRoute matches the tenant apex and its
+// subdomains on path /; it names them rather than matching every host
+// because a route in a tenant-* namespace has to declare hostnames
+// inside its own apex to pass cozystack-route-hostname-policy.
 func (r *Reconciler) reconcileHTTPToHTTPSRedirect(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
 	logger := log.FromContext(ctx)
 	desired, err := r.renderHTTPRedirect(tgw)
@@ -317,6 +320,18 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 		if _, ok := allowed[route.Namespace]; !ok {
 			continue
 		}
+		// The redirect route this controller renders is infrastructure,
+		// not a hostname publication, so it must not drive listener or
+		// Certificate provisioning. It names the apex and its wildcard
+		// (see renderHTTPRedirect) to satisfy the route-hostname policy.
+		//
+		// Before this route carried hostnames it contributed nothing to
+		// the claim set; skipping it here restores exactly that. Letting
+		// its hostnames through instead provisions listeners and
+		// certificates for them, which fails.
+		if isHTTPRedirectRoute(route, tgw) {
+			continue
+		}
 		matchingRefs := allAttachingParentRefs(route.Spec.ParentRefs, route.Namespace, tgw)
 		if len(matchingRefs) == 0 {
 			continue
@@ -343,6 +358,10 @@ func (r *Reconciler) collectHostnameClaims(ctx context.Context, tgw *gatewayv1al
 	if err := r.List(ctx, tlsRoutes); err != nil {
 		return nil, fmt.Errorf("list TLSRoutes: %w", err)
 	}
+	// No isHTTPRedirectRoute filter here, unlike the HTTPRoute loop
+	// above: this controller renders no TLSRoute, so there is nothing of
+	// its own to exclude. Add the equivalent guard here alongside the
+	// first controller-rendered TLSRoute, should one ever appear.
 	for i := range tlsRoutes.Items {
 		route := &tlsRoutes.Items[i]
 		if _, ok := allowed[route.Namespace]; !ok {
@@ -502,6 +521,25 @@ func (r *Reconciler) reconcilePerListenerCertificates(ctx context.Context, tgw *
 		logger.V(1).Info("deleted orphan Certificate", "namespace", tgw.Namespace, "name", c.Name)
 	}
 	return nil
+}
+
+// isHTTPRedirectRoute reports whether a route is the http→https redirect
+// this controller renders for this TenantGateway. Used by
+// collectHostnameClaims to keep that one route out of the hostname-claim
+// set; see the comment at that call site for what it would otherwise
+// provision.
+//
+// Name and ownership are both required and each is pinned by its own
+// test: ownership alone would exclude any other controller-owned route
+// as well, and name alone would extend the exception to a route planted
+// under that name by someone else. The labels renderHTTPRedirect stamps
+// are deliberately not used, being writable by anyone who can create a
+// route. Requiring the owner reference is safe for the real route
+// because renderHTTPRedirect sets it before the route is first written.
+func isHTTPRedirectRoute(route *gatewayv1.HTTPRoute, tgw *gatewayv1alpha1.TenantGateway) bool {
+	return route.Namespace == tgw.Namespace &&
+		route.Name == httpRedirectRouteName(tgw) &&
+		ownedByTenantGateway(route.OwnerReferences, tgw)
 }
 
 func ownedByTenantGateway(refs []metav1.OwnerReference, tgw *gatewayv1alpha1.TenantGateway) bool {
