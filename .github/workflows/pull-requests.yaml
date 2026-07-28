@@ -3,6 +3,11 @@ name: Pull Request
 env:
   # TODO: unhardcode this
   REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+  # Read the cache build-main.yaml writes for THIS branch, not the shared refs
+  # main writes -- those carry main's sources and mostly miss here. Must stay in
+  # sync with CACHE_REGISTRY in build-main.yaml. Builds only read it
+  # (WRITE_CACHE defaults to 0), so a miss is a cold build, never an error.
+  CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack-cache-release-1.5
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -44,7 +49,13 @@ jobs:
     # appliance -- ~9gb of RAM and a core apiece, which the small shape cannot
     # give. The `debug` label still routes to self-hosted for the breakpoint path.
     runs-on: ${{ contains(github.event.pull_request.labels.*.name, 'debug') && 'self-hosted' || 'oracle-vm-24cpu-96gb-x86-64' }}
-    timeout-minutes: 30
+    # A warm cache puts this job around 15min. 30 was not enough for a cold one:
+    # the branch-scoped cache starts empty, and anything that invalidates it
+    # (a Dockerfile edit, a go.mod bump) drops a later build back to ~45min --
+    # six container disks plus 28 packages built from scratch. Sized for that
+    # case rather than for the warm one, so a cold build reports its real
+    # failure instead of a timeout that says nothing about why.
+    timeout-minutes: 75
     permissions:
       contents: read
       packages: write
