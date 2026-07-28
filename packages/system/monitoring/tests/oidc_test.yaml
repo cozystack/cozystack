@@ -6,7 +6,7 @@ templates:
   - templates/grafana/grafana.yaml
 
 release:
-  name: monitoring
+  name: monitoring-system
   namespace: tenant-root
 
 # Baseline `_cluster` / `_namespace` values wired by cozystack-basics
@@ -146,7 +146,7 @@ tests:
         documentIndex: 1
       - equal:
           path: spec.secret
-          value: "$monitoring-oidc-client:client-secret"
+          value: "$monitoring-system-oidc-client:client-secret"
         documentIndex: 1
       - equal:
           path: spec.redirectUris[0]
@@ -154,7 +154,7 @@ tests:
         documentIndex: 1
       - contains:
           path: spec.defaultClientScopes
-          content: tenant-root-monitoring-audience
+          content: tenant-root-monitoring-system-audience
         documentIndex: 1
       # `groups` scope is the platform-managed realm-default that emits
       # the caller's Keycloak groups into the token; must be listed
@@ -174,11 +174,11 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: tenant-root-monitoring-audience
+          value: tenant-root-monitoring-system-audience
         documentIndex: 0
       - equal:
           path: spec.protocolMappers[0].config["included.client.audience"]
-          value: tenant-root-monitoring
+          value: tenant-root-monitoring-system
         documentIndex: 0
 
   - it: mode=System persists a random client-secret at install
@@ -194,7 +194,7 @@ tests:
           value: Secret
       - equal:
           path: metadata.name
-          value: monitoring-oidc-client
+          value: monitoring-system-oidc-client
       # 32 random alphanumeric chars base64-encoded → 44 chars (43 + '=' padding).
       - matchRegex:
           path: data["client-secret"]
@@ -214,7 +214,7 @@ tests:
           value: "true"
       - equal:
           path: spec.config["auth.generic_oauth"].client_id
-          value: tenant-root-monitoring
+          value: tenant-root-monitoring-system
       - equal:
           path: spec.config["auth.generic_oauth"].client_secret
           value: "${GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET}"
@@ -223,7 +223,7 @@ tests:
           value: "https://keycloak.example.org/realms/cozy/protocol/openid-connect/auth"
       - equal:
           path: spec.config["auth.generic_oauth"].scopes
-          value: "openid email profile groups tenant-root-monitoring-audience"
+          value: "openid email profile groups tenant-root-monitoring-system-audience"
       # Tenant-membership gate — unconditionally emitted in System mode
       # (chart-owned, not tied to spec.oidc.users). Rejects logins whose
       # token does not carry at least one of the release's tenant-scoped
@@ -299,7 +299,7 @@ tests:
           value: "groups"
       - equal:
           path: spec.config["auth.generic_oauth"].scopes
-          value: "openid email profile groups tenant-root-monitoring-audience"
+          value: "openid email profile groups tenant-root-monitoring-system-audience"
 
   - it: mode=System allowed_groups uses the release namespace as tenant prefix (nested tenant)
     # Regression guard against a helper regression that would compute
@@ -310,7 +310,7 @@ tests:
     # every user of the release on a nested tenant.
     template: templates/grafana/grafana.yaml
     release:
-      name: monitoring
+      name: monitoring-system
       namespace: tenant-foo-bar
     set:
       _cluster:
@@ -349,7 +349,7 @@ tests:
             name: GF_AUTH_GENERIC_OAUTH_CLIENT_SECRET
             valueFrom:
               secretKeyRef:
-                name: monitoring-oidc-client
+                name: monitoring-system-oidc-client
                 key: client-secret
 
   - it: mode=System keeps disable_login_form false so admin creds stay a break-glass path
@@ -380,7 +380,7 @@ tests:
           value: Job
       - equal:
           path: metadata.name
-          value: monitoring-oidc-users
+          value: monitoring-system-oidc-users
       - equal:
           path: metadata.annotations["helm.sh/hook"]
           value: post-install,post-upgrade
