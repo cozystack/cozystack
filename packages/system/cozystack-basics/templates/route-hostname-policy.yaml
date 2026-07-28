@@ -15,7 +15,9 @@
 
   Three pairs of resources are rendered: a VAP + Binding each for
   HTTPRoute, TLSRoute and GRPCRoute. Which API versions each one matches
-  is stated once, in the rule itself, rather than restated here.
+  is stated once, in the rule itself, rather than restated here. All
+  three share one CEL expression, so every rule stated below about
+  hostnames holds for all three kinds.
 
   GRPCRoute is gated for the same reason as the other two. The port-443
   listeners the tenant gateway controller renders pin
@@ -41,6 +43,17 @@
   open Layer 7 by itself. The only legitimate state where the
   label is absent is an in-flight namespace creation that hasn't
   finished labelling yet — in which case the caller should retry.
+
+  spec.hostnames must be present and non-empty, not waved through when
+  missing. A route that names no hostname does not match nothing: under
+  Gateway API it inherits the hostnames of every listener it attaches to.
+  `all()` over an empty list is vacuously true, so the empty list needs
+  the same treatment as the absent field.
+
+  Requiring the route to name its own hostnames is what makes them
+  comparable against the tenant apex at all — CEL has no cross-object
+  lookup, so a VAP cannot resolve the parent Gateway to learn what would
+  otherwise be inherited.
 */}}
 {{- /*
   Both operands of the hostname comparison are normalized with
@@ -49,7 +62,7 @@
   namespace.cozystack.io/host label value, which Kubernetes permits to
   carry uppercase.
 */}}
-{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (!has(object.spec.hostnames) || object.spec.hostnames.all(h, h.lowerAscii() == namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii() || h.lowerAscii().endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii())))` -}}
+{{- $celValidator := `(namespaceObject == null || !has(namespaceObject.metadata.labels) || !("namespace.cozystack.io/host" in namespaceObject.metadata.labels)) ? false : (has(object.spec.hostnames) && size(object.spec.hostnames) > 0 && object.spec.hostnames.all(h, h.lowerAscii() == namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii() || h.lowerAscii().endsWith("." + namespaceObject.metadata.labels["namespace.cozystack.io/host"].lowerAscii())))` -}}
 {{- /* Render only where the ValidatingAdmissionPolicy API is served (GA since Kubernetes 1.30; the management cluster requires 1.33+). Same guard as packages/core/platform/templates/deletion-protection.yaml. */}}
 {{- if .Capabilities.APIVersions.Has "admissionregistration.k8s.io/v1/ValidatingAdmissionPolicy" }}
 ---
@@ -74,7 +87,7 @@ spec:
   - expression: >-
       {{ $celValidator }}
     messageExpression: >-
-      "HTTPRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+      "HTTPRoute must declare spec.hostnames, and each hostname must equal the namespace's namespace.cozystack.io/host label or be a subdomain of it (namespace " + object.metadata.namespace + ")"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -108,7 +121,7 @@ spec:
   - expression: >-
       {{ $celValidator }}
     messageExpression: >-
-      "TLSRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+      "TLSRoute must declare spec.hostnames, and each hostname must equal the namespace's namespace.cozystack.io/host label or be a subdomain of it (namespace " + object.metadata.namespace + ")"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
@@ -142,7 +155,7 @@ spec:
   - expression: >-
       {{ $celValidator }}
     messageExpression: >-
-      "GRPCRoute hostnames must equal the namespace's namespace.cozystack.io/host label or be subdomains of it (namespace " + object.metadata.namespace + ")"
+      "GRPCRoute must declare spec.hostnames, and each hostname must equal the namespace's namespace.cozystack.io/host label or be a subdomain of it (namespace " + object.metadata.namespace + ")"
     reason: Forbidden
 ---
 apiVersion: admissionregistration.k8s.io/v1
