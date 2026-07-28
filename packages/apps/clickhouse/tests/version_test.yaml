@@ -1,0 +1,78 @@
+suite: version selection
+
+# The chart pins a single ClickHouse version, shared by the server and the
+# Keeper images, resolved from files/versions.yaml via the version enum.
+# The default must stay 24.9.2.42 so existing installations are not bumped
+# to a new major on upgrade.
+
+release:
+  name: ch-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    cluster-domain: cluster.local
+
+tests:
+  - it: "default version v24.9 renders 24.9.2.42 on the ClickHouse server"
+    templates:
+      - templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-server:24.9.2.42
+
+  - it: "default version v24.9 renders 24.9.2.42 on the Keeper"
+    templates:
+      - templates/chkeeper.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseKeeperInstallation
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-keeper:24.9.2.42
+
+  - it: "version v25.8 selects the mapped tag for both server and Keeper"
+    set:
+      version: v25.8
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-server:25.8.28.1
+        template: templates/clickhouse.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseInstallation
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-keeper:25.8.28.1
+        template: templates/chkeeper.yaml
+        documentSelector:
+          path: kind
+          value: ClickHouseKeeperInstallation
+
+  - it: "version v25.3 selects the mapped tag on the server"
+    set:
+      version: v25.3
+    templates:
+      - templates/clickhouse.yaml
+    documentSelector:
+      path: kind
+      value: ClickHouseInstallation
+    asserts:
+      - equal:
+          path: spec.templates.podTemplates[0].spec.containers[0].image
+          value: clickhouse/clickhouse-server:25.3.14.14
+
+  - it: "an unsupported version is rejected by the schema enum"
+    set:
+      version: v1.0
+    templates:
+      - templates/clickhouse.yaml
+    asserts:
+      - failedTemplate:
+          errorPattern: "value must be one of 'v25.8', 'v25.3', 'v24.9'"

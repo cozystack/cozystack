@@ -118,6 +118,7 @@ chart-emitted CronJob renders only when `backup.schedule` is non-empty.
 | `resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                                              | `string`   | `t1.small` |
 | `size`             | Persistent Volume Claim size available for application data.                                                                         | `quantity` | `10Gi`     |
 | `storageClass`     | StorageClass used to store the data.                                                                                                 | `string`   | `""`       |
+| `version`          | ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images.                        | `string`   | `v24.9`    |
 
 
 ### Application-specific parameters
