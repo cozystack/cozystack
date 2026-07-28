@@ -63,7 +63,7 @@ KEEPER_TAGS="$(fetch_tags "$KEEPER_REPO" CH_KEEPER_TAGS_FILE)"
 # Tags present in BOTH images. comm walks its inputs in byte order, so they
 # must be byte-collated (fetch_tags emits `LC_ALL=C sort -u`); a version
 # collation would silently drop common tags at every X.9 -> X.10 boundary.
-COMMON_TAGS="$(comm -12 <(printf '%s\n' "$SERVER_TAGS") <(printf '%s\n' "$KEEPER_TAGS"))"
+COMMON_TAGS="$(LC_ALL=C comm -12 <(printf '%s\n' "$SERVER_TAGS") <(printf '%s\n' "$KEEPER_TAGS"))"
 [ -n "$COMMON_TAGS" ] || { echo "Error: no tag common to ${SERVER_REPO} and ${KEEPER_REPO}" >&2; exit 1; }
 
 # Resolve each configured major to one tag: its pin if set (and available),
