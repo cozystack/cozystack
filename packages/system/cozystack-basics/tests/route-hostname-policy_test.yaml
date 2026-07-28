@@ -158,7 +158,7 @@ tests:
           path: spec.validations[0].messageExpression
           pattern: 'TLSRoute must declare spec\.hostnames'
 
-  - it: targets gateway.networking.k8s.io v1 HTTPRoute and v1alpha2 TLSRoute
+  - it: targets gateway.networking.k8s.io v1/v1beta1 HTTPRoute and v1alpha2 TLSRoute
     asserts:
       - documentIndex: 0
         equal:
