@@ -378,36 +378,49 @@ jobs:
       # (build-main not yet green) is a no-op: packages keep their committed
       # refs (prior behaviour). See hack/overlay-main-images.sh.
       #
-      # ONLY for PRs based on main. On a release-line PR the committed refs are
-      # not stale — they are that line's released digests, which is exactly what
-      # its charts are written against. Overlaying main's images there deploys
-      # main's binaries onto a release branch's charts, and the mismatch grows
-      # with every commit main gains: #3437 (a one-line change on release-1.6)
-      # failed install deterministically because main's cozystack-controller
-      # served an aggregated OpenAPI its charts could not validate against
-      # (`unknown model in reference: …v1alpha1.OptionSpec`), which reads as a
-      # broken PR while nothing in the PR is broken. Retargeting the overlay at a
-      # per-line artifact is not possible today: build-main.yaml publishes only
-      # cozystack-packages:main, with no release-* equivalent.
-      - name: Pull current-main packages tree
-        if: github.base_ref == 'main'
+      # Read the artifact for the PR's OWN base branch, not always main. Overlaying
+      # main's images onto a release-line PR mixes generations: main's binaries
+      # against that line's charts. #3437 (a one-line change on release-1.6) failed
+      # install deterministically that way, because main's cozystack-controller
+      # served an aggregated OpenAPI release-1.6's charts could not validate
+      # against (`unknown model in reference: …v1alpha1.OptionSpec`) — a broken
+      # lane reading as a broken PR. build-release.yaml publishes
+      # cozystack-packages:<line> for every maintained release-<major>.<minor>
+      # branch, so each base branch has its own artifact to read.
+      #
+      # A missing artifact stays a no-op (packages keep their committed refs), which
+      # also covers a line whose first build-release run has not landed yet.
+      - name: Pull base-branch packages tree
         run: |
           rm -rf _out/mainpkgs
           mkdir -p _out/mainpkgs
-          flux pull artifact "oci://${REGISTRY}/cozystack-packages:main" \
-            --output _out/mainpkgs \
-            || { echo "cozystack-packages:main pull failed — keeping committed refs"; rm -rf _out/mainpkgs; }
+          if ! flux pull artifact "oci://${REGISTRY}/cozystack-packages:${BASE_REF}" \
+                 --output _out/mainpkgs; then
+            rm -rf _out/mainpkgs
+            # Degrading to committed refs is safe, but SAY so: on a release line a
+            # missing artifact means build-release.yaml has not published this line
+            # yet (first build pending, or its branch filter does not match this
+            # branch), and the PR is then testing the line's last release instead of
+            # its tip. Silent would look identical to a working overlay.
+            if [ "${BASE_REF}" = "main" ]; then
+              echo "cozystack-packages:${BASE_REF} pull failed — keeping committed refs"
+            else
+              echo "::warning title=No packages artifact for ${BASE_REF}::Keeping committed refs, so unbuilt packages use this line's last release rather than its tip. Check that build-release.yaml has run for ${BASE_REF}."
+            fi
+          fi
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-      - name: Overlay current-main refs for unbuilt packages
+          # Env-passed, not interpolated into the script: base_ref is repo-controlled
+          # here (a branch name in this repo), but the workflow-injection hygiene
+          # applies uniformly.
+          BASE_REF: ${{ github.base_ref }}
+      - name: Overlay base-branch refs for unbuilt packages
         # Best-effort: this only improves WHICH images e2e and the installer use,
         # so an unexpected failure must degrade to the committed refs (prior
         # behaviour), never block the PR. overlay-main-images.sh already handles
-        # the expected paths (missing artifact, drift, absent unit) internally.
-        # Guarded on the base branch for the same reason as the pull above; the
-        # script would treat the absent artifact as a no-op anyway, but a
-        # release-line PR should not depend on that to avoid main's images.
-        if: github.base_ref == 'main'
+        # the expected paths (missing artifact, drift, absent unit) internally —
+        # including the empty directory the step above leaves when a line has no
+        # artifact yet.
         run: |
           hack/overlay-main-images.sh _out/mainpkgs "$BUILD_MATRIX" "$PR_TOUCHED" \
             || echo "::warning::overlay-main-images failed; unbuilt packages keep committed refs"

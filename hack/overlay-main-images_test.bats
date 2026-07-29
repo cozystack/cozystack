@@ -149,30 +149,70 @@
 }
 
 # ── workflow wiring ─────────────────────────────────────────────────────────
-# The script is only half the mechanism; WHEN the workflow invokes it decides
-# which branch's images a PR gets. Both steps must be gated on the base branch,
-# so a release-line PR keeps that line's committed digests instead of running
-# main's binaries against its charts.
+# The script is only half the mechanism; WHICH artifact the workflow hands it
+# decides which generation of images a PR gets. A release-line PR must read its
+# own line's artifact — reading main's puts main's binaries against that line's
+# charts, which failed install deterministically (#3437).
 
-@test "the overlay steps are gated on a main base branch" {
+@test "the overlay reads the artifact for the PR's own base branch" {
   root=$(pwd)
   wf="$root/.github/workflows/pull-requests.yaml"
   [ -f "$wf" ]
 
-  # Executable lines only: a commented-out guard must not satisfy this.
+  # Executable lines only: a comment mentioning the tag must not satisfy this.
   code="$(grep -v '^[[:space:]]*#' "$wf")"
 
-  # Each overlay step name must be followed by the base-branch guard before the
-  # step's `run:` — assert per step, so adding a third unguarded step is caught.
-  for step in "Pull current-main packages tree" "Overlay current-main refs for unbuilt packages"; do
-    block="$(printf '%s\n' "$code" | awk -v s="      - name: $step" '
-      $0 == s { inside = 1; next }
-      /^      - name: / { inside = 0 }
-      inside')"
-    [ -n "$block" ] || { echo "step not found in $wf: $step" >&2; exit 1; }
-    printf '%s\n' "$block" | grep -qF "if: github.base_ref == 'main'" || {
-      echo "step '$step' is not gated on the base branch; a release-line PR would" >&2
-      echo "get main's images overlaid onto that line's charts." >&2
-      exit 1; }
-  done
+  block="$(printf '%s\n' "$code" | awk '
+    $0 == "      - name: Pull base-branch packages tree" { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$block" ] || { echo "the base-branch packages pull step is missing from $wf" >&2; exit 1; }
+
+  # The artifact tag must come from the base branch, passed via env.
+  printf '%s\n' "$block" | grep -qF 'cozystack-packages:${BASE_REF}' || {
+    echo "the packages artifact tag is not the PR's base branch. Reading a fixed" >&2
+    echo "tag (e.g. :main) hands a release-line PR another generation's images." >&2
+    exit 1; }
+  printf '%s\n' "$block" | grep -qF 'BASE_REF: ${{ github.base_ref }}' || {
+    echo "BASE_REF is not wired to github.base_ref in the pull step's env." >&2; exit 1; }
+
+  # A hardcoded :main anywhere in the two overlay steps defeats the point.
+  overlay="$(printf '%s\n' "$code" | awk '
+    $0 == "      - name: Overlay base-branch refs for unbuilt packages" { inside = 1; next }
+    /^      - name: / { inside = 0 }
+    inside')"
+  [ -n "$overlay" ] || { echo "the overlay step is missing from $wf" >&2; exit 1; }
+  printf '%s\n%s\n' "$block" "$overlay" | grep -qF 'cozystack-packages:main' && {
+    echo "an overlay step still pins cozystack-packages:main" >&2; exit 1; }
+  return 0
+}
+
+@test "every maintained release line publishes its own packages artifact" {
+  root=$(pwd)
+  wf="$root/.github/workflows/build-release.yaml"
+  [ -f "$wf" ] || {
+    echo "build-release.yaml is missing: without a per-line artifact the overlay" >&2
+    echo "above degrades to a no-op on release branches, so their PRs test the" >&2
+    echo "line's last release rather than its tip." >&2
+    exit 1; }
+
+  code="$(grep -v '^[[:space:]]*#' "$wf")"
+
+  # Line branches only. The per-release and rc staging branches promote-rc.yaml
+  # and tags.yaml create (release-1.6.1, release-1.6.0-rc.4) must NOT trigger a
+  # full rebuild — their images come from the tag build.
+  printf '%s\n' "$code" | grep -qF "branches: ['release-[0-9]+.[0-9]+']" || {
+    echo "build-release.yaml does not restrict its trigger to release-<major>.<minor>" >&2; exit 1; }
+
+  # The artifact and image tag must be the branch, or the overlay cannot find it.
+  printf '%s\n' "$code" | grep -qF 'IMAGE_TAG: ${{ github.ref_name }}' || {
+    echo "build-release.yaml does not tag images/artifact with the branch name" >&2; exit 1; }
+
+  # It must not write the shared mode=max cache: that ref has exactly one
+  # serialized writer (build-main.yaml) so concurrent builds cannot race on the
+  # cache manifest. A line build can overlap a main build.
+  printf '%s\n' "$code" | grep -qF "WRITE_CACHE: '0'" || {
+    echo "build-release.yaml must set WRITE_CACHE: '0' — writing the shared" >&2
+    echo ":buildcache ref races build-main.yaml on the cache manifest." >&2
+    exit 1; }
 }
