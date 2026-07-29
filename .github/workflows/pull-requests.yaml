@@ -6,8 +6,9 @@ env:
 on:
   pull_request:
     # `labeled` makes the promote PR's release-candidate verification and manual
-    # full-e2e opt-in actionable after the bot opens it. The plan/resolve guards
-    # below discard every other label event before it can launch work.
+    # full-e2e opt-in — and the upgrade-e2e opt-in on any PR — actionable after
+    # the PR is open. The plan/resolve guards below discard every other label
+    # event before it can launch work.
     types: [opened, synchronize, reopened, labeled]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
@@ -67,7 +68,7 @@ jobs:
     runs-on: ubuntu-latest
     # Exact complement of the concurrency key above; see the reasoning there,
     # including why `release` is admitted for same-repo PRs only.
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork)
+    if: github.event.action != 'labeled' || contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name) || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork)
     permissions:
       contents: read
       # For the opening `E2E Tests` status below; e2e-report writes the terminal
@@ -744,7 +745,7 @@ jobs:
     # pre-existing behaviour on a push to such a PR is unchanged.
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
+      && (github.event.action != 'labeled' || contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name) || (github.event.label.name == 'release' && !github.event.pull_request.head.repo.fork))
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
@@ -1199,8 +1200,11 @@ jobs:
       contents: read
       packages: read
     needs: ["finalize", "build-talos", "resolve_assets"]
+    # !cancelled() rather than always(), matching the sibling `e2e` job: a
+    # cancelled run must not go on to occupy a 32-vCPU runner for up to 180
+    # minutes.
     if: >-
-      always()
+      !cancelled()
       && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success')
       && (contains(github.event.pull_request.labels.*.name, 'release')
           || contains(github.event.pull_request.labels.*.name, 'upgrade-e2e'))
