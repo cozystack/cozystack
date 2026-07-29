@@ -266,7 +266,7 @@ type MonitoringAgentsAddon struct {
 }
 
 type NodeGroup struct {
-	// System disk size for the worker VM. Carries the Talos OS image (factory.talos.dev raw artifact streamed in by CDI), kubelet state, containerd image cache, and any local-path PVCs. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk imaged from the factory artifact.
+	// System disk size for the worker VM. Carries the Talos OS image, kubelet state, containerd image cache, and any local-path PVCs. How the OS image reaches the disk follows this node group's `image`: the default and `image.factory` stream the Image Factory raw artifact in over HTTP, while `image.builtin` makes the disk a storage-layer CDI clone of a shared golden image, with no HTTP fetch. A `builtin` group must keep diskSize at or above the golden's storage size (6Gi in the shipped worker image catalog), because a CDI clone target cannot be smaller than its source — the chart rejects a smaller value at render time rather than letting the clone stall. Pre-Talos installs used a separate disk-kubelet PVC for kubelet/containerd state; on Talos this is consolidated onto the single system disk.
 	// +kubebuilder:default:="20Gi"
 	DiskSize resource.Quantity `json:"diskSize"`
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
@@ -378,10 +378,10 @@ type Scheduler struct {
 }
 
 type Talos struct {
-	// Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
+	// Cluster-wide default base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Applies only to node groups that import over HTTP — the default and `image.factory`, which overrides it per group via `nodeGroups.<name>.image.factory.imageFactoryURL`. A group on `image.builtin` clones a golden image from the worker image catalog and does not use this field at all. Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
 	// +kubebuilder:default:="https://factory.talos.dev"
 	ImageFactoryURL string `json:"imageFactoryURL"`
-	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
+	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved per node group as `<installerRepository>/<schematicID>:<version>` against that group's own schematic and version — whatever `nodeGroups.<name>.image` pins, falling back to the cluster-wide `talos.schematicID` and `talos.version` — so the installer matches the OS the group actually booted. The prefix itself is cluster-wide with no per-group override, so an air-gapped node group needs it pointed at a reachable registry as well. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
 	// +kubebuilder:default:="factory.talos.dev/installer"
 	InstallerRepository string `json:"installerRepository"`
 	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.
@@ -390,7 +390,7 @@ type Talos struct {
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
-	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
+	// Cluster-wide default Talos release for the worker OS image and the in-guest installer. Each node group can pin its own release via `nodeGroups.<name>.image.builtin.version` or `nodeGroups.<name>.image.factory.version`; a group that omits it inherits this value. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version` — the matrix is evaluated against this cluster-wide value only, so a per-group override is not checked against it.
 	// +kubebuilder:default:="v1.13.6"
 	Version string `json:"version"`
 }
