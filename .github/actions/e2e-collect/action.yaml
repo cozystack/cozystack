@@ -4,8 +4,8 @@ description: >-
   test crust-gather snapshots) and the image list from the sandbox and upload
   them as artifacts. Every step is `if: always()` so diagnostics are captured
   even after a failed run. Shared by the e2e and upgrade-e2e jobs; runs BEFORE
-  teardown so the sandbox is still alive. The chainsaw JUnit report is uploaded
-  by each job separately (its path differs per lane).
+  teardown so the sandbox is still alive. Runs in $GITHUB_WORKSPACE. The chainsaw
+  JUnit report is uploaded by each job separately (its path differs per lane).
 
 inputs:
   sandbox-name:
@@ -25,7 +25,6 @@ runs:
       if: always()
       shell: bash
       run: |
-        cd "/tmp/${{ inputs.sandbox-name }}"
         make -C packages/core/testing SANDBOX_NAME=${{ inputs.sandbox-name }} collect-report || true
 
     - name: Upload cozyreport.tgz
@@ -33,13 +32,12 @@ runs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-prefix }}cozyreport
-        path: /tmp/${{ inputs.sandbox-name }}/_out/cozyreport.tgz
+        path: _out/cozyreport.tgz
 
     - name: Collect images list
       if: always()
       shell: bash
       run: |
-        cd "/tmp/${{ inputs.sandbox-name }}"
         make -C packages/core/testing SANDBOX_NAME=${{ inputs.sandbox-name }} collect-images || true
 
     - name: Upload image list
@@ -47,4 +45,4 @@ runs:
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
       with:
         name: ${{ inputs.artifact-prefix }}image-list
-        path: /tmp/${{ inputs.sandbox-name }}/_out/images.txt
+        path: _out/images.txt
