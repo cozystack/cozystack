@@ -1,9 +1,23 @@
-name: Build cache (main)
+name: Build cache (release-1.5)
 
-# Warms the shared mode=max build cache so PR builds start hot.
+# Warms the mode=max build cache for THIS branch so its PR builds start hot.
+#
+# On main this workflow fires on main pushes; on a release branch it has to fire
+# on that branch's own pushes, because the cache main writes is main's content.
+# Nothing had been warming release-1.5: main dropped ubuntu-container-disk from
+# `make image` in 39cdc8866, six days before this branch was cut, so its six
+# :*-buildcache refs were never written at all, and every other ref carries
+# main's sources rather than this branch's. The result was a PR Build that ran
+# cold end to end and timed out -- ~28min of it in ubuntu-container-disk alone
+# before #3457 parallelised that target, and ~38min across all 28 packages after.
+#
+# The cache is written to its OWN namespace (CACHE_REGISTRY below), not the
+# shared one. Writing the shared refs from here would replace main's layers with
+# this branch's, so main's next PR build would miss on everything and blow its
+# own 30-min timeout until the next main push re-warmed it.
 #
 # PR builds (pull-requests.yaml) read the cache but never write it
-# (WRITE_CACHE unset -> 0). Only this serialized main build writes
+# (WRITE_CACHE unset -> 0). Only this serialized branch build writes
 # CACHE_REGISTRY/<img>:buildcache, so concurrent PR builds never race on the
 # cache manifest -- the 409 collisions PR #2711 fixed for image tags would
 # otherwise reappear on the cache ref. Cache is mode=max so all multistage
@@ -19,23 +33,32 @@ name: Build cache (main)
 env:
   # Same per-CI registry as pull-requests.yaml; the cache is co-located here.
   REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+  # Branch-scoped cache namespace, kept in sync with the Build job in
+  # pull-requests.yaml. Both must point at the same place or PR builds read a
+  # cache nobody writes.
+  CACHE_REGISTRY: iad.ocir.io/idyksih5sir9/cozystack-cache-release-1.5
 
 on:
   push:
-    branches: [main]
+    branches: [release-1.5]
     paths-ignore:
       - 'docs/**'
 
-# Only the newest main commit's cache matters; cancel older in-flight warmers.
+# Only the newest commit's cache matters; cancel older in-flight warmers.
 concurrency:
-  group: build-main-cache
+  group: build-release-1.5-cache
   cancel-in-progress: true
 
 jobs:
   warm-cache:
     name: Warm build cache
-    runs-on: [self-hosted]
-    timeout-minutes: 90
+    # Was [self-hosted], which is the decommissioned cozy-runner-1 (#2937) -- this
+    # workflow could not have run on this branch even once. Same ephemeral shape
+    # the main warmer moved to; a cold serial `make build` here is CPU-bound.
+    runs-on: oracle-vm-24cpu-96gb-x86-64
+    # The first run is fully cold and builds six ubuntu-container-disk images on
+    # top of the other 28 packages; later runs mostly re-export a warm cache.
+    timeout-minutes: 120
     permissions:
       contents: read
       packages: write
@@ -92,7 +115,7 @@ jobs:
           BUILDER: ${{ steps.buildx.outputs.name }}
           # WRITE_CACHE=1 turns on --cache-to (mode=max) for every image.
           WRITE_CACHE: '1'
-          # Publish a floating :main handle; do not move :latest (releases do).
-          IMAGE_TAG: main
+          # Floating handle for this branch; do not move :latest (releases do).
+          IMAGE_TAG: release-1.5
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
