@@ -74,6 +74,16 @@ jobs:
           # .git/config where a later build step could read it.
           persist-credentials: false
 
+      # `make build` ends at packages/core/installer, whose image-packages target
+      # shells out to `flux push artifact`. The self-hosted runner this workflow
+      # used to target had flux baked in; the ephemeral shape does not, so without
+      # this the warmer builds all 28 packages and then fails on the last one.
+      # pull-requests.yaml installs it for the same reason. Idempotent.
+      - name: Set up build toolchain
+        run: |
+          command -v flux >/dev/null \
+            || curl -fsSL https://fluxcd.io/install.sh | sudo bash
+
       - name: Set up Docker config
         run: |
           if [ -d ~/.docker ]; then
