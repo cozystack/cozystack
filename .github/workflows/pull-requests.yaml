@@ -5,9 +5,10 @@ env:
   REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
 on:
   pull_request:
-    # `labeled` makes the promote PR's manual full-e2e opt-in actionable after
-    # the bot opens it. The plan/resolve guards below discard every other label
-    # event before it can launch build or E2E work.
+    # `labeled` makes the promote PR's manual full-e2e opt-in — and the
+    # upgrade-e2e opt-in on any PR — actionable after the PR is open. The
+    # plan/resolve guards below discard every other label event before it can
+    # launch build or E2E work.
     types: [opened, synchronize, reopened, labeled]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
@@ -52,7 +53,7 @@ jobs:
   plan:
     name: Plan build
     runs-on: ubuntu-latest
-    if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'
+    if: github.event.action != 'labeled' || contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name)
     permissions:
       contents: read
       # For the opening `E2E Tests` status below; e2e-report writes the terminal
@@ -627,7 +628,7 @@ jobs:
     runs-on: ubuntu-latest
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e')
+      && (github.event.action != 'labeled' || contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name))
     outputs:
       disk_id:      ${{ steps.fetch_assets.outputs.disk_id }}
 
@@ -1050,8 +1051,11 @@ jobs:
       contents: read
       packages: read
     needs: ["finalize", "build-talos", "resolve_assets"]
+    # !cancelled() rather than always(), matching the sibling `e2e` job: a
+    # cancelled run must not go on to occupy a 32-vCPU runner for up to 180
+    # minutes.
     if: >-
-      always()
+      !cancelled()
       && (needs.finalize.result == 'success' || needs.resolve_assets.result == 'success')
       && (contains(github.event.pull_request.labels.*.name, 'release')
           || contains(github.event.pull_request.labels.*.name, 'upgrade-e2e'))
