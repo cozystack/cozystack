@@ -1,0 +1,188 @@
+{{- $shouldRun := true }}
+{{- $cm := lookup "v1" "ConfigMap" .Release.Namespace (printf "%s-kafka-deployed-version" .Release.Name) }}
+{{- if $cm }}
+  {{- if ge (dig "data" "version" "0" $cm) "1" }}
+    {{- $shouldRun = false }}
+  {{- end }}
+{{- end }}
+{{- if $shouldRun }}
+{{- $controllerReplicas := 3 }}
+{{- if le (int .Values.kafka.replicas) 1 }}
+  {{- $controllerReplicas = 1 }}
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+rules:
+- apiGroups: ["kafka.strimzi.io"]
+  resources: ["kafkas", "kafkanodepools"]
+  verbs: ["get", "list", "watch", "create", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "1"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ .Release.Name }}-kafka-migration
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-kafka-migration
+    namespace: {{ .Release.Namespace | quote }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-kafka-migration
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "2"
+    helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1800
+  template:
+    metadata:
+      labels:
+        policy.cozystack.io/allow-to-apiserver: "true"
+    spec:
+      serviceAccountName: {{ .Release.Name }}-kafka-migration
+      restartPolicy: Never
+      containers:
+        - name: kubectl
+          image: docker.io/alpine/k8s:1.33.4
+          command: [sh, -ec]
+          args:
+            - |
+              set -eu
+
+              ns={{ .Release.Namespace | quote }}
+              name={{ .Release.Name | quote }}
+
+              if ! kubectl -n "$ns" get kafka "$name" >/dev/null 2>&1; then
+                echo "No existing Kafka CR — fresh install, skipping migration."
+                exit 0
+              fi
+
+              state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
+              echo "Current kafkaMetadataState: '${state}'"
+
+              if [ -z "$state" ] || [ "$state" = "KRaft" ]; then
+                echo "Already migrated or no state — nothing to do."
+                exit 0
+              fi
+
+              echo "Ensuring broker + controller KafkaNodePools exist (Helm-owned)..."
+              cat <<MANIFEST | kubectl apply -f -
+              apiVersion: kafka.strimzi.io/v1beta2
+              kind: KafkaNodePool
+              metadata:
+                name: ${name}-broker
+                namespace: ${ns}
+                labels:
+                  strimzi.io/cluster: ${name}
+                  app.kubernetes.io/managed-by: Helm
+                annotations:
+                  meta.helm.sh/release-name: ${name}
+                  meta.helm.sh/release-namespace: ${ns}
+              spec:
+                replicas: {{ .Values.kafka.replicas }}
+                roles:
+                  - broker
+                storage:
+                  type: jbod
+                  volumes:
+                  - id: 0
+                    type: persistent-claim
+                    {{- with .Values.kafka.size }}
+                    size: {{ . }}
+                    {{- end }}
+                    {{- with .Values.kafka.storageClass }}
+                    class: {{ . }}
+                    {{- end }}
+                    deleteClaim: false
+              ---
+              apiVersion: kafka.strimzi.io/v1beta2
+              kind: KafkaNodePool
+              metadata:
+                name: ${name}-controller
+                namespace: ${ns}
+                labels:
+                  strimzi.io/cluster: ${name}
+                  app.kubernetes.io/managed-by: Helm
+                annotations:
+                  meta.helm.sh/release-name: ${name}
+                  meta.helm.sh/release-namespace: ${ns}
+              spec:
+                replicas: {{ $controllerReplicas }}
+                roles:
+                  - controller
+                storage:
+                  type: jbod
+                  volumes:
+                  - id: 0
+                    type: persistent-claim
+                    size: {{ .Values.kafka.controllerStorageSize | default "5Gi" }}
+                    {{- with .Values.kafka.storageClass }}
+                    class: {{ . }}
+                    {{- end }}
+                    kraftMetadata: shared
+                    deleteClaim: false
+              MANIFEST
+
+              echo "Enabling node pools and KRaft migration on the Kafka CR..."
+              kubectl -n "$ns" annotate kafka "$name" strimzi.io/node-pools=enabled --overwrite
+              kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=migration --overwrite
+
+              echo "Waiting for migration to reach KRaftPostMigration..."
+              for i in $(seq 1 240); do
+                state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
+                case "$state" in
+                  KRaftPostMigration|PreKRaft|KRaft)
+                    echo "Reached state: $state"
+                    break
+                    ;;
+                  *)
+                    echo "[$i/240] State: ${state}, waiting..."
+                    sleep 5
+                    ;;
+                esac
+              done
+
+              echo "Finalising migration to KRaft..."
+              kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=enabled --overwrite
+
+              echo "Waiting for KRaft state..."
+              for i in $(seq 1 120); do
+                state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
+                if [ "$state" = "KRaft" ]; then
+                  echo "Migration complete."
+                  exit 0
+                fi
+                echo "[$i/120] State: ${state}, waiting..."
+                sleep 5
+              done
+
+              echo "ERROR: migration did not complete in time."
+              exit 1
+{{- end }}

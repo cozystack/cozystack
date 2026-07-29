@@ -11,6 +11,13 @@ external: false
 ## @param {TLS} tls - TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.
 tls: {}
 
+## @enum {string} Version - Kafka version to deploy.
+## @value v3.9
+## @value v3.8
+
+## @param {Version} version - Kafka version to deploy.
+version: "v3.9"
+
 ##
 ## @section Application-specific parameters
 ##
@@ -104,6 +111,7 @@ topics: []
 ## @field {string} storageClass - StorageClass used to store the Kafka data.
 ## @immutable
 ## @x-cozystack-options {source: storageclass}
+## @field {quantity} [controllerStorageSize] - Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).
 
 ## @param {Kafka} kafka - Kafka configuration.
 kafka:
@@ -112,24 +120,4 @@ kafka:
   resourcesPreset: "c1.small"
   size: 10Gi
   storageClass: ""
-
-##
-## @section ZooKeeper configuration
-##
-
-## @typedef {struct} ZooKeeper - ZooKeeper configuration.
-## @field {int} replicas - Number of ZooKeeper replicas.
-## @field {Resources} [resources] - Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied.
-## @field {ResourcesPreset} resourcesPreset - Default sizing preset used when `resources` is omitted.
-## @field {quantity} size - Persistent Volume size for ZooKeeper.
-## @field {string} storageClass - StorageClass used to store the ZooKeeper data.
-## @immutable
-## @x-cozystack-options {source: storageclass}
-
-## @param {ZooKeeper} zookeeper - ZooKeeper configuration.
-zookeeper:
-  replicas: 3
-  resources: {}
-  resourcesPreset: "c1.small"
-  size: 5Gi
-  storageClass: ""
+  controllerStorageSize: 5Gi

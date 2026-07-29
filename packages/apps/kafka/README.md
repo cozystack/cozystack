@@ -1,7 +1,5 @@
 # Managed Kafka Service
 
-> Both `kafka.storageClass` and `zookeeper.storageClass` are annotated as immutable in the chart schema — see [`docs/storage-immutability.md`](../../../docs/storage-immutability.md) for the contract and which consumers enforce it.
-
 ## Parameters
 
 ### Common parameters
@@ -11,6 +9,7 @@
 | `external`    | Enable external access from outside the cluster.                                                                                                                                                                                                                                                                                                                                                    | `bool`   | `false` |
 | `tls`         | TLS configuration. Strimzi manages the cluster PKI automatically (no cert-manager is involved for this chart): the operator auto-creates `<release>-cluster-ca-cert` and `<release>-clients-ca-cert` secrets, both exposed for client trust setup. The internal TLS listener on 9093 is always on; this toggle only controls the external listener on 9094.                                         | `object` | `{}`    |
 | `tls.enabled` | Enable TLS on the external listener. When unset, inherits the value of `external` (TLS is on when external access is enabled). Warning: setting this to false while external is true exposes Kafka over plaintext on a public IP via LoadBalancer. Strimzi does not provide authentication on this listener unless SCRAM, mTLS, or OAuth is separately configured. Use only in controlled networks. | `*bool`  | `null`  |
+| `version`     | Kafka version to deploy.                                                                                                                                                                                                                                                                                                                                                                            | `string` | `v3.9`  |
 
 
 ### Application-specific parameters
@@ -26,30 +25,17 @@
 
 ### Kafka configuration
 
-| Name                     | Description                                                                                              | Type       | Value      |
-| ------------------------ | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `kafka`                  | Kafka configuration.                                                                                     | `object`   | `{}`       |
-| `kafka.replicas`         | Number of Kafka replicas.                                                                                | `int`      | `3`        |
-| `kafka.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `kafka.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`       |
-| `kafka.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
-| `kafka.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
-| `kafka.size`             | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`     |
-| `kafka.storageClass`     | StorageClass used to store the Kafka data.                                                               | `string`   | `""`       |
-
-
-### ZooKeeper configuration
-
-| Name                         | Description                                                                                              | Type       | Value      |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
-| `zookeeper`                  | ZooKeeper configuration.                                                                                 | `object`   | `{}`       |
-| `zookeeper.replicas`         | Number of ZooKeeper replicas.                                                                            | `int`      | `3`        |
-| `zookeeper.resources`        | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
-| `zookeeper.resources.cpu`    | CPU available to each replica.                                                                           | `quantity` | `""`       |
-| `zookeeper.resources.memory` | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
-| `zookeeper.resourcesPreset`  | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
-| `zookeeper.size`             | Persistent Volume size for ZooKeeper.                                                                    | `quantity` | `5Gi`      |
-| `zookeeper.storageClass`     | StorageClass used to store the ZooKeeper data.                                                           | `string`   | `""`       |
+| Name                          | Description                                                                                              | Type       | Value      |
+| ----------------------------- | -------------------------------------------------------------------------------------------------------- | ---------- | ---------- |
+| `kafka`                       | Kafka configuration.                                                                                     | `object`   | `{}`       |
+| `kafka.replicas`              | Number of Kafka replicas.                                                                                | `int`      | `3`        |
+| `kafka.resources`             | Explicit CPU and memory configuration. When omitted, the preset defined in `resourcesPreset` is applied. | `object`   | `{}`       |
+| `kafka.resources.cpu`         | CPU available to each replica.                                                                           | `quantity` | `""`       |
+| `kafka.resources.memory`      | Memory (RAM) available to each replica.                                                                  | `quantity` | `""`       |
+| `kafka.resourcesPreset`       | Default sizing preset used when `resources` is omitted.                                                  | `string`   | `c1.small` |
+| `kafka.size`                  | Persistent Volume size for Kafka.                                                                        | `quantity` | `10Gi`     |
+| `kafka.storageClass`          | StorageClass used to store the Kafka data.                                                               | `string`   | `""`       |
+| `kafka.controllerStorageSize` | Persistent Volume size for KRaft controller metadata (used during ZK-to-KRaft migration).                | `quantity` | `5Gi`      |
 
 
 ## Parameter examples and reference
@@ -72,10 +58,6 @@ Presets follow a cloud-style `<series>.<size>` naming convention. Five series co
 
 See [`docs/operations/resource-presets.md`](../../../docs/operations/resource-presets.md) for the full size matrix and the legacy-to-instance-type mapping.
 
-### Authentication
-
-This chart does not configure listener authentication. When TLS is enabled on the external listener, clients can connect without credentials. To require authentication, use Strimzi's `KafkaUser` resource with an appropriate `authentication` type (`tls`, `scram-sha-512`, or `oauth`) outside this chart. See the [Strimzi documentation on KafkaUser](https://strimzi.io/docs/operators/latest/overview.html#security-options_str) for details.
-
 ### topics
 
 ```yaml
@@ -94,3 +76,48 @@ topics:
     partitions: 1
     replicas: 3
 ```
+
+## ZooKeeper to KRaft Migration
+
+The chart itself is now pure KRaft — it ships a Kafka CR with
+`strimzi.io/kraft: enabled` and separate broker + controller `KafkaNodePool`
+resources, with no `spec.zookeeper` block.
+
+Existing ZooKeeper-based instances are migrated automatically on the next chart
+upgrade by a Helm `pre-upgrade` Job, gated by a `<release>-kafka-deployed-version`
+ConfigMap shipped with the chart.
+
+### How it works
+
+1. The Job renders only when the version ConfigMap is missing or stamped below `"1"`.
+2. On upgrade, it inspects the existing Kafka CR's `status.kafkaMetadataState`:
+   - If the CR is absent (fresh install) or already in `KRaft`, it exits immediately.
+   - Otherwise (typically `ZooKeeper` state), it creates the broker + controller
+     `KafkaNodePool` resources matching the chart's values and annotates the
+     Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`.
+3. The Job polls `status.kafkaMetadataState` and waits for the migration to
+   reach `KRaftPostMigration | PreKRaft | KRaft`.
+4. It then flips the annotation to `strimzi.io/kraft=enabled` and waits until
+   the state reaches `KRaft`.
+5. When the Job succeeds, Helm applies the chart's KRaft manifests (which match
+   the post-migration state) and stamps the ConfigMap to `"1"`. Subsequent
+   reconciles see the ConfigMap and skip the Job entirely.
+6. If the Job fails or times out, Helm aborts the upgrade — the ConfigMap stays
+   below the threshold, so the next reconcile re-runs the same Job.
+
+### Observability and escape hatches
+
+- Tail the Job logs to follow migration progress:
+  `kubectl logs -n <namespace> job/<release>-kafka-migration`
+- Monitor `status.kafkaMetadataState` on the Kafka CR directly.
+- If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback`
+  annotation stays available as a manual escape hatch:
+  `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`,
+  then delete the failed Job and retry.
+
+### Important notes
+
+- **Strimzi 0.45 is the last version supporting ZooKeeper.** Future Strimzi
+  releases only support KRaft.
+- The `kafka.controllerStorageSize` parameter controls PV size for the new
+  KRaft controller nodes (default: `5Gi`).
