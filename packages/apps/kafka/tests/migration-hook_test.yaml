@@ -1,0 +1,83 @@
+suite: Migration pre-upgrade hook tests
+
+templates:
+  - templates/migration-hook.yaml
+
+tests:
+  - it: renders SA + Role + RoleBinding + Job when no version ConfigMap exists
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - hasDocuments:
+          count: 4
+      - isKind:
+          of: ServiceAccount
+        documentIndex: 0
+      - isKind:
+          of: Role
+        documentIndex: 1
+      - isKind:
+          of: RoleBinding
+        documentIndex: 2
+      - isKind:
+          of: Job
+        documentIndex: 3
+
+  - it: tags all resources as helm pre-upgrade hooks
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+        documentIndex: 0
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+        documentIndex: 1
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+        documentIndex: 2
+      - equal:
+          path: metadata.annotations["helm.sh/hook"]
+          value: pre-upgrade
+        documentIndex: 3
+
+  - it: names all resources with the release prefix
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - equal:
+          path: metadata.name
+          value: test-kafka-kafka-migration
+        documentIndex: 0
+      - equal:
+          path: metadata.name
+          value: test-kafka-kafka-migration
+        documentIndex: 3
+
+  - it: grants permission to patch kafkas and kafkanodepools
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - contains:
+          path: rules[0].apiGroups
+          content: kafka.strimzi.io
+        documentIndex: 1
+      - contains:
+          path: rules[0].resources
+          content: kafkas
+        documentIndex: 1
+      - contains:
+          path: rules[0].resources
+          content: kafkanodepools
+        documentIndex: 1
+      - contains:
+          path: rules[0].verbs
+          content: patch
+        documentIndex: 1
