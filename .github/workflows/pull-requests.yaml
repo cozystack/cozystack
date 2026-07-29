@@ -1263,7 +1263,6 @@ jobs:
           FROM_VERSION: ${{ steps.prev.outputs.from }}
           TARGET_TAG: ${{ steps.prev.outputs.target }}
         run: |
-          cd /tmp/$SANDBOX_NAME
           if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME \
               UPGRADE_FROM_VERSION="$FROM_VERSION" \
               UPGRADE_TARGET_TAG="$TARGET_TAG" \
@@ -1291,7 +1290,6 @@ jobs:
       - name: Collect chainsaw report
         if: always()
         run: |
-          cd /tmp/$SANDBOX_NAME
           mkdir -p _out
           docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw-upgrade/chainsaw-report.xml \
             _out/upgrade-chainsaw-report.xml || true
@@ -1301,7 +1299,7 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: upgrade-chainsaw-report
-          path: /tmp/${{ env.SANDBOX_NAME }}/_out/upgrade-chainsaw-report.xml
+          path: _out/upgrade-chainsaw-report.xml
           if-no-files-found: ignore
 
       - name: Collect sandbox diagnostics
