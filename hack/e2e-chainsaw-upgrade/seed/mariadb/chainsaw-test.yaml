@@ -2,8 +2,9 @@
 #
 # Reuses the app suite's MariaDB manifest verbatim (DRY). The canary lives in
 # the manifest's `testdb`, written as `testuser` (password from the same
-# manifest) over 127.0.0.1 from inside the primary pod — TCP so the user@%%
-# grant matches. skipDelete keeps it for verify/mariadb.
+# manifest) over the mariadb-test-primary Service — TCP so the user@%% grant
+# matches, and the Service rather than 127.0.0.1 for the reason in the step
+# comment below. skipDelete keeps it for verify/mariadb.
 apiVersion: chainsaw.kyverno.io/v1alpha1
 kind: Test
 metadata:
