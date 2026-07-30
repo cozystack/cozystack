@@ -273,7 +273,15 @@ Step 5 is the part that fails: it touches 40+ external repositories over a netwo
 
 Re-running is safe at any point of failure. `promote-retag.sh` skips a tag already at the expected digest, creates a missing one, and refuses to move a stable tag that points elsewhere. `promote-publish-chart.sh` compares an already-published chart against the tree by extracted content and skips an identical one, because `helm package` is not byte-reproducible and an unconditional re-push would move the stable chart tag onto new bytes. A run in which everything already landed comes out green.
 
-Re-running also picks up a *fix*, not just a retry. The job checks out the release tree at the promoted merge commit — frozen, as release content must be — but checks out the promotion scripts from `main` at run time, into `.promote-scripts/`. So the sequence for a script bug is: land the correction on `main`, press "Re-run failed jobs", and the corrected script runs against the unchanged release tree. Note GitHub allows a re-run only within 30 days of the original run; past that, or if the failure is in the workflow YAML rather than in a script (a re-run reuses the original workflow file), run the script by hand from a checkout of the release tag — `cd <tag-tree> && /path/to/main/hack/promote-retag.sh vX.Y.Z`, with `MOVE_LATEST=1` only if this is the newest stable.
+Re-running also picks up a *fix*, not just a retry. The job checks out the release tree at the promoted merge commit — frozen, as release content must be — but checks out the promotion scripts from `main` at run time, into `.promote-scripts/`. So the sequence for a script bug is: land the correction on `main`, press "Re-run failed jobs", and the corrected script runs against the unchanged release tree. Note GitHub allows a re-run only within 30 days of the original run; past that, or if the failure is in the workflow YAML rather than in a script (a re-run reuses the original workflow file), run the scripts by hand from a checkout of the release tag. Run **both** — retagging the images without publishing the chart leaves exactly the half-finished state this job exists to make recoverable. Log in to the registry first (`docker login` against the OCIR host, the same credentials the job uses), then, with `MOVE_LATEST=1` set only if this is the newest stable:
+
+```sh
+cd <tag-tree>
+MOVE_LATEST=1 /path/to/main/hack/promote-retag.sh vX.Y.Z
+MOVE_LATEST=1 /path/to/main/hack/promote-publish-chart.sh vX.Y.Z
+```
+
+Both are invoked by absolute path from a working directory that is the release tree, which is how the job runs them too: each resolves its own helpers relative to the script, and scans the package tree relative to the working directory.
 
 ### Phase 6 — `update-releasenotes.yaml` (sync GitHub Release body)
 
