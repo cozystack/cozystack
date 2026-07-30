@@ -136,7 +136,18 @@ EOF
 @test "a target naming only a major version is an error, not a guess" {
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
-  _fixture > "$tmp/tags"
+
+  # NOT _fixture: it ships no v1.0.x/v1.1.x tag, so the buggy reading of "v1"
+  # as v1.1 walked down to an empty v1.0 line and errored for the WRONG reason —
+  # an assertion against that fixture passes whether or not the bug is present.
+  # This set gives the bug something to succeed with, so the case is only green
+  # because the target is refused.
+  cat > "$tmp/tags" <<'EOF'
+v1.0.1
+v1.0.9
+v1.5.3
+v1.6.0
+EOF
 
   for bad in v1 1; do
     if out=$(hack/upgrade-prev-version.sh "$bad" "$tmp/tags" 2>/dev/null); then
