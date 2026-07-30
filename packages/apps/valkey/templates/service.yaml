@@ -1,0 +1,25 @@
+{{- if .Values.external }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Release.Name }}-external-lb
+  labels:
+    app.kubernetes.io/instance: {{ .Release.Name }}
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  {{- if (include "cozy-lib.network.disableLoadBalancerNodePorts" $ | fromYaml) }}
+  allocateLoadBalancerNodePorts: false
+  {{- end }}
+  selector:
+    app.kubernetes.io/component: redis
+    app.kubernetes.io/name: {{ .Release.Name }}
+    app.kubernetes.io/part-of: redis-failover
+    redisfailovers-role: master
+  ports:
+  - name: redis
+    port: 6379
+    targetPort: redis
+{{- end }}

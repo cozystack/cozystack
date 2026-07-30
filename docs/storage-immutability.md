@@ -18,7 +18,7 @@ Every stateful Cozystack application that exposes a `storageClass` parameter dec
 
 The following charts annotate at least one `storageClass` field as immutable:
 
-- `clickhouse`, `foundationdb`, `harbor`, `http-cache`, `kafka` (Kafka + ZooKeeper), `kubernetes` (top-level only — see below), `mariadb`, `mongodb`, `nats`, `openbao`, `opensearch`, `postgres`, `qdrant`, `rabbitmq`, `redis`, `vm-disk`.
+- `clickhouse`, `foundationdb`, `harbor`, `http-cache`, `kafka` (Kafka + ZooKeeper), `kubernetes` (top-level only — see below), `mariadb`, `mongodb`, `nats`, `openbao`, `opensearch`, `postgres`, `qdrant`, `rabbitmq`, `redis`, `valkey`, `vm-disk`.
 
 The per-node-group `kubernetes.nodeGroups[name].storageClass` field is intentionally NOT annotated immutable: it is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group. If a richer ratcheting form (`!has(oldSelf.storageClass) || self.storageClass == oldSelf.storageClass`) becomes available, the annotation should be added back.
 

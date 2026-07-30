@@ -1,0 +1,76 @@
+# Chainsaw test for the managed Valkey app (mirrors the redis suite).
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: valkey
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: valkey-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=valkey-test
+      tail: 50
+  steps:
+  - name: create-valkey
+    try:
+    - apply:
+        file: valkey.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: valkey-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: verify-storage-and-workloads
+    try:
+    # replicas: 2 provisions two StatefulSet-templated PVCs — verify both.
+    # The operator keeps the redisfailover-* resource naming regardless of the
+    # Valkey engine image, so these names match the redis suite.
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-valkey-test-0
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-valkey-test-1
+          status:
+            phase: Bound
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: rfs-valkey-test
+          status:
+            (conditions[?type == 'Available']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-valkey-test
+          status:
+            readyReplicas: 2
