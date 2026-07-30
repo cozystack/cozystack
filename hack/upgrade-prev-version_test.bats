@@ -125,3 +125,28 @@ EOF
     false
   fi
 }
+
+# A target naming only a major ("v1") is not a version this resolver can act on,
+# and must be refused rather than guessed at. It used to resolve: `cut -f2`
+# without -s prints the whole line when it carries no delimiter, so min came
+# back as "1" and v1 was silently treated as v1.1 — emitting a real-looking
+# baseline from the v1.0 line with exit 0. A wrong-but-plausible baseline is
+# worse than an error here, because the lane would install it and report on an
+# upgrade path nobody asked for.
+@test "a target naming only a major version is an error, not a guess" {
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  _fixture > "$tmp/tags"
+
+  for bad in v1 1; do
+    if out=$(hack/upgrade-prev-version.sh "$bad" "$tmp/tags" 2>/dev/null); then
+      echo "FAIL: target '$bad' should be refused, got '$out'" >&2
+      false
+    fi
+  done
+
+  # The two-component form is legitimate and must keep resolving — the guard
+  # rejects a missing minor, not a missing patch.
+  out=$(hack/upgrade-prev-version.sh "v1.6" "$tmp/tags")
+  [ -n "$out" ]
+}
