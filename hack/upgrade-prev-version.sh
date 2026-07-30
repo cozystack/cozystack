@@ -53,7 +53,12 @@ fi
 ver="${target#v}"
 ver="${ver%%-*}"                       # strip the -rc.N / -beta.N suffix
 maj=$(printf '%s' "$ver" | cut -d. -f1)
-min=$(printf '%s' "$ver" | cut -d. -f2)
+# -s is load-bearing: without it `cut -f2` on a line carrying no delimiter
+# prints the WHOLE line, so a single-component target like "v1" yielded min=1
+# and was silently resolved as if it were v1.1 — printing a plausible baseline
+# with exit 0 instead of rejecting an unparseable target. -s suppresses the
+# delimiter-less line, min comes back empty, and the guard below catches it.
+min=$(printf '%s' "$ver" | cut -s -d. -f2)
 case "${maj}:${min}" in
   *[!0-9:]*|:*|*:) echo "ERROR: cannot parse target version '$target'" >&2; exit 1 ;;
 esac
