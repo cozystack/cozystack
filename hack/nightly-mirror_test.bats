@@ -8,17 +8,19 @@
 # tree), and every copy targets the destination registry with the source digest
 # preserved.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats — see the same
-# note in hack/promote-retag_test.bats. No `run`, `$status`, `$output`, `skip`,
-# or setup()/teardown(); each @test is a shell function under `set -eu -x`, so a
-# non-zero exit aborts the test (that is the exit-0 assertion). A test that
-# expects a non-zero exit must capture it with `|| rc=$?`. mikefarah yq is
-# assumed present (provided by the test toolchain).
+# Harness note: the CI path is bats(1) since #3453 — see the same note in
+# hack/promote-retag_test.bats. `run`, `$status`, `$output`, `skip` and
+# setup()/teardown() are available but unused here; a non-zero exit aborts the
+# test (that is the exit-0 assertion). A test that expects a non-zero exit must
+# capture it with `|| rc=$?`. mikefarah yq is assumed present (provided by the
+# test toolchain).
 #
-# Run with: hack/cozytest.sh hack/nightly-mirror_test.bats
+# Run with: bats hack/nightly-mirror_test.bats
 
 # Build a synthetic baked tree exercising all four image-ref shapes plus the
 # refs that MUST be filtered (third-party host, cozystack-packages artifact).
+
+load test_helper
 _make_tree() {
   D="$(printf 'a%.0s' $(seq 1 64))"   # 64-hex fake digest body
   t="$1"

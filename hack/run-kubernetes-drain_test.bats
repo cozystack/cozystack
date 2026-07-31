@@ -9,12 +9,15 @@
 # is never misread as "the tenant has drained". The function returns 0 (drained)
 # only when every capture is empty/whitespace, non-zero otherwise.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Assertions are expressed as
-# direct shell tests that exit non-zero on failure.
+# Runs under bats(1). `run` and `$status` are available but unused here:
+# assertions are expressed as direct shell tests that exit non-zero on
+# failure. bats supplies `set -e`, and hack/test_helper.bash restores the
+# `set -u` that cozytest.sh applied before #3453.
 #
-# Run with: hack/cozytest.sh hack/run-kubernetes-drain_test.bats
+# Run with: bats hack/run-kubernetes-drain_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "all-empty captures report drained" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh

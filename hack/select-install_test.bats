@@ -2,19 +2,20 @@
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-install.sh
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Each test runs as a shell
-# function under `set -eu -x`, so assertions are direct shell tests that exit
-# non-zero on failure. setup()/teardown() are not honored; per-test `trap ...
-# EXIT` cleanup IS honored. To assert a NON-zero exit, invert with `if` so
-# `set -e` doesn't abort the test.
+# Runs under bats(1). Assertions are direct shell tests that exit non-zero on
+# failure; `run` and `$status` are available but unused here. bats supplies
+# `set -e`, and hack/test_helper.bash restores the `set -u` that cozytest.sh
+# applied before #3453. Per-test `trap ... EXIT` cleanup is honored. To assert
+# a NON-zero exit, invert with `if` so `set -e` doesn't abort the test.
 #
 # Tests that only READ the production sources call the script directly (it
 # defaults sources-dir to packages/core/platform/sources); only the tests that
 # build a synthetic graph or suite tree use a scratch dir.
 #
-# Run with: hack/cozytest.sh hack/select-install_test.bats
+# Run with: bats hack/select-install_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "single app selects its forward dependency closure" {
     output=$(hack/select-install.sh "postgres")

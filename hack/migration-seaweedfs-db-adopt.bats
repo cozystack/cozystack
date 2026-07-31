@@ -55,12 +55,15 @@
 # the script does any work, while on a developer box /bin/sh is often bash, which
 # runs green and proves nothing about ash.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
-# shell tests that exit non-zero on failure.
+# Runs under bats(1). `run` and `$status` are available but unused here:
+# assertions are direct shell tests that exit non-zero on failure. bats
+# supplies `set -e`, and hack/test_helper.bash restores the `set -u` that
+# cozytest.sh applied before #3453.
 #
-# Run with: hack/cozytest.sh hack/migration-seaweedfs-db-adopt.bats
+# Run with: bats hack/migration-seaweedfs-db-adopt.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-seaweedfs-db"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"
@@ -79,10 +82,13 @@ ALPINE=$(sed -n 's/^FROM \(alpine:[^ ]*\).*$/\1/p' \
 # assertions read back on the host. --network none because nothing here may
 # reach a real cluster; --user keeps $WORK removable by the test afterwards.
 #
-# The explicit `return` is load-bearing: cozytest.sh's awk generator rewrites
-# every bare `}` in column 0 into `return 0` + `}`, so a helper that falls off
-# its own end returns 0 no matter what it ran, and every fail-closed assertion
-# below would pass vacuously. Capture the status and return it by hand.
+# The explicit `return` is no longer load-bearing: it worked around
+# cozytest.sh's awk generator, which rewrote every bare `}` in column 0 into
+# `return 0` + `}`, so a helper falling off its own end returned 0 whatever it
+# ran and every fail-closed assertion below passed vacuously. bats does not
+# rewrite function bodies, so this is now belt-and-braces. Kept because
+# returning the status explicitly is clearer than relying on the fall-through
+# either way.
 run_migration() {
   _run_migration_rc=0
   docker run --rm --network none \

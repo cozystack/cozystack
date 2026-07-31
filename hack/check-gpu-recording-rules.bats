@@ -28,13 +28,10 @@
 # enforced: some rules exist for ad-hoc PromQL or upcoming dashboards. Treat
 # unused rules as an editorial concern, not a regression.
 #
-# Title syntax constraints from cozytest.sh's awk parser:
-#   - Titles delimited by ASCII double quotes; embedded quotes truncate.
-#   - Only [A-Za-z0-9] from the title survives into the function name; titles
-#     differing only in punctuation collapse to the same function.
-#
-# Run with: hack/cozytest.sh hack/check-gpu-recording-rules.bats
+# Run with: bats hack/check-gpu-recording-rules.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 RULES_FILE="$REPO_ROOT/packages/system/monitoring-agents/alerts/gpu-recording.rules.yaml"

@@ -14,25 +14,17 @@
 #
 # Each test installs a `trap 'rm -rf "$STUB_DIR"' EXIT` immediately after
 # creating the stub dir so cleanup runs even when an assertion fails mid-test
-# under `set -e`. cozytest.sh runs each @test in its own subshell, so traps
-# scope per test and do not leak across tests.
+# under `set -e`. bats runs each @test in its own subshell, so traps scope per
+# test and do not leak across tests.
 #
-# Tests are otherwise self-contained — no shared setup/teardown helpers,
-# because cozytest.sh's awk parser only recognizes @test blocks and treats a
-# bare `}` on its own line as the end of a test function.
+# Tests are otherwise self-contained: each provisions its own stub dir rather
+# than sharing a setup()/teardown() pair. hack/test_helper.bash supplies the
+# only shared setup(), restoring the `set -u` cozytest.sh applied before #3453.
 #
-# Title syntax constraints (inherited from cozytest.sh's awk parser):
-#   - Titles must be delimited by ASCII double quotes; embedded literal
-#     double quotes are NOT escaped and will silently truncate the title.
-#   - Only alphanumeric characters from the title survive into the shell
-#     function name (everything else becomes '_'), so titles that differ
-#     only in punctuation collapse to the same function name. Keep titles
-#     distinctive in their alphanumeric run.
-#
-# Run with: hack/cozytest.sh hack/check-host-runtime.bats
-#           (or `bats hack/check-host-runtime.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run with: bats hack/check-host-runtime.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "clean host with no runtime services exits silently" {
   STUB_DIR=$(mktemp -d)

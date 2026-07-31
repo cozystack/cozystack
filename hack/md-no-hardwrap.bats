@@ -26,6 +26,8 @@
 # The hook speaks the agent hook protocol: a JSON payload on stdin, exit 0 to
 # allow, exit 2 to block with an explanation on stderr.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 HOOK="$REPO_ROOT/.claude/hooks/md-no-hardwrap.py"
 
@@ -429,9 +431,11 @@ wrapped across two lines."')"
   # `gh api --input -` takes JSON, not markdown. Its braces and quoted keys
   # are not a hardwrapped paragraph.
   #
-  # The JSON is indented so that no line of it starts with `}`: cozytest.sh
-  # converts each @test into a shell function with awk, and a bare `}` in the
-  # first column ends that function early, silently truncating the test.
+  # The JSON is indented so that no line of it starts with `}`. That was
+  # forced by cozytest.sh, which converted each @test into a shell function
+  # with awk and ended it at a bare column-0 `}`, silently truncating the
+  # test. bats does not rewrite the file, so the indentation is now only a
+  # readability choice.
   payload="$(bash_payload 'gh api --method POST /repos/o/r/pulls/1/reviews --input - <<EOF
   {
     "event": "COMMENT",

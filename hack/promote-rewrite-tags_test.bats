@@ -17,16 +17,16 @@
 # registry prefix finds files it has never heard of, which is the whole failure
 # mode. Stamp wider than the rewrite, then assert the rewrite cleaned all of it.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. cozytest.sh's
-# awk parser recognizes only @test blocks and a bare `}` on its own line; there
-# is no `run`, `$status`, `$output`, `skip`, or setup()/teardown(). Each test
-# runs as a shell function under `set -eu -x`, so a non-zero exit aborts the
-# test (that is the exit-0 assertion). A test that expects a non-zero exit must
-# capture it with `|| rc=$?` so the harness's `set -e` does not abort first.
-# Paths are repo-root-relative: BATS_TEST_DIRNAME is unset here and would abort
-# the whole suite under `set -u`.
+# Harness note: the CI path is bats(1) since #3453, so `run`, `$status`,
+# `$output`, `skip` and setup()/teardown() are all available — this file simply
+# does not use them. A non-zero exit aborts the test (that is the exit-0
+# assertion). A test that expects a non-zero exit must capture it with
+# `|| rc=$?` so `set -e` does not abort first. Paths stay repo-root-relative,
+# which worked under both runners.
 #
-# Run with: hack/cozytest.sh hack/promote-rewrite-tags_test.bats
+# Run with: bats hack/promote-rewrite-tags_test.bats
+
+load test_helper
 
 @test "rewrite leaves no rc reference anywhere in the tree" {
   tmp=$(mktemp -d)

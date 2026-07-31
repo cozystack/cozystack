@@ -20,11 +20,19 @@
 # Moving the classifier into a file with tests is the point. These drive it
 # against a fake kubectl, mocking only the cluster boundary.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its own
-# line; there is no bats `run`/`$status`/`setup`.
+# Runs under bats(1). `run` and `$status` are available but unused here.
+# hack/test_helper.bash restores the `set -u` that cozytest.sh applied before
+# #3453.
 #
-# Run with: hack/cozytest.sh hack/seaweedfs-naming-audit.bats
+# Note that the script under test is POSIX sh and is EXECUTED by /bin/sh at
+# run time, but SOURCED into bats' bash here. A bash-only construct added to
+# it would pass this suite and fail in production; shellcheck's `shell=sh`
+# directive in the script is what guards that now.
+#
+# Run with: bats hack/seaweedfs-naming-audit.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 SEAWEEDFS_AUDIT_LIB=1
 export SEAWEEDFS_AUDIT_LIB

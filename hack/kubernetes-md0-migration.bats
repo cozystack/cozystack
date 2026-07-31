@@ -20,17 +20,20 @@
 # "The stamp ran" is detected by the version stamp's `kubectl apply` appearing
 # in the fake's call log — equivalently, CURRENT_VERSION was/was not advanced.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line (column 0); there is no bats `run`/`$status`/`setup`/`teardown`.
-# Assertions are direct shell tests that exit non-zero on failure, and the
-# fake-kubectl heredocs deliberately keep every `}` off column 0 so the parser
-# does not mistake one for the end of a test. Each @test runs in its own
-# subshell, and cleanup is inline (no EXIT/RETURN trap — see
+# Runs under bats(1). `run` and `$status` are available but unused here:
+# assertions are direct shell tests that exit non-zero on failure. bats
+# supplies `set -e`, and hack/test_helper.bash restores the `set -u` that
+# cozytest.sh applied before #3453. The fake-kubectl heredocs keep every `}`
+# off column 0 — a cozytest parser constraint that no longer binds, since bats
+# does not rewrite the file, but harmless to leave in place. Each @test runs in
+# its own subshell, and cleanup is inline (no EXIT/RETURN trap — see
 # docs/agents/e2e-testing.md §3).
 #
-# Run with: hack/cozytest.sh hack/kubernetes-md0-migration.bats
+# Run with: bats hack/kubernetes-md0-migration.bats
 #           (or `bats hack/kubernetes-md0-migration.bats`)
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$HACK_DIR/.." && pwd)"
@@ -43,7 +46,8 @@ MIGRATION="$REPO_ROOT/packages/core/platform/images/migrations/migrations/47"
 #     an object whose nodeGroups lacks md0 (so the migration tries to patch);
 #   - `patch` fails when MOCK_FAIL=patch, else succeeds;
 #   - `apply` (the version stamp) is a no-op that drains stdin.
-# No line below is a bare column-0 `}`, so cozytest.sh's parser leaves it intact.
+# No line below is a bare column-0 `}` — a cozytest.sh parser constraint that
+# bats does not impose, kept only so the heredoc stays diff-stable.
 write_fake_kubectl() {
   cat > "$1/kubectl" <<'KEOF'
 #!/bin/sh

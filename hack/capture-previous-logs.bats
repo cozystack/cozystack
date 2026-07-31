@@ -23,15 +23,10 @@
 # asserts with `[ ... ]`, matching this repo's plain-shell bats convention (no
 # `run` helper).
 #
-# Title syntax constraints (inherited from cozytest.sh's awk parser):
-#   - Titles delimited by ASCII double quotes; embedded quotes truncate.
-#   - Only [A-Za-z0-9] from the title survives into the function name, so keep
-#     titles distinctive in their alphanumeric run.
-#
-# Run with: hack/cozytest.sh hack/capture-previous-logs.bats
-#           (or `bats hack/capture-previous-logs.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run with: bats hack/capture-previous-logs.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-capture-previous-logs.sh"
@@ -54,7 +49,7 @@ E2E_CAPTURE_PREVLOGS_LIB=1
   [ "$(printf '%s\n' "$out" | grep -c .)" -eq 2 ]
   printf '%s\n' "$out" | grep -q '^tenant-test|mariadb-test-0|mariadb|container|3$'
   printf '%s\n' "$out" | grep -q '^tenant-test|mariadb-test-0|init-datadir|init|2$'
-  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for a
+  # `! cmd` is vacuous under `set -e` (errexit is suppressed for a
   # `!`-negated pipeline), so a filter regression that let these rows through
   # would not fail the test. Assert the absence via `if cmd; then ...; false`.
   if printf '%s\n' "$out" | grep -q 'mariadb-test-1'; then echo "FAIL: must drop the zero-restart replica"; false; fi

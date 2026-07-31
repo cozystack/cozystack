@@ -11,13 +11,16 @@
 # same manager would strip the label, so the manifest is centralized here and
 # every migration sources it instead of copy-pasting a heredoc.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Assertions are expressed as
-# direct shell tests that exit non-zero on failure. Each test runs in its own
+# Runs under bats(1). `run` and `$status` are available but unused here:
+# assertions are expressed as direct shell tests that exit non-zero on
+# failure. bats supplies `set -e`, and hack/test_helper.bash restores the
+# `set -u` that cozytest.sh applied before #3453. Each test runs in its own
 # subshell, so NAMESPACE set/unset in one test does not leak into another.
 #
-# Run with: hack/cozytest.sh hack/cozystack-version-stamp.bats
+# Run with: bats hack/cozystack-version-stamp.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "renders parseable YAML for a version" {
     . packages/core/platform/images/migrations/migrations/lib/cozystack-version.sh

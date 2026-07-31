@@ -2,14 +2,16 @@
 # -----------------------------------------------------------------------------
 # Unit tests for hack/select-e2e.sh
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`. Each test runs as a shell
-# function under `set -eu -x`, so assertions are direct shell tests that exit
-# non-zero on failure. setup()/teardown() are not honored — each test creates
-# and cleans its own scratch dir.
+# Runs under bats(1). Assertions are direct shell tests that exit non-zero on
+# failure; `run` and `$status` are available but unused here. bats supplies
+# `set -e`, and hack/test_helper.bash restores the `set -u` that cozytest.sh
+# applied before #3453. Each test creates and cleans its own scratch dir
+# rather than sharing a setup()/teardown() pair.
 #
-# Run with: hack/cozytest.sh hack/select-e2e_test.bats
+# Run with: bats hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "single app diff selects only that suite" {
     tmp=$(mktemp -d)

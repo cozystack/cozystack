@@ -4,12 +4,14 @@
 # cozystack-packages:main artifact.
 #
 # Run from the repo root:  bats hack/overlay-main-images_test.bats
-# (CI runs it via hack/cozytest.sh through `make unit-tests`.)
+# (CI runs it via bats through `make unit-tests`.)
 #
 # Each test builds a throwaway tree: a `packages/` tree on release (ghcr/v1.5.0)
 # refs, and a `main/` dir standing in for the extracted cozystack-packages:main
 # artifact (root = contents of packages/) on current-main (OCIR/:main) refs.
 # $root is the real repo, captured before cd.
+
+load test_helper
 
 @test "overlays an unbuilt unit (.tag) to current-main and reports it" {
   root=$(pwd)

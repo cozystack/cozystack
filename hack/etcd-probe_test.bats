@@ -24,15 +24,15 @@
 # need a live cluster and are covered by the e2e run, matching how the other
 # hack/ helpers are tested.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`, and setup()/teardown() are not
-# honored. Each test runs under `set -eu -x`; assertions are direct shell tests
-# that exit non-zero on failure. Titles are delimited by ASCII double quotes and
-# only [A-Za-z0-9] survives into the generated function name, so keep them
-# distinctive in their alphanumeric run.
+# Runs under bats(1). `run` and `$status` are available but unused here;
+# assertions are direct shell tests that exit non-zero on failure. bats
+# supplies `set -e`, and hack/test_helper.bash restores the `set -u` that
+# cozytest.sh applied before #3453.
 #
-# Run with: hack/cozytest.sh hack/etcd-probe_test.bats
+# Run with: bats hack/etcd-probe_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 # shellcheck source=/dev/null

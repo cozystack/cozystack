@@ -38,9 +38,11 @@
 # directly here — the prefix is meaningful only when the parent wrapper
 # chart is in play.
 #
-# Compatible with both `bats` directly and the in-repo cozytest.sh runner.
-# cozytest.sh runs each @test in a fresh subshell with `set -u` and does
-# not honor bats setup()/teardown(), so we provision TMP inline per test.
+# Runs under bats(1), which gives each @test its own subshell;
+# hack/test_helper.bash restores the `set -u` cozytest.sh applied before
+# #3453. TMP is provisioned inline per test rather than in a setup() hook.
+
+load test_helper
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 CHART="$REPO_ROOT/packages/system/gpu-operator/charts/gpu-operator"

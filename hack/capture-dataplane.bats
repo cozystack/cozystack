@@ -23,15 +23,10 @@
 # asserts with `[ ... ]`, matching this repo's plain-shell bats convention (no
 # `run` helper). Mock IPs use the RFC 5737 / RFC 3849 documentation ranges.
 #
-# Title syntax constraints (inherited from cozytest.sh's awk parser):
-#   - Titles delimited by ASCII double quotes; embedded quotes truncate.
-#   - Only [A-Za-z0-9] from the title survives into the function name, so keep
-#     titles distinctive in their alphanumeric run.
-#
-# Run with: hack/cozytest.sh hack/capture-dataplane.bats
-#           (or `bats hack/capture-dataplane.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run with: bats hack/capture-dataplane.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-capture-dataplane.sh"
@@ -95,7 +90,7 @@ EOF
   [ "$(printf '%s\n' "$out" | grep -c .)" -eq 2 ]
   printf '%s\n' "$out" | grep -q '^tenant|app|LoadBalancer|192.0.2.50|'
   printf '%s\n' "$out" | grep -q '^tenant|db|LoadBalancer|192.0.2.51|'
-  # `! cmd` is vacuous under cozytest's `set -e` (errexit is suppressed for a
+  # `! cmd` is vacuous under `set -e` (errexit is suppressed for a
   # `!`-negated pipeline), so a filter regression that let these rows through
   # would not fail the test. Assert the absence via `if cmd; then ...; false`.
   if printf '%s\n' "$out" | grep -q 'kube-dns'; then echo "FAIL: lb_filter_services must drop the kube-dns row"; false; fi

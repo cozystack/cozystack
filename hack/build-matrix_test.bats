@@ -1,10 +1,13 @@
 #!/usr/bin/env bats
 # Unit tests for hack/build-matrix.sh — the CI build-matrix selector.
 #
-# Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the
-# relative `hack/build-matrix.sh` calls below resolve against that cwd. A bats
-# setup() hook would be dead here — cozytest never invokes it — so the
-# repo-root cwd is supplied by the runner rather than a setup() cd.
+# Run via bats from the repo root (make bats-unit-tests); the relative
+# `hack/build-matrix.sh` calls below resolve against that cwd, which the
+# runner supplies rather than a setup() cd. Note that setup() hooks DO run
+# under bats — hack/test_helper.bash defines the shared one — so a setup()
+# added here must call strict_setup() to keep `set -u`.
+
+load test_helper
 
 @test "no argument emits the full matrix" {
   out=$(hack/build-matrix.sh)
@@ -16,7 +19,7 @@
 
 @test "talos and installer are excluded from the parallel matrix" {
   out=$(hack/build-matrix.sh)
-  # `! cmd` would be vacuous: cozytest.sh runs each @test under `set -e`, which
+  # `! cmd` would be vacuous: each @test runs under `set -e`, which
   # is suppressed for a `!`-negated pipeline, so a regression that wrongly
   # included these paths would not fail the test. Assert via `if cmd; then ...`.
   if echo "$out" | grep -q '"packages/core/talos"'; then echo "FAIL: packages/core/talos must be excluded from the parallel matrix"; false; fi

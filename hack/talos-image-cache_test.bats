@@ -28,14 +28,16 @@
 # Root cause + fix are from cozystack/cozystack#3254 (@lexfrei); this is the port
 # to the Chainsaw layout (hack/e2e-chainsaw/_lib/).
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run` or `$status`, and setup()/teardown() are not
-# honored. Each test runs under `set -eu -x`; assertions are direct shell tests
-# that exit non-zero on failure. mikefarah yq prints `---` between matched
+# Runs under bats(1). `run` and `$status` are available but unused here;
+# assertions are direct shell tests that exit non-zero on failure. bats
+# supplies `set -e`, and hack/test_helper.bash restores the `set -u` that
+# cozytest.sh applied before #3453. mikefarah yq prints `---` between matched
 # documents, so document streams are compared with those separators stripped.
 #
-# Run with: hack/cozytest.sh hack/talos-image-cache_test.bats
+# Run with: bats hack/talos-image-cache_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "manifest documents partition into pre-Cilium apply plus the Cilium policy" {
     manifest=hack/e2e-talos-image-cache.yaml

@@ -23,14 +23,17 @@
 #   - stamps the version (kubectl apply) on a clean run;
 #   - is a safe no-op that still stamps when the CRDs are absent.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line (column 0); assertions are direct shell tests, and the fake-kubectl
-# heredoc keeps every `}` off column 0. Each @test cleans up inline (no
+# Runs under bats(1); assertions are direct shell tests that exit non-zero on
+# failure. bats supplies `set -e`, and hack/test_helper.bash restores the
+# `set -u` that cozytest.sh applied before #3453. The fake-kubectl heredoc
+# keeps every `}` off column 0 — a cozytest parser constraint that no longer
+# binds, but harmless to leave in place. Each @test cleans up inline (no
 # EXIT/RETURN trap — see docs/agents/e2e-testing.md §3).
 #
-# Run with: hack/cozytest.sh hack/monitoring-pvc-backfill-migration.bats
-#           (or `bats hack/monitoring-pvc-backfill-migration.bats`)
+# Run with: bats hack/monitoring-pvc-backfill-migration.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$HACK_DIR/.." && pwd)"
@@ -40,7 +43,8 @@ MIGRATION="$REPO_ROOT/packages/core/platform/images/migrations/migrations/51"
 # Emits a fake `kubectl` that logs every call to $KLOG and, when $MOCK_ABSENT=1,
 # reports the VM/VL CRDs as absent. Ordering matters: the CR appname read is
 # matched by *managedMetadata* before the generic *vmclusters*/*vlclusters* list.
-# No line below is a bare column-0 `}`, so cozytest.sh's parser leaves it intact.
+# No line below is a bare column-0 `}` — a cozytest.sh parser constraint that
+# bats does not impose, kept only so the heredoc stays diff-stable.
 write_fake_kubectl() {
   cat > "$1/kubectl" <<'KEOF'
 #!/bin/sh

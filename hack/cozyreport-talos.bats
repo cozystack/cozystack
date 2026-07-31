@@ -3,6 +3,8 @@
 # The full report needs a cluster; this test sources only the focused helper and
 # replaces talosctl with a shell function that records the exact argument vector.
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/cozyreport.sh"
 
@@ -10,8 +12,9 @@ COZYREPORT_LIB=1
 # shellcheck source=/dev/null
 . "$SCRIPT"
 
-# cozytest.sh's parser ends an @test block at the first bare `}`, so keep the
-# talosctl mock at top level rather than nesting a function inside the test.
+# The talosctl mock stays at top level rather than nested inside a test. That
+# was forced by cozytest.sh's parser, which ended an @test block at the first
+# bare `}`; bats does not, but a shared top-level mock is clearer anyway.
 talosctl() {
   printf '%s\n' "$*" >> "$calls"
 }

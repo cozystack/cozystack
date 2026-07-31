@@ -18,11 +18,14 @@
 # CILIUM_LEAK_HEALER_LIB set, which its sourcing guard honours by defining the
 # helpers and returning before the heal loop -- so no cluster is required and
 # the loop never executes. Assertions use plain `[ ... ]` / if-then-false, not a
-# `run` helper (cozytest.sh has no `run`). Mock IPs use the RFC 5737
+# `run` helper (available under bats, simply unused here). Mock IPs use the
+# RFC 5737
 # documentation range (TEST-NET-1, 192.0.2.0/24).
 #
-# Run with: hack/cozytest.sh hack/cilium-leak-healer_test.bats
+# Run with: bats hack/cilium-leak-healer_test.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-cilium-endpoint-leak-healer.sh"

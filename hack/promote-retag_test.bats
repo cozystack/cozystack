@@ -8,18 +8,17 @@
 # cannot push to aborted the whole promotion. The selector must emit only
 # cozystack-owned ($REGISTRY/...) refs.
 #
-# Harness note: the CI path is hack/cozytest.sh, NOT real bats. cozytest.sh's
-# awk parser recognizes only @test blocks and a bare `}` on its own line; there
-# is no `run`, `$status`, `$output`, `skip`, or setup()/teardown(). Each test
-# runs as a shell function under `set -eu -x`, so a non-zero exit aborts the
-# test (that is the exit-0 assertion) and other expectations are direct shell
-# tests. A test that expects a non-zero exit must capture it with `|| rc=$?`
-# so the harness's `set -e` does not abort first. mikefarah yq is assumed
-# present (provided by the test toolchain, like the other yq-using bats here).
+# Harness note: the CI path is bats(1) since #3453, so `run`, `$status`,
+# `$output`, `skip` and setup()/teardown() are all available — this file simply
+# does not use them. A non-zero exit aborts the test (that is the exit-0
+# assertion) and other expectations are direct shell tests. A test that expects
+# a non-zero exit must capture it with `|| rc=$?` so `set -e` does not abort
+# first. mikefarah yq is assumed present (provided by the test toolchain, like
+# the other yq-using bats here).
 #
-# Run with: hack/cozytest.sh hack/promote-retag_test.bats
-#           (or `bats hack/promote-retag_test.bats` if the bats binary is
-#           installed; cozytest.sh is the CI path.)
+# Run with: bats hack/promote-retag_test.bats
+
+load test_helper
 
 @test "dry-run over the real tree retags only cozystack-owned refs" {
   tmp=$(mktemp -d)

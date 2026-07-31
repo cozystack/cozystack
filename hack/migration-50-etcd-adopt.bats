@@ -18,12 +18,15 @@
 #   3. the operator is scaled to 0 BEFORE etcd-migrate --apply and back to 1
 #      AFTER, with --apply always carrying the S3 backup destination.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on its
-# own line; there is no bats `run`/`$status`/`setup`. Assertions are direct
-# shell tests that exit non-zero on failure.
+# Runs under bats(1). `run` and `$status` are available but unused here:
+# assertions are direct shell tests that exit non-zero on failure. bats
+# supplies `set -e`, and hack/test_helper.bash restores the `set -u` that
+# cozytest.sh applied before #3453.
 #
-# Run with: hack/cozytest.sh hack/migration-50-etcd-adopt.bats
+# Run with: bats hack/migration-50-etcd-adopt.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 FAKEBIN="$PWD/hack/testdata/migration-50"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/50"

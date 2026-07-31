@@ -12,12 +12,15 @@
 # are useless there because flux's ClearFailures zeroes them on successful
 # reconciliation; .status.history retains the snapshot trail.
 #
-# cozytest.sh's awk parser recognizes only @test blocks and a bare `}` on
-# its own line; there is no bats `run` or `$status`. Assertions are
-# expressed as direct shell tests that exit non-zero on failure.
+# Runs under bats(1). `run` and `$status` are available but unused here:
+# assertions are expressed as direct shell tests that exit non-zero on
+# failure. bats supplies `set -e`, and hack/test_helper.bash restores the
+# `set -u` that cozytest.sh applied before #3453.
 #
-# Run with: hack/cozytest.sh hack/remediation-guard.bats
+# Run with: bats hack/remediation-guard.bats
 # -----------------------------------------------------------------------------
+
+load test_helper
 
 @test "empty history returns not-detected" {
     . hack/e2e-chainsaw/_lib/remediation-guard.sh
