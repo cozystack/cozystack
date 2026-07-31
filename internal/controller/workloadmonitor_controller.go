@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/pointer"
@@ -329,8 +330,13 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
 		if bc.Spec.BucketClassName != "" {
-          workload.Labels["workloads.cozystack.io/bucket-class"] = bc.Spec.BucketClassName
-        }
+			if errs := validation.IsValidLabelValue(bc.Spec.BucketClassName); len(errs) == 0 {
+				workload.Labels["workloads.cozystack.io/bucket-class"] = bc.Spec.BucketClassName
+			} else {
+				logger.Info("Skipping bucket-class label: not a valid label value",
+					"bucketClaim", bc.Name, "bucketClassName", bc.Spec.BucketClassName, "errors", errs)
+			}
+		}
 
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
