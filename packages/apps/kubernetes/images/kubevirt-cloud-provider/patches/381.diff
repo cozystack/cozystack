@@ -1,5 +1,5 @@
 diff --git a/pkg/controller/kubevirteps/kubevirteps_controller.go b/pkg/controller/kubevirteps/kubevirteps_controller.go
-index a53860c60..292b93049 100644
+index a53860c60..0345c6ec6 100644
 --- a/pkg/controller/kubevirteps/kubevirteps_controller.go
 +++ b/pkg/controller/kubevirteps/kubevirteps_controller.go
 @@ -12,12 +12,15 @@ import (
@@ -177,7 +177,7 @@ index a53860c60..292b93049 100644
  		return
  	}
  
-@@ -896,15 +996,31 @@ func (c *Controller) getDesiredEndpoints(service *v1.Service, tenantSlices []*di
+@@ -896,17 +996,45 @@ func (c *Controller) getDesiredEndpoints(service *v1.Service, tenantSlices []*di
  func (c *Controller) getAllVMIEndpoints() []*discovery.Endpoint {
  	var endpoints []*discovery.Endpoint
  
@@ -185,36 +185,50 @@ index a53860c60..292b93049 100644
 -	vmiList, err := c.infraDynamic.
 -		Resource(kubevirtv1.VirtualMachineInstanceGroupVersionKind.GroupVersion().WithResource("virtualmachineinstances")).
 -		Namespace(c.infraNamespace).
--		List(context.TODO(), metav1.ListOptions{})
-+	// List the VMIs of this cluster in the infra namespace. An infra namespace can hold more than
-+	// one tenant cluster, as well as plain VirtualMachines, and those VMIs do not serve this
-+	// Service's NodePort: selecting them would add endpoints that blackhole traffic.
-+	listOpts := metav1.ListOptions{}
-+	if c.clusterName != "" {
-+		listOpts.LabelSelector = labels.SelectorFromSet(labels.Set{clusterNameLabel: c.clusterName}).String()
-+	}
-+	vmiClient := c.infraDynamic.Resource(vmiGVR).Namespace(c.infraNamespace)
-+	vmiList, err := vmiClient.List(context.TODO(), listOpts)
++	// List every VMI of the infra namespace, then keep only the ones of this cluster. An infra
++	// namespace can hold more than one tenant cluster, as well as plain VirtualMachines, and those
++	// VMIs do not serve this Service's NodePort: selecting them would add endpoints that blackhole
++	// the traffic, or route it to another tenant.
++	vmiList, err := c.infraDynamic.Resource(vmiGVR).Namespace(c.infraNamespace).
+ 		List(context.TODO(), metav1.ListOptions{})
  	if err != nil {
  		klog.Errorf("Failed to list VMIs in namespace %q: %v", c.infraNamespace, err)
  		return endpoints
  	}
-+	if len(vmiList.Items) == 0 && listOpts.LabelSelector != "" {
-+		// The VMIs are not labelled with the cluster name (they are not managed by CAPK, or an
-+		// older version of it). Keep the previous behaviour rather than returning no endpoint
-+		// at all, which would take the LoadBalancer down.
-+		klog.Warningf("No VMI matched %q in namespace %s, falling back to every VMI of the namespace",
-+			listOpts.LabelSelector, c.infraNamespace)
-+		vmiList, err = vmiClient.List(context.TODO(), metav1.ListOptions{})
-+		if err != nil {
-+			klog.Errorf("Failed to list VMIs in namespace %q: %v", c.infraNamespace, err)
-+			return endpoints
+ 
+-	for _, obj := range vmiList.Items {
++	items := vmiList.Items
++	if c.clusterName != "" {
++		mine := make([]unstructured.Unstructured, 0, len(items))
++		anyLabelled := false
++		for i := range items {
++			name, found := items[i].GetLabels()[clusterNameLabel]
++			if !found {
++				continue
++			}
++			anyLabelled = true
++			if name == c.clusterName {
++				mine = append(mine, items[i])
++			}
++		}
++		// Widen to every VMI only when NONE of them carries the label: the VMIs are then not
++		// managed by CAPK (or by an older version of it) and there is no way to tell the clusters
++		// apart, so returning nothing would take the LoadBalancer down. As soon as some VMIs are
++		// labelled, an empty selection is a legitimate answer -- this cluster currently has no
++		// node -- and must not be widened to the VMIs of another cluster.
++		if anyLabelled {
++			items = mine
++		} else {
++			klog.Warningf("No VMI carries %q in namespace %s, selecting every VMI of the namespace",
++				clusterNameLabel, c.infraNamespace)
 +		}
 +	}
- 
- 	for _, obj := range vmiList.Items {
++
++	for _, obj := range items {
  		vmi := &kubevirtv1.VirtualMachineInstance{}
-@@ -944,7 +1060,8 @@ func (c *Controller) getAllVMIEndpoints() []*discovery.Endpoint {
+ 		err = runtime.DefaultUnstructuredConverter.FromUnstructured(obj.Object, vmi)
+ 		if err != nil {
+@@ -944,7 +1072,8 @@ func (c *Controller) getAllVMIEndpoints() []*discovery.Endpoint {
  		}
  	}
  
@@ -225,10 +239,10 @@ index a53860c60..292b93049 100644
  }
  
 diff --git a/pkg/controller/kubevirteps/kubevirteps_controller_test.go b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
-index 17608fa10..b9d0f03c6 100644
+index 17608fa10..51a030cd7 100644
 --- a/pkg/controller/kubevirteps/kubevirteps_controller_test.go
 +++ b/pkg/controller/kubevirteps/kubevirteps_controller_test.go
-@@ -965,3 +965,108 @@ var _ = g.Describe("getDesiredEndpoints", func() {
+@@ -965,3 +965,135 @@ var _ = g.Describe("getDesiredEndpoints", func() {
  		Expect(endpoints).To(HaveLen(0), "Expected no endpoints due to missing NodeName or IP")
  	})
  })
@@ -275,6 +289,33 @@ index 17608fa10..b9d0f03c6 100644
 +		endpoints := t.controller.getAllVMIEndpoints()
 +
 +		Expect(endpoints).To(HaveLen(2), "Unlabelled VMIs must still be selected, so the LB does not lose every endpoint")
++	})
++
++	g.It("Should return no endpoint when only another cluster's VMIs are present", func() {
++		t := setupTestKubevirtEPSController()
++		// The controller's cluster is "test-cluster" and has no VMI right now (scaled to zero, or
++		// every VMI being replaced by a rollout), while another tenant cluster of the same infra
++		// namespace does have some. Widening to every VMI here would publish the other cluster's
++		// addresses as this Service's endpoints.
++		createVMI(t, createUnstructuredVMIForCluster("other-1", "infra-1", "10.0.0.1", "another-cluster"))
++		createVMI(t, createUnstructuredVMIForCluster("other-2", "infra-2", "10.0.0.2", "another-cluster"))
++
++		endpoints := t.controller.getAllVMIEndpoints()
++
++		Expect(endpoints).To(BeEmpty(),
++			"An empty selection is legitimate and must not be widened to another cluster's VMIs")
++	})
++
++	g.It("Should ignore the unlabelled VMIs when some VMIs carry the cluster label", func() {
++		t := setupTestKubevirtEPSController()
++		createVMI(t, createUnstructuredVMIForCluster("mine", "infra-1", "10.0.0.1", "test-cluster"))
++		// A standalone VirtualMachine of the same namespace, not part of any tenant cluster.
++		createVMI(t, createUnstructuredVMIForCluster("standalone", "infra-2", "10.0.0.2", ""))
++
++		endpoints := t.controller.getAllVMIEndpoints()
++
++		Expect(endpoints).To(HaveLen(1))
++		Expect(endpoints[0].Addresses).To(ConsistOf("10.0.0.1"))
 +	})
 +
 +	g.It("Should requeue the LoadBalancer Services when a VMI appears or disappears", func() {
