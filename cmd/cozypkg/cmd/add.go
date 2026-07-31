@@ -148,10 +148,13 @@ func parseVariantFlags(raw []string) (map[string]string, error) {
 	result := make(map[string]string, len(raw))
 	for _, entry := range raw {
 		parts := strings.SplitN(entry, "=", 2)
-		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		if len(parts) != 2 {
 			return nil, fmt.Errorf("invalid --set-variant value %q, expected format pkg=variant", entry)
 		}
 		pkg, variant := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+		if pkg == "" || variant == "" {
+			return nil, fmt.Errorf("invalid --set-variant value %q, expected format pkg=variant", entry)
+		}
 		if existing, ok := result[pkg]; ok && existing != variant {
 			return nil, fmt.Errorf("conflicting --set-variant values for %q: %q and %q", pkg, existing, variant)
 		}
