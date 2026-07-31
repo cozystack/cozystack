@@ -328,6 +328,10 @@ func (r *WorkloadMonitorReconciler) reconcileBucketClaimForMonitor(
 		}
 		workload.Labels[workloadMonitorLabel] = monitor.Name
 
+		if bc.Spec.BucketClassName != "" {
+          workload.Labels["workloads.cozystack.io/bucket-class"] = bc.Spec.BucketClassName
+        }
+
 		// Start from the sizes already recorded on the Workload: when the
 		// metrics endpoint is unreachable or reports nothing for this bucket,
 		// the last known good values must survive rather than collapse to
