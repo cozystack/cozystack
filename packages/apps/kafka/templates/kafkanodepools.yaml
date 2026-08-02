@@ -1,8 +1,4 @@
-{{- /* Controller replicas: odd quorum (1 for single-node, 3 otherwise) */ -}}
-{{- $controllerReplicas := 3 }}
-{{- if le (int .Values.kafka.replicas) 1 }}
-  {{- $controllerReplicas = 1 }}
-{{- end }}
+{{- $controllerReplicas := include "kafka.controllerReplicas" . }}
 ---
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaNodePool
