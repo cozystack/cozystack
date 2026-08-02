@@ -1,7 +1,4 @@
-{{- $controllerReplicas := 3 }}
-{{- if le (int .Values.kafka.replicas) 1 }}
-  {{- $controllerReplicas = 1 }}
-{{- end }}
+{{- $controllerReplicas := include "kafka.controllerReplicas" . }}
 ---
 apiVersion: cozystack.io/v1alpha1
 kind: WorkloadMonitor

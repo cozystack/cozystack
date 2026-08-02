@@ -81,3 +81,26 @@ tests:
           path: rules[0].verbs
           content: patch
         documentIndex: 1
+
+  # The migration Job must never apply strimzi.io/kraft=enabled unless the
+  # cluster actually reached KRaftPostMigration — flipping it earlier is
+  # unsafe and irreversible. Guard the finalize step behind an explicit
+  # readiness flag that aborts (exit 1) on timeout, leaving the deployed-version
+  # ConfigMap unstamped so Helm retries.
+  - it: guards the KRaft finalize step behind a reached-safe-state check
+    release:
+      name: test-kafka
+      namespace: tenant-test
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "migration_ready=false"
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: 'if \[ "\$migration_ready" != "true" \]; then'
+        documentIndex: 3
+      - matchRegex:
+          path: spec.template.spec.containers[0].args[0]
+          pattern: "Refusing to apply strimzi.io/kraft=enabled in an unsafe state"
+        documentIndex: 3
