@@ -6,10 +6,7 @@
   {{- end }}
 {{- end }}
 {{- if $shouldRun }}
-{{- $controllerReplicas := 3 }}
-{{- if le (int .Values.kafka.replicas) 1 }}
-  {{- $controllerReplicas = 1 }}
-{{- end }}
+{{- $controllerReplicas := include "kafka.controllerReplicas" . }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -60,7 +57,10 @@ metadata:
     helm.sh/hook-delete-policy: hook-succeeded,before-hook-creation
 spec:
   backoffLimit: 0
-  activeDeadlineSeconds: 1800
+  # Worst-case in-script waits total ~1800s of sleeps (240x5s + 120x5s) before
+  # kubectl round-trip latency; keep headroom above that so a genuinely-progressing
+  # migration is not SIGKILLed mid-flight and the guard/error paths can run.
+  activeDeadlineSeconds: 3600
   template:
     metadata:
       labels:
@@ -155,11 +155,13 @@ spec:
               kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=migration --overwrite
 
               echo "Waiting for migration to reach KRaftPostMigration..."
+              migration_ready=false
               for i in $(seq 1 240); do
                 state=$(kubectl -n "$ns" get kafka "$name" -o jsonpath='{.status.kafkaMetadataState}' || echo "")
                 case "$state" in
                   KRaftPostMigration|PreKRaft|KRaft)
                     echo "Reached state: $state"
+                    migration_ready=true
                     break
                     ;;
                   *)
@@ -168,6 +170,19 @@ spec:
                     ;;
                 esac
               done
+
+              # Strimzi only permits strimzi.io/kraft=enabled once the cluster has
+              # reached KRaftPostMigration. Applying it earlier — while brokers still
+              # depend on ZooKeeper — is unsafe and irreversible (kraft=rollback is no
+              # longer available past that point). If the wait timed out in an
+              # intermediate state, abort without finalising and without stamping the
+              # deployed-version ConfigMap, so Helm fails the upgrade and the next
+              # reconcile retries from where the migration left off.
+              if [ "$migration_ready" != "true" ]; then
+                echo "ERROR: migration did not reach KRaftPostMigration (last state: ${state:-unknown})."
+                echo "Refusing to apply strimzi.io/kraft=enabled in an unsafe state."
+                exit 1
+              fi
 
               echo "Finalising migration to KRaft..."
               kubectl -n "$ns" annotate kafka "$name" strimzi.io/kraft=enabled --overwrite

@@ -30,7 +30,8 @@ spec:
     exclude: []
     include:
       - resourceNames:
-          - kafka-{{ .name }}-clients-ca
+          - kafka-{{ .name }}-clients-ca-cert
+          - kafka-{{ .name }}-cluster-ca-cert
   services:
     exclude: []
     include:

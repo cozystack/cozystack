@@ -79,41 +79,24 @@ topics:
 
 ## ZooKeeper to KRaft Migration
 
-The chart itself is now pure KRaft — it ships a Kafka CR with
-`strimzi.io/kraft: enabled` and separate broker + controller `KafkaNodePool`
-resources, with no `spec.zookeeper` block.
+The chart itself is now pure KRaft — it ships a Kafka CR with `strimzi.io/kraft: enabled` and separate broker + controller `KafkaNodePool` resources, with no `spec.zookeeper` block.
 
-Existing ZooKeeper-based instances are migrated automatically on the next chart
-upgrade by a Helm `pre-upgrade` Job, gated by a `<release>-kafka-deployed-version`
-ConfigMap shipped with the chart.
+Existing ZooKeeper-based instances are migrated automatically on the next chart upgrade by a Helm `pre-upgrade` Job, gated by a `<release>-kafka-deployed-version` ConfigMap shipped with the chart.
 
 ### How it works
 
 1. The Job renders only when the version ConfigMap is missing or stamped below `"1"`.
-2. On upgrade, it inspects the existing Kafka CR's `status.kafkaMetadataState`:
-   - If the CR is absent (fresh install) or already in `KRaft`, it exits immediately.
-   - Otherwise (typically `ZooKeeper` state), it creates the broker + controller
-     `KafkaNodePool` resources matching the chart's values and annotates the
-     Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`.
-3. The Job polls `status.kafkaMetadataState` and waits for the migration to
-   reach `KRaftPostMigration | PreKRaft | KRaft`.
-4. It then flips the annotation to `strimzi.io/kraft=enabled` and waits until
-   the state reaches `KRaft`.
-5. When the Job succeeds, Helm applies the chart's KRaft manifests (which match
-   the post-migration state) and stamps the ConfigMap to `"1"`. Subsequent
-   reconciles see the ConfigMap and skip the Job entirely.
-6. If the Job fails or times out, Helm aborts the upgrade — the ConfigMap stays
-   below the threshold, so the next reconcile re-runs the same Job.
+2. On upgrade, it inspects the existing Kafka CR's `status.kafkaMetadataState`: if the CR is absent (fresh install) or already in `KRaft` it exits immediately; otherwise (typically `ZooKeeper` state) it creates the broker + controller `KafkaNodePool` resources matching the chart's values and annotates the Kafka CR with `strimzi.io/node-pools=enabled` and `strimzi.io/kraft=migration`.
+3. The Job polls `status.kafkaMetadataState` and waits for the migration to reach `KRaftPostMigration | PreKRaft | KRaft`.
+4. Only once that safe state is reached does it flip the annotation to `strimzi.io/kraft=enabled` and wait until the state reaches `KRaft`; if the wait times out in an intermediate state the Job aborts (`exit 1`) without finalising, leaving the ConfigMap unstamped.
+5. When the Job succeeds, Helm applies the chart's KRaft manifests (which match the post-migration state) and stamps the ConfigMap to `"1"`. Subsequent reconciles see the ConfigMap and skip the Job entirely.
+6. If the Job fails or times out, Helm aborts the upgrade — the ConfigMap stays below the threshold, so the next reconcile re-runs the same Job.
 
 ### Observability and escape hatches
 
-- Tail the Job logs to follow migration progress:
-  `kubectl logs -n <namespace> job/<release>-kafka-migration`
+- Tail the Job logs to follow migration progress: `kubectl logs -n <namespace> job/<release>-kafka-migration`
 - Monitor `status.kafkaMetadataState` on the Kafka CR directly.
-- If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback`
-  annotation stays available as a manual escape hatch:
-  `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`,
-  then delete the failed Job and retry.
+- If migration gets stuck before `KRaftPostMigration`, Strimzi's `rollback` annotation stays available as a manual escape hatch: `kubectl annotate kafka <release> strimzi.io/kraft=rollback --overwrite`, then delete the failed Job and retry.
 
 ### Important notes
 
