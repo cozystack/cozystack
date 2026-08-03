@@ -1,0 +1,112 @@
+# ./tests/resources_test.yaml
+suite: resources sanitize helper
+
+templates:
+  - templates/tests/resources.yaml
+
+release:
+  name: myrelease
+  namespace: default
+
+tests:
+  # Regression guard for the VPA admission webhook, which rejects a CPU
+  # quantity finer than 1m ("MinAllowed: CPU [62500u] must be a whole number
+  # of milli CPUs"). Before the fix, 250m / 4 rendered as "0.0625" and any
+  # chart feeding a sanitized CPU request to a VerticalPodAutoscaler was stuck
+  # in an UpgradeFailed/RollbackFailed loop on such a ratio.
+  - it: rounds the CPU request up to a whole milli-CPU on an indivisible ratio
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+      resources:
+        cpu: 250m
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: 63m
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: 250m
+
+  - it: rounds up rather than down so the request never drops below the fraction
+    set:
+      _cluster:
+        cpu-allocation-ratio: 3
+      resources:
+        cpu: 1000m
+        memory: 256Mi
+    asserts:
+      # 1000m / 3 = 333.33...m
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: 334m
+
+  - it: keeps the rendering unchanged on the default ratio
+    set:
+      resources:
+        cpu: 250m
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.025"
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: 250m
+
+  - it: keeps the rendering unchanged when a non-default ratio divides evenly
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+      resources:
+        cpu: 1000m
+        memory: 256Mi
+    asserts:
+      # 1000m / 4 = 250m exactly, so no rounding and no re-formatting
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.25"
+
+  # 700m / 1 is 699.9999999999999m in binary floating point. Without the
+  # %.6f round-trip in the helper, ceil() would bump it to 700m and change the
+  # rendered value of an exactly divisible request.
+  - it: does not let binary-float noise bump an exact value to the next milli
+    set:
+      _cluster:
+        cpu-allocation-ratio: 1
+      resources:
+        cpu: 700m
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0.7"
+
+  - it: never renders a sub-milli CPU request
+    set:
+      _cluster:
+        cpu-allocation-ratio: 10
+      resources:
+        cpu: 1m
+        memory: 256Mi
+    asserts:
+      # 1m / 10 = 0.1m, which is not a representable CPU quantity
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: 1m
+
+  - it: leaves memory requests untouched
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+      resources:
+        cpu: 250m
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.memory
+          value: "268435456"
+      - equal:
+          path: spec.containers[0].resources.limits.memory
+          value: 256Mi
