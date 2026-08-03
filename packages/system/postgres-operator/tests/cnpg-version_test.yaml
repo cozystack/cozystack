@@ -12,11 +12,16 @@ release:
   namespace: cozy-postgres-operator
 
 tests:
+<<<<<<< HEAD
   - it: runs the CNPG 1.27.3 operator image
+=======
+  - it: runs the CNPG 1.28.2 operator image
+>>>>>>> bcb3626 (fix(postgres-operator): align CNPG operator and CRDs to 1.28.2 for PVC resize-deadlock fix)
     template: charts/cloudnative-pg/templates/deployment.yaml
     asserts:
       - equal:
           path: spec.template.spec.containers[0].image
+<<<<<<< HEAD
           value: ghcr.io/cloudnative-pg/cloudnative-pg:1.27.3
       - equal:
           path: spec.template.spec.containers[0].env[0].value
@@ -26,9 +31,27 @@ tests:
           value: 1.27.3
 
   - it: preserves the CNPG 1.27.3 backup session ID status
+=======
+          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.28.2
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.28.2
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: 1.28.2
+
+  - it: ships the CNPG 1.28.2 CRDs patched in lockstep with the operator
+>>>>>>> bcb3626 (fix(postgres-operator): align CNPG operator and CRDs to 1.28.2 for PVC resize-deadlock fix)
     template: charts/cloudnative-pg/templates/crds/crds.yaml
     asserts:
       - documentIndex: 0
         equal:
+<<<<<<< HEAD
+=======
+          path: metadata.annotations["controller-gen.kubebuilder.io/version"]
+          value: v0.20.1
+      - documentIndex: 0
+        equal:
+>>>>>>> bcb3626 (fix(postgres-operator): align CNPG operator and CRDs to 1.28.2 for PVC resize-deadlock fix)
           path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.instanceID.properties.sessionID.type
           value: string

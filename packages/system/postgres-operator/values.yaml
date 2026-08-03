@@ -1,8 +1,38 @@
 cloudnative-pg:
   crds:
     create: true
+<<<<<<< HEAD
   image:
     tag: "1.27.3"
+=======
+  # The vendored chart is 0.27.1 (appVersion 1.28.1). patches/cloudnative-pg-1.28.2.patch,
+  # applied by `make update`, raises the operator image AND its CRDs together to 1.28.2 for the
+  # PVC resize-deadlock fix (cloudnative-pg#9980 / #9981), which ships in the 1.28.2 operator
+  # binary. Upstream publishes a chart only per minor .0/.1, so there is no 1.28.2 chart to bump
+  # to on the 1.28 line without jumping a minor - hence the patch keeps operator and CRDs aligned.
+  #
+  # Do NOT pin image.tag here: the tag follows the chart's appVersion, so operator and CRDs stay
+  # in lockstep. Pinning image.tag to a version the CRDs do not match makes the operator write
+  # status fields the CRD prunes (e.g. status.instanceID.sessionID, added in CNPG 1.27.3),
+  # failing every backup cluster-wide. To move the operator + CRDs, edit the patch (or bump the
+  # chart version in the Makefile).
+
+# CloudNativePG Barman Cloud Plugin (github.com/cloudnative-pg/plugin-barman-cloud).
+# Native spec.backup.barmanObjectStore is deprecated in CNPG 1.27 and removed in 1.29,
+# and the `standard` postgresql image variant this platform pins no longer ships the
+# barman-cloud-* binaries. The plugin runs the barman tooling in a sidecar instead, so
+# it must be co-located with the CNPG operator: CNPG discovers plugins by listing
+# Services carrying the cnpg.io/pluginName label *in the operator's own namespace*
+# (cozy-postgres-operator). The subchart renders every object into .Release.Namespace,
+# which cozyhr/Flux set to cozy-postgres-operator, so no namespaceOverride is needed.
+#
+# Requires cert-manager: the subchart mints a self-signed Issuer plus the
+# barman-cloud-server-tls / barman-cloud-client-tls Secrets that carry the mTLS between
+# the operator and the plugin.
+plugin-barman-cloud:
+  crds:
+    create: true
+>>>>>>> bcb3626 (fix(postgres-operator): align CNPG operator and CRDs to 1.28.2 for PVC resize-deadlock fix)
 # Image used by the post-install webhook-readiness Job (see templates/webhook-ready-hook.yaml).
 # Any image with kubectl on PATH works; the Job calls the apiserver service proxy with the
 # hook ServiceAccount's token to confirm the mcluster.cnpg.io webhook is reachable end-to-end

@@ -1,5 +1,9 @@
 apiVersion: v2
+<<<<<<< HEAD
 appVersion: 1.27.3
+=======
+appVersion: 1.28.2
+>>>>>>> bcb3626 (fix(postgres-operator): align CNPG operator and CRDs to 1.28.2 for PVC resize-deadlock fix)
 dependencies:
 - alias: monitoring
   condition: monitoring.grafanaDashboard.create
