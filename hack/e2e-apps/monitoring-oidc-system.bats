@@ -128,7 +128,11 @@ EOF
   # The EDP Keycloak operator API group is only present when the
   # platform-level OIDC feature is on. Skip gracefully otherwise so the
   # test suite works on runners without Keycloak installed.
-  if ! kubectl api-resources --api-group=v1.edp.epam.com >/dev/null 2>&1; then
+  # Test the OUTPUT, not the exit code: `kubectl api-resources` exits 0 for an
+  # absent API group and just prints an empty list, so an exit-code guard never
+  # skips and the assertions below would time out instead.
+  if ! kubectl api-resources --api-group=v1.edp.epam.com --output=name 2>/dev/null \
+       | grep -q '^keycloakclients\.'; then
     skip "EDP Keycloak operator CRDs not present on this cluster"
   fi
 
