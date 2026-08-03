@@ -1,0 +1,39 @@
+suite: etcd VerticalPodAutoscaler bounds
+
+release:
+  name: etcd
+  namespace: tenant-root
+
+templates:
+  - templates/vpa.yaml
+
+tests:
+  - it: brackets the sanitized request with a floor and a ceiling
+    set:
+      _cluster: {}
+    asserts:
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].minAllowed.cpu
+          value: "0.025"
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].maxAllowed.cpu
+          value: "0.5"
+
+  # Regression guard for #3517. minAllowed/maxAllowed are bounds on the
+  # *request* the VPA sets, so they go through cozy-lib.resources.sanitize and
+  # are divided by cpuAllocationRatio like every other request in the chart.
+  # 250m / 4 = 62.5m, which the VPA admission webhook rejects outright
+  # ("MinAllowed: CPU [62500u] must be a whole number of milli CPUs"), leaving
+  # the HelmRelease looping UpgradeFailed -> RollbackFailed forever. The helper
+  # now rounds up to a whole milli-CPU, so any ratio renders a valid quantity.
+  - it: renders whole milli-CPU bounds on a ratio that does not divide 250m
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+    asserts:
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].minAllowed.cpu
+          value: 63m
+      - equal:
+          path: spec.resourcePolicy.containerPolicies[0].maxAllowed.cpu
+          value: "1.25"

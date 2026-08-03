@@ -59,7 +59,9 @@
   A sanitized resource map is a dict with resource-name to resource-quantity.
   All resources are returned with equal **requests** and **limits**, except for
   **cpu**, whose *request* is reduced by the CPU-allocation ratio obtained from
-  `cozy-lib.resources.cpuAllocationRatio`.
+  `cozy-lib.resources.cpuAllocationRatio` and then rounded **up** to a whole
+  number of milli-CPUs (a CPU quantity finer than 1m is invalid for the VPA
+  admission webhook and meaningless for the scheduler).
 
   The template now expects **one flat map** as input (no nested `requests:` /
   `limits:` sections).  Each value in that map is taken as the *limit* for the
@@ -97,7 +99,25 @@
 {{-     if eq $k "cpu" }}
 {{-       $vcpuRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
 {{-       $cpuRequestF64 := divf $vcpuRequestF64 $cpuAllocationRatio }}
-{{-       $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{- /*
+        A CPU quantity must be a whole number of milli-CPUs: the VPA admission
+        webhook rejects anything finer ("MinAllowed: CPU [62500u] must be a
+        whole number of milli CPUs"), and a sub-milli request is meaningless
+        anyway. A ratio that does not divide the value evenly produces one:
+        250m / 4 = 62.5m. Round the request up to the next whole milli-CPU so
+        every allocation ratio renders a valid quantity, never below the
+        intended fraction of the limit.
+        The %.6f round-trip strips binary-float noise (0.25/10*1000 can come
+        out as 25.000000000000004) so an exactly divisible value keeps its
+        current rendering instead of being bumped to the next milli-CPU.
+*/}}
+{{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | printf "%.6f" | float64 }}
+{{-       $cpuRequestMilliCeil := ceil $cpuRequestMilli }}
+{{-       if eq $cpuRequestMilli $cpuRequestMilliCeil }}
+{{-         $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
+{{-       else }}
+{{-         $_ := set $output.requests $k (printf "%dm" (int64 $cpuRequestMilliCeil)) }}
+{{-       end }}
 {{-       $_ := set $output.limits $k ($v | toString) }}
 {{-     else if eq $k "memory" }}
 {{-       $vMemoryRequestF64 := (include "cozy-lib.resources.toFloat" $v) | float64 }}
