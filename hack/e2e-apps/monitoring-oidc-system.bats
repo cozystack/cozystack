@@ -131,8 +131,16 @@ EOF
   # Test the OUTPUT, not the exit code: `kubectl api-resources` exits 0 for an
   # absent API group and just prints an empty list, so an exit-code guard never
   # skips and the assertions below would time out instead.
-  if ! kubectl api-resources --api-group=v1.edp.epam.com --output=name 2>/dev/null \
-       | grep -q '^keycloakclients\.'; then
+  #
+  # Keep the two apart, though. An empty list means the CRDs are absent, which
+  # is a legitimate skip. A discovery call that FAILS means we cannot tell, and
+  # skipping there would turn a broken API server into a green run: the suite
+  # would report success for a cluster it never checked. Fail loudly instead.
+  if ! EDP_RESOURCES=$(kubectl api-resources --api-group=v1.edp.epam.com --output=name 2>&1); then
+    echo "kubectl api-resources failed, cannot tell whether the EDP Keycloak CRDs are present: ${EDP_RESOURCES}" >&2
+    return 1
+  fi
+  if ! echo "${EDP_RESOURCES}" | grep -q '^keycloakclients\.'; then
     skip "EDP Keycloak operator CRDs not present on this cluster"
   fi
 
