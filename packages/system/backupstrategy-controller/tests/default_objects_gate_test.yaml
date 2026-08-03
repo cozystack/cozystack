@@ -1,0 +1,91 @@
+suite: DefaultObjectsGate wiring — the release the gate forces, and its RBAC
+
+# The Strategy CRs and the Velero BSL are rendered behind a `lookup` of the
+# BucketClaim this same chart creates, so a fresh install renders them empty
+# and helm-controller never re-renders (unchanged chart + values, drift
+# detection off) — the skip is permanent. The controller's DefaultObjectsGate
+# repairs that by forcing a real Helm upgrade on THIS release, so the release
+# coordinates it is given must be this chart's own release, and it must hold
+# the verbs to do it.
+
+templates:
+  - templates/deployment.yaml
+  - templates/rbac.yaml
+
+release:
+  name: backupstrategy-controller
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "gate targets this chart's own HelmRelease and the cozy-default BackupClass"
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+            value: backupstrategy-controller
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAMESPACE
+            value: cozy-backup-controller
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_BACKUPCLASS
+            value: cozy-default
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
+            value: cozy-velero
+
+  - it: "velero.bslEnabled=false: the BSL is not rendered, so the gate must not look for it"
+    template: templates/deployment.yaml
+    set:
+      velero.bslEnabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
+            value: cozy-velero
+      # The rest of the gate stays wired: the Strategy CRs still need it.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+            value: backupstrategy-controller
+
+  - it: "reconcileDefaultObjects=false: the gate is fully unwired (main.go disables it on an empty release name)"
+    template: templates/deployment.yaml
+    set:
+      backupStorage.reconcileDefaultObjects: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+            value: backupstrategy-controller
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_BACKUPCLASS
+            value: cozy-default
+
+  - it: "ClusterRole grants patch on helmreleases (forceAt stamp) and get on backupstoragelocations"
+    template: templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["helm.toolkit.fluxcd.io"]
+            resources: ["helmreleases"]
+            verbs: ["get", "create", "update", "patch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["velero.io"]
+            resources: ["backupstoragelocations"]
+            verbs: ["get"]

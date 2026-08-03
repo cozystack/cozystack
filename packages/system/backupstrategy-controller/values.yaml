@@ -118,6 +118,30 @@ backupStorage:
   # rendering. Tenants are projected lazily during BackupJob reconcile.
   systemNamespaces:
     - cozy-velero
+  # reconcileDefaultObjects enables the controller's DefaultObjectsGate.
+  #
+  # The Strategy CRs and the Velero BSL below are Helm-templated behind a
+  # `lookup` of the BucketClaim THIS chart creates, because the S3 bucket
+  # name is assigned by the COSI driver (bucket-<claim-UID>) and cannot be
+  # computed at render time. On a fresh install the lookup is empty and those
+  # templates render nothing — and helm-controller does not re-render a
+  # release whose chart and values did not change (drift detection is off on
+  # operator-generated HelmReleases), so the skip is PERMANENT. Clusters have
+  # run for months with only the BackupClass present and no Strategy CRs at
+  # all; recovery needed a hand-stamped reconcile.fluxcd.io/forceAt +
+  # requestedAt, because a plain reconcile request does not re-render.
+  #
+  # With this enabled the controller resolves the bucket name from the
+  # projector's source Secret (no new dependency, no lookup), checks that
+  # every object cozy-default routes to exists, and forces one Helm upgrade
+  # when any is missing — throttled, and a no-op in the steady state. It does
+  # NOT create the objects itself: their bodies are values-driven and Helm
+  # stays their single owner.
+  #
+  # Turn this off only if you manage the default Strategy CRs out of band and
+  # accept that a missed install-time render is never repaired. Watch
+  # cozystack_backup_default_objects_missing if you do.
+  reconcileDefaultObjects: true
 # velero — BSL rendering. The cozy-default BackupStorageLocation is
 # created in cozy-velero by templates/velero-bsl.yaml so endpoint/bucket/
 # region come from the same backupStorage block used by Strategy CRs and
@@ -129,7 +153,9 @@ backupStorage:
 # Velero CRDs are guaranteed to exist by the time this chart installs.
 # The BSL template additionally gates itself on a populated BucketClaim
 # status via the bucketName helper, so on a bootstrap install the BSL
-# materialises only after the platform Bucket reconciles. Setting this
+# materialises only after the platform Bucket reconciles AND the
+# DefaultObjectsGate has forced a real Helm upgrade (an interval reconcile
+# alone does not re-render). Setting this
 # to false is an explicit opt-out for clusters that disable VM backups
 # entirely and want to avoid the cluster-default BSL — in that case the
 # cozy-default-velero-vminstance / -vmdisk strategy CRs still ship but

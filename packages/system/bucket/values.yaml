@@ -1,2 +1,11 @@
 bucketName: "cozystack"
 users: {}
+# requireUserCredentials makes the render FAIL while a declared user's COSI
+# credentials Secret does not exist yet, instead of silently emitting no
+# <bucket>-<user>-credentials Secret. Keep it true on a live cluster: the
+# release retries (install/upgrade.remediation.retries: -1) and converges,
+# whereas a silent skip is permanent — helm-controller does not re-render an
+# unchanged release, so the Secret would never be created at all.
+# Set to false only for offline renders (`helm template`, `make show`, CI
+# diffs), where `lookup` always returns nil because no apiserver is reachable.
+requireUserCredentials: true

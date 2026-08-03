@@ -27,9 +27,22 @@
       cozystack.bucket-application + cozystack.objectstorage-controller
       ensures the controllers exist before this chart installs, but the
       BucketClaim status is reconciled asynchronously, so the first render
-      sees an unpopulated status and skips. Flux re-renders the
-      HelmRelease on its next reconcile (spec.interval); once COSI has
-      populated status.bucketName, the gated templates materialise.
+      sees an unpopulated status and skips.
+
+      The render CANNOT fail here instead: this chart is the producer of
+      the very Bucket the lookup reads, so a failed render would never
+      apply templates/bucket.yaml and the condition could never resolve.
+
+      Nor does Flux repair the skip on its own. helm-controller does not
+      re-render a release whose chart and values did not change — the
+      interval reconcile is a no-op for a healthy release, and drift
+      detection is off on operator-generated HelmReleases — so the skip is
+      PERMANENT, not a bootstrap window. Convergence is driven instead by
+      the controller's DefaultObjectsGate
+      (internal/backupcontroller/default_objects_gate.go), which forces a
+      real Helm upgrade (reconcile.fluxcd.io/forceAt + requestedAt) once
+      the bucket name is resolvable and any gated object is missing. See
+      backupStorage.reconcileDefaultObjects in values.yaml.
     - bucketNameOverride set → bypass the lookup and use it directly. This
       is the escape hatch for offline `helm template` / `--dry-run` renders
       (CI / local diffs), where lookup returns nil and no apiserver is
@@ -53,11 +66,13 @@
 {{- end -}}
 {{/* When neither path produces a value, emit the empty string.
      Strategy/BSL templates that include this helper must gate
-     themselves on a non-empty result and skip rendering until Flux
-     re-reconciles the HelmRelease (driven by spec.interval) once the
-     BucketClaim's COSI-assigned status.bucketName is populated. The
-     accompanying templates/bucket.yaml ALWAYS renders so the
-     BucketClaim CAN come into existence even on the first install. */}}
+     themselves on a non-empty result and skip rendering until a real
+     Helm upgrade re-runs this lookup with the BucketClaim's
+     COSI-assigned status.bucketName populated. That upgrade is forced by
+     the controller's DefaultObjectsGate — it does NOT happen on the
+     HelmRelease's interval reconcile. The accompanying
+     templates/bucket.yaml ALWAYS renders so the BucketClaim CAN come
+     into existence even on the first install. */}}
 {{- end -}}
 {{- end -}}
 
