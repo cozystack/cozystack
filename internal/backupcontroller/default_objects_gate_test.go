@@ -267,6 +267,56 @@ func TestCheckSkipsWhileBucketUnresolved(t *testing.T) {
 	}
 }
 
+// TestCheckSkipsWhileSourceSecretAbsent pins the state one moment earlier than
+// TestCheckSkipsWhileBucketUnresolved: the projector has not created the Secret
+// at all yet. Returning an error here would log a check failure on every tick
+// of the entire bootstrap window, for a state the gate documents as a no-op.
+func TestCheckSkipsWhileSourceSecretAbsent(t *testing.T) {
+	g, dyn := newGate(t,
+		[]client.Object{cozyDefaultBackupClass()},
+		helmReleaseObject(),
+	)
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check returned an error for an absent source Secret, want a silent no-op: %v", err)
+	}
+	if len(missing) != 0 || forced {
+		t.Fatalf("missing = %v, forced = %v, want none while the source Secret is absent", missing, forced)
+	}
+	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("HelmRelease forced before the source Secret existed: %v", ann)
+	}
+}
+
+// TestCheckTimeoutStaysBelowPeriod pins the bound on a single check. The ticker
+// loop is sequential and the manager context is only cancelled at shutdown, so
+// an unbounded check that hangs on a stalled API call stops every later check
+// for the life of the pod.
+func TestCheckTimeoutStaysBelowPeriod(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		period time.Duration
+		want   time.Duration
+	}{
+		{"unset falls back to the cap", 0, 30 * time.Second},
+		{"default period halves", time.Minute, 30 * time.Second},
+		{"short period halves", 10 * time.Second, 5 * time.Second},
+		{"long period is capped", time.Hour, 30 * time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &DefaultObjectsGate{Period: tc.period}
+			got := g.checkTimeout()
+			if got != tc.want {
+				t.Fatalf("checkTimeout() = %v, want %v", got, tc.want)
+			}
+			if tc.period > 0 && got >= tc.period {
+				t.Fatalf("checkTimeout() = %v, must stay below Period %v", got, tc.period)
+			}
+		})
+	}
+}
+
 // TestCheckThrottlesRepeatedForces pins the throttle. A condition a
 // re-render cannot fix (missing CRD, unreachable bucket) must not turn into
 // a hot loop of Helm upgrades against helm-controller.

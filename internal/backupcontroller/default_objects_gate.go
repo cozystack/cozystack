@@ -199,8 +199,32 @@ func (g *DefaultObjectsGate) Start(ctx context.Context) error {
 	}
 }
 
+// checkTimeout bounds a single check. It stays below Period so a slow check
+// cannot overlap the next tick, and is capped so a long Period does not mean a
+// correspondingly long stall.
+func (g *DefaultObjectsGate) checkTimeout() time.Duration {
+	const maxTimeout = 30 * time.Second
+	if g.Period <= 0 {
+		return maxTimeout
+	}
+	if half := g.Period / 2; half < maxTimeout {
+		return half
+	}
+	return maxTimeout
+}
+
 func (g *DefaultObjectsGate) checkAndLog(ctx context.Context, logger logr.Logger) {
-	missing, forced, err := g.Check(ctx)
+	// Bound every tick. Check makes several sequential API calls (Secret get,
+	// BackupClass get, one Get per routed strategy, HelmRelease patch) and the
+	// manager context is only cancelled at shutdown, so an API server that
+	// stalls on any one of them would block here indefinitely. The loop that
+	// drives this is sequential, so that single stuck call would stop all
+	// later checks for the life of the pod: the recovery this gate exists to
+	// provide would go silent, with a stale gauge and no further log line, and
+	// only a restart would bring it back.
+	checkCtx, cancel := context.WithTimeout(ctx, g.checkTimeout())
+	defer cancel()
+	missing, forced, err := g.Check(checkCtx)
 	switch {
 	case err != nil:
 		// Info, not Error: every branch here is either transient (the
@@ -225,12 +249,20 @@ func (g *DefaultObjectsGate) checkAndLog(ctx context.Context, logger logr.Logger
 // a forced upgrade was issued on this call.
 //
 // It is a no-op while the bucket name is unresolvable: forcing then would
-// re-render the same empty lookup. The bucket name is read from the
-// projector's source Secret rather than from the BucketClaim, so the gate
-// needs no objectstorage RBAC and works for the external-S3 path too.
+// re-render the same empty lookup. That covers both an absent source Secret
+// and one whose bucket name is still empty, which are the same bootstrap state
+// seen a moment apart. The bucket name is read from the projector's source
+// Secret rather than from the BucketClaim, so the gate needs no objectstorage
+// RBAC and works for the external-S3 path too.
 func (g *DefaultObjectsGate) Check(ctx context.Context) ([]string, bool, error) {
 	src := &corev1.Secret{}
 	if err := g.Client.Get(ctx, types.NamespacedName{Namespace: g.Config.SourceNamespace, Name: g.Config.SourceSecretName}, src); err != nil {
+		if apierrors.IsNotFound(err) {
+			// The projector has not created the Secret yet. Same no-op as an
+			// unresolved bucket name: without it, every tick of the whole
+			// bootstrap window logs a check failure for an expected state.
+			return nil, false, nil
+		}
 		return nil, false, fmt.Errorf("get source credentials Secret %s/%s: %w", g.Config.SourceNamespace, g.Config.SourceSecretName, err)
 	}
 	creds, err := parseSourceSecret(src)
