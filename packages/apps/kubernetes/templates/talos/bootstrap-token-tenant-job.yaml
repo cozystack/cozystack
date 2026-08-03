@@ -118,13 +118,22 @@ spec:
             - name: kubeconfig
               mountPath: /etc/kubernetes/kubeconfig
               readOnly: true
+          {{- /* 512Mi, not 256Mi: this container shells out to `kubectl apply`,
+                 which loads discovery plus the aggregated OpenAPI document of
+                 the target apiserver into memory before it can compute a patch.
+                 The tenant apiserver starts small but grows a CRD at a time as
+                 addons land (cert-manager, cilium, flux, velero), and this Job
+                 re-runs on every upgrade — so the footprint here tracks tenant
+                 growth. At 256Mi it is OOMKilled at exit 137 and, under
+                 restartPolicy: OnFailure, retries invisibly while the Job
+                 status stays `active`. Request stays at 64Mi. */}}
           resources:
             requests:
               cpu: 10m
               memory: 64Mi
             limits:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
