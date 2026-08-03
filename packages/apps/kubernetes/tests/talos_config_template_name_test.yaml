@@ -1,0 +1,113 @@
+suite: TalosConfigTemplate content-hash name
+
+# TalosConfigTemplate.spec is immutable (webhook
+# vtalosconfigtemplate.cluster.x-k8s.io), so the template can only ever be
+# created, never updated: applied under a fixed name it freezes the worker
+# machine config at first creation and every later change is rejected
+# server-side (cozystack/cozystack#3515). The name therefore carries a hash of
+# the rendered spec, the same way KubevirtMachineTemplate is named.
+#
+# Two independent templates have to agree on that name — the talos-reconcile Job
+# creates the object, and the MachineDeployment's bootstrap.configRef points at
+# it. If they diverge, CAPI blocks on "templates do not exist" forever and no
+# worker is ever created. helm-unittest cannot compare two templates in one
+# assertion, so the agreement is pinned as a shared literal across the paired
+# tests below: the `-<hash>` suffixes MUST be identical within each pair.
+#
+# The literals change whenever the rendered machine config changes. That is the
+# signal that the upgrade will roll the workers onto a new bootstrap config,
+# which is the intended behaviour and the point of the fix.
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  - it: the Job applies the TalosConfigTemplate under the hashed name
+    template: templates/talos/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="TCT_NAME")].value
+          value: test-k8s-md0-35293f
+      # The heredoc must use that name and never a fixed one — a fixed name is
+      # what made the immutability webhook reject the apply.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: \$\{TCT_NAME\}'
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'name: \$\{RELEASE\}-\$\{GROUP_NAME\}'
+
+  - it: the MachineDeployment bootstrap configRef points at the same hashed name
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    asserts:
+      # Same literal as the paired test above.
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: test-k8s-md0-35293f
+      # Shape: <release>-<group>-<6 hex>.
+      - matchRegex:
+          path: spec.template.spec.bootstrap.configRef.name
+          pattern: ^test-k8s-md0-[0-9a-f]{6}$
+
+  # GPU node groups add `nodeLabels: {gpu: "on"}` to the machine config, so the
+  # spec — and therefore the name — differs from the pair above. This is exactly
+  # the propagation that was impossible before the fix: new content lands on a
+  # NEW template instead of a rejected mutation, and CAPI rolls the workers.
+  - it: a machine-config change rotates the name the Job applies
+    template: templates/talos/talos-reconcile-job.yaml
+    documentSelector:
+      path: kind
+      value: Job
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus:
+            - name: nvidia.com/GH200
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].env[?(@.name=="TCT_NAME")].value
+          value: test-k8s-md0-52cee2
+
+  - it: a machine-config change rotates the name the MachineDeployment references
+    template: templates/cluster.yaml
+    documentSelector:
+      path: kind
+      value: MachineDeployment
+    set:
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus:
+            - name: nvidia.com/GH200
+    asserts:
+      # Same literal as the paired test above.
+      - equal:
+          path: spec.template.spec.bootstrap.configRef.name
+          value: test-k8s-md0-52cee2

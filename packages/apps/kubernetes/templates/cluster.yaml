@@ -704,7 +704,14 @@ metadata:
        inputs appear — in parallel with the rest of the install. The
        MachineDeployment below still references the TCT name; CAPI's
        Machine controller blocks on its absence and unblocks the moment
-       the Job applies it. */}}
+       the Job applies it.
+
+       The name it references carries a hash of the rendered machine config,
+       computed here from the same named template the Job renders into its
+       heredoc, because TalosConfigTemplate.spec is immutable and can only ever
+       be created, never updated — see
+       templates/talos/_talosconfigtemplate.tpl. */}}
+{{- $talosConfigTemplateName := printf "%s-%s-%s" $.Release.Name $groupName (include "kubernetes.talosConfigTemplateHash" (dict "root" $ "group" $group)) }}
 ---
 {{- $context := deepCopy $ }}
 {{- $_ := set $context "group" $group }}
@@ -794,7 +801,7 @@ spec:
         configRef:
           apiVersion: bootstrap.cluster.x-k8s.io/v1alpha3
           kind: TalosConfigTemplate
-          name: {{ $.Release.Name }}-{{ $groupName }}
+          name: {{ $talosConfigTemplateName }}
           namespace: {{ $.Release.Namespace }}
       clusterName: {{ $.Release.Name }}
       infrastructureRef:
