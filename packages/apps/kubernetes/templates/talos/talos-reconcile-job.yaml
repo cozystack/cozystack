@@ -447,13 +447,31 @@ spec:
                               disabled: true
               EOF
               echo "[$(date -u +%H:%M:%S)] TalosConfigTemplate ${RELEASE}-${GROUP_NAME} applied"
+          {{- /* Memory: `kubectl apply` builds an in-memory model of the target
+                 API surface before it can compute a patch — full discovery plus
+                 the aggregated OpenAPI document, which on a Cozystack management
+                 cluster spans several hundred CRDs. At the former 256Mi limit
+                 this container was OOMKilled (exit 137) part-way through the
+                 script: it got as far as the KamajiControlPlane certSANs patch
+                 and died before the TalosConfigTemplate apply, so nothing
+                 downstream of that point ever ran. And the failure was silent —
+                 restartPolicy: OnFailure with backoffLimit: 30 keeps respawning
+                 the container while the Job-level status stays `active`, so the
+                 only symptom is a pod with a growing restart count. The request
+                 stays at 64Mi (the container spends most of its life idle in the
+                 input-wait loop above, and the limit is only touched during the
+                 apply), so the headroom costs nothing in scheduling terms; it
+                 does count against a tenant ResourceQuota on limits.memory, but
+                 only for the tens of seconds the Job lives. Operators whose
+                 management cluster carries an even larger API surface raise
+                 talos.reconcileJobMemoryLimit. */}}
           resources:
             requests:
               cpu: 10m
               memory: 64Mi
             limits:
               cpu: 100m
-              memory: 256Mi
+              memory: {{ $.Values.talos.reconcileJobMemoryLimit | default "512Mi" | quote }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:

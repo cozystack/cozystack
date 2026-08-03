@@ -287,6 +287,7 @@ images:
 ## @field {string} schematicID - Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 ## @field {string} imageFactoryURL - Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
 ## @field {string} installerRepository - OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
+## @field {quantity} [reconcileJobMemoryLimit]="512Mi" - Memory limit for the kubectl container of the chart-internal `talos-reconcile` Job. That Job runs `kubectl apply` against the management cluster, which loads full discovery plus the aggregated OpenAPI document (several hundred CRDs on Cozystack) into memory; too low a limit gets the container OOMKilled mid-run, and because it uses `restartPolicy: OnFailure` the Job status stays `active` while the pod silently loops. Raise on management clusters with an unusually large API surface. Changing this value rotates the Job's content-hash name, so the next reconcile creates a fresh Job that re-applies a byte-identical TalosConfigTemplate — a CAPI no-op that does not roll existing workers.
 
 ## @param {Talos} talos - Talos worker image configuration.
 talos:
@@ -294,6 +295,7 @@ talos:
   schematicID: "ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
   imageFactoryURL: "https://factory.talos.dev"
   installerRepository: "factory.talos.dev/installer"
+  reconcileJobMemoryLimit: "512Mi"
 
 ##
 ## @section Node Health Check

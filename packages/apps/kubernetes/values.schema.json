@@ -954,6 +954,20 @@
           "type": "string",
           "default": "factory.talos.dev/installer"
         },
+        "reconcileJobMemoryLimit": {
+          "description": "Memory limit for the kubectl container of the chart-internal `talos-reconcile` Job. That Job runs `kubectl apply` against the management cluster, which loads full discovery plus the aggregated OpenAPI document (several hundred CRDs on Cozystack) into memory; too low a limit gets the container OOMKilled mid-run, and because it uses `restartPolicy: OnFailure` the Job status stays `active` while the pod silently loops. Raise on management clusters with an unusually large API surface. Changing this value rotates the Job's content-hash name, so the next reconcile creates a fresh Job that re-applies a byte-identical TalosConfigTemplate — a CAPI no-op that does not roll existing workers.",
+          "default": "512Mi",
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        },
         "schematicID": {
           "description": "Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.",
           "type": "string",
