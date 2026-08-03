@@ -110,10 +110,19 @@
         The %.6f round-trip strips binary-float noise (0.25/10*1000 can come
         out as 25.000000000000004) so an exactly divisible value keeps its
         current rendering instead of being bumped to the next milli-CPU.
+        That tolerance has a floor: a request below 0.0000005m normalizes to
+        zero, which would look exactly divisible and render as the raw float
+        (1m / 10000000 came out as "1e-10", not a valid quantity). Any
+        positive request that rounds to zero milli-CPU is therefore clamped to
+        1m, the smallest quantity that is both valid and non-zero. Reaching it
+        takes a ratio above two million, so this guards the arbitrary-ratio
+        contract rather than any realistic configuration.
 */}}
 {{-       $cpuRequestMilli := mulf $cpuRequestF64 1000.0 | printf "%.6f" | float64 }}
 {{-       $cpuRequestMilliCeil := ceil $cpuRequestMilli }}
-{{-       if eq $cpuRequestMilli $cpuRequestMilliCeil }}
+{{-       if and (gt $cpuRequestF64 0.0) (eq $cpuRequestMilliCeil 0.0) }}
+{{-         $_ := set $output.requests $k "1m" }}
+{{-       else if eq $cpuRequestMilli $cpuRequestMilliCeil }}
 {{-         $_ := set $output.requests $k ($cpuRequestF64 | toString) }}
 {{-       else }}
 {{-         $_ := set $output.requests $k (printf "%dm" (int64 $cpuRequestMilliCeil)) }}

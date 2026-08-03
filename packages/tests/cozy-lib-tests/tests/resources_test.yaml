@@ -42,6 +42,36 @@ tests:
           path: spec.containers[0].resources.requests.cpu
           value: 334m
 
+  # Boundary of the %.6f tolerance: below 0.0000005m the normalized value is
+  # zero, which looks exactly divisible and rendered the raw float ("1e-10"),
+  # not a valid quantity. Clamp to the smallest valid non-zero request instead.
+  - it: clamps a positive request that rounds to zero milli-CPU to 1m
+    set:
+      _cluster:
+        cpu-allocation-ratio: 10000000
+      resources:
+        cpu: 1m
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: 1m
+      - equal:
+          path: spec.containers[0].resources.limits.cpu
+          value: 1m
+
+  - it: leaves a genuinely zero CPU request at zero
+    set:
+      _cluster:
+        cpu-allocation-ratio: 4
+      resources:
+        cpu: 0
+        memory: 256Mi
+    asserts:
+      - equal:
+          path: spec.containers[0].resources.requests.cpu
+          value: "0"
+
   - it: keeps the rendering unchanged on the default ratio
     set:
       resources:
