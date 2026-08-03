@@ -1,5 +1,5 @@
 apiVersion: v2
-appVersion: 1.28.1
+appVersion: 1.28.2
 dependencies:
 - alias: monitoring
   condition: monitoring.grafanaDashboard.create

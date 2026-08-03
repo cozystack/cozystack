@@ -1,0 +1,38 @@
+suite: CNPG operator and CRDs stay aligned
+
+templates:
+  - charts/cloudnative-pg/templates/deployment.yaml
+  - charts/cloudnative-pg/templates/rbac.yaml
+  - charts/cloudnative-pg/templates/config.yaml
+  - charts/cloudnative-pg/templates/monitoring-configmap.yaml
+  - charts/cloudnative-pg/templates/crds/crds.yaml
+
+release:
+  name: postgres-operator
+  namespace: cozy-postgres-operator
+
+tests:
+  - it: runs the CNPG 1.28.2 operator image
+    template: charts/cloudnative-pg/templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].image
+          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.28.2
+      - equal:
+          path: spec.template.spec.containers[0].env[0].value
+          value: ghcr.io/cloudnative-pg/cloudnative-pg:1.28.2
+      - equal:
+          path: metadata.labels["app.kubernetes.io/version"]
+          value: 1.28.2
+
+  - it: ships the CNPG 1.28.2 CRDs patched in lockstep with the operator
+    template: charts/cloudnative-pg/templates/crds/crds.yaml
+    asserts:
+      - documentIndex: 0
+        equal:
+          path: metadata.annotations["controller-gen.kubebuilder.io/version"]
+          value: v0.20.1
+      - documentIndex: 0
+        equal:
+          path: spec.versions[0].schema.openAPIV3Schema.properties.status.properties.instanceID.properties.sessionID.type
+          value: string
