@@ -8,7 +8,7 @@ contact_links:
     about: Changes that affect multiple components or APIs, or that need a decision before any code is written (a new subsystem, an API change with tradeoffs). Open a design-proposal PR in the community repo.
   - name: 🏛️ Governance, process, or community
     url: https://github.com/cozystack/community/issues/new
-    about: Maintainership, decision-making, meetings, working groups, community resources — these live in the community repo.
+    about: Decision-making, meetings, working groups, community resources — these live in the community repo. Exception, kept here because MAINTAINERS.md, CODEOWNERS and the ladder all live in this repo: nominating someone to Reviewer or Maintainer, for which use the Role nomination template above.
   - name: 💬 Chat (Telegram / CNCF Slack)
     url: https://t.me/cozystack
     about: Real-time discussion with the Cozystack community.
