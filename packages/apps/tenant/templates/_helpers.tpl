@@ -53,6 +53,38 @@
   typing, so the "key absent" form is what distinguishes "unset"
   from explicit `false`.
 */}}
+{{/*
+  tenant.ancestorTenantLabels emits the full set of
+  `tenant.cozystack.io/<ancestor>: ""` namespace labels for the tenant whose
+  namespace name is passed as the single argument (e.g. "tenant-ktj-htdev").
+
+  Every tenant descends from tenant-root, so that label is always emitted.
+  The remaining ancestors are encoded in the namespace name itself: tenant.name
+  constructs each child namespace as `<parent-namespace>-<word>`, so every
+  progressive dash-prefix of the name is a real ancestor namespace
+  (tenant-ktj-htdev -> tenant-ktj, tenant-ktj-htdev). The last prefix is the
+  tenant's own name, so its self-label is included too.
+
+  Deriving the chain from the name (rather than from a lookup of the parent
+  namespace's labels) is deterministic: it needs no cluster state, renders
+  identically offline, and converges on every reconcile regardless of the
+  order in which parent and child HelmReleases reconcile. It replaces an
+  earlier splitList over `.Release.Namespace` that only ever reached one level
+  up and therefore dropped tenant-root for tenants at depth >= 2 — breaking the
+  `<ancestor>-egress` CiliumClusterwideNetworkPolicy that grants an ancestor
+  reachability to its descendants via the `tenant.cozystack.io/<ancestor>`
+  namespace label.
+*/}}
+{{- define "tenant.ancestorTenantLabels" -}}
+{{- $parts := splitList "-" . -}}
+tenant.cozystack.io/tenant-root: ""
+{{- range $i, $v := $parts }}
+{{- if ne $i 0 }}
+{{ printf "tenant.cozystack.io/%s: \"\"" (join "-" (slice $parts 0 (add $i 1))) }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
 {{- define "tenant.gatewayEffective" -}}
 {{- if kindIs "invalid" .Values.gateway -}}
 false
