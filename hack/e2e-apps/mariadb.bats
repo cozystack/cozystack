@@ -40,7 +40,16 @@ EOF
   timeout 60 sh -ec "until kubectl -n tenant-test get hr mariadb-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr mariadb-$name --timeout=5m --for=condition=ready
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
-  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  # The chart hands the operator a MariaDB CR and ships no built-in workload, so
+  # the HelmRelease above goes Ready as soon as helm applies the manifests — it
+  # never waits for a pod. This is the first gate that does: an endpoint address
+  # appears only once a replica has passed its startup and then its readiness
+  # probe. The startup probe grants each replica 310s of first-boot budget (see
+  # packages/apps/mariadb/templates/mariadb.yaml for why), so a ceiling under
+  # that fails runs the probe was still willing to wait for. One ready address
+  # satisfies this, so it has to clear one budget, not two, plus the operator
+  # reconcile, PVC bind and image pull that precede it.
+  timeout 600 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 60 sh -ec "until kubectl -n tenant-test get statefulset.apps/mariadb-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=110s --for=jsonpath='{.status.replicas}'=2
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name-metrics -o jsonpath='{.spec.ports[0].port}' | grep -q '9104'; do sleep 10; done"
@@ -99,7 +108,11 @@ EOF
   # With replicas=1 the operator provisions the bare <name> service (no
   # -primary/-secondary): assert it exists and has an endpoint.
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name -o jsonpath='{.spec.ports[0].port}' | grep -q '3306'; do sleep 10; done"
-  timeout 80 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  # Same gate as the replicated case above — the HelmRelease does not wait for a
+  # pod, so this is where first boot is actually covered. One replica means one
+  # 310s startup budget, plus the operator reconcile, PVC bind and image pull
+  # ahead of it.
+  timeout 600 sh -ec "until kubectl -n tenant-test get endpoints mariadb-$name -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 60 sh -ec "until kubectl -n tenant-test get statefulset.apps/mariadb-$name >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait statefulset.apps/mariadb-$name --timeout=110s --for=jsonpath='{.status.replicas}'=1
   timeout 80 sh -ec "until kubectl -n tenant-test get svc mariadb-$name-metrics -o jsonpath='{.spec.ports[0].port}' | grep -q '9104'; do sleep 10; done"
