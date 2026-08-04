@@ -92,6 +92,15 @@ func fluxAIODeployment() *appsv1.Deployment {
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 								}},
 								{Name: "TUF_ROOT", Value: "/tmp/.sigstore"},
+								// Corporate-proxy env the installer puts on
+								// flux-aio; harmless there but hangs a
+								// standalone shard at startup.
+								{Name: "HTTP_PROXY", Value: "http://proxy.example:3128"},
+								{Name: "HTTPS_PROXY", Value: "http://proxy.example:3128"},
+								{Name: "NO_PROXY", Value: ".svc"},
+								{Name: "http_proxy", Value: "http://proxy.example:3128"},
+								{Name: "https_proxy", Value: "http://proxy.example:3128"},
+								{Name: "no_proxy", Value: ".svc"},
 							},
 							VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
 						},
@@ -188,6 +197,11 @@ func TestBuildShardDeployment(t *testing.T) {
 			// A non-hostNetwork pod dialing the node-local KubePrism endpoint
 			// crashloops on "dial tcp [::1]:7445: connect: connection refused".
 			t.Fatalf("node-local apiserver endpoint env leaked through: %s", e.Name)
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+			"http_proxy", "https_proxy", "no_proxy":
+			// A standalone shard behind an unreachable proxy hangs at startup
+			// and crashloops before it ever serves /healthz.
+			t.Fatalf("corporate-proxy env leaked through: %s", e.Name)
 		}
 	}
 	envNames := make([]string, 0, len(hc.Env))

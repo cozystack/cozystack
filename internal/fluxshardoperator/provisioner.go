@@ -316,6 +316,17 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 		// is not hostNetwork, so it must fall back to the in-cluster defaults.
 		case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
 			continue
+		// Corporate-proxy env inherited from flux-aio. A standalone shard needs
+		// no external egress (source-controller fetches artifacts), so the proxy
+		// only harms it: a startup HTTPS call that stalls through an unreachable
+		// proxy blocks the manager before it serves /healthz, and the liveness
+		// probe then crashloops the pod indefinitely. flux-aio survives only
+		// because it starts once and never restarts. Drop the proxy env (and the
+		// now-pointless NO_PROXY) so the shard talks to the in-cluster apiserver
+		// directly.
+		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
+			"http_proxy", "https_proxy", "no_proxy":
+			continue
 		}
 		env = append(env, e)
 	}
