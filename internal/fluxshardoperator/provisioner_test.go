@@ -8,6 +8,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // fluxAIODeployment models the relevant shape of the flux-aio "flux"
@@ -103,6 +104,16 @@ func fluxAIODeployment() *appsv1.Deployment {
 								{Name: "no_proxy", Value: ".svc"},
 							},
 							VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
+							LivenessProbe: &corev1.Probe{
+								ProbeHandler: corev1.ProbeHandler{
+									HTTPGet: &corev1.HTTPGetAction{
+										Path: "/healthz",
+										Port: intstr.FromString("healthz-hc"),
+									},
+								},
+								PeriodSeconds:    10,
+								FailureThreshold: 3,
+							},
 						},
 						{Name: "notification-controller", Image: "ghcr.io/fluxcd/notification-controller:v1.8.0"},
 					},
@@ -214,6 +225,16 @@ func TestBuildShardDeployment(t *testing.T) {
 
 	if hc.Resources.Limits.Memory().String() != "1Gi" {
 		t.Fatalf("resources override not applied: %v", hc.Resources)
+	}
+
+	if hc.StartupProbe == nil {
+		t.Fatal("startupProbe must be added so a slow start is not liveness-killed into a crashloop")
+	}
+	if hc.StartupProbe.HTTPGet == nil || hc.StartupProbe.HTTPGet.Path != "/healthz" {
+		t.Fatalf("startupProbe must reuse the liveness /healthz handler: %+v", hc.StartupProbe)
+	}
+	if hc.StartupProbe.FailureThreshold < 10 {
+		t.Fatalf("startupProbe budget too small to cover a slow cache sync: %d", hc.StartupProbe.FailureThreshold)
 	}
 }
 

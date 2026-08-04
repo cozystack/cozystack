@@ -338,6 +338,22 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 	mergeResourceList(&hc.Resources.Requests, cfg.ShardResources.Requests)
 	mergeResourceList(&hc.Resources.Limits, cfg.ShardResources.Limits)
 
+	// Guard startup with a startupProbe derived from the liveness handler.
+	// Without it the inherited ~30s liveness window kills a controller that is
+	// still syncing caches (a slow start on a large cluster, or a transient
+	// dependency), turning any slow start into an unrecoverable crashloop. The
+	// generous startup budget defers liveness until the manager is serving,
+	// then liveness still catches a wedged running pod.
+	if hc.LivenessProbe != nil && hc.StartupProbe == nil {
+		sp := hc.LivenessProbe.DeepCopy()
+		sp.InitialDelaySeconds = 0
+		sp.PeriodSeconds = 10
+		sp.TimeoutSeconds = 1
+		sp.SuccessThreshold = 1
+		sp.FailureThreshold = 30
+		hc.StartupProbe = sp
+	}
+
 	mounted := map[string]bool{}
 	for _, m := range hc.VolumeMounts {
 		mounted[m.Name] = true
