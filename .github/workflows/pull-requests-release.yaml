@@ -3,8 +3,15 @@ name: "Releasing PR"
 on:
   pull_request:
     types: [closed]
-    paths-ignore:
-      - 'docs/**/*'
+    # No paths filter. A `paths-ignore: docs/**/*` used to live here as an
+    # optimization, but the promote PR now carries docs/changelogs/vX.Y.Z.md —
+    # and `Prepare stable branch` explicitly tolerates producing no tag-string
+    # changes ("digests already stable"). That combination can yield a docs-only
+    # promote PR, which the filter would drop: no finalize run, so no tag, no
+    # release, and no error anywhere. Filtering is left entirely to the `if:`
+    # gate below (merged + `release` label + release-bot author), which is what
+    # actually decides whether this workflow should do anything. The cost is a
+    # skipped job on unrelated closed PRs.
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
 concurrency:
@@ -74,6 +81,15 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          # Do NOT persist GITHUB_TOKEN as http.extraheader. Every tag/branch push
+          # below re-injects the app token via `git remote set-url`, but a persisted
+          # extraheader silently wins over the URL credential — so those pushes
+          # would authenticate as GITHUB_TOKEN, and a GITHUB_TOKEN push creates no
+          # workflow run (GitHub anti-recursion). That is exactly why v1.6.0's
+          # stable tag triggered no tags.yaml run (the generate-changelog and
+          # update-website-docs backstops never fired). With this false, the set-url
+          # app token authenticates, matching how promote-rc.yaml already pushes.
+          persist-credentials: false
 
       # Create the release tag at the merge commit — write-once.
       #
@@ -312,6 +328,39 @@ jobs:
               console.log(`🏷️  ${tag} is the highest version, make_latest: true`);
             }
 
+            // Release body comes from the changelog that merged with THIS PR
+            // (promote-rc.yaml commits it onto the release-X.Y.Z branch), read
+            // from the merge commit already checked out here.
+            //
+            // Deliberately not left to update-releasenotes.yaml: that workflow
+            // triggers on pushes to main touching docs/changelogs/v*.md, so it
+            // would race this job on the very same push — and if it won, it
+            // would find no published release yet, skip, and never fire again,
+            // leaving the release body permanently empty. It also only watches
+            // main, so a patch release whose promote PR targets release-X.Y
+            // would never be synced at all. Reading the file here is both
+            // race-free and branch-agnostic; update-releasenotes.yaml remains
+            // for later maintainer edits and manual re-syncs.
+            const fs = require('fs');
+            const changelogPath = `docs/changelogs/${tag}.md`;
+            let body;
+            if (fs.existsSync(changelogPath)) {
+              const raw = fs.readFileSync(changelogPath, 'utf8');
+              // Last line of defence before the body becomes public and
+              // immutable-by-convention. promote-rc.yaml validates the changelog
+              // structurally, but it can also arrive by hand-commit, and an
+              // empty or whitespace-only file here would blank the release notes
+              // more thoroughly than publishing the draft's body would.
+              if (raw.trim().length === 0) {
+                console.log(`::warning::${changelogPath} is empty or whitespace-only — refusing to use it as the release body for ${tag}. Publishing with the draft's existing body instead.`);
+              } else {
+                body = raw;
+                console.log(`📝 Release body from ${changelogPath} (${body.length} bytes)`);
+              }
+            } else {
+              console.log(`::warning::${changelogPath} not found in the merge commit — publishing ${tag} with the draft's existing body. Add the changelog and re-run 'Update Release Notes' to backfill it.`);
+            }
+
             // Publish the release
             await github.rest.repos.updateRelease({
               owner: context.repo.owner,
@@ -319,7 +368,8 @@ jobs:
               release_id: draft.id,
               draft: false,
               prerelease: isRc,
-              make_latest: makeLatest
+              make_latest: makeLatest,
+              ...(body ? { body } : {})
             });
             console.log(`🚀 Published release ${tag}`);
 
