@@ -53,6 +53,25 @@ EOF
   # for some reason it takes longer for the read-only endpoint to be ready
   #timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-ro -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
   timeout 120 sh -ec "until kubectl -n tenant-test get endpoints postgres-$name-rw -o jsonpath='{.subsets[*].addresses[*].ip}' | grep -q '[0-9]'; do sleep 10; done"
+  backup_name="$name-session-id-schema"
+  kubectl -n tenant-test delete backups.postgresql.cnpg.io "$backup_name" --ignore-not-found --timeout=2m
+  kubectl -n tenant-test apply -f - <<EOF
+apiVersion: postgresql.cnpg.io/v1
+kind: Backup
+metadata:
+  name: $backup_name
+spec:
+  cluster:
+    name: postgres-$name
+EOF
+  kubectl -n tenant-test patch backups.postgresql.cnpg.io "$backup_name" --subresource=status --type=merge -p='{"status":{"phase":"failed","instanceID":{"podName":"schema-probe","sessionID":"cozystack-schema-probe"}}}'
+  actual_session_id="$(kubectl -n tenant-test get backups.postgresql.cnpg.io "$backup_name" -o jsonpath='{.status.instanceID.sessionID}')"
+  [ "$actual_session_id" = "cozystack-schema-probe" ] || {
+    echo "Backup status sessionID was not preserved by the API server"
+    kubectl -n tenant-test get backups.postgresql.cnpg.io "$backup_name" -o yaml
+    false
+  }
+  kubectl -n tenant-test delete backups.postgresql.cnpg.io "$backup_name" --timeout=2m
   kubectl -n tenant-test delete postgreses.apps.cozystack.io $name
   kubectl -n tenant-test delete job.batch/postgres-$name-init-job
 }
