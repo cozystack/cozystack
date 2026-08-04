@@ -1,0 +1,23 @@
+diff --git a/internal/runtime/controller.go b/internal/runtime/controller.go
+index 902116a..4cbe4c3 100644
+--- a/internal/runtime/controller.go
++++ b/internal/runtime/controller.go
+@@ -171,10 +171,14 @@ func NewObjectStorageControllerWithClientset(identity string, leaderLockName str
+ 		threadiness:  threads,
+ 
+ 		ResyncPeriod: 30 * time.Second,
+-		// leader election
+-		LeaseDuration: 150 * time.Second,
+-		RenewDeadline: 120 * time.Second,
+-		RetryPeriod:   60 * time.Second,
++		// Leader election. The COSI controller and the per-driver sidecar both
++		// run single-replica, so leader election provides no HA — it only gates
++		// how fast a freshly recreated pod takes over. Use the standard
++		// Kubernetes leader-election timings instead of the upstream 150/120/60s
++		// so a recreated pod resumes reconciliation in ~15s rather than ~150s.
++		LeaseDuration: 15 * time.Second,
++		RenewDeadline: 10 * time.Second,
++		RetryPeriod:   2 * time.Second,
+ 
+ 		opMap: &sync.Map{},
+ 	}, nil

@@ -103,6 +103,7 @@ jobs:
               // area/storage
               'seaweedfs':           'area/storage',
               'seaweedfs-cosi-driver': 'area/storage',
+              'objectstorage-controller': 'area/storage',
               'bucket':              'area/storage',
               'linstor':             'area/storage',
               'velero':              'area/storage',

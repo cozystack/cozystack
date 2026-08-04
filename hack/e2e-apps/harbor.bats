@@ -43,13 +43,22 @@ EOF
   timeout 60 sh -ec "until kubectl -n tenant-test get hr $release >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait hr $release --timeout=5m --for=condition=ready
 
-  # Wait for COSI to provision bucket. The driver creates the Bucket and grants
-  # access quickly, but the central COSI controller's propagation of the Bucket's
-  # readiness back onto the namespaced BucketClaim can lag several minutes on a
-  # loaded runner, so allow the same 10m budget the dependent HelmRelease gets.
+  # Wait for COSI to provision the bucket. The driver creates the backend Bucket
+  # and grants access; the central COSI controller requeues the BucketClaim until
+  # the Bucket's readiness has propagated, so it converges within tens of seconds.
+  # A frozen claim (the propagation race this guards against) never converges, so
+  # the tight bound surfaces that regression instead of masking it.
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketclaims.objectstorage.k8s.io $release-registry \
-    --timeout=600s --for=jsonpath='{.status.bucketReady}'=true
+    --timeout=120s --for=jsonpath='{.status.bucketReady}'=true || {
+    echo "=== BucketClaim did not converge to bucketReady=true ==="
+    kubectl -n tenant-test get bucketclaims.objectstorage.k8s.io $release-registry -o yaml 2>&1 || true
+    echo "=== backend Buckets (cluster-scoped) ==="
+    kubectl get buckets.objectstorage.k8s.io -o wide 2>&1 || true
+    echo "=== objectstorage-controller ==="
+    kubectl -n cozy-objectstorage-controller get pods 2>&1 || true
+    false
+  }
   timeout 60 sh -ec "until kubectl -n tenant-test get bucketaccesses.objectstorage.k8s.io $release-registry >/dev/null 2>&1; do sleep 2; done"
   kubectl -n tenant-test wait bucketaccesses.objectstorage.k8s.io $release-registry \
     --timeout=60s --for=jsonpath='{.status.accessGranted}'=true
