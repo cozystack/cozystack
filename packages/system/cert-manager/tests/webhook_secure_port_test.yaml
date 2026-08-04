@@ -1,0 +1,64 @@
+suite: cert-manager webhook secure port
+
+# Keeps the webhook off the kubelet's port. The values.yaml override this
+# guards carries the reasoning; it is not repeated here.
+#
+# The first test is the regression guard: it fails if the override is dropped
+# or if `make update` re-vendors a chart that ignores it, and it asserts the
+# listener flag together with the advertised containerPort so the two cannot
+# drift apart. The other two pin preconditions the fix depends on and already
+# hold on their own — that the port lives in the Pod's network namespace
+# rather than the node's, and that the Service reaches it by name, which is
+# what lets a port change roll out without dropping an endpoint.
+#
+# An upstream rename of the key needs no test: the vendored values.schema.json
+# sets additionalProperties: false, so the override would fail helm outright
+# rather than be silently ignored.
+
+templates:
+  - charts/cert-manager/templates/webhook-deployment.yaml
+  - charts/cert-manager/templates/webhook-service.yaml
+
+release:
+  name: cert-manager
+  namespace: cozy-cert-manager
+
+tests:
+  - it: serves the webhook on 10260, not the kubelet's 10250
+    template: charts/cert-manager/templates/webhook-deployment.yaml
+    asserts:
+      - isKind:
+          of: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --secure-port=10260
+      - equal:
+          path: spec.template.spec.containers[0].ports[0]
+          value:
+            name: https
+            protocol: TCP
+            containerPort: 10260
+
+  - it: keeps the webhook off the host network, so the port lives in the Pod netns
+    template: charts/cert-manager/templates/webhook-deployment.yaml
+    asserts:
+      # The template emits the key only when the value is truthy, so absence
+      # is the only shape a disabled hostNetwork can take here. isNullOrEmpty
+      # would not do: it fails on a path that does not exist.
+      - notExists:
+          path: spec.template.spec.hostNetwork
+
+  - it: resolves the Service to the webhook container by name, not by number
+    template: charts/cert-manager/templates/webhook-service.yaml
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: spec.ports[0].name
+          value: https
+      - equal:
+          path: spec.ports[0].port
+          value: 443
+      - equal:
+          path: spec.ports[0].targetPort
+          value: https
