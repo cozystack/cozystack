@@ -11,7 +11,7 @@ spec:
     name: {{ $.Release.Name }}
   characterSet: utf8
   collate: utf8_general_ci
-{{- range $user := $db.roles.admin }}
+{{- range $user := dig "roles" "admin" (list) $db }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
@@ -27,7 +27,7 @@ spec:
   username: {{ $user }}
   grantOption: true
 {{- end }}
-{{- range $user := $db.roles.readonly }}
+{{- range $user := dig "roles" "readonly" (list) $db }}
 {{ $userDNSName := replace "_" "-" $user }}
 ---
 apiVersion: k8s.mariadb.com/v1alpha1
