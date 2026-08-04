@@ -310,7 +310,7 @@
           ],
           "properties": {
             "extraArgs": {
-              "description": "Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for other apiserver flags (`--requestheader-uid-headers=X-Remote-Uid`, feature gates, etc). Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).",
+              "description": "Extra command-line flags appended to the tenant kube-apiserver, passed through to KamajiControlPlane `spec.apiServer.extraArgs`. For OIDC use `spec.oidc.mode` — this passthrough is the escape hatch for unrelated apiserver flags. When `spec.oidc.mode` is not `None` the chart also renders `--requestheader-uid-headers=X-Remote-Uid` here from Kubernetes `v1.32`, plus `--feature-gates=RemoteRequestHeaderUID=true` on `v1.32` itself. It reads an entry of your own on either flag and adapts where it can, and fails the render on two shapes the apiserver would refuse to start on; `docs/oidc-tenant.md` documents these shapes and what `--emulated-version` changes. Do NOT add legacy `--oidc-*` flags here when `spec.oidc.mode` is not `None`; the chart injects `--authentication-config` and the apiserver refuses to boot with both. Empty by default (no change to current behavior).",
               "type": "array",
               "default": [],
               "items": {
