@@ -12,3 +12,4 @@ update:
 	helm repo update cnpg
 	helm pull cnpg/cloudnative-pg --untar --untardir charts --version 0.26.1
 	rm -rf charts/cloudnative-pg/charts
+	patch --no-backup-if-mismatch -p4 < patches/cloudnative-pg-1.27.3.patch
