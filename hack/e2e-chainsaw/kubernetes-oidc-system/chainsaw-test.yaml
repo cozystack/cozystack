@@ -73,6 +73,12 @@ spec:
               # --authentication-config is appended to extraArgs; the
               # chart-owned mount lands on extraVolumeMounts.
               (contains(extraArgs, '--authentication-config=/etc/kubernetes/authentication-config/config.yaml')): true
+              # Without this flag the apiserver never publishes
+              # requestheader-uid-headers, and the user's UID is dropped on the
+              # way to an aggregated apiserver. This tenant runs v1.35, where
+              # the RemoteRequestHeaderUID gate is on by default, so the chart
+              # renders the header flag alone.
+              (contains(extraArgs, '--requestheader-uid-headers=X-Remote-Uid')): true
               (extraVolumeMounts[?name == 'authentication-config']):
               - name: authentication-config
             deployment:
