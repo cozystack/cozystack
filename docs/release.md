@@ -174,7 +174,7 @@ gitGraph
        cherry-pick id: "patch 2"
    ```
 
-   When all relevant patch commits are cherry-picked, the branch is ready for release.
+   When all relevant patch commits are cherry-picked, the branch is ready for release. Confirm that with `go run ./cmd/backport-audit release-1.2` rather than by eye — it exits non-zero while anything labeled for the line is still missing from it, and prints the URLs. See [Cherry-pick triage before a patch](#cherry-pick-triage-before-a-patch).
 
 2. The maintainer cuts a release candidate (`v1.2.1-rc.N`) via the [`Cut Pre-release Tag`](../.github/workflows/cut-prerelease.yaml) workflow (manual dispatch **from `release-1.2`**), which tags that branch's `HEAD`. CI builds and publishes the rc, pushes the `release-1.2.1-rc.N` staging branch, and runs the mandatory full `rc-e2e` job against the published tag.
 3. Watch `rc-e2e` and wait for it to pass, then complete the other release checks. A successful manual `e2e-tag.yaml` run for `v1.2.1-rc.N` is also valid evidence if the latest `tags.yaml` run does not carry a green `rc-e2e`. **Optional:** press the `Generate RC Changelog` button ([`changelog-rc.yaml`](../.github/workflows/changelog-rc.yaml)) to generate `docs/changelogs/v1.2.1.md` at rc time and bank it on the rc staging branch; promotion then reuses it instead of regenerating.
@@ -382,14 +382,16 @@ for n in $(gh pr list --search "label:kind/backport label:kind/backport-previous
 done
 ```
 
+A conflict the bot reports is recoverable, because the draft PR is right there. The dangerous failure is the one that leaves nothing behind: before PR #3155, `conflict_resolution` was passed as a top-level input instead of nested under `experimental`, where the action silently ignored it and fell back to `fail` — which on a conflicting cherry-pick opens no PR and reports no failure, so the backport was simply dropped with no draft and no red check to notice. Every backport labeled before 2026-07-03 that hit a conflict was lost this way, which is why [`backport-audit`](../cmd/backport-audit/README.md) reports a cluster of `MISSING` entries on the older lines. A run of `MISSING` verdicts concentrated in one time window is the signature of the bot failing, not of maintainers forgetting.
+
 ### Cherry-pick triage before a patch
 
 A patch release includes bugfixes for code that shipped in the corresponding minor `vX.Y.0`. Use:
 
 ```bash
-# 1. Inventory PRs already labeled for backport (merged but not yet on release-X.Y)
-gh pr list --search "is:merged label:kind/backport" --limit 100
-gh pr list --search "is:merged label:kind/backport-previous" --limit 100
+# 1. Audit what was labeled for this line and has NOT landed on it.
+#    Exits non-zero when anything is outstanding; see cmd/backport-audit/README.md.
+go run ./cmd/backport-audit release-X.Y
 
 # 2. List commits on main since the release branch diverged that are NOT yet on release-X.Y
 git merge-base origin/main origin/release-X.Y
@@ -398,6 +400,8 @@ git log <base>..origin/main --grep="(#" --oneline
 # 3. Open PRs that may need labeling before the cut
 gh pr list --state open --base main --label kind/bug
 ```
+
+Step 1 covers the labeled work: [`backport-audit`](../cmd/backport-audit/README.md) resolves each `backport` / `backport-previous` PR to the line the label meant **at merge time** (the same `getLatestRelease` rule the bot applies, not the label text), then reports each one as already on the branch, `pending` on an open backport PR, `dropped` with the reason someone recorded, or `MISSING`. Listing the labeled PRs with `gh pr list --search "is:merged label:backport"` is not a substitute — it says nothing about whether the change reached the branch, which is the only thing that matters at this point in the cut. Steps 2 and 3 remain necessary because they cover what step 1 structurally cannot see: changes that were never labeled at all.
 
 **Include rule:**
 
