@@ -1,0 +1,177 @@
+suite: seaweedfs cluster-scoped RBAC uniqueness guard
+
+# Companion to cluster_scoped_names_test.yaml: that suite pins the NAMES the
+# chart renders, this one pins the guard that refuses when those names would not
+# be unique per tenant.
+#
+# The guard reads global.seaweedfs.serviceAccountName and requires it to carry
+# the release namespace, because the pinned fullname is identical in every tenant
+# and so cannot be what distinguishes a cluster-scoped object. It runs only when
+# the render can see the cluster (namespace canary, same as naming-guard.yaml) —
+# system/seaweedfs's values.yaml default is a placeholder that only
+# extra/seaweedfs overrides per release, so a client-side render must not trip.
+
+templates:
+  - templates/cluster-scoped-rbac-guard.yaml
+
+release:
+  name: seaweedfs-system
+  namespace: tenant-fresh
+
+tests:
+  - it: renders for a client-side install with no cluster view (CI lint, unittest)
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders when the cluster-scoped RBAC name carries the namespace
+    set:
+      global:
+        seaweedfs:
+          serviceAccountName: tenant-fresh-seaweedfs
+    kubernetesProvider:
+      scheme: &scheme
+        "v1/Namespace":
+          gvr:
+            group: ""
+            version: "v1"
+            resource: "namespaces"
+          namespaced: false
+      objects:
+        - &ns
+          kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-fresh
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # M2 REGRESSION — the compat shim. Production does NOT set the canonical
+  # global.seaweedfs.serviceAccountName that the other cases here use:
+  # extra/seaweedfs sets the OLD FLAT key global.serviceAccountName, which only
+  # `include "seaweedfs.compat"` folds into the canonical path (and the flat key
+  # wins when present). Without that include the guard reads this chart's
+  # placeholder default and refuses EVERY real upgrade on EVERY cluster — a bug
+  # that only `helm upgrade --dry-run=server` caught, because every mock set the
+  # canonical key. This case sets the key production actually sets.
+  - it: accepts the flat global.serviceAccountName that extra/seaweedfs actually sets
+    set:
+      global:
+        serviceAccountName: tenant-fresh-seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  # The shim must not become a way to bypass the guard: a flat key that is not
+  # per-namespace is still refused.
+  - it: refuses a flat global.serviceAccountName that is not per-namespace
+    set:
+      global:
+        serviceAccountName: seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+    asserts:
+      - failedTemplate:
+          errorPattern: "not unique per tenant"
+
+  # A substring match accepts `tenant-ab-seaweedfs` for namespace `tenant-a`; a
+  # prefix match still accepts `tenant-a-b-seaweedfs`, which is ALSO the natural
+  # value for namespace `tenant-a-b` — so two namespaces would accept one string
+  # and collide on the object this guard exists to keep unique. Only equality with
+  # `<namespace>-seaweedfs` — the value extra/seaweedfs actually sets — is safe.
+  - it: refuses a service account from a namespace that only shares a prefix
+    release:
+      name: seaweedfs-system
+      namespace: tenant-a
+    set:
+      global:
+        seaweedfs:
+          serviceAccountName: tenant-ab-seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-a
+    asserts:
+      - failedTemplate:
+          errorPattern: "not unique per tenant"
+
+  # The prefix variant: `tenant-a-b-seaweedfs` starts with `tenant-a-` but belongs
+  # to namespace tenant-a-b. hasPrefix passes this; equality does not.
+  - it: refuses a service account whose namespace merely extends this one
+    release:
+      name: seaweedfs-system
+      namespace: tenant-a
+    set:
+      global:
+        seaweedfs:
+          serviceAccountName: tenant-a-b-seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-a
+    asserts:
+      - failedTemplate:
+          errorPattern: "not unique per tenant"
+
+  # The regression this guard exists for: the bare chart default (or any value
+  # that is the same string in every tenant) collides cluster-wide.
+  - it: refuses when the RBAC name would be identical in every tenant
+    set:
+      global:
+        seaweedfs:
+          serviceAccountName: seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+    asserts:
+      - failedTemplate:
+          errorPattern: "not unique per tenant"
+
+  # The placeholder shipped in system/seaweedfs/values.yaml is namespace-shaped
+  # but belongs to no real namespace — it must not be mistaken for a valid value
+  # once the render can see the cluster.
+  - it: refuses when the value is the shipped placeholder, not this namespace
+    set:
+      global:
+        seaweedfs:
+          serviceAccountName: tenant-foo-seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - *ns
+    asserts:
+      - failedTemplate:
+          errorPattern: "not unique per tenant"
+
+  - it: refuses for a non-default instance name whose SA is not per-namespace
+    release:
+      name: foo-system
+      namespace: tenant-named
+    set:
+      global:
+        seaweedfs:
+          serviceAccountName: seaweedfs
+    kubernetesProvider:
+      scheme: *scheme
+      objects:
+        - kind: Namespace
+          apiVersion: v1
+          metadata:
+            name: tenant-named
+    asserts:
+      - failedTemplate:
+          errorPattern: "not unique per tenant"

@@ -1,0 +1,101 @@
+#!/bin/sh
+# Fake kubectl for hack/migration-seaweedfs-db-adopt.bats. It serves only the
+# calls lib/seaweedfs-db-adopt.sh makes; behaviour is driven by FAKE_* env and
+# every invocation is appended to $FAKE_CMDLOG so the test can assert on which
+# namespaces were acted on and with which annotations.
+#
+#   FAKE_CMDLOG    file to append a one-line record of each call to
+#   FAKE_CLUSTERS  newline list of "<ns> <release-name> <resource-policy>" — one
+#                  per namespace holding a Cluster/seaweedfs-db. Use "-" for
+#                  either annotation to model it being ABSENT (jsonpath prints
+#                  nothing and exits 0).
+#   FAKE_LIST_FAIL      non-empty => the -A fleet scan exits 1 with this as stderr
+#   FAKE_GET_FAIL       non-empty => the per-namespace get exits 1 with this stderr
+#   FAKE_ANNOTATE_FAIL  non-empty => `annotate` exits 1 (a failed hand-over)
+#
+# The failure knobs exist because the point of the helper is that a kubectl error
+# must ABORT the migration rather than let it stamp the version and never run
+# again. A fake that can only succeed cannot test that.
+set -u
+
+log() { [ -n "${FAKE_CMDLOG:-}" ] && printf '%s\n' "$*" >> "$FAKE_CMDLOG"; }
+log "KUBECTL $*"
+
+args="$*"
+
+# arg_after KEY -- echoes the token following KEY in the argument vector.
+arg_after() { k="$1"; shift; p=""; for a in "$@"; do [ "$p" = "$k" ] && { printf '%s' "$a"; return; }; p="$a"; done; }
+
+# field <ns> <rel|keep> -- echo that annotation for the FAKE_CLUSTERS row of ns.
+field() {
+  printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r n rel keep; do
+    if [ "$n" = "$1" ]; then
+      case "$2" in
+        rel)  [ "${rel:--}" = "-" ]  || printf '%s' "$rel" ;;
+        keep) [ "${keep:--}" = "-" ] || printf '%s' "$keep" ;;
+      esac
+      break
+    fi
+  done
+}
+
+case "$args" in
+  # Version stamp: kubectl apply --filename -
+  *"apply --filename -"*)
+    manifest=$(cat)
+    # Record the version actually stamped. A migration that stamped the wrong
+    # number would loop the runner forever, and asserting a bare "STAMP" would
+    # not notice.
+    v=$(printf '%s\n' "$manifest" | sed -n 's/^  version: "\{0,1\}\([0-9]\{1,\}\)"\{0,1\}$/\1/p' | head -1)
+    log "STAMP ${v:-unknown}"
+    exit 0
+    ;;
+
+  # Fleet scan: list namespaces holding a Cluster named seaweedfs-db.
+  *"get cluster.postgresql.cnpg.io -A"*)
+    if [ -n "${FAKE_LIST_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_LIST_FAIL" >&2
+      exit 1
+    fi
+    printf '%s\n' "${FAKE_CLUSTERS:-}" | while read -r ns rel keep; do
+      [ -n "$ns" ] && printf '%s\n' "$ns"
+    done
+    exit 0
+    ;;
+
+  # Per-namespace read of an annotation.
+  *"get cluster.postgresql.cnpg.io seaweedfs-db"*)
+    if [ -n "${FAKE_GET_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_GET_FAIL" >&2
+      exit 1
+    fi
+    ns=$(arg_after -n "$@")
+    case "$args" in
+      *"resource-policy"*) field "$ns" keep ;;
+      *)                   field "$ns" rel ;;
+    esac
+    exit 0
+    ;;
+
+  # The hand-over itself.
+  *"annotate cluster.postgresql.cnpg.io seaweedfs-db"*)
+    if [ -n "${FAKE_ANNOTATE_FAIL:-}" ]; then
+      printf '%s\n' "$FAKE_ANNOTATE_FAIL" >&2
+      exit 1
+    fi
+    ns=$(arg_after -n "$@")
+    rel=""
+    keep=""
+    for a in "$@"; do
+      case "$a" in
+        meta.helm.sh/release-name=*) rel="${a#meta.helm.sh/release-name=}" ;;
+        helm.sh/resource-policy=*)   keep="${a#helm.sh/resource-policy=}" ;;
+      esac
+    done
+    log "ANNOTATE $ns release-name=${rel:-<unset>} resource-policy=${keep:-<unset>}"
+    exit 0
+    ;;
+esac
+
+log "UNHANDLED $args"
+exit 0

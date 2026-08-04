@@ -13,9 +13,12 @@ suite: seaweedfs s3 consumers resolve the renamed s3 service
 # `seaweedfs-system-s3` while the real service is `seaweedfs-s3`. With no
 # matching endpoints, ingress-nginx returns 503 and COSI cannot reach S3.
 #
-# All tests render under the real release name so name != fullname, the exact
-# condition that exposes the bug. The all-in-one case documents the other
-# ternary branch, which is unchanged and correct.
+# values.yaml now pins fullnameOverride: seaweedfs, which makes name == fullname
+# and would hide this bug by accident. So each test re-creates the original
+# condition explicitly (fullnameOverride: seaweedfs-system => name != fullname)
+# and keeps guarding the divergence itself, independent of what the shipped
+# default happens to be. The all-in-one case documents the other ternary branch,
+# which is unchanged and correct.
 
 templates:
   - charts/seaweedfs/templates/s3/s3-service.yaml
@@ -31,6 +34,7 @@ tests:
   - it: s3 service is named with the name helper, not componentName
     template: charts/seaweedfs/templates/s3/s3-service.yaml
     set:
+      seaweedfs.fullnameOverride: seaweedfs-system
       seaweedfs.s3.enabled: true
     asserts:
       - equal:
@@ -40,6 +44,7 @@ tests:
   - it: s3 ingress backend points at the s3 service, not a fullname-derived name
     template: charts/seaweedfs/templates/s3/s3-ingress.yaml
     set:
+      seaweedfs.fullnameOverride: seaweedfs-system
       seaweedfs.s3.enabled: true
       seaweedfs.s3.ingress.enabled: true
       seaweedfs.s3.ingress.host: s3.example.com
@@ -51,6 +56,7 @@ tests:
   - it: all-in-one ingress backend still resolves to the all-in-one service
     template: charts/seaweedfs/templates/s3/s3-ingress.yaml
     set:
+      seaweedfs.fullnameOverride: seaweedfs-system
       seaweedfs.allInOne.enabled: true
       seaweedfs.allInOne.s3.enabled: true
       seaweedfs.s3.ingress.enabled: true
@@ -63,6 +69,7 @@ tests:
   - it: iceberg ingress backend points at the s3 service too
     template: charts/seaweedfs/templates/s3/s3-iceberg-ingress.yaml
     set:
+      seaweedfs.fullnameOverride: seaweedfs-system
       seaweedfs.s3.enabled: true
       seaweedfs.s3.icebergPort: 8334
       seaweedfs.s3.icebergIngress.enabled: true
@@ -75,6 +82,7 @@ tests:
   - it: COSI in-cluster ENDPOINT resolves the s3 service when ingress is disabled
     template: charts/seaweedfs/templates/cosi/cosi-deployment.yaml
     set:
+      seaweedfs.fullnameOverride: seaweedfs-system
       seaweedfs.cosi.enabled: true
       seaweedfs.s3.enabled: true
       seaweedfs.s3.ingress.enabled: false
@@ -88,6 +96,7 @@ tests:
   - it: COSI in-cluster ENDPOINT (filer S3 mode) targets the s3 service on the filer s3 port
     template: charts/seaweedfs/templates/cosi/cosi-deployment.yaml
     set:
+      seaweedfs.fullnameOverride: seaweedfs-system
       seaweedfs.cosi.enabled: true
       seaweedfs.s3.enabled: false
       seaweedfs.filer.s3.enabled: true
