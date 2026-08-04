@@ -14,23 +14,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func TestUnprefixedMonitoredObjectReturnsNil(t *testing.T) {
-	w := &cozyv1alpha1.Workload{}
-	w.Name = "unprefixed-name"
-	obj := getMonitoredObject(w)
-	if obj != nil {
-		t.Errorf(`getMonitoredObject(&Workload{Name: "%s"}) == %v, want nil`, w.Name, obj)
-	}
-}
-
-func TestPodMonitoredObject(t *testing.T) {
-	w := &cozyv1alpha1.Workload{}
-	w.Name = "pod-mypod"
-	obj := getMonitoredObject(w)
-	if pod, ok := obj.(*corev1.Pod); !ok || pod.Name != "mypod" {
-		t.Errorf(`getMonitoredObject(&Workload{Name: "%s"}) == %v, want &Pod{Name: "mypod"}`, w.Name, obj)
-	}
-}
 
 func TestWorkloadReconciler_DeletesOnMissingMonitor(t *testing.T) {
 	scheme := runtime.NewScheme()
@@ -71,19 +54,14 @@ func TestWorkloadReconciler_KeepsWhenAllExist(t *testing.T) {
 	_ = cozyv1alpha1.AddToScheme(scheme)
 	_ = corev1.AddToScheme(scheme)
 
-	// Create a monitor and its backing Pod
+	// Create a monitor and its workload
 	monitor := &cozyv1alpha1.WorkloadMonitor{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "mon",
 			Namespace: "default",
 		},
 	}
-	pod := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "foo",
-			Namespace: "default",
-		},
-	}
+
 	w := &cozyv1alpha1.Workload{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "pod-foo",
@@ -96,7 +74,7 @@ func TestWorkloadReconciler_KeepsWhenAllExist(t *testing.T) {
 
 	fakeClient := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(monitor, pod, w).
+		WithObjects(monitor, w).
 		Build()
 	reconciler := &WorkloadReconciler{Client: fakeClient}
 	req := reconcile.Request{NamespacedName: types.NamespacedName{Name: "pod-foo", Namespace: "default"}}
