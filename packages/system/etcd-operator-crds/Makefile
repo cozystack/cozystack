@@ -4,7 +4,7 @@ export NAMESPACE=cozy-etcd-operator
 include ../../../hack/package.mk
 
 # Pinned ref of github.com/cozystack/etcd-operator to vendor CRDs from.
-ETCD_OPERATOR_REF ?= v0.5.3
+ETCD_OPERATOR_REF ?= v0.5.4
 
 # controller-gen writes the CRDs to charts/etcd-operator/crd-bases/ upstream (there
 # is no config/crd kustomization). Vendor each verbatim and stamp

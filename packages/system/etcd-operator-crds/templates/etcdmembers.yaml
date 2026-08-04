@@ -1101,11 +1101,10 @@ spec:
               replicas:
                 default: 1
                 description: |-
-                  Replicas exists only because the PodDisruptionBudget controller
-                  traverses Pods' controllerRef looking for /scale on the parent and
-                  fails closed ("does not implement the scale subresource") if it
-                  isn't there. Each EtcdMember represents exactly one Pod; this field
-                  is locked to 1 by validation and cannot be tuned.
+                  Replicas backs the /scale subresource. The operator's own PDB
+                  (integer minAvailable) never resolves scale; kept because
+                  maxUnavailable or percentage budgets over member Pods fail
+                  without it. Locked to 1: an EtcdMember is exactly one Pod.
                 format: int32
                 maximum: 1
                 minimum: 1
@@ -1677,15 +1676,14 @@ spec:
               replicas:
                 description: |-
                   Replicas exposes via /scale "this EtcdMember owns 1 Pod if it has
-                  a PodName, 0 otherwise". Required by the PodDisruptionBudget
-                  controller to derive expectedPods for the cluster's PDB — without
-                  /scale on the Pod controller-ref it sets the PDB to SyncFailed.
+                  a PodName, 0 otherwise". Unused by the operator's own PDB;
+                  scale-resolving budgets go SyncFailed without it.
                 format: int32
                 type: integer
               selector:
                 description: |-
-                  Selector exposes the label-selector that matches this member's Pod
-                  via /scale (consumed by the PDB controller; not user-facing).
+                  Selector exposes the label-selector matching this member's Pod via
+                  /scale (for scale-resolving disruption budgets; not user-facing).
                 type: string
               version:
                 description: |-
