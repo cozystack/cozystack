@@ -317,13 +317,17 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 		case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
 			continue
 		// Corporate-proxy env inherited from flux-aio. A standalone shard needs
-		// no external egress (source-controller fetches artifacts), so the proxy
-		// only harms it: a startup HTTPS call that stalls through an unreachable
-		// proxy blocks the manager before it serves /healthz, and the liveness
-		// probe then crashloops the pod indefinitely. flux-aio survives only
-		// because it starts once and never restarts. Drop the proxy env (and the
-		// now-pointless NO_PROXY) so the shard talks to the in-cluster apiserver
-		// directly.
+		// no external egress (source-controller does artifact fetching and
+		// cosign/TUF verification), so the proxy only harms it: a blocking
+		// external HTTPS call at startup stalls through an unreachable proxy,
+		// the manager never serves /healthz, and the liveness probe then
+		// crashloops the pod. (flux-aio itself is unaffected in practice: it is
+		// long-lived and does not restart, so it never re-hits this startup
+		// path.) Drop the proxy env (and the now-pointless NO_PROXY) so the
+		// shard reaches the in-cluster apiserver directly. A HelmRelease
+		// targeting a remote cluster via spec.kubeConfig reachable only through
+		// the proxy is the one theoretical exception; cozystack guest-cluster
+		// apiservers are in-cluster, so this does not apply here.
 		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 			"http_proxy", "https_proxy", "no_proxy":
 			continue
@@ -343,12 +347,15 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 	// still syncing caches (a slow start on a large cluster, or a transient
 	// dependency), turning any slow start into an unrecoverable crashloop. The
 	// generous startup budget defers liveness until the manager is serving,
-	// then liveness still catches a wedged running pod.
+	// then liveness still catches a wedged running pod. Only the budget fields
+	// are normalised; the liveness handler and its TimeoutSeconds are inherited,
+	// so a controller whose /healthz is slow under load keeps the same tolerance
+	// at startup as at runtime (overriding TimeoutSeconds down could make the
+	// startup probe stricter than liveness and recreate the crashloop).
 	if hc.LivenessProbe != nil && hc.StartupProbe == nil {
 		sp := hc.LivenessProbe.DeepCopy()
 		sp.InitialDelaySeconds = 0
 		sp.PeriodSeconds = 10
-		sp.TimeoutSeconds = 1
 		sp.SuccessThreshold = 1
 		sp.FailureThreshold = 30
 		hc.StartupProbe = sp

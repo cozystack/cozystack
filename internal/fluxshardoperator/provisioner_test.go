@@ -93,9 +93,10 @@ func fluxAIODeployment() *appsv1.Deployment {
 									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "metadata.namespace"},
 								}},
 								{Name: "TUF_ROOT", Value: "/tmp/.sigstore"},
-								// Corporate-proxy env the installer puts on
-								// flux-aio; harmless there but hangs a
-								// standalone shard at startup.
+								// Corporate-proxy env present on flux-aio in
+								// proxied installs (operator/patch level, not the
+								// installer, which injects only KUBERNETES_SERVICE_*);
+								// harmless there, hangs a standalone shard at startup.
 								{Name: "HTTP_PROXY", Value: "http://proxy.example:3128"},
 								{Name: "HTTPS_PROXY", Value: "http://proxy.example:3128"},
 								{Name: "NO_PROXY", Value: ".svc"},
@@ -112,6 +113,7 @@ func fluxAIODeployment() *appsv1.Deployment {
 									},
 								},
 								PeriodSeconds:    10,
+								TimeoutSeconds:   5,
 								FailureThreshold: 3,
 							},
 						},
@@ -235,6 +237,10 @@ func TestBuildShardDeployment(t *testing.T) {
 	}
 	if hc.StartupProbe.FailureThreshold < 10 {
 		t.Fatalf("startupProbe budget too small to cover a slow cache sync: %d", hc.StartupProbe.FailureThreshold)
+	}
+	if hc.StartupProbe.TimeoutSeconds != 5 {
+		t.Fatalf("startupProbe must inherit the liveness TimeoutSeconds (5), not force it stricter: got %d",
+			hc.StartupProbe.TimeoutSeconds)
 	}
 }
 
