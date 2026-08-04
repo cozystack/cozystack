@@ -128,6 +128,36 @@ in CustomConfig mode: the issuer and clientId are inside the
 operator-supplied config and are not knowable to the chart. Distribute
 the OIDC kubeconfig out-of-band.
 
+## Aggregated API servers
+
+Authenticating a user is only half of the path. A call that lands on an aggregated API server — an `APIService` backed by an extension server rather than by the core apiserver — reaches it over the aggregation layer, which forwards the caller's identity in request headers. The UID travels in `X-Remote-Uid`, and the extension server trusts that header only when the tenant kube-apiserver has published it under `requestheader-uid-headers` in the `extension-apiserver-authentication` ConfigMap. Without it the UID is dropped in transit and the call fails on an empty user UID, even though `kubectl` against the core apiserver works fine.
+
+Carrying the UID across that hop is a property of the aggregation layer, not of OIDC — a user authenticated by any means loses their UID the same way. The chart nonetheless renders these flags only when `spec.oidc.mode` is not `None`, which keeps the blast radius to clusters opting into a new feature. A cluster left on `mode: None` therefore still drops UIDs at the aggregation layer, including for ServiceAccount tokens, which carry a UID regardless of OIDC.
+
+Whenever `spec.oidc.mode` is not `None`, the chart renders the flags that publish it, alongside `--authentication-config`:
+
+| `spec.version` | rendered |
+| --- | --- |
+| `v1.31` | nothing — the flag does not exist upstream, and an unknown flag stops the apiserver from starting |
+| `v1.32` | `--requestheader-uid-headers=X-Remote-Uid` plus `--feature-gates=RemoteRequestHeaderUID=true` |
+| `v1.33` and newer | `--requestheader-uid-headers=X-Remote-Uid` |
+
+The gate is rendered on `v1.32` only, where `RemoteRequestHeaderUID` is still alpha and the apiserver rejects the flag while the gate is off. From `v1.33` the gate is beta and on by default, so rendering it would buy nothing and would collide with a gate list of your own.
+
+Adding either flag through `controlPlane.apiServer.extraArgs` by hand is no longer necessary, and an existing cluster that does keeps working: the tenant control plane holds a single entry per flag name, so the chart skips its own copy when your entry already carries `X-Remote-Uid` or already enables the gate.
+
+Where your entry and the chart cannot both be satisfied, the chart refuses to render and the message names the fix. That covers a uid-headers list of your own that omits `X-Remote-Uid`, a `v1.32` gate entry that leaves `RemoteRequestHeaderUID` out — the chart needs that flag for itself there, and the control plane keeps only one entry per flag — and a `v1.33`-and-newer gate entry that sets `RemoteRequestHeaderUID=false`. The gate is beta-and-on from `v1.33` but never locked to its default, so an explicit `=false` genuinely turns it off and genuinely makes the header flag fatal.
+
+Failing is deliberate rather than quietly skipping the flag. Skipping would hand you back the exact problem this feature removes: OIDC on, no error anywhere, and `user UID is empty` the first time something calls an aggregated API. A `HelmRelease` that goes red with an actionable message is the better failure.
+
+This is a breaking change on every version the chart renders the flag on, and worth stating plainly. On `v1.32` a cluster that already sets `--feature-gates` for something unrelated rendered and booted before, and will now refuse to render until you merge `RemoteRequestHeaderUID=true` into that entry. From `v1.33` the same applies more narrowly: a cluster that switches the gate off, with `RemoteRequestHeaderUID=false` or a blanket `AllBeta=false`, also rendered and booted before — the chart added no header flag, so a disabled gate was harmless — and now fails to render. In both cases the error message is the migration instruction. Setups whose gate is genuinely already on are left alone, whether you named it explicitly or switched it on with a blanket `AllAlpha=true`.
+
+The gate check reads your entry the way the apiserver does: one `Name=value` element at a time, spaces trimmed on both sides, and the value resolved the way `strconv.ParseBool` resolves it, so `1`, `t` and `T` mean the same as `true` and `0`, `f` and `F` the same as `false`. Blanket settings count too, because the apiserver applies them to every gate you have not named explicitly. On `v1.32` a `--feature-gates=AllAlpha=true` genuinely switches `RemoteRequestHeaderUID` on — it is an alpha gate there — so the chart treats it as yours and leaves it alone. From `v1.33` the mirror image applies: `AllBeta=false` genuinely switches it off, and is rejected. Naming the gate wins either way — `AllAlpha=true,RemoteRequestHeaderUID=false` is still rejected on `v1.32`, and `AllBeta=false,RemoteRequestHeaderUID=true` is still accepted on `v1.33` — because an explicit entry beats a blanket one whichever order they appear in.
+
+The uid-headers list is read without trimming, because the apiserver does not trim it either: `--requestheader-uid-headers=X-Remote-Uid , Other` does not contain `X-Remote-Uid` as far as the apiserver is concerned, and the chart treats it the same way rather than accepting a value the apiserver will reject.
+
+On `v1.31` the chart renders neither flag, and the two UID guards above do not run, so a uid-headers or `--feature-gates` entry of yours passes through untouched. The unrelated `--oidc-*` and `--authentication-config` collision guards still apply there as everywhere else. Aggregated API servers cannot see the caller's UID on `v1.31`; move the cluster to `v1.32` or newer if you need them to. Writing `--requestheader-uid-headers` yourself does not work around it — the flag does not exist on `v1.31`, and an unknown flag stops the apiserver from starting.
+
 ## Users and RBAC
 
 `users[]` is a flat list. Each entry produces a single
