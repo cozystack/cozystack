@@ -485,7 +485,14 @@ spec:
        *management* cluster-domain, sourced from .Values._cluster
        (populated by cozystack-controller from the platform config). */}}
 {{- $mgmtClusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
-{{- range $groupName, $group := .Values.nodeGroups }}
+{{- /* Iterate the EFFECTIVE node groups (the kubernetes.nodeGroups helper),
+       never the raw .Values.nodeGroups map. The built-in md0 group lives in
+       the helper's else-branch, so a cluster that supplies no nodeGroups has
+       an empty raw map: ranging over it renders zero Jobs, leaving the md0
+       MachineDeployment below pointing at a TalosConfigTemplate that only
+       this Job ever creates. CAPI then blocks every Machine the autoscaler
+       adds. Must stay in lockstep with the loop in cluster.yaml. */}}
+{{- range $groupName, $group := (include "kubernetes.nodeGroups" $ | fromYaml) }}
 {{- /* Mirror the kubelet-reservation computation from cluster.yaml so the
        worker machineconfig the Job applies carries the same numbers the
        MachineDeployment validator was happy with. Auto-computed
