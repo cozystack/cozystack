@@ -28,7 +28,9 @@ import (
 // gate resolves and the plural the fake serves cannot drift apart.
 var gateGVKs = []schema.GroupVersionKind{
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "CNPG"},
+	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "MariaDB"},
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Etcd"},
+	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Altinity"},
 	{Group: strategyAPIGroup, Version: "v1alpha1", Kind: "Velero"},
 	{Group: "velero.io", Version: "v1", Kind: "BackupStorageLocation"},
 	{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmRelease"},
@@ -99,7 +101,9 @@ func cozyDefaultBackupClass() *backupsv1alpha1.BackupClass {
 		Spec: backupsv1alpha1.BackupClassSpec{
 			Strategies: []backupsv1alpha1.BackupClassStrategy{
 				ref("CNPG", "cozy-default-cnpg"),
+				ref("MariaDB", "cozy-default-mariadb"),
 				ref("Etcd", "cozy-default-etcd"),
+				ref("Altinity", "cozy-default-altinity"),
 				ref("Velero", "cozy-default-velero-vminstance"),
 				ref("Velero", "cozy-default-velero-vmdisk"),
 			},
@@ -201,9 +205,9 @@ func TestCheckForcesWhenObjectsMissing(t *testing.T) {
 	if !forced {
 		t.Fatal("expected a forced Helm upgrade when default objects are missing")
 	}
-	// 4 strategyRefs (Velero twice under different names) + the BSL.
-	if len(missing) != 5 {
-		t.Fatalf("missing = %v, want 5 entries", missing)
+	// 6 strategyRefs (Velero twice under different names) + the BSL.
+	if len(missing) != 7 {
+		t.Fatalf("missing = %v, want 7 entries", missing)
 	}
 	ann := forceAnnotations(t, dyn)
 	forceAt, ok := ann["reconcile.fluxcd.io/forceAt"]
@@ -228,7 +232,9 @@ func TestCheckNoopWhenAllPresent(t *testing.T) {
 		[]client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()},
 		helmReleaseObject(),
 		strategyObject("CNPG", "cozy-default-cnpg"),
+		strategyObject("MariaDB", "cozy-default-mariadb"),
 		strategyObject("Etcd", "cozy-default-etcd"),
+		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
 		bslObject(),
@@ -368,7 +374,9 @@ func TestMissingObjectsIgnoresUnmappedKinds(t *testing.T) {
 	g, _ := newGate(t, []client.Object{sourceSecret("b"), bc},
 		helmReleaseObject(),
 		strategyObject("CNPG", "cozy-default-cnpg"),
+		strategyObject("MariaDB", "cozy-default-mariadb"),
 		strategyObject("Etcd", "cozy-default-etcd"),
+		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
 		bslObject(),
@@ -397,7 +405,9 @@ func TestMissingObjectsSkipsVeleroWhenNamespaceEmpty(t *testing.T) {
 	g, _ := newGate(t, []client.Object{sourceSecret("b"), bc},
 		helmReleaseObject(),
 		strategyObject("CNPG", "cozy-default-cnpg"),
+		strategyObject("MariaDB", "cozy-default-mariadb"),
 		strategyObject("Etcd", "cozy-default-etcd"),
+		strategyObject("Altinity", "cozy-default-altinity"),
 	)
 	g.VeleroNamespace = ""
 
@@ -421,7 +431,9 @@ func TestMissingObjectsSkipsBSLWhenVeleroAPIAbsent(t *testing.T) {
 	g, _ := newGate(t, []client.Object{sourceSecret("b"), bc},
 		helmReleaseObject(),
 		strategyObject("CNPG", "cozy-default-cnpg"),
+		strategyObject("MariaDB", "cozy-default-mariadb"),
 		strategyObject("Etcd", "cozy-default-etcd"),
+		strategyObject("Altinity", "cozy-default-altinity"),
 		strategyObject("Velero", "cozy-default-velero-vminstance"),
 		strategyObject("Velero", "cozy-default-velero-vmdisk"),
 	)
