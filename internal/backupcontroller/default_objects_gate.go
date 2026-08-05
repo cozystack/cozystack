@@ -364,15 +364,28 @@ func (g *DefaultObjectsGate) missingObjects(ctx context.Context, backupClass *ba
 	}
 
 	if g.VeleroNamespace != "" {
-		_, err := g.Resource(backupStorageLocationGVR).Namespace(g.VeleroNamespace).Get(ctx, defaultBackupStorageLocationName, metav1.GetOptions{})
+		// Resolve through the RESTMapper, like the strategy loop above, so a
+		// genuinely absent Velero API is a NoMatch we skip rather than a
+		// NotFound we count. The dynamic client's Get bypasses the mapper and
+		// returns a plain 404 for an unserved group, which IsNotFound would
+		// catch first, making the "CRDs absent" branch dead code and looping
+		// the gate forever if Velero were removed while bslEnabled=true.
+		mapping, err := g.RESTMapping(schema.GroupKind{Group: backupStorageLocationGVR.Group, Kind: "BackupStorageLocation"})
 		switch {
 		case err == nil:
-		case apierrors.IsNotFound(err):
-			missing = append(missing, fmt.Sprintf("BackupStorageLocation/%s", defaultBackupStorageLocationName))
+			_, getErr := g.Resource(mapping.Resource).Namespace(g.VeleroNamespace).Get(ctx, defaultBackupStorageLocationName, metav1.GetOptions{})
+			switch {
+			case getErr == nil:
+			case apierrors.IsNotFound(getErr):
+				missing = append(missing, fmt.Sprintf("BackupStorageLocation/%s", defaultBackupStorageLocationName))
+			default:
+				return nil, fmt.Errorf("get BackupStorageLocation %s: %w", defaultBackupStorageLocationName, getErr)
+			}
 		case meta.IsNoMatchError(err):
-			// Velero CRDs absent: nothing to materialise.
+			// Velero API not served (e.g. Velero uninstalled after bootstrap):
+			// no Helm re-render can create the BSL, so it is not "missing".
 		default:
-			return nil, fmt.Errorf("get BackupStorageLocation %s: %w", defaultBackupStorageLocationName, err)
+			return nil, fmt.Errorf("map BackupStorageLocation: %w", err)
 		}
 	}
 

@@ -410,6 +410,55 @@ func TestMissingObjectsSkipsVeleroWhenNamespaceEmpty(t *testing.T) {
 	}
 }
 
+// TestMissingObjectsSkipsBSLWhenVeleroAPIAbsent covers Velero being removed
+// after bootstrap while bslEnabled=true: the velero.io API is no longer
+// served, so the BSL cannot be re-rendered and must not be counted as
+// missing. Resolving through the RESTMapper turns that into a NoMatch skip;
+// the previous hardcoded-GVR Get returned a NotFound that would have looped
+// the gate forever.
+func TestMissingObjectsSkipsBSLWhenVeleroAPIAbsent(t *testing.T) {
+	bc := cozyDefaultBackupClass()
+	g, _ := newGate(t, []client.Object{sourceSecret("b"), bc},
+		helmReleaseObject(),
+		strategyObject("CNPG", "cozy-default-cnpg"),
+		strategyObject("Etcd", "cozy-default-etcd"),
+		strategyObject("Velero", "cozy-default-velero-vminstance"),
+		strategyObject("Velero", "cozy-default-velero-vmdisk"),
+	)
+	// Rebuild the RESTMapper without BackupStorageLocation: the velero.io API
+	// is not served on this cluster.
+	gvset := map[schema.GroupVersion]struct{}{}
+	var kept []schema.GroupVersionKind
+	for _, gvk := range gateGVKs {
+		if gvk.Kind == "BackupStorageLocation" {
+			continue
+		}
+		gvset[gvk.GroupVersion()] = struct{}{}
+		kept = append(kept, gvk)
+	}
+	var gvs []schema.GroupVersion
+	for gv := range gvset {
+		gvs = append(gvs, gv)
+	}
+	m := meta.NewDefaultRESTMapper(gvs)
+	for _, gvk := range kept {
+		scope := meta.RESTScopeRoot
+		if gvk.Kind == "HelmRelease" {
+			scope = meta.RESTScopeNamespace
+		}
+		m.Add(gvk, scope)
+	}
+	g.RESTMapper = m
+
+	missing, err := g.missingObjects(context.Background(), bc)
+	if err != nil {
+		t.Fatalf("missingObjects: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("missing = %v, want none when the Velero API is absent", missing)
+	}
+}
+
 // TestCheckSurfacesPatchFailure pins that a failed force is reported rather
 // than silently recorded as done — and that lastForce is NOT advanced, so
 // the next tick retries instead of waiting out MinForceInterval.
