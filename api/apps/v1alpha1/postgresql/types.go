@@ -49,6 +49,9 @@ type ConfigSpec struct {
 	// Quorum configuration for synchronous replication.
 	// +kubebuilder:default:={}
 	Quorum Quorum `json:"quorum"`
+	// Read-replica autoscaling configuration.
+	// +kubebuilder:default:={}
+	Autoscaling Autoscaling `json:"autoscaling"`
 	// Users configuration map.
 	// +kubebuilder:default:={}
 	Users map[string]User `json:"users,omitempty"`
@@ -61,6 +64,27 @@ type ConfigSpec struct {
 	// Bootstrap configuration.
 	// +kubebuilder:default:={}
 	Bootstrap Bootstrap `json:"bootstrap"`
+}
+
+type Autoscaling struct {
+	// Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).
+	// +kubebuilder:default:=false
+	DryRun bool `json:"dryRun"`
+	// Enable horizontal autoscaling of read replicas.
+	// +kubebuilder:default:=false
+	Enabled bool `json:"enabled"`
+	// Maximum total instances; raised to the quorum floor if the floor exceeds it.
+	// +kubebuilder:default:=6
+	MaxReplicas int `json:"maxReplicas"`
+	// Freeze scaling while replication lag exceeds this and the primary is writing.
+	// +kubebuilder:default:=30
+	MaxReplicationLagSeconds int `json:"maxReplicationLagSeconds"`
+	// Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
+	// +kubebuilder:default:=2
+	MinReplicas int `json:"minReplicas"`
+	// Target active read connections per read-serving replica.
+	// +kubebuilder:default:=150
+	Target resource.Quantity `json:"target"`
 }
 
 type Backup struct {

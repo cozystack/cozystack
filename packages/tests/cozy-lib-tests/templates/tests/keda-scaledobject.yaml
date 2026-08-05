@@ -1,0 +1,15 @@
+{{- if .Values.render -}}
+{{ include "cozy-lib.keda.scaledObject" (dict
+     "name" .Release.Name
+     "namespace" .Release.Namespace
+     "scaleTargetRef" (dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" .Release.Name)
+     "minReplicaCount" .Values.minReplicaCount
+     "maxReplicaCount" .Values.maxReplicaCount
+     "serverAddress" .Values.serverAddress
+     "query" .Values.query
+     "threshold" .Values.threshold
+     "behavior" .Values.behavior
+     "paused" .Values.paused
+     "labels" (dict "app.kubernetes.io/instance" .Release.Name)
+) }}
+{{- end -}}

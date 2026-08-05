@@ -1,0 +1,17 @@
+{{- if .Values.autoscaling.enabled }}
+{{- include "cozy-lib.keda.scaledObject" (dict
+     "name" .Release.Name
+     "namespace" .Release.Namespace
+     "scaleTargetRef" (dict "apiVersion" "postgresql.cnpg.io/v1" "kind" "Cluster" "name" .Release.Name)
+     "minReplicaCount" (int (include "postgres.autoscaling.effectiveMin" .))
+     "maxReplicaCount" (int (include "postgres.autoscaling.effectiveMax" .))
+     "serverAddress" (include "postgres.autoscaling.serverAddress" .)
+     "query" (include "postgres.autoscaling.query" .)
+     "threshold" (.Values.autoscaling.target | toString)
+     "behavior" (dict
+       "scaleUp" (dict "stabilizationWindowSeconds" 300)
+       "scaleDown" (dict "stabilizationWindowSeconds" 1800 "policies" (list (dict "type" "Pods" "value" 1 "periodSeconds" 600))))
+     "paused" .Values.autoscaling.dryRun
+     "labels" (dict "app.kubernetes.io/name" "postgres.apps.cozystack.io" "app.kubernetes.io/instance" .Release.Name)
+) }}
+{{- end }}

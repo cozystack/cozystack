@@ -240,6 +240,19 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 | `quorum.maxSyncReplicas` | Maximum number of synchronous replicas allowed (must be less than total replicas). | `int`    | `0`   |
 
 
+### Autoscaling
+
+| Name                                   | Description                                                                                                             | Type       | Value   |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------- | ------- |
+| `autoscaling`                          | Read-replica autoscaling configuration.                                                                                 | `object`   | `{}`    |
+| `autoscaling.enabled`                  | Enable horizontal autoscaling of read replicas.                                                                         | `bool`     | `false` |
+| `autoscaling.minReplicas`              | Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher. | `int`      | `2`     |
+| `autoscaling.maxReplicas`              | Maximum total instances; raised to the quorum floor if the floor exceeds it.                                            | `int`      | `6`     |
+| `autoscaling.target`                   | Target active read connections per read-serving replica.                                                                | `quantity` | `150`   |
+| `autoscaling.maxReplicationLagSeconds` | Freeze scaling while replication lag exceeds this and the primary is writing.                                           | `int`      | `30`    |
+| `autoscaling.dryRun`                   | Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).                  | `bool`     | `false` |
+
+
 ### Users configuration
 
 | Name                      | Description                                  | Type                | Value   |

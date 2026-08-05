@@ -1,11 +1,17 @@
 {{- $tlsEnabled := (include "postgres.tls.enabled" .) | eq "true" -}}
+{{- $autoscaling := (include "postgres.autoscaling.active" .) | eq "true" -}}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
   name: {{ .Release.Name }}
 spec:
+  {{- if not $autoscaling }}
+  # Under active autoscaling the KEDA-managed HPA owns .spec.instances via the
+  # scale subresource, so the chart must not declare it (a declared value would
+  # be reverted by Flux). See templates/scaledobject.yaml and the design proposal.
   instances: {{ .Values.replicas }}
+  {{- end }}
   {{- if and $tlsEnabled .Values.external }}
   # Operator-managed TLS. CNPG auto-generates its own self-signed CA and signs
   # server + client + replication certs from it. The operator's default SAN list
@@ -240,7 +246,7 @@ metadata:
   labels:
     workloads.cozystack.io/resource-preset: {{ .Values.resourcesPreset | quote }}
 spec:
-  replicas: {{ .Values.replicas }}
+  replicas: {{ if $autoscaling }}{{ include "postgres.autoscaling.effectiveMin" . }}{{ else }}{{ .Values.replicas }}{{ end }}
   minReplicas: 1
   kind: postgres
   type: postgres

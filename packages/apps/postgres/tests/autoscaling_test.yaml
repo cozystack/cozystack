@@ -1,0 +1,157 @@
+suite: postgres read-replica autoscaling (KEDA)
+
+# Covers the autoscaling.enabled path: under active autoscaling the chart stops
+# declaring spec.instances (so Flux/KEDA no longer contend) and renders a KEDA
+# ScaledObject whose bounds encode the synchronous-quorum floor. dryRun keeps the
+# static count and pauses the ScaledObject.
+
+release:
+  name: postgres-db
+  namespace: tenant-acme
+
+set:
+  _cluster:
+    scheduling: {}
+    cluster-domain: cozy.local
+  _namespace:
+    monitoring: tenant-root
+
+templates:
+  - templates/db.yaml
+  - templates/scaledobject.yaml
+
+tests:
+  - it: keeps a static spec.instances and renders no ScaledObject when autoscaling is off (default)
+    templates:
+      - templates/db.yaml
+    documentSelector:
+      path: kind
+      value: Cluster
+    asserts:
+      - equal:
+          path: spec.instances
+          value: 2
+
+  - it: renders no ScaledObject when autoscaling is off (default)
+    templates:
+      - templates/scaledobject.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: drops spec.instances from the Cluster and floors the WorkloadMonitor under active autoscaling
+    templates:
+      - templates/db.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: "150"
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - notExists:
+          path: spec.instances
+        documentSelector:
+          path: kind
+          value: Cluster
+      # WorkloadMonitor tracks the quorum-floored minimum instead of a stale static value
+      - equal:
+          path: spec.replicas
+          value: 3
+        documentSelector:
+          path: kind
+          value: WorkloadMonitor
+
+  - it: renders a KEDA ScaledObject with quorum-floored bounds under active autoscaling
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: "150"
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ScaledObject
+      - equal:
+          path: metadata.name
+          value: postgres-db
+      - equal:
+          path: spec.scaleTargetRef.kind
+          value: Cluster
+      - equal:
+          path: spec.scaleTargetRef.name
+          value: postgres-db
+      # minReplicaCount = max(minReplicas=2, maxSyncReplicas+1=3, 2) = 3
+      - equal:
+          path: spec.minReplicaCount
+          value: 3
+      - equal:
+          path: spec.maxReplicaCount
+          value: 6
+      - equal:
+          path: spec.triggers[0].type
+          value: prometheus
+      - equal:
+          path: spec.triggers[0].metadata.threshold
+          value: "150"
+      - matchRegex:
+          path: spec.triggers[0].metadata.serverAddress
+          pattern: ^http://vmselect-.*:8481/select/0/prometheus$
+      # the query is scoped to the tenant namespace and folds the target in as +150
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: tenant-acme
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: \+ 150
+
+  - it: raises the effective maximum to the quorum floor when the floor exceeds maxReplicas
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: "150"
+      quorum:
+        maxSyncReplicas: 6
+    asserts:
+      # floor = maxSyncReplicas+1 = 7 > maxReplicas 6 → quorum wins on both bounds
+      - equal:
+          path: spec.minReplicaCount
+          value: 7
+      - equal:
+          path: spec.maxReplicaCount
+          value: 7
+
+  - it: keeps the static count and pauses the ScaledObject in dry-run mode
+    set:
+      autoscaling:
+        enabled: true
+        dryRun: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: "150"
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - equal:
+          path: spec.instances
+          value: 2
+        documentSelector:
+          path: kind
+          value: Cluster
+        template: templates/db.yaml
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+          value: "true"
+        template: templates/scaledobject.yaml

@@ -197,6 +197,60 @@
         }
       }
     },
+    "autoscaling": {
+      "description": "Read-replica autoscaling configuration.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "dryRun",
+        "enabled",
+        "maxReplicas",
+        "maxReplicationLagSeconds",
+        "minReplicas",
+        "target"
+      ],
+      "properties": {
+        "dryRun": {
+          "description": "Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).",
+          "type": "boolean",
+          "default": false
+        },
+        "enabled": {
+          "description": "Enable horizontal autoscaling of read replicas.",
+          "type": "boolean",
+          "default": false
+        },
+        "maxReplicas": {
+          "description": "Maximum total instances; raised to the quorum floor if the floor exceeds it.",
+          "type": "integer",
+          "default": 6
+        },
+        "maxReplicationLagSeconds": {
+          "description": "Freeze scaling while replication lag exceeds this and the primary is writing.",
+          "type": "integer",
+          "default": 30
+        },
+        "minReplicas": {
+          "description": "Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.",
+          "type": "integer",
+          "default": 2
+        },
+        "target": {
+          "description": "Target active read connections per read-serving replica.",
+          "default": 150,
+          "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "x-kubernetes-int-or-string": true
+        }
+      }
+    },
     "users": {
       "description": "Users configuration map.",
       "type": "object",

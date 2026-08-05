@@ -141,6 +141,27 @@ quorum:
   maxSyncReplicas: 0
 
 ##
+## @section Autoscaling
+##
+
+## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When enabled, `replicas` is no longer declared statically — a KEDA ScaledObject drives the CNPG instance count from read load.
+## @field {bool} enabled - Enable horizontal autoscaling of read replicas.
+## @field {int} minReplicas - Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
+## @field {int} maxReplicas - Maximum total instances; raised to the quorum floor if the floor exceeds it.
+## @field {quantity} target - Target active read connections per read-serving replica.
+## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this and the primary is writing.
+## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).
+
+## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 6
+  target: "150"
+  maxReplicationLagSeconds: 30
+  dryRun: false
+
+##
 ## @section Users configuration
 ##
 
