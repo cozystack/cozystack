@@ -53,41 +53,53 @@ jobs:
         uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
         with:
           script: |
-            // Get latest release
-            let latestRelease;
-            try {
-              latestRelease = await github.rest.repos.getLatestRelease({
-                owner: context.repo.owner,
-                repo: context.repo.repo
-              });
-            } catch (e) {
-              core.setFailed('No existing releases found; cannot determine backport target.');
+            // Enumerate the real release-X.Y branches rather than deriving them
+            // from the latest published release.
+            //
+            // Since cutting an rc freezes the line (cut-prerelease.yaml),
+            // release-X.Y is created when the first vX.Y.0-rc.N is cut — before
+            // vX.Y.0 is ever published. getLatestRelease returns the newest
+            // published STABLE, so throughout the freeze window it still named
+            // the previous line: a `backport` on a fix for the release being
+            // stabilised would have landed on release-X.(Y-1) and missed the
+            // release it was written for. That window is exactly when backports
+            // matter most, since the frozen branch is the only way in.
+            //
+            // Enumerating branches also drops the contiguous-minor assumption:
+            // `previous` used to be computed as min-1, which named a
+            // non-existent branch whenever a minor was skipped.
+            const branches = await github.paginate(github.rest.repos.listBranches, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              per_page: 100
+            });
+
+            const lines = branches
+              .map(b => /^release-(\d+)\.(\d+)$/.exec(b.name))
+              .filter(Boolean)
+              .map(m => ({ name: m[0], maj: Number(m[1]), min: Number(m[2]) }))
+              .sort((a, b) => (b.maj - a.maj) || (b.min - a.min));
+
+            if (lines.length === 0) {
+              core.setFailed('No release-X.Y branches found; cannot determine backport target.');
               return;
             }
-            
-            const [maj, min] = latestRelease.data.tag_name.replace(/^v/, '').split('.');
-            const currentBranch = `release-${maj}.${min}`;
-            const prevMin = parseInt(min) - 1;
-            const previousBranch = prevMin >= 0 ? `release-${maj}.${prevMin}` : '';
-            
+
+            const currentBranch  = lines[0].name;
+            const previousBranch = lines.length > 1 ? lines[1].name : '';
+
             core.setOutput('current_branch', currentBranch);
             core.setOutput('previous_branch', previousBranch);
-            
+
+            console.log(`Release lines found: ${lines.map(l => l.name).join(', ')}`);
             console.log(`Current branch: ${currentBranch}, Previous branch: ${previousBranch || 'N/A'}`);
-            
-            // Verify previous branch exists if we need it
-            if (previousBranch && '${{ steps.labels.outputs.backport_previous }}' === 'true') {
-              try {
-                await github.rest.repos.getBranch({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  branch: previousBranch
-                });
-                console.log(`Previous branch ${previousBranch} exists`);
-              } catch (e) {
-                core.setFailed(`Previous branch ${previousBranch} does not exist.`);
-                return;
-              }
+
+            // Both targets come from the enumeration above, so they exist by
+            // construction — no getBranch probe needed. What CAN still fail is
+            // asking for a previous line when only one exists.
+            if (!previousBranch && '${{ steps.labels.outputs.backport_previous }}' === 'true') {
+              core.setFailed('backport-previous requested, but only one release line exists.');
+              return;
             }
 
   backport:

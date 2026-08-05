@@ -1,0 +1,106 @@
+suite: paas/naas catalogs refuse to render without the system bundle
+templates:
+  - templates/bundles/paas.yaml
+  - templates/bundles/naas.yaml
+  - templates/bundles/iaas.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # bundles.system.variant keeps its value when bundles.system.enabled is false,
+  # so the pre-existing variant guard passes on a preset that selects a valid
+  # variant and still skips the whole system bundle. That combination shipped in
+  # values-isp-hosted.yaml and produced an app catalog with no dependency
+  # closure: every Package DependenciesNotReady, the cozystack-platform
+  # HelmRelease never Ready, and nothing in the output naming the cause. Fail the
+  # render instead of letting the operator discover it hours later.
+  #
+  # Assertions are scoped with `template:` because helm-unittest otherwise checks
+  # every assertion against every template listed above, and each guard lives in
+  # only one of them.
+  - it: fails the render when paas is enabled without the system bundle
+    set:
+      bundles:
+        system:
+          enabled: false
+          variant: isp-hosted
+        paas:
+          enabled: true
+        naas:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "bundles\\.paas\\.enabled requires bundles\\.system\\.enabled"
+        template: templates/bundles/paas.yaml
+
+  - it: fails the render when naas is enabled without the system bundle
+    set:
+      bundles:
+        system:
+          enabled: false
+          variant: isp-hosted
+        paas:
+          enabled: false
+        naas:
+          enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "bundles\\.naas\\.enabled requires bundles\\.system\\.enabled"
+        template: templates/bundles/naas.yaml
+
+  - it: fails the render when iaas is enabled without the system bundle
+    set:
+      bundles:
+        system:
+          enabled: false
+          variant: isp-full
+        iaas:
+          enabled: true
+        paas:
+          enabled: false
+        naas:
+          enabled: false
+    asserts:
+      - failedTemplate:
+          errorPattern: "bundles\\.iaas\\.enabled requires bundles\\.system\\.enabled"
+        template: templates/bundles/iaas.yaml
+
+  # The message has to tell the operator what to do instead, otherwise the
+  # obvious reading of "requires system" is to abandon the hosted topology.
+  - it: points the operator at the isp-hosted variant rather than at disabling the bundle
+    set:
+      bundles:
+        system:
+          enabled: false
+          variant: isp-hosted
+        paas:
+          enabled: true
+    asserts:
+      - failedTemplate:
+          errorPattern: "bundles\\.system\\.variant: isp-hosted.*bundles\\.iaas\\.enabled: false"
+        template: templates/bundles/paas.yaml
+
+  # The guard must not fire on the supported configurations.
+  - it: renders the catalog when the system bundle is enabled on the hosted variant
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-hosted
+        paas:
+          enabled: true
+        naas:
+          enabled: true
+    asserts:
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.harbor-application
+          any: true
+        template: templates/bundles/paas.yaml
+      - containsDocument:
+          apiVersion: cozystack.io/v1alpha1
+          kind: Package
+          name: cozystack.vpn-application
+          any: true
+        template: templates/bundles/naas.yaml

@@ -35,6 +35,20 @@ on:
     paths-ignore:
       - 'docs/**'
 
+  # Run against a line on request. The push trigger above cannot cover the moment
+  # a line is BORN: cut-prerelease.yaml creates release-X.Y at a commit that is
+  # already on main, so that push carries no new commits, and GitHub does not run
+  # a workflow whose `paths`/`paths-ignore` filter finds no changed files. Without
+  # a dispatch the line would have no `cozystack-packages:<line>` artifact until
+  # its first cherry-pick merged, and until then pull-requests.yaml's overlay
+  # would find nothing to pull and leave every package on its committed ref — at
+  # freeze time, the PREVIOUS release's, which is the cross-generation mix #3437
+  # fixed. The freeze step dispatches this workflow for the branch it just made.
+  #
+  # Also the recovery path when a line build fails or is cancelled: re-run it
+  # without having to push an empty commit to the line.
+  workflow_dispatch:
+
 # Per line: a newer push to the same line supersedes an in-flight build, but
 # different lines build independently.
 concurrency:
@@ -54,6 +68,34 @@ jobs:
       packages: write
 
     steps:
+      # workflow_dispatch takes ANY ref, and the "Run workflow" ref selector
+      # preselects the default branch — which is exactly where the recovery
+      # advice above, and cut-prerelease.yaml's warning, send an operator. Since
+      # IMAGE_TAG below is github.ref_name, a dispatch from 'main' spends two
+      # hours republishing cozystack-packages:main and every main image tag while
+      # build-main.yaml may be writing the same ones: the 409 tag-collision class
+      # #2711 fixed. Nothing is mislabeled (the content really is that ref), but
+      # a runner and a cache generation are gone.
+      #
+      # The push trigger is already filtered to release-X.Y; this closes the
+      # dispatch path to the same set, and keeps holding if that filter is ever
+      # widened. Anchored at both ends on purpose: unanchored, the per-release
+      # staging branches (release-1.6.1, release-1.6.0-rc.4) would qualify, and
+      # those are built by tags.yaml. Fails rather than skips — a skipped job
+      # reads in the run list like one that produced the artifact.
+      - name: Refuse a build for a non-line ref
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
+        run: |
+          if [ "$REF_TYPE" != "branch" ] \
+            || ! printf '%s' "$REF_NAME" | grep -qE '^release-[0-9]+\.[0-9]+$'; then
+            echo "::error::Refusing to build '$REF_NAME' ($REF_TYPE). This workflow publishes cozystack-packages:<ref> and every image tagged <ref>, so it may only run for a maintained release line (release-X.Y)."
+            echo "::error::Pick the release-X.Y branch in the 'Run workflow' ref selector. To build main, use build-main.yaml."
+            exit 1
+          fi
+          echo "Building line '$REF_NAME'."
+
       - name: Checkout code
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:

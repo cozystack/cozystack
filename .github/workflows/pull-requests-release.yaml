@@ -333,14 +333,17 @@ jobs:
             // from the merge commit already checked out here.
             //
             // Deliberately not left to update-releasenotes.yaml: that workflow
-            // triggers on pushes to main touching docs/changelogs/v*.md, so it
-            // would race this job on the very same push — and if it won, it
-            // would find no published release yet, skip, and never fire again,
-            // leaving the release body permanently empty. It also only watches
-            // main, so a patch release whose promote PR targets release-X.Y
-            // would never be synced at all. Reading the file here is both
-            // race-free and branch-agnostic; update-releasenotes.yaml remains
-            // for later maintainer edits and manual re-syncs.
+            // triggers on pushes to main touching docs/changelogs/v*.md, and it
+            // only watches main. Since the rc freeze every promote PR targets
+            // release-X.Y, so no such push exists at promote time and it would
+            // sync no release at all — that used to be the patch-release corner
+            // case and is now every release. Back when the promote PR did merge
+            // into main it was worse than useless: it raced this job on that very
+            // push, and if it won it found no published release yet, skipped, and
+            // never fired again, leaving the release body permanently empty.
+            // Reading the file here is both race-free and branch-agnostic;
+            // update-releasenotes.yaml remains for later maintainer edits and
+            // manual re-syncs.
             const fs = require('fs');
             const changelogPath = `docs/changelogs/${tag}.md`;
             let body;

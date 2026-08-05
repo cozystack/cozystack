@@ -237,11 +237,12 @@ code_lines() { grep -vE '^[[:space:]]*#'; }
   return 0
 }
 
-# 6. When a promote PR targets release-X.Y (a patch release), the changelog never
-#    reaches main, so the backstop fires. It must PORT the reviewed file from the
-#    tag, not regenerate: a second AI pass would spend quota and then, once its PR
-#    merged, update-releasenotes.yaml would overwrite already-published release
-#    notes with text nobody approved.
+# 6. A promote PR targets release-X.Y for EVERY release since the rc freeze, so
+#    the changelog never reaches main on its own and the backstop fires as the
+#    normal path rather than the patch-release corner case it was written for. It
+#    must PORT the reviewed file from the tag, not regenerate: a second AI pass
+#    would spend quota and then, once its PR merged, update-releasenotes.yaml
+#    would overwrite already-published release notes with text nobody approved.
 @test "the tags.yaml backstop ports an existing changelog instead of regenerating" {
   block="$(job_block generate-changelog "$TAGS")"
   [ -n "$block" ] || { echo "Could not locate generate-changelog in $TAGS" >&2; exit 1; }
