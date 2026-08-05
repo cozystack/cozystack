@@ -1,0 +1,31 @@
+suite: keda package renders the external-metrics APIService and cozystack ServiceMonitors
+release:
+  name: keda
+  namespace: cozy-keda
+tests:
+  # The whole database-autoscaling design rests on KEDA claiming the cluster-wide
+  # external.metrics.k8s.io APIService. Guard that the vendored chart still emits it.
+  - it: registers the v1beta1.external.metrics.k8s.io APIService
+    templates:
+      - charts/keda/templates/metrics-server/apiservice.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: APIService
+      - equal:
+          path: metadata.name
+          value: v1beta1.external.metrics.k8s.io
+      - equal:
+          path: spec.group
+          value: external.metrics.k8s.io
+
+  # The shim turns ServiceMonitors on; guard the override survives a re-vendor.
+  - it: emits the metrics-server ServiceMonitor enabled by the cozystack shim
+    templates:
+      - charts/keda/templates/metrics-server/servicemonitor.yaml
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ServiceMonitor

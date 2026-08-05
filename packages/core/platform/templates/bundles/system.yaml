@@ -322,6 +322,7 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-dns-application" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.kuberture" $) }}
+{{include "cozystack.platform.package.optional.default" (list "cozystack.keda" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.external-secrets-operator" $) }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.linstor-gui" $) }}
 {{- if has "cozystack.bootbox" (default (list) .Values.bundles.enabledPackages) }}
