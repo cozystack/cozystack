@@ -27,3 +27,6 @@ spec:
         {{- if .Values.cozystackController.disableTelemetry }}
         - --disable-telemetry
         {{- end }}
+        {{- with .Values.cozystackController.seaweedfsMetricsEndpoint }}
+        - --seaweedfs-metrics-endpoint={{ . }}
+        {{- end }}
