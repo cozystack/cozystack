@@ -24,56 +24,63 @@ type certReloader struct {
 	certFile string
 	keyFile  string
 
-	mu      sync.RWMutex
-	cert    *tls.Certificate
-	modTime time.Time
+	mu            sync.RWMutex
+	cert          *tls.Certificate
+	loadedModTime time.Time
 }
 
 // newCertReloader loads the initial key pair and returns a reloader for it.
 func newCertReloader(certFile, keyFile string) (*certReloader, error) {
 	cr := &certReloader{certFile: certFile, keyFile: keyFile}
-	if err := cr.reload(); err != nil {
+	if err := cr.reload(cr.certModTime()); err != nil {
 		return nil, err
 	}
 	return cr, nil
 }
 
-// reload reads the key pair from disk and atomically swaps the cached certificate.
-func (cr *certReloader) reload() error {
-	cert, err := tls.LoadX509KeyPair(cr.certFile, cr.keyFile)
-	if err != nil {
-		return err
-	}
-
-	var modTime time.Time
-	if fi, statErr := os.Stat(cr.certFile); statErr == nil {
-		modTime = fi.ModTime()
-	}
-
-	cr.mu.Lock()
-	cr.cert = &cert
-	cr.modTime = modTime
-	cr.mu.Unlock()
-	return nil
-}
-
-// changed reports whether the certificate file was modified since the last load.
-func (cr *certReloader) changed() bool {
+// certModTime returns the modification time of the certificate file, or the zero
+// time if it cannot be stat'd (logged so a broken mount is not silently invisible).
+func (cr *certReloader) certModTime() time.Time {
 	fi, err := os.Stat(cr.certFile)
 	if err != nil {
-		return false
+		log.Printf("certificate stat failed, keeping previous certificate: %v", err)
+		return time.Time{}
 	}
-	cr.mu.RLock()
-	defer cr.mu.RUnlock()
-	return fi.ModTime().After(cr.modTime)
+	return fi.ModTime()
 }
 
-// GetCertificate is a tls.Config.GetCertificate callback. It reloads the key pair
-// when the file changes and keeps serving the last good certificate if a reload
-// fails (for example a torn read while the mounted Secret is being updated).
+// reload reads the key pair from disk and atomically swaps the cached certificate.
+//
+// modTime is the certificate file's modification time observed BEFORE the read, so a
+// Secret swap racing the read leaves modTime older than the file on disk and is caught
+// on the next handshake instead of being cached under a newer mtime and missed. The
+// attempt is recorded regardless of outcome, so a persistently unreadable file is
+// retried only once its mtime advances, not on every handshake.
+func (cr *certReloader) reload(modTime time.Time) error {
+	cert, err := tls.LoadX509KeyPair(cr.certFile, cr.keyFile)
+
+	cr.mu.Lock()
+	cr.loadedModTime = modTime
+	if err == nil {
+		cr.cert = &cert
+	}
+	cr.mu.Unlock()
+	return err
+}
+
+// GetCertificate is a tls.Config.GetCertificate callback. It reloads the key pair when
+// the certificate file's modification time changes and keeps serving the last good
+// certificate if a reload fails (for example a torn read while the mounted Secret is
+// being updated).
 func (cr *certReloader) GetCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-	if cr.changed() {
-		if err := cr.reload(); err != nil {
+	modTime := cr.certModTime()
+
+	cr.mu.RLock()
+	stale := !modTime.IsZero() && !modTime.Equal(cr.loadedModTime)
+	cr.mu.RUnlock()
+
+	if stale {
+		if err := cr.reload(modTime); err != nil {
 			log.Printf("certificate reload failed, keeping previous certificate: %v", err)
 		}
 	}
