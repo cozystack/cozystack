@@ -197,6 +197,14 @@
         }
       }
     },
+    "metric": {
+      "description": "Read-load signal for autoscaling.",
+      "type": "string",
+      "enum": [
+        "ReadConnections",
+        "ReadCPUUtilization"
+      ]
+    },
     "autoscaling": {
       "description": "Read-replica autoscaling configuration.",
       "type": "object",
@@ -206,12 +214,14 @@
         "enabled",
         "maxReplicas",
         "maxReplicationLagSeconds",
+        "metric",
         "minReplicas",
-        "target"
+        "target",
+        "transition"
       ],
       "properties": {
         "dryRun": {
-          "description": "Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).",
+          "description": "Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.",
           "type": "boolean",
           "default": false
         },
@@ -230,13 +240,22 @@
           "type": "integer",
           "default": 30
         },
+        "metric": {
+          "description": "Read-load signal to scale on.",
+          "type": "string",
+          "default": "ReadConnections",
+          "enum": [
+            "ReadConnections",
+            "ReadCPUUtilization"
+          ]
+        },
         "minReplicas": {
           "description": "Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.",
           "type": "integer",
           "default": 2
         },
         "target": {
-          "description": "Target active read connections per read-serving replica.",
+          "description": "Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores).",
           "default": 150,
           "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
           "anyOf": [
@@ -248,6 +267,11 @@
             }
           ],
           "x-kubernetes-int-or-string": true
+        },
+        "transition": {
+          "description": "Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.",
+          "type": "boolean",
+          "default": false
         }
       }
     },

@@ -11,7 +11,7 @@
      "behavior" (dict
        "scaleUp" (dict "stabilizationWindowSeconds" 300)
        "scaleDown" (dict "stabilizationWindowSeconds" 1800 "policies" (list (dict "type" "Pods" "value" 1 "periodSeconds" 600))))
-     "paused" .Values.autoscaling.dryRun
+     "paused" ((include "postgres.autoscaling.paused" .) | eq "true")
      "labels" (dict "app.kubernetes.io/name" "postgres.apps.cozystack.io" "app.kubernetes.io/instance" .Release.Name)
 ) }}
 {{- end }}

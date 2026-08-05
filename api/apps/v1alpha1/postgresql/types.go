@@ -49,6 +49,8 @@ type ConfigSpec struct {
 	// Quorum configuration for synchronous replication.
 	// +kubebuilder:default:={}
 	Quorum Quorum `json:"quorum"`
+	// Read-load signal for autoscaling.
+	Metric ReadMetric `json:"metric"`
 	// Read-replica autoscaling configuration.
 	// +kubebuilder:default:={}
 	Autoscaling Autoscaling `json:"autoscaling"`
@@ -67,7 +69,7 @@ type ConfigSpec struct {
 }
 
 type Autoscaling struct {
-	// Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).
+	// Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.
 	// +kubebuilder:default:=false
 	DryRun bool `json:"dryRun"`
 	// Enable horizontal autoscaling of read replicas.
@@ -79,12 +81,18 @@ type Autoscaling struct {
 	// Freeze scaling while replication lag exceeds this and the primary is writing.
 	// +kubebuilder:default:=30
 	MaxReplicationLagSeconds int `json:"maxReplicationLagSeconds"`
+	// Read-load signal to scale on.
+	// +kubebuilder:default:="ReadConnections"
+	Metric ReadMetric `json:"metric"`
 	// Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
 	// +kubebuilder:default:=2
 	MinReplicas int `json:"minReplicas"`
-	// Target active read connections per read-serving replica.
+	// Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores).
 	// +kubebuilder:default:=150
 	Target resource.Quantity `json:"target"`
+	// Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.
+	// +kubebuilder:default:=false
+	Transition bool `json:"transition"`
 }
 
 type Backup struct {
@@ -206,6 +214,9 @@ type User struct {
 	// Whether the user has replication privileges.
 	Replication bool `json:"replication,omitempty"`
 }
+
+// +kubebuilder:validation:Enum="ReadConnections";"ReadCPUUtilization"
+type ReadMetric string
 
 // +kubebuilder:validation:Enum="t1.nano";"t1.micro";"t1.small";"t1.medium";"t1.large";"t1.xlarge";"t1.2xlarge";"t1.4xlarge";"c1.nano";"c1.micro";"c1.small";"c1.medium";"c1.large";"c1.xlarge";"c1.2xlarge";"c1.4xlarge";"s1.nano";"s1.micro";"s1.small";"s1.medium";"s1.large";"s1.xlarge";"s1.2xlarge";"s1.4xlarge";"u1.nano";"u1.micro";"u1.small";"u1.medium";"u1.large";"u1.xlarge";"u1.2xlarge";"u1.4xlarge";"m1.nano";"m1.micro";"m1.small";"m1.medium";"m1.large";"m1.xlarge";"m1.2xlarge";"m1.4xlarge";"nano";"micro";"small";"medium";"large";"xlarge";"2xlarge"
 type ResourcesPreset string

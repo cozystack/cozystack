@@ -133,6 +133,53 @@ tests:
           path: spec.maxReplicaCount
           value: 7
 
+  - it: holds instances at the staged count and pauses the ScaledObject in migration phase 1 (transition)
+    set:
+      replicas: 5                    # operator stages this to the live instance count
+      autoscaling:
+        enabled: true
+        transition: true
+        minReplicas: 2
+        maxReplicas: 6
+        target: "150"
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      # phase 1: the static field is kept (as a floor) so three-way merge cannot
+      # delete it and collapse CNPG to 1 while KEDA stands up
+      - equal:
+          path: spec.instances
+          value: 5
+        documentSelector:
+          path: kind
+          value: Cluster
+        template: templates/db.yaml
+      # ...and the ScaledObject is present but paused (no writer contention yet)
+      - equal:
+          path: metadata.annotations["autoscaling.keda.sh/paused"]
+          value: "true"
+        template: templates/scaledobject.yaml
+
+  - it: builds a CPU query when metric is ReadCPUUtilization
+    templates:
+      - templates/scaledobject.yaml
+    set:
+      autoscaling:
+        enabled: true
+        metric: ReadCPUUtilization
+        minReplicas: 2
+        maxReplicas: 6
+        target: "500"
+      quorum:
+        maxSyncReplicas: 2
+    asserts:
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: container_cpu_usage_seconds_total
+      - matchRegex:
+          path: spec.triggers[0].metadata.query
+          pattern: \+ 500
+
   - it: keeps the static count and pauses the ScaledObject in dry-run mode
     set:
       autoscaling:

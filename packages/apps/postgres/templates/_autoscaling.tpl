@@ -7,12 +7,22 @@ vmselect address, and the read-load PromQL.
 */}}
 
 {{/*
-postgres.autoscaling.active is "true" only when autoscaling is enabled AND not in
-dry-run. It gates dropping the static spec.instances: in dry-run the static count
-is kept and the ScaledObject is rendered paused (recommendation mode).
+postgres.autoscaling.active is "true" only when autoscaling is enabled AND neither
+in dry-run NOR mid-transition. It gates dropping the static spec.instances: while
+dry-run (permanent recommendation) or transition (migration phase 1) is set, the
+static count is kept and the ScaledObject is rendered paused, so KEDA never
+contends with Flux for the field.
 */}}
 {{- define "postgres.autoscaling.active" -}}
-{{- if and .Values.autoscaling.enabled (not .Values.autoscaling.dryRun) -}}true{{- end -}}
+{{- if and .Values.autoscaling.enabled (not .Values.autoscaling.dryRun) (not .Values.autoscaling.transition) -}}true{{- end -}}
+{{- end -}}
+
+{{/*
+postgres.autoscaling.paused is "true" when the ScaledObject must be rendered
+paused: dry-run (recommendation) or transition (migration phase 1).
+*/}}
+{{- define "postgres.autoscaling.paused" -}}
+{{- if or .Values.autoscaling.dryRun .Values.autoscaling.transition -}}true{{- end -}}
 {{- end -}}
 
 {{/*
@@ -48,14 +58,20 @@ tenant with an isolated monitoring stack point elsewhere later).
 {{- end -}}
 
 {{/*
-Read-load metric: Σ(active read connections over the standby pods) + target.
-Fed to KEDA as an AverageValue trigger so stock HPA computes
+Read-load metric: Σ(read load over the standby pods) + target, fed to KEDA as an
+AverageValue trigger so stock HPA computes
 desired = ceil((Σ + target) / target) = 1 + ceil(Σ / target) = primaryCount + desiredRead.
-The namespace matcher scopes it to this tenant; the exact expression (and the
-replication-lag clamp) is calibrated on a live cluster per the proposal's PoC.
+The join restricts the metric to this app's standby pods; the namespace matcher
+scopes it to the tenant. The exact expression (and the replication-lag clamp) is
+calibrated on a live cluster per the proposal's PoC.
 */}}
 {{- define "postgres.autoscaling.query" -}}
 {{- $ns := .Release.Namespace -}}
 {{- $rel := .Release.Name -}}
-{{- printf "sum(cnpg_backends_total{namespace=%q,state=\"active\"} * on(namespace,pod) group_left() kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q,label_cnpg_io_instance_role=\"replica\"}) + %v" $ns $ns $rel .Values.autoscaling.target -}}
+{{- $join := printf "* on(namespace,pod) group_left() kube_pod_labels{namespace=%q,label_cnpg_io_cluster=%q,label_cnpg_io_instance_role=\"replica\"}" $ns $rel -}}
+{{- if eq .Values.autoscaling.metric "ReadCPUUtilization" -}}
+{{- printf "sum(rate(container_cpu_usage_seconds_total{namespace=%q,container=\"postgres\"}[5m]) %s) * 1000 + %v" $ns $join .Values.autoscaling.target -}}
+{{- else -}}
+{{- printf "sum(cnpg_backends_total{namespace=%q,state=\"active\"} %s) + %v" $ns $join .Values.autoscaling.target -}}
+{{- end -}}
 {{- end -}}

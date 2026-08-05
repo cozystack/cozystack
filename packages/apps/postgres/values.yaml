@@ -144,22 +144,41 @@ quorum:
 ## @section Autoscaling
 ##
 
-## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When enabled, `replicas` is no longer declared statically — a KEDA ScaledObject drives the CNPG instance count from read load.
+## @typedef {struct} Autoscaling - Horizontal autoscaling of read replicas via KEDA. When active, `replicas` is no longer declared statically — a KEDA ScaledObject drives the CNPG instance count from read load.
 ## @field {bool} enabled - Enable horizontal autoscaling of read replicas.
 ## @field {int} minReplicas - Minimum total instances; raised to the synchronous-quorum floor (`maxSyncReplicas + 1`) and to 2 when either is higher.
 ## @field {int} maxReplicas - Maximum total instances; raised to the quorum floor if the floor exceeds it.
-## @field {quantity} target - Target active read connections per read-serving replica.
+## @field {ReadMetric} metric - Read-load signal to scale on.
+## @field {quantity} target - Target read load per read-serving replica (unit depends on `metric`: active connections, or CPU millicores).
 ## @field {int} maxReplicationLagSeconds - Freeze scaling while replication lag exceeds this and the primary is writing.
-## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate).
+## @field {bool} dryRun - Recommendation mode: keep the static count and render the ScaledObject paused (KEDA does not actuate). Permanent, unlike `transition`.
+## @field {bool} transition - Migration phase 1: keep `.spec.instances` rendered as a floor (from `replicas`, which the operator stages to the live count) AND pause the ScaledObject, so KEDA stands up without contending for the field. Flip to false (phase 2) to drop the static field and hand the count to KEDA. See the enablement note below.
 
+## @param {ReadMetric} metric - Read-load signal for autoscaling.
+## @enum {string} ReadMetric - Read-load metric type.
+## @value ReadConnections - Active read connections on the standby pods.
+## @value ReadCPUUtilization - CPU (millicores) of the postgres container on the standby pods.
+
+## Enabling autoscaling on an EXISTING database is a two-phase, count-preserving
+## migration — a naive enable drops `.spec.instances` and CNPG defaults to 1.
+## Phase 1: stage `replicas` to the current live instance count and set
+## `autoscaling: {enabled: true, transition: true, ...}` — the field is held as a
+## floor and the ScaledObject comes up paused (no writer conflict); verify KEDA is
+## healthy. Phase 2: set `transition: false`. Because helm-controller applies via
+## Helm's three-way merge (not SSA), suspend the HelmRelease across the phase-2
+## apply so dropping the static field does not race CNPG's default-to-1 (the exact
+## safe handoff is confirmed on a live cluster per the design proposal). A NEW
+## database can skip the migration — set `enabled: true` directly.
 ## @param {Autoscaling} autoscaling - Read-replica autoscaling configuration.
 autoscaling:
   enabled: false
   minReplicas: 2
   maxReplicas: 6
+  metric: ReadConnections
   target: "150"
   maxReplicationLagSeconds: 30
   dryRun: false
+  transition: false
 
 ##
 ## @section Users configuration
