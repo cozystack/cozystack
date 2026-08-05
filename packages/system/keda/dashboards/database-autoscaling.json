@@ -1,0 +1,59 @@
+{
+  "title": "Database Autoscaling",
+  "uid": "cozy-db-autoscaling",
+  "tags": ["cozystack", "database", "autoscaling"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "namespace",
+        "type": "query",
+        "datasource": "VictoriaMetrics",
+        "query": "label_values(kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\"}, namespace)",
+        "includeAll": true,
+        "multi": true
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Desired vs current replicas",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        { "expr": "kube_horizontalpodautoscaler_status_current_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "current {{namespace}}/{{horizontalpodautoscaler}}" },
+        { "expr": "kube_horizontalpodautoscaler_status_desired_replicas{horizontalpodautoscaler=~\"keda-hpa-.*\",namespace=~\"$namespace\"}", "legendFormat": "desired {{namespace}}/{{horizontalpodautoscaler}}" }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Active read connections",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        { "expr": "sum by (namespace) (cnpg_backends_total{state=\"active\",namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}" }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Replication lag (seconds)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        { "expr": "max by (namespace) (cnpg_pg_replication_lag{namespace=~\"$namespace\"})", "legendFormat": "{{namespace}}" }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Scaling limited (ScalingLimited=true)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        { "expr": "kube_horizontalpodautoscaler_status_condition{horizontalpodautoscaler=~\"keda-hpa-.*\",condition=\"ScalingLimited\",status=\"true\",namespace=~\"$namespace\"}", "legendFormat": "{{namespace}}/{{horizontalpodautoscaler}}" }
+      ]
+    }
+  ]
+}

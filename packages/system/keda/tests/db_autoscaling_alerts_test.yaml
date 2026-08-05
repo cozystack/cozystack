@@ -1,0 +1,43 @@
+suite: database-autoscaling alert rules
+templates:
+  - templates/alerts.yaml
+release:
+  name: keda
+  namespace: cozy-keda
+tests:
+  - it: renders a PrometheusRule with the database-autoscaling alerts by default
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: PrometheusRule
+      - equal:
+          path: spec.groups[0].name
+          value: database-autoscaling.rules
+      # stuck scale-up (quota / unschedulable / unbindable PVC): desired > current
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScaleStuck
+          any: true
+      # scaling limited at the (possibly quorum-raised) maximum
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerAtMax
+          any: true
+      # KEDA cannot read the metric (vmselect down / bad query): scaler errors
+      - contains:
+          path: spec.groups[0].rules
+          content:
+            alert: DatabaseAutoscalerScalerErrors
+          any: true
+
+  - it: can be disabled
+    set:
+      databaseAutoscaling:
+        alerts:
+          enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0

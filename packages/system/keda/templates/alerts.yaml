@@ -1,0 +1,56 @@
+{{- if .Values.databaseAutoscaling.alerts.enabled }}
+{{- /*
+Alerts for cozystack managed-database read-replica autoscaling. KEDA names the
+HPA it generates "keda-hpa-<scaledobject>", so every rule scopes to
+horizontalpodautoscaler=~"keda-hpa-.*". Metric names/labels are calibrated on a
+live cluster per the design proposal's PoC; the rule shapes are what this ships.
+*/}}
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: database-autoscaling
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: database-autoscaling
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+spec:
+  groups:
+  - name: database-autoscaling.rules
+    rules:
+    # Scale-up patched but not converging: quota-rejected standby, unbindable
+    # PVC, or unschedulable pod. There is no automatic rollback (see the design
+    # proposal) — this alert is the operator's signal to resolve it.
+    - alert: DatabaseAutoscalerScaleStuck
+      expr: |-
+        kube_horizontalpodautoscaler_status_desired_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
+        > kube_horizontalpodautoscaler_status_current_replicas{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*"}
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: Database autoscaler cannot reach its desired replica count.
+        description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} has wanted more replicas than are available for 15m (stuck scale-up — likely quota, unbindable PVC, or unschedulable pod).
+    # Scaling is limited at the (possibly quorum-raised) maximum. Sustained means
+    # the configured maxReplicas — or the quorum floor that overrode it — is the
+    # ceiling under real load.
+    - alert: DatabaseAutoscalerAtMax
+      expr: |-
+        kube_horizontalpodautoscaler_status_condition{job="kube-state-metrics",horizontalpodautoscaler=~"keda-hpa-.*",condition="ScalingLimited",status="true"} == 1
+      for: 30m
+      labels:
+        severity: info
+      annotations:
+        summary: Database autoscaler has been scaling-limited for 30m.
+        description: HPA {{ "{{ $labels.horizontalpodautoscaler }}" }} in namespace {{ "{{ $labels.namespace }}" }} reports ScalingLimited=true for 30m (at maxReplicas, or the synchronous-quorum floor raised the effective maximum).
+    # KEDA cannot evaluate the trigger (vmselect unreachable or the query fails):
+    # scaling silently stops. Never scale blind.
+    - alert: DatabaseAutoscalerScalerErrors
+      expr: |-
+        increase(keda_scaler_errors_total[15m]) > 0
+      for: 15m
+      labels:
+        severity: warning
+      annotations:
+        summary: KEDA scaler is erroring for a managed database.
+        description: KEDA reported scaler errors over the last 15m for a database ScaledObject (metric source unreachable or query invalid); the desired count is not being updated.
+{{- end }}

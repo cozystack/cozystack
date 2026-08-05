@@ -1,3 +1,12 @@
+# cozystack-owned autoscaling observability, rendered by this umbrella chart's
+# own templates (templates/alerts.yaml, templates/dashboard.yaml) — NOT passed to
+# the vendored KEDA subchart.
+databaseAutoscaling:
+  alerts:
+    enabled: true
+  dashboard:
+    enabled: true
+
 keda:
   # Cozystack ships a Prometheus (VictoriaMetrics) stack by default, so surface
   # KEDA's operator, metrics-server and webhook metrics through ServiceMonitors.
