@@ -329,6 +329,15 @@ func (g *DefaultObjectsGate) missingObjects(ctx context.Context, backupClass *ba
 		if strategy.StrategyRef.APIGroup != nil && *strategy.StrategyRef.APIGroup != "" {
 			group = *strategy.StrategyRef.APIGroup
 		}
+		// When the Velero BSL is disabled (velero.bslEnabled=false, surfaced
+		// here as an empty VeleroNamespace) the chart gates the Velero
+		// Strategy CRs off the SAME flag, so they are never rendered. The
+		// BackupClass still routes to them unconditionally, so counting them
+		// as missing would force a Helm upgrade every MinForceInterval
+		// forever against a render that can never produce them.
+		if g.VeleroNamespace == "" && group == strategyAPIGroup && kind == "Velero" {
+			continue
+		}
 		key := fmt.Sprintf("%s/%s", kind, name)
 		if _, dup := seen[key]; dup {
 			continue

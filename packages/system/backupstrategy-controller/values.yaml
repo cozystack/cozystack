@@ -157,10 +157,13 @@ backupStorage:
 # DefaultObjectsGate has forced a real Helm upgrade (an interval reconcile
 # alone does not re-render). Setting this
 # to false is an explicit opt-out for clusters that disable VM backups
-# entirely and want to avoid the cluster-default BSL — in that case the
-# cozy-default-velero-vminstance / -vmdisk strategy CRs still ship but
-# their `storageLocation: cozy-default` reference will not resolve, so
-# VM BackupJobs against cozy-default will fail.
+# entirely and want to avoid the cluster-default BSL. In that case the
+# cozy-default-velero-vminstance / -vmdisk Strategy CRs are gated off the
+# same flag and are NOT rendered either, so the DefaultObjectsGate does
+# not expect them (it would otherwise force a Helm upgrade forever against
+# a render that can never produce them). VM BackupJobs against cozy-default
+# still fail, because the BackupClass keeps routing VMInstance / VMDisk to
+# those absent strategies.
 velero:
   bslEnabled: true
   namespace: cozy-velero

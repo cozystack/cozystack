@@ -383,17 +383,21 @@ func TestMissingObjectsIgnoresUnmappedKinds(t *testing.T) {
 	}
 }
 
-// TestMissingObjectsSkipsBSLWhenVeleroNamespaceEmpty covers
-// velero.bslEnabled=false: the chart renders no BSL, so its absence is not
-// a defect and must not drive forced upgrades.
-func TestMissingObjectsSkipsBSLWhenVeleroNamespaceEmpty(t *testing.T) {
+// TestMissingObjectsSkipsVeleroWhenNamespaceEmpty covers
+// velero.bslEnabled=false: the chart gates BOTH the BSL and the Velero
+// Strategy CRs off the same flag, so neither is rendered and their absence
+// is not a defect. The BackupClass still routes to the Velero strategies
+// unconditionally, which is the trap: without the skip the gate would count
+// the never-rendered Velero CRs as missing and force a Helm upgrade every
+// MinForceInterval forever. The Velero objects are deliberately NOT
+// pre-created here, because with the BSL disabled the chart never renders
+// them on a real cluster.
+func TestMissingObjectsSkipsVeleroWhenNamespaceEmpty(t *testing.T) {
 	bc := cozyDefaultBackupClass()
 	g, _ := newGate(t, []client.Object{sourceSecret("b"), bc},
 		helmReleaseObject(),
 		strategyObject("CNPG", "cozy-default-cnpg"),
 		strategyObject("Etcd", "cozy-default-etcd"),
-		strategyObject("Velero", "cozy-default-velero-vminstance"),
-		strategyObject("Velero", "cozy-default-velero-vmdisk"),
 	)
 	g.VeleroNamespace = ""
 
@@ -402,7 +406,7 @@ func TestMissingObjectsSkipsBSLWhenVeleroNamespaceEmpty(t *testing.T) {
 		t.Fatalf("missingObjects: %v", err)
 	}
 	if len(missing) != 0 {
-		t.Fatalf("missing = %v, want none when the BSL is disabled", missing)
+		t.Fatalf("missing = %v, want none when Velero is disabled", missing)
 	}
 }
 
