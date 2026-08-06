@@ -56,8 +56,9 @@ not share a library), and tests/render-parity.sh now compares the machine
 config the two talos-reconcile Jobs apply, so a divergence here fails a test
 instead of shipping.
 
-Takes the node group dict, returns a YAML list (empty output when there is
-nothing to load, so the caller can gate the whole `kernel:` block on it).
+Takes a context carrying .group and .groupName, returns a YAML list (empty
+output when there is nothing to load, so the caller can gate the whole
+`kernel:` block on it).
 
 A Talos system extension ships a kernel module but does not load it — that is
 `machine.kernel.modules`' job. The NVIDIA extensions are the case that made
@@ -91,10 +92,35 @@ has to be the open-kernel-modules extension, since the proprietary one loads,
 creates `/dev/nvidia0`, and then finds no devices.
 */}}
 {{- define "kubernetes.kernelModules" -}}
-{{- $group := . -}}
+{{- $group := .group -}}
+{{- $groupName := .groupName -}}
 {{- $modules := list -}}
 {{- if kindIs "slice" $group.kernelModules -}}
 {{-   $modules = $group.kernelModules -}}
+{{- /* Validate the USER-SUPPLIED list only — the automatic NVIDIA set below is
+         valid by construction. Same split, and the same regexMatch/fail idiom, as
+         the kubelet reservation guards in cluster.yaml.
+
+         This is a shell-injection guard, not a typo guard. The machine config is
+         written through `cat <<EOF | kubectl apply -f -` with an UNQUOTED
+         delimiter, which the script needs so ${RELEASE} and friends expand, and
+         which therefore expands everything else in the block too. A module name
+         of `nvidia$(id)` would run `id` inside the talos-reconcile pod, whose
+         ServiceAccount can write TalosConfigTemplates and read Talos secrets.
+         These values come straight from a tenant-facing CR, so the render is the
+         only place left to stop them. */}}
+{{-   range $modules -}}
+{{-     $name := .name | default "" | toString -}}
+{{-     if not (regexMatch `^[a-z0-9_-]+$` $name) -}}
+{{-       fail (printf "pool %s: invalid kernelModules name %q — must be a kernel module name matching ^[a-z0-9_-]+$ (e.g. nvidia_uvm)" $groupName $name) -}}
+{{-     end -}}
+{{-     range .parameters | default list -}}
+{{-       $param := . | toString -}}
+{{-       if not (regexMatch `^[A-Za-z0-9_.,:=+/-]+$` $param) -}}
+{{-         fail (printf "pool %s: invalid kernelModules parameter %q on module %q — must match ^[A-Za-z0-9_.,:=+/-]+$ (e.g. NVreg_EnableGpuFirmware=1)" $groupName $param $name) -}}
+{{-       end -}}
+{{-     end -}}
+{{-   end -}}
 {{- else -}}
 {{-   range $group.gpus | default list -}}
 {{-     if hasPrefix "nvidia.com/" (.name | default "") -}}
@@ -148,7 +174,21 @@ workers are not rolled. Setting it does roll that pool's workers, which is
 inherent: changing a node's boot image means replacing the node.
 */}}
 {{- define "kubernetes.schematicID" -}}
-{{- .group.schematicID | default .Values.talos.schematicID -}}
+{{- $schematicID := .group.schematicID | default .Values.talos.schematicID | toString -}}
+{{- /* Shell-injection guard, for the same reason as kubernetes.kernelModules: this
+       value is interpolated into `install.image` inside an unquoted heredoc in the
+       talos-reconcile Job, so a `$(...)` in it would execute there.
+
+       Validates the EFFECTIVE value rather than only the per-group override, which
+       also closes the pre-existing path through the cluster-wide talos.schematicID.
+       An image-factory schematic ID is the sha256 of the schematic, so 64 lowercase
+       hex characters is the whole of the syntax; anything else would 404 at the
+       factory anyway, and failing the render says so instead of leaving a VM stuck
+       importing an image that does not exist. */}}
+{{- if not (regexMatch `^[0-9a-f]{64}$` $schematicID) -}}
+{{- fail (printf "pool %s: invalid schematicID %q — must be a Talos image-factory schematic ID, 64 lowercase hex characters" .groupName $schematicID) -}}
+{{- end -}}
+{{- $schematicID -}}
 {{- end }}
 
 {{/*

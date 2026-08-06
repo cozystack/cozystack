@@ -256,3 +256,68 @@ tests:
         documentSelector:
           path: kind
           value: Job
+
+  # B1 from review: these values reach an unquoted `cat <<EOF | kubectl apply -f -`
+  # heredoc in the Job's shell script, so a `$(...)` in them would execute inside the
+  # talos-reconcile pod, whose ServiceAccount can write TalosConfigTemplates and read
+  # Talos secrets. They come from a tenant-facing CR, and cozyvalues-gen has no
+  # `pattern` vocabulary, so the render is the only place left to stop them.
+  - it: rejects a module name that could inject shell into the reconcile Job
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kernelModules:
+            - name: nvidia$(id)
+          kubelet: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid kernelModules name "nvidia\$\(id\)"'
+
+  - it: rejects a module parameter that could inject shell into the reconcile Job
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [worker]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kernelModules:
+            - name: nvidia
+              parameters:
+                - "opt=$(cat /etc/passwd)"
+          kubelet: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid kernelModules parameter'

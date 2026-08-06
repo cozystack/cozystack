@@ -398,7 +398,7 @@ spec:
                                only when the group resolves to a non-empty list, so a
                                group without modules renders the machine config it
                                rendered before this field existed — no worker roll. */}}
-                        {{- $kernelModules := include "kubernetes.kernelModules" .group }}
+                        {{- $kernelModules := include "kubernetes.kernelModules" . }}
                         {{- if $kernelModules }}
                         kernel:
                           modules:

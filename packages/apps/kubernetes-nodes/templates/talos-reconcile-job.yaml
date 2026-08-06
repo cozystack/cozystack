@@ -300,7 +300,7 @@ spec:
                                when the pool resolves to a non-empty list, so a pool
                                without modules renders the machine config it rendered
                                before this field existed — no worker roll. */}}
-                        {{- $kernelModules := include "kubernetes.kernelModules" .group }}
+                        {{- $kernelModules := include "kubernetes.kernelModules" . }}
                         {{- if $kernelModules }}
                         kernel:
                           modules:

@@ -209,3 +209,38 @@ tests:
         documentSelector:
           path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
           value: 50Gi
+
+  # Same injection sink as kernelModules: schematicID is interpolated into
+  # `install.image` inside the unquoted heredoc. Validating the effective value also
+  # closes the pre-existing path through the cluster-wide talos.schematicID.
+  - it: rejects a schematicID that could inject shell into the reconcile Job
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          schematicID: "$(id)"
+          kubelet: {}
+    asserts:
+      # The guard lives in a shared helper reached from both this suite's templates,
+      # and Helm aborts the whole render on the first one to hit it, so the assert
+      # names the template that reports the failure rather than the only one able to.
+      - failedTemplate:
+          errorPattern: 'invalid schematicID'
+        template: templates/talos/talos-reconcile-job.yaml

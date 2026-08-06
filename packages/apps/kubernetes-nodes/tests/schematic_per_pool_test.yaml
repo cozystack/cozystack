@@ -99,3 +99,25 @@ tests:
         documentSelector:
           path: kind
           value: KubevirtMachineTemplate
+
+  # Same injection sink as kernelModules: schematicID is interpolated into
+  # `install.image` inside the unquoted heredoc. Validating the effective value also
+  # closes the pre-existing path through the cluster-wide talos.schematicID.
+  - it: rejects a schematicID that could inject shell into the reconcile Job
+    set:
+      schematicID: "$(id)"
+    asserts:
+      # The guard lives in a shared helper reached from both this suite's templates,
+      # and Helm aborts the whole render on the first one to hit it, so the assert
+      # names the template that reports the failure rather than the only one able to.
+      - failedTemplate:
+          errorPattern: 'invalid schematicID'
+        template: templates/talos-reconcile-job.yaml
+
+  - it: rejects a schematicID that is not a 64-character hex digest
+    set:
+      schematicID: "not-a-schematic"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'must be a Talos image-factory schematic ID, 64 lowercase hex characters'
+        template: templates/talos-reconcile-job.yaml
