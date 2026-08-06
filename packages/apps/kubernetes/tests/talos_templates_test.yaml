@@ -189,19 +189,20 @@ tests:
           gpus:
             - name: nvidia.com/GH200
     asserts:
-      # Only gpus changed vs the case above, yet the suffix differs (335756 vs
+      # Only gpus changed vs the case above, yet the suffix differs (676d60 vs
       # 16c1c9) — the content hash tracks the rendered spec, and the TCT the Job
       # applies is what changed (GPU nodeLabels, plus the NVIDIA kernel modules
       # a `nvidia.com/*` group now gets by default).
       #
-      # This value moved from a9dc0c when the kernel-modules surface landed, and
-      # the non-GPU suffix above did not: an ordinary node group renders the same
-      # machine config it always did, so its Job is not recreated and its workers
-      # are not reconciled. A GPU group is the one that does change, which is the
-      # point — the Job has to rotate for the new config to be applied at all.
+      # This suffix tracks the GPU group's machine config and moves whenever that
+      # config does, which the kernel-modules surface made it do. The non-GPU
+      # suffix above did not move: an ordinary node group renders the machine
+      # config it always did, so its Job is not recreated and its workers are not
+      # reconciled. A GPU group is the one that changes, which is the point — the
+      # Job has to rotate for the new config to be applied at all.
       - equal:
           path: metadata.name
-          value: test-k8s-talos-reconcile-md0-335756
+          value: test-k8s-talos-reconcile-md0-676d60
         documentSelector:
           path: kind
           value: Job

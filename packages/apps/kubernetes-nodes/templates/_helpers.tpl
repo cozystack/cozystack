@@ -79,6 +79,18 @@ the automatic NVIDIA set unreachable, and a bare `kernelModules:` (null) fails
 values.schema.json validation under helm-unittest, which sees the null before
 Helm's coalescing drops it.
 
+`NVreg_NvLinkDisable=1` on the `nvidia` module mirrors what the chart already
+does for tenant clusters through the gpu-operator driver container, which
+writes exactly that one line into the `nvidia-kernel-module-params` ConfigMap
+(packages/system/gpu-operator, kernelModuleConfig.content). Cozystack passes
+individual GPUs into worker VMs WITHOUT the NVSwitches, so the driver would
+otherwise wait forever for an NVLink fabric that can never come up, leaving
+Fabric State "In Progress" and failing every CUDA call with "system not yet
+initialized". On Talos the driver comes from a system extension and that
+container is disabled, so the machine config is the only place left to carry
+the parameter — without it, moving a GPU node group to Talos loses it silently.
+A no-op on a PCIe card with no NVLink.
+
 Module order is the order Talos' own NVIDIA documentation prescribes and the
 order validated against a production GB202 passthrough node: `nvidia` first
 (the others depend on it), then `nvidia_uvm` (CUDA unified memory, needed by
@@ -139,7 +151,7 @@ creates `/dev/nvidia0`, and then finds no devices.
 {{- else -}}
 {{-   range $group.gpus | default list -}}
 {{-     if hasPrefix "nvidia.com/" (.name | default "") -}}
-{{-       $modules = list (dict "name" "nvidia") (dict "name" "nvidia_uvm") (dict "name" "nvidia_drm") (dict "name" "nvidia_modeset") -}}
+{{-       $modules = list (dict "name" "nvidia" "parameters" (list "NVreg_NvLinkDisable=1")) (dict "name" "nvidia_uvm") (dict "name" "nvidia_drm") (dict "name" "nvidia_modeset") -}}
 {{-     end -}}
 {{-   end -}}
 {{- end -}}

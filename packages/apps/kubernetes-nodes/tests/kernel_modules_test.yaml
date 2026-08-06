@@ -55,7 +55,7 @@ tests:
       # the list in order, so this pins the order, not just the set.
       - matchRegex:
           path: spec.template.spec.containers[0].command[2]
-          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n {14}- name: nvidia_uvm\n {14}- name: nvidia_drm\n {14}- name: nvidia_modeset\n'
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n {14}  parameters:\n {14}  - NVreg_NvLinkDisable=1\n {14}- name: nvidia_uvm\n {14}- name: nvidia_drm\n {14}- name: nvidia_modeset\n'
         documentSelector:
           path: kind
           value: Job
