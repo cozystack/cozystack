@@ -153,7 +153,7 @@ tests:
           path: kind
           value: Job
 
-  # B1 from review: these values reach an unquoted `cat <<EOF | kubectl apply -f -`
+  # These values reach an unquoted `cat <<EOF | kubectl apply -f -`
   # heredoc in the Job's shell script, so a `$(...)` in them would execute inside the
   # talos-reconcile pod, whose ServiceAccount can write TalosConfigTemplates and read
   # Talos secrets. They come from a tenant-facing CR, and cozyvalues-gen has no
@@ -177,3 +177,27 @@ tests:
     asserts:
       - failedTemplate:
           errorPattern: 'invalid kernelModules parameter'
+
+  - it: drops an unvalidated extra key on a kernelModules item
+    set:
+      gpus: []
+      kernelModules:
+        - name: dummy
+          evil: "$(touch /tmp/pwned)"
+    asserts:
+      # The emitted list is rebuilt from validated fields, so an unknown key cannot
+      # reach the shell even though nothing prunes it upstream: `items` in
+      # values.schema.json has no `additionalProperties: false`, and the aggregated
+      # apiserver wires that schema into defaulting only, with no validation on write.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'evil|touch /tmp/pwned'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: dummy\n'
+        documentSelector:
+          path: kind
+          value: Job

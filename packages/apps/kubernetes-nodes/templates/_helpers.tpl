@@ -96,30 +96,45 @@ creates `/dev/nvidia0`, and then finds no devices.
 {{- $groupName := .groupName -}}
 {{- $modules := list -}}
 {{- if kindIs "slice" $group.kernelModules -}}
-{{-   $modules = $group.kernelModules -}}
-{{- /* Validate the USER-SUPPLIED list only — the automatic NVIDIA set below is
-         valid by construction. Same split, and the same regexMatch/fail idiom, as
-         the kubelet reservation guards in cluster.yaml.
+{{- /* The emitted list is REBUILT from validated fields rather than passed through
+         from the user's dict. Validating `.name` and `.parameters` and then emitting
+         the raw item would let any other key ride along: `- {name: dummy, evil: "$(...)"}`
+         reached the heredoc verbatim, because `toYaml` copies whatever is there and
+         nothing upstream prunes it — `items` in values.schema.json carries no
+         `additionalProperties: false`, and the aggregated apiserver wires that schema
+         into defaulting only (pkg/registry/apps/application/rest_defaulting.go), with
+         no pruning or validation on Create/Update. Allowlisting by construction closes
+         that whole class instead of enumerating the fields it happens to know about.
 
-         This is a shell-injection guard, not a typo guard. The machine config is
-         written through `cat <<EOF | kubectl apply -f -` with an UNQUOTED
-         delimiter, which the script needs so ${RELEASE} and friends expand, and
-         which therefore expands everything else in the block too. A module name
-         of `nvidia$(id)` would run `id` inside the talos-reconcile pod, whose
-         ServiceAccount can write TalosConfigTemplates and read Talos secrets.
-         These values come straight from a tenant-facing CR, so the render is the
-         only place left to stop them. */}}
-{{-   range $modules -}}
+         Why any of this is needed: the machine config is written through
+         `cat <<EOF | kubectl apply -f -` with an UNQUOTED delimiter, which the script
+         needs so ${RELEASE} and friends expand, and which therefore expands everything
+         else in the block too. A module name of `nvidia$(id)` would run `id` inside the
+         talos-reconcile pod, whose ServiceAccount can write TalosConfigTemplates and
+         read Talos secrets. The values come from a tenant-facing CR, so this render is
+         the last gate.
+
+         Only the USER-SUPPLIED list is checked; the automatic NVIDIA set below is valid
+         by construction. Same split, and the same regexMatch/fail idiom, as the kubelet
+         reservation guards in cluster.yaml. */}}
+{{-   range $group.kernelModules -}}
 {{-     $name := .name | default "" | toString -}}
 {{-     if not (regexMatch `^[a-z0-9_-]+$` $name) -}}
 {{-       fail (printf "pool %s: invalid kernelModules name %q — must be a kernel module name matching ^[a-z0-9_-]+$ (e.g. nvidia_uvm)" $groupName $name) -}}
 {{-     end -}}
+{{-     $params := list -}}
 {{-     range .parameters | default list -}}
 {{-       $param := . | toString -}}
 {{-       if not (regexMatch `^[A-Za-z0-9_.,:=+/-]+$` $param) -}}
 {{-         fail (printf "pool %s: invalid kernelModules parameter %q on module %q — must match ^[A-Za-z0-9_.,:=+/-]+$ (e.g. NVreg_EnableGpuFirmware=1)" $groupName $param $name) -}}
 {{-       end -}}
+{{-       $params = append $params $param -}}
 {{-     end -}}
+{{-     $module := dict "name" $name -}}
+{{-     if $params -}}
+{{-       $_ := set $module "parameters" $params -}}
+{{-     end -}}
+{{-     $modules = append $modules $module -}}
 {{-   end -}}
 {{- else -}}
 {{-   range $group.gpus | default list -}}
@@ -181,12 +196,20 @@ inherent: changing a node's boot image means replacing the node.
 
        Validates the EFFECTIVE value rather than only the per-group override, which
        also closes the pre-existing path through the cluster-wide talos.schematicID.
-       An image-factory schematic ID is the sha256 of the schematic, so 64 lowercase
-       hex characters is the whole of the syntax; anything else would 404 at the
-       factory anyway, and failing the render says so instead of leaving a VM stuck
-       importing an image that does not exist. */}}
-{{- if not (regexMatch `^[0-9a-f]{64}$` $schematicID) -}}
-{{- fail (printf "pool %s: invalid schematicID %q — must be a Talos image-factory schematic ID, 64 lowercase hex characters" .groupName $schematicID) -}}
+
+       Deliberately a character class and NOT `^[0-9a-f]{64}$`. The public factory
+       names schematics by sha256, but the chart supports more than the public
+       factory: talos.imageFactoryURL documents a self-hosted factory, a caching
+       mirror or "an internal HTTP file server", and talos.installerRepository
+       documents mirrored registries. On a file server or a mirrored registry the
+       operator picks the path, and a readable name like `talos-gpu-nvidia-open` is
+       the obvious choice — a 64-hex rule would stop such a cluster reconciling on a
+       field its operator never touched. This class rejects $, backticks, quotes and
+       whitespace, which is all that is needed here; a wrong ID still 404s at the
+       factory exactly as before, and that failure surfaces on the DataVolume where
+       it can be seen. */}}
+{{- if not (regexMatch `^[A-Za-z0-9._:-]+$` $schematicID) -}}
+{{- fail (printf "pool %s: invalid schematicID %q — must match ^[A-Za-z0-9._:-]+$ (a 64-hex image-factory digest, or the path an operator chose on a self-hosted factory or mirror)" .groupName $schematicID) -}}
 {{- end -}}
 {{- $schematicID -}}
 {{- end }}

@@ -244,3 +244,79 @@ tests:
       - failedTemplate:
           errorPattern: 'invalid schematicID'
         template: templates/talos/talos-reconcile-job.yaml
+
+  - it: rejects a schematicID carrying a character that could break out of the heredoc
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          schematicID: "sch`whoami`"
+          kubelet: {}
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid schematicID'
+        template: templates/talos/talos-reconcile-job.yaml
+
+  # Guarding the effective value must not turn into a format rule. The chart supports a
+  # self-hosted factory, a caching mirror and an internal HTTP file server, where the
+  # operator picks the path and a readable name is the obvious choice; a 64-hex rule
+  # would stop such a cluster reconciling on a field nobody touched.
+  - it: accepts a readable schematic name as used on a mirror or file server
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      talos:
+        imageFactoryURL: "http://images.internal.example.com/talos"
+        installerRepository: "registry.internal.example.com/talos/installer"
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          schematicID: "talos-gpu-nvidia-open"
+          kubelet: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: http://images.internal.example.com/talos/image/talos-gpu-nvidia-open/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: registry\.internal\.example\.com/talos/installer/talos-gpu-nvidia-open:v1\.13\.6'
+        template: templates/talos/talos-reconcile-job.yaml
+        documentSelector:
+          path: kind
+          value: Job
