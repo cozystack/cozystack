@@ -108,6 +108,11 @@
         }
       }
     },
+    "schematicID": {
+      "description": "Per-pool override for `talos.schematicID`, applied to both the worker boot disk image and the Talos installer image. When empty, the cluster-wide `talos.schematicID` applies. A schematic is a fixed set of Talos system extensions, and Talos refuses to finish booting when an extension service in it cannot start: `ext-nvidia-persistenced` and `ext-nvidia-cdi-gen` require an NVIDIA card, so a pool with no GPU that boots an NVIDIA schematic fails `startAllServices` and reboots roughly every 70 minutes, indefinitely, while still reporting `Ready` (kubelet starts before the failing phase). A cluster mixing GPU and non-GPU pools therefore has no correct cluster-wide value, and this field is what makes it expressible: set the NVIDIA schematic on the GPU pool only. Changing it replaces the pool's boot image and so rolls its workers.",
+      "type": "string",
+      "default": ""
+    },
     "kernelModules": {
       "description": "Kernel modules loaded on every worker in this pool, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a pool holding at least one `nvidia.com/*` GPU gets `nvidia`, `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other pool gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU pool. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension.",
       "type": "array",

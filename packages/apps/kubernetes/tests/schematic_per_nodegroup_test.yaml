@@ -1,0 +1,211 @@
+suite: per-node-group Talos schematic tests
+
+# Regression guard for the reboot loop a cluster-wide schematic causes in a mixed
+# cluster. A Talos schematic is a fixed set of system extensions baked into one
+# image, and Talos refuses to finish booting when an extension service in it
+# cannot start. `ext-nvidia-persistenced` and `ext-nvidia-cdi-gen` need an NVIDIA
+# card, so a node with no GPU that boots the NVIDIA schematic fails
+# `startAllServices` and reboots — observed in production as a ~70 minute cycle on
+# every node of a non-GPU node group, in a cluster whose GPU group had forced the
+# cluster-wide `talos.schematicID` to an NVIDIA one. The nodes report `Ready`
+# throughout, because kubelet starts before the failing phase, so nothing surfaces
+# in `kubectl get nodes`; only identical pod restart counters per node betray it.
+#
+# With one schematic per cluster there is no correct value to set: the GPU group
+# needs the extensions and every other group is broken by them.
+#
+# Two objects carry the schematic and both must agree, or an in-place Talos
+# upgrade swaps a node's extension set out from under it:
+#   - the boot disk image the DataVolume pulls (templates/cluster.yaml)
+#   - the installer image in the TalosConfigTemplate the talos-reconcile Job
+#     applies (templates/talos/talos-reconcile-job.yaml)
+#
+# Suite-level `templates` limits the render to these two; declaring `templates`
+# per test does not filter the render, and the unrelated `lookup` in
+# templates/helmreleases/csi.yaml then fails the suite.
+
+templates:
+  - templates/cluster.yaml
+  - templates/talos/talos-reconcile-job.yaml
+
+tests:
+  - it: applies a per-node-group schematic to both the boot image and the installer
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        gpu:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: ""
+          diskSize: 50Gi
+          roles: []
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: nvidia.com/GB202_RTX_PRO_6000
+          schematicID: "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999"
+          kubelet: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      # The installer must match the boot image. A mismatch is worse than a wrong
+      # value: the node boots one extension set and upgrades into another.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999:v1\.13\.6'
+        template: templates/talos/talos-reconcile-job.yaml
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: falls back to the cluster-wide schematic when a node group does not set one
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      talos:
+        schematicID: "1111111111111111111111111111111111111111111111111111111111111111"
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kubelet: {}
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/1111111111111111111111111111111111111111111111111111111111111111/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: factory\.talos\.dev/installer/1111111111111111111111111111111111111111111111111111111111111111:v1\.13\.6'
+        template: templates/talos/talos-reconcile-job.yaml
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: treats an empty per-node-group schematic as unset
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      talos:
+        schematicID: "1111111111111111111111111111111111111111111111111111111111111111"
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          schematicID: ""
+          kubelet: {}
+    asserts:
+      # An empty string inherits rather than rendering an image URL with an empty
+      # schematic path segment, which would 404 at the factory and leave the VM
+      # stuck importing forever.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/1111111111111111111111111111111111111111111111111111111111111111/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+
+  - it: keeps a non-GPU node group on the cluster schematic when another group overrides it
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kubelet: {}
+        gpu:
+          minReplicas: 1
+          maxReplicas: 2
+          instanceType: ""
+          diskSize: 50Gi
+          roles: []
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: nvidia.com/GB202_RTX_PRO_6000
+          schematicID: "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999"
+          kubelet: {}
+    asserts:
+      # This is the whole point of the field: the GPU group takes the NVIDIA
+      # schematic and md0 keeps the vanilla one, so md0 stops rebooting. Before the
+      # field existed, expressing this required a cluster-wide value that had to be
+      # wrong for one group or the other.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          # Selected by diskSize: the KubevirtMachineTemplate name carries a
+          # content hash, so matching on it would hardcode a value that moves
+          # with any unrelated field. 20Gi is md0's in this fixture, 50Gi is gpu's.
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 20Gi
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: https://factory.talos.dev/image/aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.storage.resources.requests.storage
+          value: 50Gi

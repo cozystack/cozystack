@@ -207,6 +207,48 @@ creates `/dev/nvidia0`, and then finds no devices.
 {{- end }}
 
 {{/*
+Effective Talos image-factory schematic ID for one worker node group.
+
+Takes a context carrying .group (the node group) and .Values, returns the
+group's own schematicID when set, otherwise the cluster-wide
+talos.schematicID.
+
+Why this needs to be per-group at all: a schematic is a fixed set of system
+extensions baked into one image, and Talos refuses to finish booting when an
+extension service in it cannot start. `ext-nvidia-persistenced` and
+`ext-nvidia-cdi-gen` need an NVIDIA card, so a node with no GPU that boots the
+NVIDIA schematic fails `startAllServices` and reboots, every time, forever.
+Observed in production as a ~70 minute reboot cycle on a non-GPU node group in
+a cluster whose only GPU group had forced the cluster-wide schematic to an
+NVIDIA one. The nodes stay `Ready` throughout — kubelet starts before the
+failing phase — so `kubectl get nodes` shows nothing and only the pod restart
+counters betray it.
+
+With one schematic per cluster, a cluster that mixes GPU and non-GPU node
+groups has no correct value to set: the GPU group needs the extensions and
+every other group is broken by them. This field is what makes such a cluster
+expressible.
+
+Both consumers of the schematic have to agree on it, or an in-place upgrade
+silently swaps a node's extension set: the boot disk image the DataVolume
+pulls (cluster.yaml) and the installer image in the TalosConfigTemplate
+(talos/talos-reconcile-job.yaml). Both call this helper.
+
+Deliberately NOT auto-derived from `gpus`, unlike kernelModules: a schematic
+ID is an opaque image-factory digest, so the chart cannot know which one
+carries the NVIDIA extensions, or synthesise one. That part stays the
+operator's to supply.
+
+Leaving it unset renders byte-identical output to a chart without this field,
+so the node group's content-hash-named KubevirtMachineTemplate keeps its name
+and its workers are not rolled. Setting it does roll that group's workers,
+which is inherent: changing a node's boot image means replacing the node.
+*/}}
+{{- define "kubernetes.schematicID" -}}
+{{- .group.schematicID | default .Values.talos.schematicID -}}
+{{- end }}
+
+{{/*
 OIDC clientId for the per-cluster Keycloak public client (mode: System).
 
 Namespaced by Release.Namespace so the identifier is globally unique within

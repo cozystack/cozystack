@@ -229,8 +229,28 @@ kernelModules: []
 kubelet: {}
 EOF
 
+# --- Case: per-pool Talos schematic override. Covers both consumers at once — the
+#     boot disk image is in the KubevirtMachineTemplate compared above, the installer
+#     image is in the machine config — so a chart that overrode one and not the other
+#     fails here. ---
+cat >"$WORK/case-schematic.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "4"
+  memory: 8Gi
+gpus:
+  - name: nvidia.com/AD102GL_L40S
+schematicID: "aaaabbbbccccddddeeeeffff0000111122223333444455556666777788889999"
+kubelet: {}
+EOF
+
 RC=0
-for c in resources gpu kubelet kernelmodules kernelmodules-optout; do
+for c in resources gpu kubelet kernelmodules kernelmodules-optout schematic; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done

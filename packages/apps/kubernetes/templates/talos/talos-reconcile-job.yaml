@@ -430,7 +430,11 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" }}/{{ $.Values.talos.schematicID }}:{{ .talosVersion }}
+                          {{- /* Must resolve to the same schematic as the boot disk image in
+                                 cluster.yaml: this installer is what an in-place Talos upgrade
+                                 runs, so a mismatch would swap the node's extension set out
+                                 from under it. Both call kubernetes.schematicID. */}}
+                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" }}/{{ include "kubernetes.schematicID" . }}:{{ .talosVersion }}
                           wipe: false
                         features:
                           rbac: true

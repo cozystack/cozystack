@@ -296,6 +296,8 @@ type NodeGroup struct {
 	Resources Resources `json:"resources,omitempty"`
 	// List of node roles.
 	Roles []string `json:"roles,omitempty"`
+	// Per-group override for `talos.schematicID`, applied to both the worker boot disk image and the Talos installer image. When empty, the cluster-wide `talos.schematicID` applies. A schematic is a fixed set of Talos system extensions, and Talos refuses to finish booting when an extension service in it cannot start: `ext-nvidia-persistenced` and `ext-nvidia-cdi-gen` require an NVIDIA card, so a node group with no GPU that boots an NVIDIA schematic fails `startAllServices` and reboots roughly every 70 minutes, indefinitely, while still reporting `Ready` (kubelet starts before the failing phase). A cluster mixing GPU and non-GPU node groups therefore has no correct cluster-wide value, and this field is what makes it expressible: set the NVIDIA schematic on the GPU group only. Changing it replaces the group's boot image and so rolls its workers.
+	SchematicID string `json:"schematicID,omitempty"`
 	// StorageClass for worker node persistent disks. When empty, falls back to the application-level storageClass. Worker VMs live-migrate, so their disks need ReadWriteMany — the RWX access mode is supplied by the chosen StorageClass's CDI StorageProfile, not set on the DataVolume here — and linstor-csi rejects RWX volumes that are not on a DRBD-backed StorageClass, so the fallback targets the replicated/DRBD application storageClass rather than a possibly non-DRBD cluster default. NOTE: deliberately not marked immutable — the field is optional and undefaulted, so a strict `self == oldSelf` rule would block any future attempt to set it on an existing node group.
 	StorageClass string `json:"storageClass,omitempty"`
 }
