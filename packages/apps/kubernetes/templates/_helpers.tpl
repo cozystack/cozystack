@@ -154,6 +154,59 @@ md0:
 {{- end }}
 
 {{/*
+Effective Talos `machine.kernel.modules` list for one worker node group.
+
+Takes the node group dict, returns a YAML list (empty output when there is
+nothing to load, so the caller can gate the whole `kernel:` block on it).
+
+A Talos system extension ships a kernel module but does not load it — that is
+`machine.kernel.modules`' job. The NVIDIA extensions are the case that made
+this surface necessary: without the modules the driver never initialises, and
+the failure is silent all the way down (the VM has the PCI device, the node
+advertises no GPU, nothing logs an error).
+
+Three-state contract on the group's `kernelModules`:
+
+  unset      the chart decides. A group holding at least one `nvidia.com/*`
+             GPU gets the NVIDIA set below; anything else gets nothing.
+  non-empty  taken verbatim, replacing whatever the chart would have picked.
+  []         explicit opt-out — emit no `kernel` block even on a GPU group.
+
+The `[]` state is why the field is undefaulted: a default of `[]` would
+collapse "unset" into "opted out" on every group and make the automatic
+NVIDIA set unreachable. Do not add it to the built-in md0 group in
+kubernetes.nodeGroups above either, for the same reason.
+
+Module order is the order Talos' own NVIDIA documentation prescribes and the
+order validated against a production GB202 passthrough node: `nvidia` first
+(the others depend on it), then `nvidia_uvm` (CUDA unified memory, needed by
+any workload using the CUDA runtime), then `nvidia_drm` and `nvidia_modeset`.
+Talos loads them in list order, so this is not cosmetic.
+
+Note this only covers loading the module the OS already carries. Which
+extension supplies it is the schematic's business (`talos.schematicID`) and
+is not derivable from the node group — on Blackwell (GB202) specifically it
+has to be the open-kernel-modules extension, since the proprietary one loads,
+creates `/dev/nvidia0`, and then finds no devices.
+*/}}
+{{- define "kubernetes.kernelModules" -}}
+{{- $group := . -}}
+{{- $modules := list -}}
+{{- if kindIs "slice" $group.kernelModules -}}
+{{-   $modules = $group.kernelModules -}}
+{{- else -}}
+{{-   range $group.gpus | default list -}}
+{{-     if hasPrefix "nvidia.com/" (.name | default "") -}}
+{{-       $modules = list (dict "name" "nvidia") (dict "name" "nvidia_uvm") (dict "name" "nvidia_drm") (dict "name" "nvidia_modeset") -}}
+{{-     end -}}
+{{-   end -}}
+{{- end -}}
+{{- if $modules -}}
+{{ toYaml $modules }}
+{{- end -}}
+{{- end }}
+
+{{/*
 OIDC clientId for the per-cluster Keycloak public client (mode: System).
 
 Namespaced by Release.Namespace so the identifier is globally unique within

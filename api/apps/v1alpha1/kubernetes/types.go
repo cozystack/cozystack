@@ -221,6 +221,13 @@ type IngressNginxAddon struct {
 	ValuesOverride k8sRuntime.RawExtension `json:"valuesOverride"`
 }
 
+type KernelModule struct {
+	// Module name as `modprobe` takes it, e.g. `nvidia_uvm`.
+	Name string `json:"name"`
+	// Module parameters, each as a bare `key=value` string.
+	Parameters []string `json:"parameters,omitempty"`
+}
+
 type Konnectivity struct {
 	// Konnectivity Server configuration.
 	// +kubebuilder:default:={}
@@ -271,6 +278,8 @@ type NodeGroup struct {
 	// Virtual machine instance type.
 	// +kubebuilder:default:="u1.medium"
 	InstanceType string `json:"instanceType"`
+	// Kernel modules loaded on every worker in this node group, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a node group holding at least one `nvidia.com/*` GPU gets `nvidia`, `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other group gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU group. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension.
+	KernelModules []KernelModule `json:"kernelModules,omitempty"`
 	// Kubelet resource reservations for this node group.
 	Kubelet Kubelet `json:"kubelet,omitempty"`
 	// Maximum number of replicas.

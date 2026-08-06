@@ -293,6 +293,19 @@ spec:
                         nodeLabels:
                           gpu: "on"
                         {{- end }}
+                        {{- /* Kernel modules to load at boot. A Talos system extension
+                               installs a module but never loads it, so a GPU pool whose
+                               schematic carries the NVIDIA extension still comes up with
+                               no working driver until these are declared. Emitted only
+                               when the pool resolves to a non-empty list, so a pool
+                               without modules renders the machine config it rendered
+                               before this field existed — no worker roll. */}}
+                        {{- $kernelModules := include "kubernetes.kernelModules" .group }}
+                        {{- if $kernelModules }}
+                        kernel:
+                          modules:
+                            {{- $kernelModules | nindent 28 }}
+                        {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
                           extraConfig:
@@ -373,11 +386,20 @@ spec:
 {{- $serviceCIDR := "10.95.0.0/16" }}
 {{- $dnsDomain := include "kubernetes.tenantClusterDomain" $ }}
 {{- $mgmtClusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
+{{- /* kernelModules carries no entry in values.yaml at all, so the key is absent
+       here unless the operator set it. `dict` keeps it as nil, which is what
+       kubernetes.kernelModules reads as "unset" (as opposed to an explicit empty
+       list, which opts the pool out). Do not default it to `list` here, and do
+       not add `kernelModules: []` (or a bare `kernelModules:`) to values.yaml:
+       the first collapses unset into opted-out for every pool, and the second
+       fails values.schema.json validation under helm-unittest, which sees the
+       null before Helm's coalescing drops it. */}}
 {{- $group := dict
       "instanceType" .Values.instanceType
       "resources" .Values.resources
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
+      "kernelModules" .Values.kernelModules
 }}
 {{- /* Mirror the kubelet-reservation computation from nodegroup.yaml so the
        worker machineconfig this Job applies carries the same numbers the

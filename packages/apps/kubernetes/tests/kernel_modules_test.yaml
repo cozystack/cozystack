@@ -1,0 +1,258 @@
+suite: worker kernel modules (machine.kernel.modules) tests
+
+# A Talos system extension installs a kernel module but does not load it. Loading
+# is `machine.kernel.modules`' job, and until this field existed the chart emitted
+# no such block and no values key could add one — a GPU node group came up with the
+# NVIDIA extension present, the module never loaded, and nothing reported it: the
+# VM held the PCI device, the node advertised no GPU, no component logged an error.
+# Found in production on Cozystack 1.6.0 (cozystack/cozystack#3563).
+#
+# Same assertion mechanism as gpu_node_labels_test.yaml: the TalosConfigTemplate is
+# not a rendered object. The chart emits a Job whose container command carries the
+# TCT as a string literal that the Job applies at runtime, so the machine config is
+# reached through matchRegex on that literal.
+#
+# The patterns below pin absolute indentation (`\n {10}kernel:` and so on) rather
+# than `\s+`, because indentation is the failure mode worth guarding: `modules:` one
+# level out is still valid YAML, is still accepted by the apiserver, and silently
+# loads nothing. If the Job's shell script is ever reindented as a whole, these
+# counts move with it — read them off the rendered `data: |` block, do not relax
+# them to `\s+`.
+
+templates:
+  - templates/talos/talos-reconcile-job.yaml
+
+tests:
+  - it: emits the NVIDIA module set, in dependency order, for an nvidia.com GPU node group
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: nvidia.com/GB202_RTX_PRO_6000
+          kubelet: {}
+    asserts:
+      # `nvidia` must come first (the other three depend on it) and `nvidia_uvm`
+      # must be present or any CUDA workload fails on unified memory. Talos loads
+      # the list in order, so this pins the order, not just the set.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n {14}- name: nvidia_uvm\n {14}- name: nvidia_drm\n {14}- name: nvidia_modeset\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: emits no kernel block for a node group with neither GPUs nor kernelModules
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kubelet: {}
+    asserts:
+      # The machine config of an ordinary node group must be exactly what it was
+      # before this field existed. Anything emitted here changes the config every
+      # existing worker would be reconciled to, for no reason. `kernel` appears
+      # nowhere else in the machine config, so the bare token is a sound guard.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kernel:'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: takes an explicit kernelModules list verbatim, including parameters
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kernelModules:
+            - name: br_netfilter
+              parameters:
+                - nf_conntrack_helper=0
+            - name: dummy
+          kubelet: {}
+    asserts:
+      # Nothing about the field is NVIDIA-specific, and `parameters` has to survive
+      # the round trip through the machine config.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: br_netfilter\n {14}  parameters:\n {14}  - nf_conntrack_helper=0\n {14}- name: dummy\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: lets an explicit list replace the NVIDIA default on a GPU node group
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: nvidia.com/GB202_RTX_PRO_6000
+          kernelModules:
+            - name: nvidia
+            - name: nvidia_uvm
+          kubelet: {}
+    asserts:
+      # Replaces, does not merge: an operator who lists a subset gets the subset.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n {14}- name: nvidia_uvm\n {10}kubelet:\n'
+        documentSelector:
+          path: kind
+          value: Job
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nvidia_drm'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: treats an explicit empty kernelModules list as an opt-out on a GPU node group
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: nvidia.com/GB202_RTX_PRO_6000
+          kernelModules: []
+          kubelet: {}
+    asserts:
+      # `[]` is distinguishable from unset and means "emit nothing". This is why the
+      # field is undefaulted in values.yaml — a `[]` default there would turn every
+      # node group into an opt-out and make the NVIDIA default dead code.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kernel:'
+        documentSelector:
+          path: kind
+          value: Job
+      # The gpu=on label is independent of the modules and must survive the opt-out.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+gpu: "on"'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: does not assume NVIDIA for a GPU node group from another vendor
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus:
+            - name: amd.com/gpu
+          kubelet: {}
+    asserts:
+      # The automatic set is keyed on the `nvidia.com/` resource prefix, not on the
+      # mere presence of `gpus`. Loading nvidia modules on an AMD node would be a
+      # guess with no basis; such a group declares its own list.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kernel:'
+        documentSelector:
+          path: kind
+          value: Job

@@ -391,6 +391,19 @@ spec:
                         nodeLabels:
                           gpu: "on"
                         {{- end }}
+                        {{- /* Kernel modules to load at boot. A Talos system extension
+                               installs a module but never loads it, so a GPU node group
+                               whose schematic carries the NVIDIA extension still comes up
+                               with no working driver until these are declared. Emitted
+                               only when the group resolves to a non-empty list, so a
+                               group without modules renders the machine config it
+                               rendered before this field existed — no worker roll. */}}
+                        {{- $kernelModules := include "kubernetes.kernelModules" .group }}
+                        {{- if $kernelModules }}
+                        kernel:
+                          modules:
+                            {{- $kernelModules | nindent 28 }}
+                        {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
                           extraConfig:

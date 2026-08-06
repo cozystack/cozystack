@@ -25,6 +25,10 @@ storageClass: replicated
 ## @field {string} name - Name of GPU, such as "nvidia.com/AD102GL_L40S".
 ## @x-cozystack-options {source: gpu}
 
+## @typedef {struct} KernelModule - Kernel module loaded on the worker at boot.
+## @field {string} name - Module name as `modprobe` takes it, e.g. `nvidia_uvm`.
+## @field {[]string} [parameters] - Module parameters, each as a bare `key=value` string.
+
 ## @typedef {struct} Kubelet - Kubelet resource reservations for worker nodes.
 ## @field {string} [systemReservedMemory] - Memory reserved for host OS. Auto-computed from instanceType if empty.
 ## @field {string} [kubeReservedMemory] - Memory reserved for kubelet and container runtime. Auto-computed from instanceType if empty.
@@ -54,6 +58,8 @@ resources: {}
 
 ## @param {[]GPU} gpus - List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 gpus: []
+
+## @param {[]KernelModule} [kernelModules] - Kernel modules loaded on every worker in this pool, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a pool holding at least one `nvidia.com/*` GPU gets `nvidia`, `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other pool gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU pool. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension.
 
 ## @param {Kubelet} [kubelet] - Kubelet resource reservations for this pool.
 kubelet: {}

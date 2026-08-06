@@ -44,6 +44,8 @@ type ConfigSpec struct {
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	// +kubebuilder:default:={}
 	Gpus []GPU `json:"gpus,omitempty"`
+	// Kernel modules loaded on every worker in this pool, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a pool holding at least one `nvidia.com/*` GPU gets `nvidia`, `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other pool gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU pool. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension.
+	KernelModules []KernelModule `json:"kernelModules,omitempty"`
 	// Kubelet resource reservations for this pool.
 	// +kubebuilder:default:={}
 	Kubelet Kubelet `json:"kubelet,omitempty"`
@@ -73,6 +75,13 @@ type Images struct {
 	// Image used by the talos-reconcile Job (kubectl). Empty falls back to images/kubectl.tag.
 	// +kubebuilder:default:=""
 	Kubectl string `json:"kubectl,omitempty"`
+}
+
+type KernelModule struct {
+	// Module name as `modprobe` takes it, e.g. `nvidia_uvm`.
+	Name string `json:"name"`
+	// Module parameters, each as a bare `key=value` string.
+	Parameters []string `json:"parameters,omitempty"`
 }
 
 type Kubelet struct {
