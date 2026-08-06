@@ -18,7 +18,14 @@ tests:
           path: spec.values.gpu-operator.devicePlugin.enabled
           value: false
 
-  - it: should default the NvLinkDisable kernel module config even when hami is disabled
+  # The default targets the Talos workers tenant clusters have run since 1.6.0,
+  # where the driver comes from a system extension rather than the operator's
+  # driver container. These three asserts are the whole contract: the operator
+  # must not try to own the driver or containerd, the driver validator must look
+  # at the host root instead of a driver container that does not exist, and the
+  # device plugin must route CUDA libraries through CDI because tenant pods carry
+  # no runtimeClassName and Talos does not make `nvidia` the default runtime.
+  - it: configures the operator for a driver provided by the OS
     set:
       addons:
         gpuOperator:
@@ -29,34 +36,81 @@ tests:
           valuesOverride: {}
     asserts:
       - equal:
-          path: spec.values.kernelModuleConfig.create
-          value: true
+          path: spec.values.gpu-operator.driver.enabled
+          value: false
       - equal:
-          path: spec.values.gpu-operator.driver.kernelModuleConfig.name
-          value: nvidia-kernel-module-params
-      - notExists:
-          path: spec.values.gpu-operator.devicePlugin
+          path: spec.values.gpu-operator.toolkit.enabled
+          value: false
+      # gap 3: without these the validator never writes its sentinel and the
+      # device plugin stays blocked behind toolkit-validation.
+      - contains:
+          path: spec.values.gpu-operator.validator.driver.env
+          content:
+            name: DRIVER_ROOT
+            value: "/"
+      - contains:
+          path: spec.values.gpu-operator.validator.driver.env
+          content:
+            name: DISABLE_DEV_CHAR_SYMLINK_CREATION
+            value: "true"
+      # gap 4: without these the pod gets the device and no CUDA libraries.
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: DEVICE_LIST_STRATEGY
+            value: cdi-annotations
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: NVIDIA_CTK_PATH
+            value: /usr/local/bin/nvidia-ctk
 
-  - it: should let user override the kernel module config name
+  # The previous default fed NVreg_NvLinkDisable=1 to the operator's driver
+  # container through the nvidia-kernel-module-params ConfigMap. With the driver
+  # container off that ConfigMap is mounted by nothing, so the parameter now
+  # travels through the machine config as nodeGroups.<name>.kernelModules. Pin
+  # its absence so the dead default cannot come back and offer a second, inert
+  # source for the same setting.
+  - it: no longer renders the driver-container kernel module ConfigMap
+    set:
+      addons:
+        gpuOperator:
+          enabled: true
+          valuesOverride: {}
+        hami:
+          enabled: false
+          valuesOverride: {}
+    asserts:
+      - notExists:
+          path: spec.values.kernelModuleConfig
+      - notExists:
+          path: spec.values.gpu-operator.driver.kernelModuleConfig
+
+  # mergeOverwrite replaces a list rather than merging it, so an operator adding
+  # one variable to devicePlugin.env silently drops the CDI defaults with it.
+  # That is Helm's list semantics and cannot be fixed here, so pin it: the
+  # behaviour is documented in the template and a reader who finds this test
+  # knows the override has to restate the full list.
+  - it: lets an operator replace the device plugin env wholesale
     set:
       addons:
         gpuOperator:
           enabled: true
           valuesOverride:
             gpu-operator:
-              driver:
-                kernelModuleConfig:
-                  name: my-custom-kmc
+              devicePlugin:
+                env:
+                  - name: DEVICE_LIST_STRATEGY
+                    value: envvar
         hami:
           enabled: false
           valuesOverride: {}
     asserts:
       - equal:
-          path: spec.values.gpu-operator.driver.kernelModuleConfig.name
-          value: my-custom-kmc
-      - equal:
-          path: spec.values.kernelModuleConfig.create
-          value: true
+          path: spec.values.gpu-operator.devicePlugin.env
+          value:
+            - name: DEVICE_LIST_STRATEGY
+              value: envvar
 
   - it: should apply hami defaults when valuesOverride key is omitted
     set:
