@@ -1,4 +1,5 @@
 suite: Redis dashboard resources
+
 templates:
   - templates/dashboard-resourcemap.yaml
 
@@ -20,6 +21,22 @@ tests:
       - equal:
           path: metadata.name
           value: redis-test-dashboard-resources
+
+      - contains:
+          path: rules[0].resourceNames
+          content: rfs-redis-test
+
+      - contains:
+          path: rules[0].resourceNames
+          content: rfrm-redis-test
+
+      - contains:
+          path: rules[0].resourceNames
+          content: rfrs-redis-test
+
+      - contains:
+          path: rules[0].resourceNames
+          content: redis-test-external-lb
 
       - contains:
           path: rules[1].resourceNames

@@ -34,7 +34,7 @@ tests:
           value: 1Gi
 
       - equal:
-          path: spec.redis.auth.secretPath
+          path: spec.auth.secretPath
           value: redis-test-auth
 
   - it: renders authentication secret by default
@@ -132,4 +132,4 @@ tests:
       value: RedisFailover
     asserts:
       - notExists:
-          path: spec.redis.auth
+          path: spec.auth
