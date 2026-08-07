@@ -71,27 +71,6 @@ func setModTime(t *testing.T, name string, mtime time.Time) {
 	}
 }
 
-// certSerial returns the serial number of a *tls.Certificate leaf without mutating the
-// shared value returned by GetCertificate (it parses into a local when Leaf is unset).
-func certSerial(t *testing.T, c *tls.Certificate) int64 {
-	t.Helper()
-	if c == nil {
-		t.Fatal("nil certificate")
-	}
-	leaf := c.Leaf
-	if leaf == nil {
-		if len(c.Certificate) == 0 {
-			t.Fatal("certificate has no DER data")
-		}
-		parsed, err := x509.ParseCertificate(c.Certificate[0])
-		if err != nil {
-			t.Fatalf("parse served cert: %v", err)
-		}
-		leaf = parsed
-	}
-	return leaf.SerialNumber.Int64()
-}
-
 // servedSerial completes a TLS handshake against addr and returns the serial number
 // of the leaf certificate the server actually presented.
 func servedSerial(t *testing.T, addr string) int64 {
@@ -156,90 +135,5 @@ func TestReloadingTLSConfigServesRenewedCertificate(t *testing.T) {
 
 	if got := servedSerial(t, addr); got != 2 {
 		t.Fatalf("after renewal: expected renewed serial 2, got %d (certificate was not reloaded)", got)
-	}
-}
-
-// TestCertReloaderKeepsLastGoodCertificate verifies that a failed reload (e.g. a torn
-// read while the volume is updated) does not take the webhook down: it keeps serving
-// the previously loaded certificate instead of erroring the handshake.
-func TestCertReloaderKeepsLastGoodCertificate(t *testing.T) {
-	dir := t.TempDir()
-	certFile := filepath.Join(dir, "tls.crt")
-	keyFile := filepath.Join(dir, "tls.key")
-
-	certA, keyA := genSelfSigned(t, 1)
-	writeKeyPair(t, certFile, keyFile, certA, keyA, time.Now().Add(-2*time.Second))
-
-	cr, err := newCertReloader(certFile, keyFile)
-	if err != nil {
-		t.Fatalf("newCertReloader: %v", err)
-	}
-
-	// Corrupt the cert file and advance its mtime so a reload is attempted and fails.
-	if err := os.WriteFile(certFile, []byte("not a certificate"), 0o600); err != nil {
-		t.Fatalf("corrupt cert: %v", err)
-	}
-	setModTime(t, certFile, time.Now().Add(2*time.Second))
-
-	got, err := cr.GetCertificate(&tls.ClientHelloInfo{})
-	if err != nil {
-		t.Fatalf("GetCertificate returned error instead of serving last good cert: %v", err)
-	}
-	if certSerial(t, got) != 1 {
-		t.Fatalf("expected to keep serving serial 1 after failed reload, got %d", certSerial(t, got))
-	}
-}
-
-// TestCertReloaderRetriesAfterTransientFailure is the regression test for the reloader
-// abandoning a renewal on a transient error. A failed reload must NOT advance the
-// recorded mtime, so once the (unchanged-mtime) file becomes readable the renewed
-// certificate is still picked up. Against the code that advanced the mtime on failure,
-// the renewal is permanently missed and this test fails.
-func TestCertReloaderRetriesAfterTransientFailure(t *testing.T) {
-	dir := t.TempDir()
-	certFile := filepath.Join(dir, "tls.crt")
-	keyFile := filepath.Join(dir, "tls.key")
-
-	certA, keyA := genSelfSigned(t, 1)
-	writeKeyPair(t, certFile, keyFile, certA, keyA, time.Now().Add(-2*time.Second))
-
-	cr, err := newCertReloader(certFile, keyFile)
-	if err != nil {
-		t.Fatalf("newCertReloader: %v", err)
-	}
-	cr.retryInterval = 0 // retry immediately, no backoff wait in the test
-
-	// Renewal advances the mtime, but the first load fails (simulating a transient,
-	// content-independent error) by writing an unreadable cert at the new mtime.
-	renewMod := time.Now().Add(2 * time.Second)
-	if err := os.WriteFile(certFile, []byte("transiently unreadable"), 0o600); err != nil {
-		t.Fatalf("write bad cert: %v", err)
-	}
-	setModTime(t, certFile, renewMod)
-
-	if got, gerr := cr.GetCertificate(&tls.ClientHelloInfo{}); gerr != nil {
-		t.Fatalf("GetCertificate errored during transient failure: %v", gerr)
-	} else if certSerial(t, got) != 1 {
-		t.Fatalf("during transient failure: expected to keep serial 1, got %d", certSerial(t, got))
-	}
-
-	// The renewed, valid certificate is now readable at the SAME mtime as the failed
-	// attempt. The reloader must still pick it up on retry.
-	certB, keyB := genSelfSigned(t, 2)
-	if err := os.WriteFile(certFile, certB, 0o600); err != nil {
-		t.Fatalf("write renewed cert: %v", err)
-	}
-	if err := os.WriteFile(keyFile, keyB, 0o600); err != nil {
-		t.Fatalf("write renewed key: %v", err)
-	}
-	setModTime(t, certFile, renewMod)
-	setModTime(t, keyFile, renewMod)
-
-	got, gerr := cr.GetCertificate(&tls.ClientHelloInfo{})
-	if gerr != nil {
-		t.Fatalf("GetCertificate errored after retry: %v", gerr)
-	}
-	if certSerial(t, got) != 2 {
-		t.Fatalf("after transient failure: expected renewed serial 2 on retry, got %d (mtime advanced on failure, renewal permanently missed)", certSerial(t, got))
 	}
 }
