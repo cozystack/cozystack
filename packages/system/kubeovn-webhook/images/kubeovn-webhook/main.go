@@ -4,6 +4,7 @@ import (
 	"flag"
 	"log"
 	"net/http"
+	"time"
 )
 
 var (
@@ -33,9 +34,13 @@ func main() {
 	}
 
 	server := &http.Server{
-		Addr:      ":8443",
-		TLSConfig: tlsConfig,
-		Handler:   mux,
+		Addr:              ":8443",
+		TLSConfig:         tlsConfig,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
 	log.Printf("Starting webhook server on %s", server.Addr)
