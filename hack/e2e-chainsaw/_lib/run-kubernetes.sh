@@ -5399,10 +5399,10 @@ EOF
   # leaves a "failed" or "uninstalled" entry behind that survives a later
   # successful reinstall, unlike the installFailures/upgradeFailures
   # counters (which ClearFailures zeroes on every successful reconcile).
-  # The shape is pinned by hack/remediation-guard.bats; the upstream
-  # types are github.com/fluxcd/helm-controller/api v2 Snapshot.
+  # The expression comes from remediation-guard.sh, sourced at the top of this
+  # file, where it is pinned against the upstream Flux type.
   history_statuses=$(kubectl get hr -n tenant-test "kubernetes-${test_name}" \
-    -ojsonpath='{range .status.history[*]}{.status}{"\n"}{end}')
+    -o"jsonpath=${HELMRELEASE_HISTORY_JSONPATH}")
   # Always emit the raw value so a silent future-Flux field rename shows
   # up as "empty history on a Ready HR" in CI logs rather than vanishing.
   echo "Parent HelmRelease history statuses:"

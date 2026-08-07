@@ -63,7 +63,7 @@ The install test fails if **any** HelmRelease is not Ready. A toothless gate (ba
 
 A parent HelmRelease that hit its wait timeout, uninstalled, and reinstalled is a silent race we want to catch. **Do not** check `.status.installFailures` / `.status.upgradeFailures`: Flux's `ClearFailures()` zeroes those on every successful reconcile, so checking them after the HR is Ready is **vacuous** and passes against a reverted fix.
 
-- Inspect `.status.history` instead — a `failed` or `uninstalled` Snapshot survives a later successful reconcile. Use the shared helper in `hack/e2e-chainsaw/_lib/remediation-guard.sh` (`helmrelease_has_remediation_cycle`) from a `script` step.
+- Inspect `.status.history` instead — a `failed` or `uninstalled` Snapshot survives a later successful reconcile. Use the shared helper in `hack/e2e-chainsaw/_lib/remediation-guard.sh` (`helmrelease_has_remediation_cycle`) from a `script` step. Take the jsonpath from `HELMRELEASE_HISTORY_JSONPATH` in that same file rather than writing it out: `internal/fluxcontract` sources that file and runs the resulting value against the upstream Flux type, and a literal copied elsewhere is not covered by it.
 
 ### 7. Test-Impact Analysis (TIA), default-on
 
