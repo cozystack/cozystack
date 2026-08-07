@@ -263,7 +263,14 @@ func mergeResourceList(dst *corev1.ResourceList, overrides corev1.ResourceList) 
 //   - the required podAntiAffinity cloned from flux-aio (which keeps its own
 //     replicas off one node) is dropped, since it targets
 //     app.kubernetes.io/name=flux and would otherwise leave every shard
-//     Pending on a single-node cluster.
+//     Pending on a single-node cluster;
+//   - the corporate-proxy env (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) inherited from
+//     flux-aio is dropped: a standalone shard needs no external egress, and an
+//     unreachable proxy stalls a blocking startup HTTPS call, so the manager
+//     never serves /healthz and the pod crashloops;
+//   - a startupProbe is derived from the liveness handler (generous failure
+//     budget, liveness handler and TimeoutSeconds inherited) so a slow but
+//     progressing start is not killed by the short inherited liveness window.
 func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv1.Deployment, error) {
 	var src *corev1.Container
 	for i := range flux.Spec.Template.Spec.Containers {
