@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -43,9 +44,55 @@ const (
 	singularName         = "tenantsecret"
 	kindTenantSecret     = "TenantSecret"
 	kindTenantSecretList = "TenantSecretList"
+
+	// internalPrefix namespaces the labels and annotations the platform owns:
+	// the lineage webhook's tenantresource verdict, the cacert controller's
+	// tenant-ca selector and its ownership markers. They are the platform's
+	// answer to "may this tenant see this Secret", and an ApplicationDefinition
+	// selects on them, so a caller writing through this API must not be able to
+	// plant or strip one on the backing Secret. The guard is on the prefix
+	// rather than on a list of keys so a platform key added later is protected
+	// without anyone remembering to come back here.
+	internalPrefix = "internal.cozystack.io/"
 )
 
-func stripInternal(m map[string]string) map[string]string {
+// isInternalKey reports whether a metadata key belongs to the platform.
+func isInternalKey(k string) bool { return strings.HasPrefix(k, internalPrefix) }
+
+// restoreInternal rewrites the platform-owned entries of m to exactly those of
+// cur, leaving every other entry alone, and reports whether m changed. It is
+// the repair half of the guard, for the write path that reaches the backing
+// Secret without passing through tenantToSecret.
+func restoreInternal(m, cur map[string]string) (map[string]string, bool) {
+	changed := false
+	for k := range m {
+		if !isInternalKey(k) {
+			continue
+		}
+		if _, keep := cur[k]; !keep {
+			delete(m, k)
+			changed = true
+		}
+	}
+	for k, v := range cur {
+		if !isInternalKey(k) {
+			continue
+		}
+		if got, ok := m[k]; !ok || got != v {
+			if m == nil {
+				m = map[string]string{}
+			}
+			m[k] = v
+			changed = true
+		}
+	}
+	return m, changed
+}
+
+// stripTenantMarker hides the tenant-resource marker, and only that key. The
+// read side is deliberately narrower than the write side: a tenant may see the
+// platform's other verdicts, tenant-ca among them, it just cannot write them.
+func stripTenantMarker(m map[string]string) map[string]string {
 	if m == nil {
 		return nil
 	}
@@ -93,7 +140,7 @@ func secretToTenant(sec *corev1.Secret) *corev1alpha1.TenantSecret {
 			UID:               sec.UID,
 			ResourceVersion:   sec.ResourceVersion,
 			CreationTimestamp: sec.CreationTimestamp,
-			Labels:            stripInternal(sec.Labels),
+			Labels:            stripTenantMarker(sec.Labels),
 			Annotations:       sec.Annotations,
 		},
 		Type:       string(sec.Type),
@@ -115,6 +162,14 @@ func tenantToSecret(ts *corev1alpha1.TenantSecret, cur *corev1.Secret) *corev1.S
 	}
 	out.Labels[tsLabelKey] = tsLabelValue
 	for k, v := range ts.Labels {
+		// Platform keys are dropped rather than rejected: a caller that GETs an
+		// object, edits it and PUTs it back sends them straight back at us, and
+		// failing that round-trip would break `kubectl edit` for no gain. On an
+		// update out starts as a copy of the stored Secret, so ignoring the
+		// caller here also means a platform key cannot be stripped.
+		if isInternalKey(k) {
+			continue
+		}
 		out.Labels[k] = v
 	}
 
@@ -122,6 +177,9 @@ func tenantToSecret(ts *corev1alpha1.TenantSecret, cur *corev1.Secret) *corev1.S
 		out.Annotations = map[string]string{}
 	}
 	for k, v := range ts.Annotations {
+		if isInternalKey(k) {
+			continue
+		}
 		out.Annotations[k] = v
 	}
 
@@ -434,14 +492,27 @@ func (r *REST) Patch(
 		return nil, err
 	}
 
-	// Ensure tenant secret label is preserved
-	if out.Labels == nil {
-		out.Labels = make(map[string]string)
-	}
-
-	if out.Labels[tsLabelKey] != tsLabelValue {
-		out.Labels[tsLabelKey] = tsLabelValue
-		_ = r.c.Update(ctx, out, &client.UpdateOptions{Raw: &metav1.UpdateOptions{}})
+	// This method is not what serves a PATCH request: rest.Patcher is
+	// Getter+Updater, so the endpoint installer routes PATCH through Update,
+	// and the guard that covers it is the one in tenantToSecret. Nothing
+	// reaches this code today. It is kept in step anyway rather than left as
+	// the weaker of two doors — the raw patch here lands on the backing Secret
+	// without any conversion, so the platform keys have to be put back
+	// afterwards, the tenant-resource marker among them.
+	lbls, lblsChanged := restoreInternal(out.Labels, current.Labels)
+	anns, annsChanged := restoreInternal(out.Annotations, current.Annotations)
+	if lblsChanged || annsChanged {
+		out.Labels, out.Annotations = lbls, anns
+		// Carry the caller's options over: this repair now fires on any platform
+		// key, not just a missing marker, so a dry-run patch would otherwise
+		// commit it for real.
+		raw := &metav1.UpdateOptions{}
+		if opts != nil {
+			raw.DryRun, raw.FieldManager, raw.FieldValidation = opts.DryRun, opts.FieldManager, opts.FieldValidation
+		}
+		if err := r.c.Update(ctx, out, &client.UpdateOptions{Raw: raw}); err != nil {
+			return nil, err
+		}
 	}
 
 	return secretToTenant(out), nil
