@@ -64,6 +64,33 @@ tests:
           content:
             name: NVIDIA_CTK_PATH
             value: /usr/local/bin/nvidia-ctk
+      # The remaining three are just as load-bearing as the two above: CDI device
+      # names key on the UUID strategy, the plugin resolves the driver from
+      # NVIDIA_DRIVER_ROOT, and the annotation prefix has to be the one containerd
+      # reads. A regression in any of them breaks device resolution while the two
+      # assertions above still pass.
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: DEVICE_ID_STRATEGY
+            value: uuid
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: NVIDIA_DRIVER_ROOT
+            value: "/"
+      - contains:
+          path: spec.values.gpu-operator.devicePlugin.env
+          content:
+            name: CDI_ANNOTATION_PREFIX
+            value: cdi.k8s.io/
+      # Same for the validator: NVIDIA_DRIVER_ROOT alongside DRIVER_ROOT is what
+      # the driver-validation init container reads.
+      - contains:
+          path: spec.values.gpu-operator.validator.driver.env
+          content:
+            name: NVIDIA_DRIVER_ROOT
+            value: "/"
 
   # The previous default fed NVreg_NvLinkDisable=1 to the operator's driver
   # container through the nvidia-kernel-module-params ConfigMap. With the driver
