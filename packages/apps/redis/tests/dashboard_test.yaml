@@ -1,0 +1,51 @@
+suite: Redis dashboard resources
+templates:
+  - templates/dashboard-resourcemap.yaml
+
+release:
+  name: redis-test
+  namespace: tenant-test
+
+tests:
+  - it: renders dashboard RBAC resources
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: renders dashboard Role
+    documentSelector:
+      path: kind
+      value: Role
+    asserts:
+      - equal:
+          path: metadata.name
+          value: redis-test-dashboard-resources
+
+      - contains:
+          path: rules[1].resourceNames
+          content: redis-test-auth
+
+      - contains:
+          path: rules[2].resourceNames
+          content: redis-test-redis
+
+      - contains:
+          path: rules[2].resourceNames
+          content: redis-test-sentinel
+
+  - it: renders dashboard RoleBinding
+    documentSelector:
+      path: kind
+      value: RoleBinding
+    asserts:
+      - equal:
+          path: metadata.name
+          value: redis-test-dashboard-resources
+
+      - equal:
+          path: roleRef.name
+          value: redis-test-dashboard-resources
+
+      - equal:
+          path: roleRef.kind
+          value: Role

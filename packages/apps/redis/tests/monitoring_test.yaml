@@ -1,0 +1,51 @@
+suite: Redis monitoring
+templates:
+  - templates/servicescrape.yaml
+
+release:
+  name: redis-test
+  namespace: tenant-test
+
+tests:
+  - it: renders monitoring resources
+    asserts:
+      - hasDocuments:
+          count: 2
+
+  - it: renders VMServiceScrape
+    documentSelector:
+      path: kind
+      value: VMServiceScrape
+    asserts:
+      - equal:
+          path: metadata.name
+          value: redis-test
+
+      - equal:
+          path: spec.namespaceSelector.matchNames[0]
+          value: tenant-test
+
+      - equal:
+          path: spec.endpoints[0].port
+          value: metrics
+
+  - it: renders metrics service
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: redis-test-metrics
+
+      - equal:
+          path: spec.ports[0].name
+          value: metrics
+
+      - equal:
+          path: spec.ports[0].port
+          value: 9121
+
+      - equal:
+          path: spec.ports[0].targetPort
+          value: metrics

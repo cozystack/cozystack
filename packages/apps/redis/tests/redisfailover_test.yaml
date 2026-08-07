@@ -1,0 +1,135 @@
+suite: Redis failover
+templates:
+  - templates/redisfailover.yaml
+
+release:
+  name: redis-test
+  namespace: tenant-test
+
+tests:
+  - it: renders all default Redis resources
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders RedisFailover with default values
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: metadata.name
+          value: redis-test
+
+      - equal:
+          path: spec.redis.replicas
+          value: 2
+
+      - equal:
+          path: spec.sentinel.replicas
+          value: 3
+
+      - equal:
+          path: spec.redis.storage.persistentVolumeClaim.spec.resources.requests.storage
+          value: 1Gi
+
+      - equal:
+          path: spec.redis.auth.secretPath
+          value: redis-test-auth
+
+  - it: renders authentication secret by default
+    documentSelector:
+      path: metadata.name
+      value: redis-test-auth
+    asserts:
+      - isKind:
+          of: Secret
+
+      - exists:
+          path: data.password
+
+  - it: renders Redis workload monitor
+    documentSelector:
+      path: metadata.name
+      value: redis-test-redis
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+
+      - equal:
+          path: spec.replicas
+          value: 2
+
+      - equal:
+          path: spec.minReplicas
+          value: 1
+
+      - equal:
+          path: spec.kind
+          value: redis
+
+      - equal:
+          path: spec.type
+          value: redis
+
+  - it: renders Sentinel workload monitor
+    documentSelector:
+      path: metadata.name
+      value: redis-test-sentinel
+    asserts:
+      - isKind:
+          of: WorkloadMonitor
+
+      - equal:
+          path: spec.replicas
+          value: 3
+
+      - equal:
+          path: spec.minReplicas
+          value: 2
+
+      - equal:
+          path: spec.kind
+          value: redis
+
+      - equal:
+          path: spec.type
+          value: sentinel
+
+  - it: applies custom replica and storage values
+    set:
+      replicas: 4
+      size: 10Gi
+      storageClass: fast
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - equal:
+          path: spec.redis.replicas
+          value: 4
+
+      - equal:
+          path: spec.redis.storage.persistentVolumeClaim.spec.resources.requests.storage
+          value: 10Gi
+
+      - equal:
+          path: spec.redis.storage.persistentVolumeClaim.spec.storageClassName
+          value: fast
+
+  - it: does not render authentication secret when auth is disabled
+    set:
+      authEnabled: false
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: removes Redis authentication configuration when auth is disabled
+    set:
+      authEnabled: false
+    documentSelector:
+      path: kind
+      value: RedisFailover
+    asserts:
+      - notExists:
+          path: spec.redis.auth
