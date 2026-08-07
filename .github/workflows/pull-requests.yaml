@@ -114,6 +114,31 @@ jobs:
         run: |
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
+      # The version is pinned because shellcheck's findings change across
+      # releases, and hack/shellcheck-baseline.txt records the findings of one
+      # of them. Distro packages lag several versions behind, so the release
+      # tarball rather than apt. Keep the version in step with
+      # SHELLCHECK_PINNED_VERSION in hack/shellcheck.sh; the script refuses to
+      # run when they disagree, rather than reporting against a baseline that
+      # was not written for it.
+      - name: Set up shellcheck
+        env:
+          SHELLCHECK_VERSION: '0.11.0'
+          SHELLCHECK_SHA256: b7af85e41cc99489dcc21d66c6d5f3685138f06d34651e6d34b42ec6d54fe6f6
+        run: |
+          if ! shellcheck --version 2>/dev/null | grep -qx "version: ${SHELLCHECK_VERSION}"; then
+            tarball="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.gz"
+            curl -fsSLo "/tmp/$tarball" \
+              "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${tarball}"
+            echo "${SHELLCHECK_SHA256}  /tmp/$tarball" | sha256sum --check --strict
+            tar -xzf "/tmp/$tarball" -C /tmp
+            sudo install -m 0755 "/tmp/shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
+          fi
+          # Asserted, not printed. The runner is persistent and its PATH is not
+          # audited here, so a different shellcheck winning resolution would let
+          # this step pass and print while the next one fails on the version,
+          # under a log that says setup succeeded.
+          shellcheck --version | grep -qx "version: ${SHELLCHECK_VERSION}"
       - name: Run unit tests
         run: make unit-tests
       - name: Run controller Go tests

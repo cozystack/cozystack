@@ -69,7 +69,7 @@ Root targets (run from the repo root):
 
 ```bash
 make build          # Build all Docker images (needs: docker, skopeo, jq, gh, helm, yq, GNU tar/sed/awk)
-make unit-tests     # Run all unit tests (Helm, BATS, Go, etc.)
+make unit-tests     # Run all unit tests (Helm, BATS, Go, etc.; needs shellcheck 0.11.0)
 make generate       # Code generation (hack/update-codegen.sh) — CRDs, DeepCopy, clients, RBAC
 make manifests      # Generate CRD manifests and operator YAML variants
 make cozypkg        # Build the cozypkg CLI
@@ -100,9 +100,10 @@ Package `values.yaml` files carry annotations (`@param`, `@typedef`, `@field`, `
 
 ## Testing
 
-- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). `make unit-tests` runs the full unit suite — Helm, BATS, Go, and the preset/readiness checks.
+- **Helm unit tests:** `make helm-unit-tests` (runs `hack/helm-unit-tests.sh` over every package that defines a `test` target). `make unit-tests` runs the full unit suite — Helm, BATS, Go, shellcheck, and the preset/readiness checks.
 - **E2E tests:** Kyverno Chainsaw suites in `hack/e2e-chainsaw/` (one directory per app), run with `chainsaw test`. Cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS. Conventions for writing and stabilising them — and the CI that runs them — live in [`e2e-testing.md`](./e2e-testing.md).
 - **Go tests:** standard `go test`, with Ginkgo/Gomega for controllers.
+- **Shell linting:** `make shellcheck` (runs `hack/shellcheck.sh`, part of `make unit-tests`). It covers every shell script this repository owns, enumerated by shebang **and** by `.sh` suffix, and compares the result against `hack/shellcheck-baseline.txt`. Neither half of that union is redundant: a `*.sh` glob alone would miss 57 files with no extension, 53 of them the platform migrations `run-migrations.sh` runs on a cluster upgrade, and a shebang alone would miss 13 held by the suffix, nine opening with a `# shellcheck shell=` directive and four with no marker at all. The baseline records the findings that predate the gate as `path check count` triples; among the scripts in scope no file is skipped and nothing is excluded on the command line, though in-file `# shellcheck disable=` directives are still honoured, so a finding suppressed that way is absent from the baseline rather than recorded in it. Two classes sit outside the scan: the vendored chart scripts under `packages/*/*/charts/`, which `make update` regenerates, and the `.bats` files, whose `#!/usr/bin/env bats` shebang the enumeration does not match. shellcheck can lint those with `--shell=bats` and has bats-specific checks; they are simply not baselined yet. A finding it does not record fails the run, and so does an entry whose findings have since been fixed — that second half is what makes the list shrink instead of ossify. After fixing findings, run `make shellcheck-baseline` and commit the smaller file. One case is deliberately not caught: a change that both removes and introduces a finding of the same check in the same script leaves the count equal and passes, because pinning identity any tighter than a count means a baseline that reddens whenever an edit shifts a line. The shellcheck version is pinned in both `hack/shellcheck.sh` and the unit-test job, because findings differ across releases.
 
 ## Conventions
 

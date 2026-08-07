@@ -1,0 +1,195 @@
+# shellcheck baseline. Regenerate with: make shellcheck-baseline
+#
+# Generated 2026-08-07 against shellcheck 0.11.0.
+#
+# One line per (script, check) pair with the number of findings hack/shellcheck.sh
+# tolerates there today. The list is allowed to shrink and nothing else: a finding
+# it does not record fails the run, and so does an entry whose findings have been
+# fixed. Adding a line is a visible act in review, not a side effect of writing
+# new code.
+#
+# Every shell script this repository owns is scanned, at shellcheck's default
+# severity: no file among them is skipped, and nothing is excluded on the
+# command line. In-file '# shellcheck disable=' directives are still honoured,
+# so a finding suppressed that way is absent from this list rather than
+# recorded in it.
+#
+# Two classes sit outside the scan and are not represented here at all: the
+# vendored chart scripts under packages/*/*/charts/, which make update
+# regenerates, and the .bats files, whose bats shebang the enumeration does
+# not match. shellcheck can lint those with --shell=bats; they are not
+# baselined here.
+#
+# These are the findings that predate the gate.
+examples/backups/clickhouse/01-create-strategy.sh SC1091 1
+examples/backups/clickhouse/02-create-backupclass.sh SC1091 1
+examples/backups/clickhouse/03-create-bucket.sh SC1091 1
+examples/backups/clickhouse/04-create-clickhouse.sh SC1091 1
+examples/backups/clickhouse/05-create-backupjob.sh SC1091 1
+examples/backups/clickhouse/06-restore-in-place.sh SC1091 1
+examples/backups/clickhouse/07-restore-to-copy.sh SC1091 1
+examples/backups/clickhouse/cleanup.sh SC1091 1
+examples/backups/etcd/01-create-strategy.sh SC1091 1
+examples/backups/etcd/02-create-bucket.sh SC1091 1
+examples/backups/etcd/03-create-etcd-src.sh SC1091 1
+examples/backups/etcd/04-create-backupjob.sh SC1091 1
+examples/backups/etcd/05-restore-in-place.sh SC1091 3
+examples/backups/etcd/cleanup.sh SC1091 1
+examples/backups/foundationdb/01-create-strategy.sh SC1091 1
+examples/backups/foundationdb/02-create-bucket.sh SC1091 1
+examples/backups/foundationdb/03-create-foundationdb-src.sh SC1091 1
+examples/backups/foundationdb/04-create-backupjob.sh SC1091 1
+examples/backups/foundationdb/05-restore-in-place.sh SC1091 1
+examples/backups/foundationdb/06-restore-to-copy.sh SC1091 1
+examples/backups/foundationdb/cleanup.sh SC1091 1
+examples/backups/mariadb/cleanup.sh SC1091 1
+examples/backups/mariadb/run-all.sh SC1091 1
+examples/backups/nats/01-create-strategy.sh SC1091 1
+examples/backups/nats/02-create-backupclass.sh SC1091 1
+examples/backups/nats/03-create-bucket.sh SC1091 1
+examples/backups/nats/04-create-nats.sh SC1091 1
+examples/backups/nats/05-create-backupjob.sh SC1091 1
+examples/backups/nats/06-restore-in-place.sh SC1091 1
+examples/backups/nats/07-restore-to-copy.sh SC1091 1
+examples/backups/nats/cleanup.sh SC1091 1
+examples/backups/postgres/cleanup.sh SC1091 1
+examples/backups/postgres/run-all.sh SC1091 1
+examples/backups/vmi/01-create-strategies.sh SC1091 1
+examples/backups/vmi/02-create-backupclass.sh SC1091 1
+examples/backups/vmi/03-create-vmdisk.sh SC1091 1
+examples/backups/vmi/04-create-vminstance.sh SC1091 1
+examples/backups/vmi/05-create-backupjob.sh SC1091 1
+examples/backups/vmi/06-restore-in-place.sh SC1009 1
+examples/backups/vmi/06-restore-in-place.sh SC1072 1
+examples/backups/vmi/06-restore-in-place.sh SC1073 1
+examples/backups/vmi/06-restore-in-place.sh SC1091 1
+examples/backups/vmi/07-restore-to-copy.sh SC1009 1
+examples/backups/vmi/07-restore-to-copy.sh SC1072 1
+examples/backups/vmi/07-restore-to-copy.sh SC1073 1
+examples/backups/vmi/07-restore-to-copy.sh SC1091 1
+examples/backups/vmi/cleanup.sh SC1091 1
+examples/backups/vmi/run-all.sh SC1091 1
+hack/collect-images.sh SC2086 2
+hack/collect-images.sh SC2162 1
+hack/cozyreport-summary.sh SC1007 1
+hack/cozyreport.sh SC1007 1
+hack/cozyreport.sh SC2086 116
+hack/cozyreport.sh SC2162 13
+hack/download-dashboards.sh SC2016 3
+hack/download-dashboards.sh SC2034 1
+hack/download-dashboards.sh SC2148 1
+hack/download-dashboards.sh SC2162 2
+hack/e2e-chainsaw/_lib/run-kubernetes.sh SC2016 3
+hack/e2e-chainsaw/_lib/run-kubernetes.sh SC2034 1
+hack/e2e-chainsaw/_lib/run-kubernetes.sh SC2086 9
+hack/e2e-chainsaw/_lib/talos-image-cache.sh SC2016 1
+hack/migrate-to-version-1.0.sh SC2001 1
+hack/migrate-to-version-1.0.sh SC2034 1
+hack/overlay-main-images.sh SC2044 1
+hack/select-changelog-source.sh SC1007 1
+hack/select-e2e.sh SC2016 2
+hack/select-install.sh SC2016 1
+hack/update-codegen.sh SC1091 1
+hack/update-codegen.sh SC2086 7
+hack/update-crd.sh SC2155 2
+hack/upload-assets.sh SC2086 12
+packages/apps/kubernetes/hack/update-versions.sh SC2034 1
+packages/apps/kubernetes/hack/update-versions.sh SC2064 2
+packages/apps/kubernetes/hack/update-versions.sh SC2162 2
+packages/apps/kubernetes/hack/update-versions.sh SC2207 1
+packages/apps/mariadb/hack/update-versions.sh SC2064 1
+packages/apps/mariadb/hack/update-versions.sh SC2207 1
+packages/apps/postgres/hack/update-versions.sh SC2064 1
+packages/apps/postgres/hack/update-versions.sh SC2207 1
+packages/apps/rabbitmq/hack/update-versions.sh SC2064 1
+packages/apps/redis/hack/update-versions.sh SC2064 1
+packages/apps/redis/hack/update-versions.sh SC2076 1
+packages/apps/redis/hack/update-versions.sh SC2199 1
+packages/apps/redis/hack/update-versions.sh SC2206 1
+packages/apps/redis/hack/update-versions.sh SC2207 1
+packages/core/platform/images/migrations/migrations/1 SC2086 2
+packages/core/platform/images/migrations/migrations/12 SC3014 2
+packages/core/platform/images/migrations/migrations/13 SC2162 1
+packages/core/platform/images/migrations/migrations/15 SC2034 1
+packages/core/platform/images/migrations/migrations/15 SC2162 2
+packages/core/platform/images/migrations/migrations/17 SC2162 1
+packages/core/platform/images/migrations/migrations/18 SC2162 3
+packages/core/platform/images/migrations/migrations/19 SC3040 1
+packages/core/platform/images/migrations/migrations/2 SC2086 2
+packages/core/platform/images/migrations/migrations/20 SC2046 2
+packages/core/platform/images/migrations/migrations/20 SC2162 1
+packages/core/platform/images/migrations/migrations/20 SC3040 1
+packages/core/platform/images/migrations/migrations/20 SC3047 1
+packages/core/platform/images/migrations/migrations/21 SC2086 2
+packages/core/platform/images/migrations/migrations/21 SC3040 1
+packages/core/platform/images/migrations/migrations/22 SC2086 3
+packages/core/platform/images/migrations/migrations/22 SC3040 1
+packages/core/platform/images/migrations/migrations/22 SC3043 3
+packages/core/platform/images/migrations/migrations/23 SC2046 1
+packages/core/platform/images/migrations/migrations/23 SC3040 1
+packages/core/platform/images/migrations/migrations/24 SC3040 1
+packages/core/platform/images/migrations/migrations/25 SC3040 1
+packages/core/platform/images/migrations/migrations/26 SC3040 1
+packages/core/platform/images/migrations/migrations/26 SC3043 6
+packages/core/platform/images/migrations/migrations/27 SC3040 1
+packages/core/platform/images/migrations/migrations/28 SC2295 4
+packages/core/platform/images/migrations/migrations/29 SC2295 2
+packages/core/platform/images/migrations/migrations/3 SC2086 2
+packages/core/platform/images/migrations/migrations/31 SC3040 1
+packages/core/platform/images/migrations/migrations/32 SC3040 1
+packages/core/platform/images/migrations/migrations/33 SC3040 1
+packages/core/platform/images/migrations/migrations/34 SC3040 1
+packages/core/platform/images/migrations/migrations/35 SC3040 1
+packages/core/platform/images/migrations/migrations/38 SC3040 1
+packages/core/platform/images/migrations/migrations/4 SC2034 1
+packages/core/platform/images/migrations/migrations/4 SC2162 2
+packages/core/platform/images/migrations/migrations/40 SC3040 1
+packages/core/platform/images/migrations/migrations/42 SC1091 1
+packages/core/platform/images/migrations/migrations/42 SC3040 1
+packages/core/platform/images/migrations/migrations/43 SC1091 2
+packages/core/platform/images/migrations/migrations/43 SC3040 1
+packages/core/platform/images/migrations/migrations/44 SC1091 1
+packages/core/platform/images/migrations/migrations/44 SC3040 1
+packages/core/platform/images/migrations/migrations/45 SC1091 1
+packages/core/platform/images/migrations/migrations/46 SC1091 1
+packages/core/platform/images/migrations/migrations/47 SC1091 1
+packages/core/platform/images/migrations/migrations/48 SC1091 1
+packages/core/platform/images/migrations/migrations/48 SC3040 1
+packages/core/platform/images/migrations/migrations/49 SC1091 1
+packages/core/platform/images/migrations/migrations/49 SC3040 1
+packages/core/platform/images/migrations/migrations/5 SC2034 1
+packages/core/platform/images/migrations/migrations/5 SC2162 2
+packages/core/platform/images/migrations/migrations/50 SC1091 1
+packages/core/platform/images/migrations/migrations/50 SC2086 1
+packages/core/platform/images/migrations/migrations/51 SC1091 1
+packages/core/platform/images/migrations/migrations/52 SC1091 1
+packages/core/platform/images/migrations/migrations/52 SC3040 1
+packages/core/platform/images/migrations/migrations/53 SC1091 2
+packages/core/platform/images/migrations/migrations/53 SC3040 1
+packages/core/platform/images/migrations/migrations/6 SC2086 2
+packages/core/platform/images/migrations/migrations/9 SC2162 1
+packages/core/platform/images/migrations/run-migrations.sh SC1091 1
+packages/core/platform/images/migrations/run-migrations.sh SC2086 3
+packages/core/platform/images/migrations/run-migrations.sh SC3040 1
+packages/core/talos/hack/gen-profiles.sh SC2086 5
+packages/core/talos/hack/gen-profiles.sh SC2153 1
+packages/core/talos/hack/gen-versions.sh SC2086 2
+packages/core/testing/images/e2e-sandbox/entrypoint.sh SC2034 1
+packages/extra/bootbox/hack/test.sh SC2148 1
+packages/system/cozystack-scheduler/examples/demo/01-scheduling-classes.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/02-create-tenants.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/03-colocate-demo.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/04-colocate-second-redis.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/05-colocate-cleanup.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/06-onepernode-demo.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/07-onepernode-second-redis.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/08-onepernode-cleanup.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/09-spread-demo.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/10-spread-cleanup.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/11-node2-demo.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/12-node2-cleanup.sh SC1091 1
+packages/system/cozystack-scheduler/examples/demo/13-teardown.sh SC1091 1
+packages/system/linstor/hack/plunger/plunger-satellite.sh SC2015 1
+packages/system/linstor/hack/plunger/plunger-satellite.sh SC2086 3
+packages/system/linstor/hack/proxmox-install-module.sh SC2148 1
+packages/system/piraeus-operator/hack/proxmox-install-module.sh SC2148 1

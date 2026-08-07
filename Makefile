@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test-controllers preflight shellcheck shellcheck-baseline
 
 include hack/common-envs.mk
 
@@ -106,10 +106,24 @@ test:
 	make -C packages/core/testing apply
 	make -C packages/core/testing e2e
 
-unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check
+unit-tests: helm-unit-tests bats-unit-tests go-unit-tests rd-presets-check test-check-readiness migrations-target-check shellcheck
 
 helm-unit-tests:
 	hack/helm-unit-tests.sh
+
+# Static analysis of every shell script the repo owns, compared against
+# hack/shellcheck-baseline.txt. Enumeration is a shebang and a *.sh suffix
+# together, so the extensionless platform migrations and the shebang-less
+# sourced libraries are both covered. Dropping either half loses files.
+#
+# Regenerate the baseline after fixing findings — the check fails on a
+# baseline that still records what is no longer there, which is what keeps
+# the list shrinking.
+shellcheck:
+	hack/shellcheck.sh
+
+shellcheck-baseline:
+	hack/shellcheck.sh --regenerate
 
 # Pin the resourcesPreset enum in every ApplicationDefinition openAPISchema
 # to the canonical 47-value set (40 instance-type names + 7 legacy aliases).
