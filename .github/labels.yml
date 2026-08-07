@@ -18,7 +18,7 @@
 #   priority/     urgency
 #   triage/       review state
 #   lifecycle/    issue or PR lifecycle
-#   area/         subsystem; extensible — add when 3+ open issues exist
+#   area/         subsystem; extensible — see the area/ block below for when to add
 #   do-not-merge/ PR merge blockers
 #   security/     security-finding severity and status (Cozystack-specific)
 #   size/         PR size (auto-applied)
@@ -151,7 +151,8 @@
 
 # ──────────────────────────────────────────────
 # area/ — subsystem (extensible)
-# Add a new area/* when there are 3+ open issues on the topic.
+# Add a new area/* when there are 3+ open issues on the topic, or when a set of
+# packages that share a concern has no area at all and nothing else fits.
 # ──────────────────────────────────────────────
 
 - name: area/api
@@ -229,6 +230,10 @@
 - name: area/tenant
   color: 'bfd4f2'
   description: Issues or PRs related to the tenant chart and multi-tenancy
+
+- name: area/crds
+  color: 'bfd4f2'
+  description: Issues or PRs related to the vendored CRD-bundle packages under packages/system/*-crd(s)
 
 - name: area/uncategorized
   color: 'fbca04'

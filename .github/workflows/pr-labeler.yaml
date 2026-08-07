@@ -34,8 +34,11 @@ jobs:
               // style, perf, test, build, ci, revert — no kind mapping
             };
 
-            // scope -> area/* mapping. Keys are the scopes observed in cozystack issues
-            // and PRs. Add new entries when a scope recurs (3+ times).
+            // scope -> area/* mapping. Keys are mostly the scopes observed in cozystack
+            // issues and PRs; add one when a scope recurs (3+ times). The threshold is
+            // how a scope is discovered out of traffic, not a bar every key has to
+            // clear: a closed, enumerable set of directories may be seeded ahead of use
+            // instead, and a block that does that says so and says why.
             const scopeToArea = {
               // area/api
               'api':                 'area/api',
@@ -50,6 +53,37 @@ jobs:
 
               // area/ci
               'ci':                  'area/ci',
+              // Both observed in the unit that matters here, the PR title: three PRs
+              // changing this very file carried one, and each landed on
+              // area/uncategorized.
+              // Not `labels`, and on evidence rather than on a rule: the sole commit
+              // carrying it as a scope was about Kubernetes object labels on chart
+              // templates, so the one observed use points somewhere else entirely.
+              // Mapping it would answer that use confidently wrong, which is worse
+              // than area/uncategorized saying out loud that it could not tell.
+              'labeler':             'area/ci',
+              'pr-labeler':          'area/ci',
+
+              // area/crds — the CRD-bundle packages under packages/system/, keyed by
+              // directory name. One key is observed rather than seeded: a PR titled
+              // `fix(prometheus-operator-crds): ship full upstream CRD bundle` landed
+              // on area/uncategorized, which is the failure this block exists to end.
+              // The rest are seeded, because authors otherwise reach for the component
+              // scope, and that has to keep meaning the component so a change to
+              // cert-manager itself does not become CRD packaging. Bare `crds` has
+              // never been used at all and is here for a change spanning several
+              // packages. application-definition-crd is left out on purpose: its CRD
+              // is cozystack's own API surface and its changes ship under `api`.
+              // "CRD-bundle" rather than "CRD-only": gateway-api-crds also ships
+              // upstream's safe-upgrades ValidatingAdmissionPolicy and its binding.
+              'crds':                'area/crds',
+              'cert-manager-crds':   'area/crds',
+              'etcd-operator-crds':  'area/crds',
+              'gateway-api-crds':    'area/crds',
+              'piraeus-operator-crds': 'area/crds',
+              'prometheus-operator-crds': 'area/crds',
+              'vertical-pod-autoscaler-crds': 'area/crds',
+              'vsnap-crd':           'area/crds',
 
               // area/dependencies — Renovate uses scope `deps` (see .github/renovate.json)
               'deps':                'area/dependencies',

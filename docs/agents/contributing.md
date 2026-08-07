@@ -70,7 +70,7 @@ git commit --signoff -m "docs(contributing): add installation guide"
 
 ## PR Title Auto-Labeling
 
-`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `edited`, `reopened`, and `synchronize` events and applies labels additively (never removes). The title is expected to follow Conventional Commits — same format as commit messages above.
+`.github/workflows/pr-labeler.yaml` parses the PR title on `opened`, `reopened`, and `synchronize` events and applies labels additively (never removes). `edited` is deliberately not among them, so retitling an open PR does not relabel it — push or reopen instead. The title is expected to follow Conventional Commits — same format as commit messages above.
 
 **Type → `kind/*`:**
 
@@ -90,7 +90,8 @@ git commit --signoff -m "docs(contributing): add installation guide"
 | agents, ai | area/ai |
 | api, cozystack-api | area/api |
 | build | area/build |
-| ci | area/ci |
+| ci, labeler, pr-labeler | area/ci |
+| crds, cert-manager-crds, etcd-operator-crds, gateway-api-crds, ... | area/crds |
 | dashboard | area/dashboard |
 | postgres, mariadb, redis, etcd, kafka, clickhouse, postgres-operator, mariadb-operator | area/database |
 | extra | area/extra |
