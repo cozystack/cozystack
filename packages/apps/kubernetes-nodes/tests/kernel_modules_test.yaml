@@ -201,3 +201,22 @@ tests:
         documentSelector:
           path: kind
           value: Job
+
+  - it: accepts a semicolon-separated module parameter
+    set:
+      gpus: []
+      kernelModules:
+        - name: nvidia
+          parameters:
+            - NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222
+    asserts:
+      # NVIDIA's documented multi-value form is semicolon-separated, and `;` is inert
+      # inside an unquoted heredoc. An allowlist that omitted it rejected a legitimate
+      # parameter, so this class denies what the shell expands rather than permitting
+      # a fixed set.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {14}  - NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222\n'
+        documentSelector:
+          path: kind
+          value: Job

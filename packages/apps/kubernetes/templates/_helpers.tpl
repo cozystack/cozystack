@@ -185,9 +185,12 @@ writes exactly that one line into the `nvidia-kernel-module-params` ConfigMap
 individual GPUs into worker VMs WITHOUT the NVSwitches, so the driver would
 otherwise wait forever for an NVLink fabric that can never come up, leaving
 Fabric State "In Progress" and failing every CUDA call with "system not yet
-initialized". On Talos the driver comes from a system extension and that
-container is disabled, so the machine config is the only place left to carry
-the parameter — without it, moving a GPU node group to Talos loses it silently.
+initialized". On Talos the driver comes from a system extension instead, and the
+operator's driver container has to be turned off or the two clash — today through
+addons.gpuOperator.valuesOverride, since the chart's addon default does not do it.
+Once it is off, nothing mounts that ConfigMap and the machine config is the only
+place left to carry the parameter, so moving a GPU node group to Talos loses it
+silently.
 A no-op on a PCIe card with no NVLink.
 
 Module order is the order Talos' own NVIDIA documentation prescribes and the
@@ -236,8 +239,8 @@ creates `/dev/nvidia0`, and then finds no devices.
 {{-     $params := list -}}
 {{-     range .parameters | default list -}}
 {{-       $param := . | toString -}}
-{{-       if not (regexMatch `^[A-Za-z0-9_.,:=+/-]+$` $param) -}}
-{{-         fail (printf "nodeGroup %s: invalid kernelModules parameter %q on module %q — must match ^[A-Za-z0-9_.,:=+/-]+$ (e.g. NVreg_EnableGpuFirmware=1)" $groupName $param $name) -}}
+{{-       if not (regexMatch `^[^[:cntrl:]\s$\x60\\'\"]+$` $param) -}}
+{{-         fail (printf "nodeGroup %s: invalid kernelModules parameter %q on module %q — must not contain $, a backtick, a backslash, quotes or whitespace (e.g. NVreg_EnableGpuFirmware=1, or the semicolon-separated NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222)" $groupName $param $name) -}}
 {{-       end -}}
 {{-       $params = append $params $param -}}
 {{-     end -}}
@@ -306,19 +309,28 @@ which is inherent: changing a node's boot image means replacing the node.
        Validates the EFFECTIVE value rather than only the per-group override, which
        also closes the pre-existing path through the cluster-wide talos.schematicID.
 
-       Deliberately a character class and NOT `^[0-9a-f]{64}$`. The public factory
-       names schematics by sha256, but the chart supports more than the public
-       factory: talos.imageFactoryURL documents a self-hosted factory, a caching
-       mirror or "an internal HTTP file server", and talos.installerRepository
-       documents mirrored registries. On a file server or a mirrored registry the
-       operator picks the path, and a readable name like `talos-gpu-nvidia-open` is
-       the obvious choice — a 64-hex rule would stop such a cluster reconciling on a
-       field its operator never touched. This class rejects $, backticks, quotes and
-       whitespace, which is all that is needed here; a wrong ID still 404s at the
+       Deliberately a DENYLIST, not an allowlist, and neither `^[0-9a-f]{64}$` nor a
+       list of permitted characters. The set of legal values here is open: the public
+       factory names schematics by sha256, but talos.imageFactoryURL documents a
+       self-hosted factory, a caching mirror or "an internal HTTP file server", and
+       talos.installerRepository documents mirrored registries. On those the operator
+       picks the path, and it may be readable (`talos-gpu-nvidia-open`) or contain
+       slashes (`gpu/nvidia-open`) — an OCI repository path takes several segments and
+       so does a URL path. Enumerating what is allowed cost a legitimate configuration
+       twice, so this enumerates what is dangerous instead.
+
+       Inside an unquoted heredoc only $, a backtick and a backslash are special;
+       `/ ; | & ( )` and the rest pass through as text. Quotes, whitespace and
+       control characters are rejected as well — not because the shell would act on
+       them, but because they would corrupt the YAML the heredoc carries. A bare
+       control character otherwise passes a guard written with `\s` (which covers
+       only tab, newline, form feed, carriage return and space) and surfaces much
+       later as `yaml: control characters are not allowed`, pointing at the template
+       rather than at the value. A wrong-but-safe ID still 404s at the
        factory exactly as before, and that failure surfaces on the DataVolume where
        it can be seen. */}}
-{{- if not (regexMatch `^[A-Za-z0-9._:-]+$` $schematicID) -}}
-{{- fail (printf "nodeGroup %s: invalid schematicID %q — must match ^[A-Za-z0-9._:-]+$ (a 64-hex image-factory digest, or the path an operator chose on a self-hosted factory or mirror)" .groupName $schematicID) -}}
+{{- if not (regexMatch `^[^[:cntrl:]\s$\x60\\'\"]+$` $schematicID) -}}
+{{- fail (printf "nodeGroup %s: invalid schematicID %q — must not contain $, a backtick, a backslash, quotes or whitespace (it is interpolated into a machine config applied through a shell heredoc); a 64-hex image-factory digest and a mirror path such as gpu/nvidia-open are both fine" .groupName $schematicID) -}}
 {{- end -}}
 {{- $schematicID -}}
 {{- end }}

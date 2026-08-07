@@ -320,3 +320,49 @@ tests:
         documentSelector:
           path: kind
           value: Job
+
+  - it: accepts a multi-segment mirror path as a schematic
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      talos:
+        imageFactoryURL: "http://images.internal.example.com/talos"
+        installerRepository: "registry.internal.example.com/talos/installer"
+      nodeGroups:
+        md0:
+          minReplicas: 1
+          maxReplicas: 3
+          instanceType: ""
+          diskSize: 20Gi
+          roles: [ingress-nginx]
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          schematicID: "gpu/nvidia-open"
+          kubelet: {}
+    asserts:
+      # An OCI repository path takes several segments and so does a URL path, so a
+      # guard that forbids `/` rejects a configuration that renders correctly. `/` is
+      # inert in an unquoted heredoc; only $, a backtick and a backslash are not.
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          value: http://images.internal.example.com/talos/image/gpu/nvidia-open/v1.13.6/openstack-amd64.raw.xz
+        template: templates/cluster.yaml
+        documentSelector:
+          path: kind
+          value: KubevirtMachineTemplate
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'image: registry\.internal\.example\.com/talos/installer/gpu/nvidia-open:v1\.13\.6'
+        template: templates/talos/talos-reconcile-job.yaml
+        documentSelector:
+          path: kind
+          value: Job
