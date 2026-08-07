@@ -105,6 +105,11 @@ func fluxAIODeployment() *appsv1.Deployment {
 								{Name: "no_proxy", Value: ".svc"},
 							},
 							VolumeMounts: []corev1.VolumeMount{{Name: "tmp", MountPath: "/tmp"}},
+							// flux-aio ships helm-controller with a bare httpGet
+							// liveness probe: no timing fields at all, so the
+							// kube-apiserver defaults (~30s window) apply. The
+							// startupProbe must inherit this handler and its unset
+							// TimeoutSeconds and only normalise the startup budget.
 							LivenessProbe: &corev1.Probe{
 								ProbeHandler: corev1.ProbeHandler{
 									HTTPGet: &corev1.HTTPGetAction{
@@ -112,9 +117,6 @@ func fluxAIODeployment() *appsv1.Deployment {
 										Port: intstr.FromString("healthz-hc"),
 									},
 								},
-								PeriodSeconds:    10,
-								TimeoutSeconds:   5,
-								FailureThreshold: 3,
 							},
 						},
 						{Name: "notification-controller", Image: "ghcr.io/fluxcd/notification-controller:v1.8.0"},
@@ -136,7 +138,18 @@ func TestBuildShardDeployment(t *testing.T) {
 		},
 	}
 
-	dep, err := BuildShardDeployment(fluxAIODeployment(), 2, cfg)
+	flux := fluxAIODeployment()
+	// Capture the source liveness probe verbatim so the startupProbe assertions
+	// can check inheritance against what flux-aio actually ships, rather than
+	// against a hardcoded value baked into the test.
+	var srcLiveness *corev1.Probe
+	for i := range flux.Spec.Template.Spec.Containers {
+		if flux.Spec.Template.Spec.Containers[i].Name == "helm-controller" {
+			srcLiveness = flux.Spec.Template.Spec.Containers[i].LivenessProbe.DeepCopy()
+		}
+	}
+
+	dep, err := BuildShardDeployment(flux, 2, cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,15 +245,37 @@ func TestBuildShardDeployment(t *testing.T) {
 	if hc.StartupProbe == nil {
 		t.Fatal("startupProbe must be added so a slow start is not liveness-killed into a crashloop")
 	}
+	// Handler inherited from liveness verbatim.
 	if hc.StartupProbe.HTTPGet == nil || hc.StartupProbe.HTTPGet.Path != "/healthz" {
 		t.Fatalf("startupProbe must reuse the liveness /healthz handler: %+v", hc.StartupProbe)
 	}
-	if hc.StartupProbe.FailureThreshold < 10 {
-		t.Fatalf("startupProbe budget too small to cover a slow cache sync: %d", hc.StartupProbe.FailureThreshold)
+	// Assert the complete normalised startup budget, not just FailureThreshold:
+	// a threshold check alone still passes if PeriodSeconds later regresses to 1,
+	// which would silently restore a short crashloop window.
+	if hc.StartupProbe.InitialDelaySeconds != 0 ||
+		hc.StartupProbe.PeriodSeconds != 10 ||
+		hc.StartupProbe.SuccessThreshold != 1 ||
+		hc.StartupProbe.FailureThreshold != 30 {
+		t.Fatalf("startupProbe budget not normalised to the expected contract "+
+			"(delay=0 period=10 success=1 failure=30): %+v", hc.StartupProbe)
 	}
-	if hc.StartupProbe.TimeoutSeconds != 5 {
-		t.Fatalf("startupProbe must inherit the liveness TimeoutSeconds (5), not force it stricter: got %d",
-			hc.StartupProbe.TimeoutSeconds)
+	// TimeoutSeconds is inherited from the source liveness probe, never forced.
+	// flux-aio ships a bare probe (TimeoutSeconds 0), so a stray
+	// sp.TimeoutSeconds = N would diverge from the source and fail here.
+	if hc.StartupProbe.TimeoutSeconds != srcLiveness.TimeoutSeconds {
+		t.Fatalf("startupProbe must inherit the liveness TimeoutSeconds (%d), got %d",
+			srcLiveness.TimeoutSeconds, hc.StartupProbe.TimeoutSeconds)
+	}
+	// The startupProbe must be a DeepCopy of the liveness probe, never an alias.
+	// If it aliased, normalising the startup FailureThreshold to 30 would also
+	// stamp 30 onto liveness, producing exactly the never-failing liveness probe
+	// this change exists to avoid.
+	if hc.LivenessProbe == hc.StartupProbe {
+		t.Fatal("startupProbe must be a DeepCopy of liveness, not an alias sharing its backing probe")
+	}
+	if hc.LivenessProbe.FailureThreshold != srcLiveness.FailureThreshold {
+		t.Fatalf("liveness FailureThreshold was clobbered by the startup budget "+
+			"(alias regression): source=%d live=%d", srcLiveness.FailureThreshold, hc.LivenessProbe.FailureThreshold)
 	}
 }
 
