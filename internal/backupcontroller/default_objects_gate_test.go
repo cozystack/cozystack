@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -128,6 +129,23 @@ func helmReleaseObject() *unstructured.Unstructured {
 	return u
 }
 
+// credentialsHelmReleaseObject is the platform bucket's <bucket>-system
+// release: the one that renders the user-credentials Secret the gate reads
+// to resolve the bucket name, behind its own install-time lookup.
+func credentialsHelmReleaseObject() *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetAPIVersion("helm.toolkit.fluxcd.io/v2")
+	u.SetKind("HelmRelease")
+	u.SetNamespace("tenant-root")
+	u.SetName("bucket-cozy-backups-system")
+	return u
+}
+
+func suspended(u *unstructured.Unstructured) *unstructured.Unstructured {
+	_ = unstructured.SetNestedField(u.Object, true, "spec", "suspend")
+	return u
+}
+
 func newGate(t *testing.T, ctrlObjs []client.Object, dynObjs ...runtime.Object) (*DefaultObjectsGate, *dynamicfake.FakeDynamicClient) {
 	t.Helper()
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(runtime.NewScheme(), gateListKinds(), dynObjs...)
@@ -142,6 +160,10 @@ func newGate(t *testing.T, ctrlObjs []client.Object, dynObjs ...runtime.Object) 
 		HelmRelease: types.NamespacedName{
 			Namespace: "cozy-backup-controller",
 			Name:      "backupstrategy-controller",
+		},
+		CredentialsHelmRelease: types.NamespacedName{
+			Namespace: "tenant-root",
+			Name:      "bucket-cozy-backups-system",
 		},
 		VeleroNamespace:  "cozy-velero",
 		MinForceInterval: 5 * time.Minute,
@@ -178,10 +200,20 @@ func bslObject() *unstructured.Unstructured {
 
 func forceAnnotations(t *testing.T, dyn *dynamicfake.FakeDynamicClient) map[string]string {
 	t.Helper()
-	hr, err := dyn.Resource(helmReleaseGVR).Namespace("cozy-backup-controller").
-		Get(context.Background(), "backupstrategy-controller", metav1.GetOptions{})
+	return annotationsOf(t, dyn, "cozy-backup-controller", "backupstrategy-controller")
+}
+
+func credentialsForceAnnotations(t *testing.T, dyn *dynamicfake.FakeDynamicClient) map[string]string {
+	t.Helper()
+	return annotationsOf(t, dyn, "tenant-root", "bucket-cozy-backups-system")
+}
+
+func annotationsOf(t *testing.T, dyn *dynamicfake.FakeDynamicClient, namespace, name string) map[string]string {
+	t.Helper()
+	hr, err := dyn.Resource(helmReleaseGVR).Namespace(namespace).
+		Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("get HelmRelease: %v", err)
+		t.Fatalf("get HelmRelease %s/%s: %v", namespace, name, err)
 	}
 	return hr.GetAnnotations()
 }
@@ -252,46 +284,184 @@ func TestCheckNoopWhenAllPresent(t *testing.T) {
 	}
 }
 
-// TestCheckSkipsWhileBucketUnresolved pins the precondition. Forcing a
-// re-render before the COSI driver has published a bucket name would just
-// re-run the same empty lookup and burn a Helm upgrade, so the gate waits.
-func TestCheckSkipsWhileBucketUnresolved(t *testing.T) {
+// TestCheckForcesCredentialsReleaseWhenSourceSecretAbsent is the second half
+// of the bug. The Secret the gate reads to resolve the bucket name is itself
+// rendered behind an install-time lookup, by the bucket's <bucket>-system
+// release — so it is subject to the identical permanent skip, one release
+// earlier. While it is absent nothing downstream can resolve: no projected
+// credentials, no Strategy CRs, no Velero, and migration 50 has no snapshot
+// target. Forcing THIS chart's release would be useless (its own lookups
+// depend on that Secret); the bucket release is the one to force.
+func TestCheckForcesCredentialsReleaseWhenSourceSecretAbsent(t *testing.T) {
 	g, dyn := newGate(t,
-		[]client.Object{sourceSecret(""), cozyDefaultBackupClass()},
+		[]client.Object{cozyDefaultBackupClass()},
 		helmReleaseObject(),
+		credentialsHelmReleaseObject(),
 	)
 
 	missing, forced, err := g.Check(context.Background())
 	if err != nil {
 		t.Fatalf("Check: %v", err)
 	}
-	if len(missing) != 0 || forced {
-		t.Fatalf("missing = %v, forced = %v, want none while the bucket is unresolved", missing, forced)
+	if !forced {
+		t.Fatal("expected the bucket release to be forced while the credentials Secret is absent")
 	}
+	if len(missing) != 1 || missing[0] != "Secret/bucket-cozy-backups-system-credentials" {
+		t.Fatalf("missing = %v, want the credentials Secret", missing)
+	}
+	ann := credentialsForceAnnotations(t, dyn)
+	if ann["reconcile.fluxcd.io/forceAt"] == "" || ann["reconcile.fluxcd.io/requestedAt"] == "" {
+		t.Errorf("bucket release not forced with both annotations: %v", ann)
+	}
+	// This chart's own release must be left alone: its templates gate on the
+	// same unresolved bucket, so forcing it would burn a Helm upgrade that
+	// re-runs the same empty lookup.
 	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
-		t.Errorf("HelmRelease forced before the bucket resolved: %v", ann)
+		t.Errorf("own HelmRelease forced before the bucket resolved: %v", ann)
 	}
 }
 
-// TestCheckSkipsWhileSourceSecretAbsent pins the state one moment earlier than
-// TestCheckSkipsWhileBucketUnresolved: the projector has not created the Secret
-// at all yet. Returning an error here would log a check failure on every tick
-// of the entire bootstrap window, for a state the gate documents as a no-op.
-func TestCheckSkipsWhileSourceSecretAbsent(t *testing.T) {
+// TestCheckForcesCredentialsReleaseWhenBucketNameEmpty pins the same
+// treatment one state later: the Secret exists but carries no bucket name (a
+// partial render, or a hand-written Secret missing the key). Only a
+// re-render of the producing release can complete it.
+func TestCheckForcesCredentialsReleaseWhenBucketNameEmpty(t *testing.T) {
 	g, dyn := newGate(t,
-		[]client.Object{cozyDefaultBackupClass()},
+		[]client.Object{sourceSecret(""), cozyDefaultBackupClass()},
 		helmReleaseObject(),
+		credentialsHelmReleaseObject(),
 	)
 
 	missing, forced, err := g.Check(context.Background())
 	if err != nil {
-		t.Fatalf("Check returned an error for an absent source Secret, want a silent no-op: %v", err)
+		t.Fatalf("Check: %v", err)
 	}
-	if len(missing) != 0 || forced {
-		t.Fatalf("missing = %v, forced = %v, want none while the source Secret is absent", missing, forced)
+	if !forced || len(missing) != 1 {
+		t.Fatalf("missing = %v, forced = %v; want the credentials Secret forced", missing, forced)
+	}
+	if ann := credentialsForceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+		t.Errorf("bucket release not forced: %v", ann)
+	}
+}
+
+// TestCheckReportsCredentialsSecretWithoutBucketRelease covers external S3
+// (backupStorage.provisionBucket=false): the Secret is admin-managed and no
+// release renders it, so there is nothing to force — but it must still be
+// reported missing, because that is the state an operator has to alert on.
+func TestCheckReportsCredentialsSecretWithoutBucketRelease(t *testing.T) {
+	g, dyn := newGate(t,
+		[]client.Object{cozyDefaultBackupClass()},
+		helmReleaseObject(),
+		credentialsHelmReleaseObject(),
+	)
+	g.CredentialsHelmRelease = types.NamespacedName{}
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if forced {
+		t.Error("forced a release on the external-S3 path, where none renders the Secret")
+	}
+	if len(missing) != 1 {
+		t.Fatalf("missing = %v, want the credentials Secret reported", missing)
+	}
+	if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("bucket release annotated with no coordinates configured: %v", ann)
+	}
+}
+
+// TestCheckThrottlesTheTwoReleasesIndependently pins that forcing the bucket
+// release does not eat the objects release's throttle budget. The two happen
+// in sequence on a real bootstrap — credentials first, then the objects the
+// resolved bucket unblocks — so a shared timestamp would delay the second
+// force by a full MinForceInterval for no reason.
+func TestCheckThrottlesTheTwoReleasesIndependently(t *testing.T) {
+	base := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	g, dyn := newGate(t,
+		[]client.Object{cozyDefaultBackupClass()},
+		helmReleaseObject(),
+		credentialsHelmReleaseObject(),
+	)
+	g.now = func() time.Time { return base }
+
+	// No source Secret yet: the bucket release is forced.
+	if _, forced, err := g.Check(context.Background()); err != nil || !forced {
+		t.Fatalf("first Check: forced = %v, err = %v; want the bucket release forced", forced, err)
+	}
+
+	// A minute later the Secret lands. The objects are still missing, and
+	// this force must go through despite being well inside MinForceInterval
+	// of the previous one.
+	g.now = func() time.Time { return base.Add(time.Minute) }
+	if err := g.Client.Create(context.Background(), sourceSecret("bucket-1a2b")); err != nil {
+		t.Fatalf("create source Secret: %v", err)
+	}
+	missing, forced, err := g.Check(context.Background())
+	if err != nil {
+		t.Fatalf("second Check: %v", err)
+	}
+	if !forced {
+		t.Fatal("objects release throttled by the earlier credentials force")
+	}
+	if len(missing) != 7 {
+		t.Fatalf("missing = %v, want the 6 strategies + the BSL", missing)
+	}
+	if ann := forceAnnotations(t, dyn); ann["reconcile.fluxcd.io/forceAt"] == "" {
+		t.Errorf("own HelmRelease not forced: %v", ann)
+	}
+}
+
+// TestForceSkipsSuspendedHelmRelease pins the suspend guard. helm-controller
+// ignores forceAt/requestedAt while spec.suspend is true (`cozyhr suspend` is
+// a standard dev workflow), so patching anyway would re-stamp every
+// MinForceInterval for the whole suspension and climb
+// cozystack_backup_default_objects_force_reconciles_total — which the runbook
+// reads as "the forced render is not producing the objects", the wrong
+// diagnosis. The objects must still be reported missing.
+func TestForceSkipsSuspendedHelmRelease(t *testing.T) {
+	g, dyn := newGate(t,
+		[]client.Object{sourceSecret("bucket-1a2b"), cozyDefaultBackupClass()},
+		suspended(helmReleaseObject()),
+	)
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if forced {
+		t.Error("forced reported true for a suspended HelmRelease that ignores the annotations")
+	}
+	if len(missing) != 7 {
+		t.Fatalf("missing = %v, want the objects still reported", missing)
 	}
 	if ann := forceAnnotations(t, dyn); len(ann) != 0 {
-		t.Errorf("HelmRelease forced before the source Secret existed: %v", ann)
+		t.Errorf("suspended HelmRelease annotated: %v", ann)
+	}
+}
+
+// TestForceSkipsSuspendedCredentialsHelmRelease pins the same guard on the
+// bucket release, which an operator is far more likely to have suspended:
+// it lives in a tenant namespace and is not part of this chart.
+func TestForceSkipsSuspendedCredentialsHelmRelease(t *testing.T) {
+	g, dyn := newGate(t,
+		[]client.Object{cozyDefaultBackupClass()},
+		helmReleaseObject(),
+		suspended(credentialsHelmReleaseObject()),
+	)
+
+	missing, forced, err := g.Check(context.Background())
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if forced {
+		t.Error("forced reported true for a suspended bucket HelmRelease")
+	}
+	if len(missing) != 1 {
+		t.Fatalf("missing = %v, want the credentials Secret still reported", missing)
+	}
+	if ann := credentialsForceAnnotations(t, dyn); len(ann) != 0 {
+		t.Errorf("suspended bucket HelmRelease annotated: %v", ann)
 	}
 }
 
@@ -488,6 +658,53 @@ func TestCheckSurfacesPatchFailure(t *testing.T) {
 	}
 	if !g.lastForce.IsZero() {
 		t.Error("lastForce advanced despite the patch failing; the next tick would be throttled")
+	}
+}
+
+// TestMissingGaugeCoversTheUnresolvedPath pins the alerting contract. The
+// gauge used to be written only after the bucket resolved, so the state the
+// gate exists to catch — no credentials Secret, therefore no strategies —
+// reported 0 or nothing at all, and an alert on it never fired. Deleting the
+// source Secret later (credential rotation) had the same effect: the gauge
+// froze at its last value.
+func TestMissingGaugeCoversTheUnresolvedPath(t *testing.T) {
+	defaultObjectsMissing.Reset()
+	g, _ := newGate(t,
+		[]client.Object{cozyDefaultBackupClass()},
+		helmReleaseObject(),
+		credentialsHelmReleaseObject(),
+	)
+
+	if _, _, err := g.Check(context.Background()); err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if got := testutil.ToFloat64(defaultObjectsMissing.WithLabelValues("cozy-default")); got != 1 {
+		t.Fatalf("cozystack_backup_default_objects_missing = %v, want 1 while the credentials Secret is absent", got)
+	}
+}
+
+// TestCheckErrorsCounterMarksTheGaugeStale pins the other half of that
+// contract. On an API error the gauge deliberately keeps its last value
+// rather than flapping the alert, which means the gauge alone cannot tell
+// "healthy" from "not evaluated". The errors counter is what closes that
+// gap, and the runbook alerts on both.
+func TestCheckErrorsCounterMarksTheGaugeStale(t *testing.T) {
+	defaultObjectsMissing.Reset()
+	defaultObjectsCheckErrors.Reset()
+	// No BackupClass: the check cannot enumerate what must exist.
+	g, _ := newGate(t,
+		[]client.Object{sourceSecret("bucket-1a2b")},
+		helmReleaseObject(),
+	)
+
+	if _, _, err := g.Check(context.Background()); err == nil {
+		t.Fatal("Check succeeded with no BackupClass, want an error")
+	}
+	if got := testutil.ToFloat64(defaultObjectsCheckErrors.WithLabelValues("cozy-default")); got != 1 {
+		t.Fatalf("cozystack_backup_default_objects_check_errors_total = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(defaultObjectsMissing.WithLabelValues("cozy-default")); got != 0 {
+		t.Fatalf("gauge = %v, want it left untouched by a failed check", got)
 	}
 }
 

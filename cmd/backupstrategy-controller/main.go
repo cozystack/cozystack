@@ -220,6 +220,16 @@ func main() {
 				Name:      hrName,
 			},
 			VeleroNamespace: os.Getenv("BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE"),
+			// The platform bucket's <bucket>-system release renders the
+			// credentials Secret the projector reads, behind the same kind
+			// of install-time lookup — and while that Secret is missing
+			// nothing downstream can resolve. Empty when the bucket is not
+			// provisioned by Cozystack (external S3), where the Secret is
+			// admin-managed and no release renders it.
+			CredentialsHelmRelease: types.NamespacedName{
+				Namespace: os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE"),
+				Name:      os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAME"),
+			},
 		}
 		if err := gate.SetupWithManager(mgr); err != nil {
 			setupLog.Error(err, "unable to add DefaultObjectsGate runnable")

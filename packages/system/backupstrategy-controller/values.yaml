@@ -131,16 +131,26 @@ backupStorage:
   # all; recovery needed a hand-stamped reconcile.fluxcd.io/forceAt +
   # requestedAt, because a plain reconcile request does not re-render.
   #
-  # With this enabled the controller resolves the bucket name from the
-  # projector's source Secret (no new dependency, no lookup), checks that
-  # every object cozy-default routes to exists, and forces one Helm upgrade
-  # when any is missing — throttled, and a no-op in the steady state. It does
-  # NOT create the objects itself: their bodies are values-driven and Helm
-  # stays their single owner.
+  # The systemSecretName Secret above sits one release earlier in the same
+  # trap: packages/system/bucket/templates/user-credentials.yaml renders it
+  # behind a `lookup` of the COSI Secret, and skips it just as permanently.
+  # Without it the projector has no source at all, so nothing downstream can
+  # resolve — and neither can this gate, which reads the bucket name from it.
+  #
+  # With this enabled the controller repairs both, in order: while the
+  # credentials Secret is missing it forces the bucket's <bucket>-system
+  # release; once the bucket name resolves it checks that every object
+  # cozy-default routes to exists and forces THIS release when any is
+  # missing. Both are throttled, independently, and a no-op in the steady
+  # state. A suspended release is skipped rather than re-stamped forever. The
+  # gate does NOT create the objects itself: their bodies are values-driven
+  # and Helm stays their single owner.
   #
   # Turn this off only if you manage the default Strategy CRs out of band and
   # accept that a missed install-time render is never repaired. Watch
-  # cozystack_backup_default_objects_missing if you do.
+  # cozystack_backup_default_objects_missing (paired with
+  # cozystack_backup_default_objects_check_errors_total, which marks the
+  # gauge stale) if you do.
   reconcileDefaultObjects: true
 # velero — BSL rendering. The cozy-default BackupStorageLocation is
 # created in cozy-velero by templates/velero-bsl.yaml so endpoint/bucket/
