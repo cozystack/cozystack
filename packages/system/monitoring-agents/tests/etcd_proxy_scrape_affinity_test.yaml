@@ -1,0 +1,37 @@
+suite: etcd-proxy-scrape DaemonSet matches control-plane nodes by label existence
+
+# The equality nodeSelector node-role.kubernetes.io/control-plane: "" only
+# matches the kubeadm/Talos/OpenShift convention (empty label value). On
+# k3s/RKE2 the same label carries value "true", so the equality match fails
+# and the DaemonSet never schedules there, leaving etcd unscraped. Switching
+# to a key-existence nodeAffinity matches every distribution regardless of
+# the label's value, and the added toleration lets it land on nodes that
+# carry the default control-plane NoSchedule taint (kubeadm/Talos/OpenShift/
+# RKE2; k3s has none by default, where the toleration is simply inert).
+release:
+  name: monitoring-agents
+  namespace: cozy-monitoring
+tests:
+  - it: requires the control-plane label to exist rather than equal a specific value
+    template: templates/etcd-proxy-scrape.yaml
+    documentIndex: 0
+    set:
+      scrapeRules:
+        etcd:
+          enabled: true
+    asserts:
+      - isKind:
+          of: DaemonSet
+      - equal:
+          path: spec.template.spec.affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms[0].matchExpressions[0]
+          value:
+            key: node-role.kubernetes.io/control-plane
+            operator: Exists
+      - equal:
+          path: spec.template.spec.tolerations[0]
+          value:
+            key: node-role.kubernetes.io/control-plane
+            operator: Exists
+            effect: NoSchedule
+      - notExists:
+          path: spec.template.spec.nodeSelector
