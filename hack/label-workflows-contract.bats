@@ -31,23 +31,39 @@ script_lines() {
 }
 
 # Body of a `const <name> = {` ... `};` object literal inside the
-# github-script block, comment lines already stripped.
+# github-script block. Comments are stripped BEFORE block detection so a
+# commented-out `// const typeToKind = {` can never open the block.
 js_object_block() {
-  awk -v name="const $1 = {" '
+  script_lines < "$2" | awk -v name="const $1 = {" '
     index($0, name) { inside = 1; next }
     inside && /^[[:space:]]*};[[:space:]]*$/ { exit }
-    inside' "$2" | script_lines
+    inside'
 }
 
-# Every label defined in .github/labels.yml, one per line.
+# Every label defined in .github/labels.yml, one per line. Parses the value
+# after `- name: ` verbatim (labels may contain spaces, e.g. "help wanted"),
+# stripping optional quotes and trailing inline comments.
 defined_labels() {
-  code_lines < "$LABELS" | awk '/^- name: / { print $3 }'
+  code_lines < "$LABELS" | awk '/^- name: / {
+    sub(/^- name: /, "")
+    sub(/[[:space:]]+#.*$/, "")
+    sub(/[[:space:]]+$/, "")
+    gsub(/^"|"$/, "")
+    print
+  }'
 }
 
-# `key: value` inputs of the stale action, comment lines stripped.
+# `key: value` inputs of the stale action; whole-line and trailing inline
+# comments are both stripped from the value.
 stale_input() {
   code_lines < "$STALE" | awk -v key="          $1: " '
-    index($0, key) == 1 { sub(key, ""); print; exit }'
+    index($0, key) == 1 {
+      sub(key, "")
+      sub(/[[:space:]]+#.*$/, "")
+      sub(/[[:space:]]+$/, "")
+      print
+      exit
+    }'
 }
 
 # A `>-` folded list input of the stale action, flattened to one label per line.
@@ -60,7 +76,9 @@ stale_exempt_list() {
 
 assert_labels_defined() {
   # $1: newline-separated label names. Fails naming the missing ones.
-  # POSIX-only on purpose: hack/cozytest.sh runs these files in plain sh.
+  # No process substitution here: hack/cozytest.sh runs these files in plain
+  # sh, which lacks it. (`local` is fine — dash/ash/bash all support it, and
+  # the other contract files in hack/ already use it.)
   local all missing
   all="$(defined_labels)"
   missing="$(printf '%s\n' "$1" | sort -u | while read -r l; do
@@ -85,8 +103,7 @@ assert_labels_defined() {
   # Labels added outside the two tables: backport prefix, breaking-change
   # footer, and the no-area fallback.
   literal_labels="$(code_lines < "$PR_LABELER" | script_lines \
-    | grep -o "toAdd.add('[^']*')" | sed "s/toAdd.add('//; s/')//" \
-    | grep -v '^typeToKind\|^scopeToArea' || true)"
+    | grep -o "toAdd.add('[^']*')" | sed "s/toAdd.add('//; s/')//" || true)"
   for l in area/release kind/breaking-change area/uncategorized; do
     printf '%s\n' "$literal_labels" | grep -qxF "$l"
   done
@@ -110,8 +127,9 @@ assert_labels_defined() {
   count="$(code_lines < "$PR_LABELER" | grep -cF '    types: [opened, reopened, synchronize]' || true)"
   [ "${count:-0}" -eq 1 ]
   # 'edited' is deliberately omitted (see the comment above the trigger); it
-  # must not creep back in as an executable line.
-  ! code_lines < "$PR_LABELER" | grep -E '^[[:space:]]*types:' | grep -q 'edited'
+  # must not creep back in as an executable line — in either the flow-sequence
+  # or block-sequence spelling. Scan the whole trigger section (before jobs:).
+  ! code_lines < "$PR_LABELER" | awk '/^jobs:/ { exit } { print }' | grep -qw 'edited'
 }
 
 @test "pr-labeler is additive only and falls back to area/uncategorized" {
@@ -161,4 +179,15 @@ assert_labels_defined() {
   [ "$(stale_input days-before-close)" = "14" ]
   [ "$(stale_input operations-per-run)" = "100" ]
   [ "$(stale_input remove-stale-when-updated)" = "true" ]
+}
+
+@test "stale runs only on a daily schedule and manual dispatch" {
+  triggers="$(code_lines < "$STALE" | awk '/^on:/ { inside = 1; next }
+    inside && /^[^[:space:]]/ { exit }
+    inside')"
+  [ -n "$triggers" ]
+  printf '%s\n' "$triggers" | grep -qF "    - cron: '37 4 * * *'"
+  printf '%s\n' "$triggers" | grep -qE '^  workflow_dispatch:'
+  # No event trigger may run the write policy on user activity.
+  ! printf '%s\n' "$triggers" | grep -qE '^  (push|pull_request|pull_request_target|issues|issue_comment):'
 }
