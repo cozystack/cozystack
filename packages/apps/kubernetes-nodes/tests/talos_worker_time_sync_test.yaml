@@ -1,0 +1,61 @@
+suite: worker machineconfig bounds the wait for time sync
+
+# Same invariant as the kubernetes chart's suite of this name, pinned here
+# because worker machineconfigs are emitted by TWO charts and a change made in
+# only one of them is silent drift: the pools this chart owns would keep the
+# unbounded wait while the parent chart's pools no longer had it.
+#
+# Talos gates kubelet on time sync before it pulls the kubelet image, and with
+# machine.time absent the wait has no bound at all -- in Talos release-1.13,
+# NetworkTimeSyncConfig() returns nil when the block is missing, the time-sync
+# controller leaves syncTimeout at zero, and its `case syncTimeout == 0:` arm
+# stops the timer. A worker that cannot reach NTP therefore never starts
+# kubelet and never registers a Node, with nothing timing it out.
+#
+# The machineconfig is a YAML string inside this Job's command, applied at
+# runtime, so the assertions match the Job's script rather than a rendered
+# manifest. The invariant lives here rather than in a comment because CABPT
+# strips comments from the machineconfig before a machine ever sees it.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles:
+    - worker
+  resources:
+    cpu: "2"
+    memory: 4Gi
+tests:
+  - it: bounds the boot-time wait for time sync on worker nodes
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'time:\s*\n\s+bootTimeout: 2m0s'
+
+  - it: keeps the bound under machine, beside the other worker settings
+    documentSelector:
+      path: kind
+      value: Job
+    asserts:
+      # Indentation is semantics in a machineconfig: one level off and the
+      # key parses as something else and silently does nothing. Pinned as one
+      # pattern so the whole nesting is checked at once -- time: at the same
+      # level as the sibling worker keys, bootTimeout one level under it.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n          type: worker\n          token: [^\n]*\n          time:\n            bootTimeout: 2m0s\n'

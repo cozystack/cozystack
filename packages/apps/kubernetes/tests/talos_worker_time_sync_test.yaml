@@ -1,0 +1,95 @@
+suite: worker machineconfig bounds the wait for time sync
+
+# Talos gates kubelet on time sync before it will even pull the kubelet image:
+# the service's Condition() is WaitForAll(timeresource.NewSyncCondition(...),
+# network.NewReadyCondition(...)), evaluated before the PreFunc that runs
+# image.Pull. A worker that cannot reach an NTP server therefore never gets as
+# far as starting kubelet, and registers no Node.
+#
+# How long it waits is decided by machine.time.bootTimeout, and the failure
+# mode of leaving it unset is not a sensible default -- it is no bound at all.
+# In Talos release-1.13, Config.NetworkTimeSyncConfig() returns nil when
+# machine.time is absent, the time-sync controller only assigns syncTimeout
+# inside `if cfg != nil && cfg.Config().NetworkTimeSyncConfig() != nil`, and
+# its `case syncTimeout == 0:` arm stops the timer outright. So an absent
+# block means the node waits forever rather than failing.
+#
+# These tests pin the bound into the rendered worker machineconfig. The
+# machineconfig is not a template output of its own: it is a YAML string
+# inside the talos-reconcile Job's command, applied at runtime, so the
+# assertions match the Job's script. Comments cannot carry this invariant --
+# CABPT strips comments out of the machineconfig before it reaches a machine,
+# and backticks inside the heredoc would be eaten by the shell -- which is
+# why it lives in a test instead.
+
+templates:
+  - templates/talos/talos-reconcile-job.yaml
+
+tests:
+  - it: bounds the boot-time wait for time sync on worker nodes
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kubelet: {}
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'time:\s*\n\s+bootTimeout: 2m0s'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: keeps the bound under machine, beside the other worker settings
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 2
+            memory: 4Gi
+          gpus: []
+          kubelet: {}
+    asserts:
+      # Indentation is semantics in a machineconfig: one level off and the
+      # key parses as something else and silently does nothing. Pinned as one
+      # pattern so the whole nesting is checked at once -- time: at the same
+      # level as the sibling worker keys, bootTimeout one level under it.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n          type: worker\n          token: [^\n]*\n          time:\n            bootTimeout: 2m0s\n'
+        documentSelector:
+          path: kind
+          value: Job
