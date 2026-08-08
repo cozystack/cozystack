@@ -20,6 +20,28 @@ spec:
   valuesFrom:
   - kind: Secret
     name: cozystack-values
+  {{- /*
+  The per-user COSI BucketInfo Secrets are referenced only to make
+  helm-controller watch them: `lookup` in the child chart's
+  user-credentials.yaml is never re-evaluated once the release settles, so
+  without this reference a Secret the COSI driver provisions after the last
+  render would never be projected into <bucket>-<user>-credentials (#3247).
+  helm-controller re-composes valuesFrom on every reconcile, so the Secret
+  appearing (or rotating) changes the composed values digest and triggers
+  an upgrade, which re-runs the lookup. Convergence is bounded by the
+  release interval below — helm-controller 1.5 (Flux 2.8) does not watch
+  valuesFrom references. BucketInfo is a JSON object, so its
+  keys (apiVersion/kind/metadata/spec) merge into the child's values root;
+  the chart does not read them. Scoping the payload under targetPath is not
+  an option before Flux 2.9: targetPath goes through Helm's strvals parser,
+  which cannot carry JSON, and `literal` needs helm-controller >= 1.6.
+  */}}
+  {{- range $name, $user := .Values.users }}
+  - kind: Secret
+    name: {{ $.Release.Name }}-{{ $name }}
+    valuesKey: BucketInfo
+    optional: true
+  {{- end }}
   values:
     bucketName: {{ .Release.Name }}
     users: {{ .Values.users | toJson }}
