@@ -118,6 +118,32 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'extraHostEntries:'
         documentIndex: 6
+      # Memory floor. `kubectl apply` against the management cluster's API
+      # surface (several hundred CRDs, large aggregated OpenAPI document) does
+      # not fit in 256Mi: the container was OOMKilled mid-script and, under
+      # restartPolicy: OnFailure with the Job status stuck on `active`, retried
+      # invisibly forever. Pin the default so a future edit cannot silently
+      # lower it back below the floor.
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 512Mi
+        documentIndex: 6
+
+  - it: talos-reconcile Job memory limit is operator-overridable
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      talos.reconcileJobMemoryLimit: 1Gi
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[0].resources.limits.memory
+          value: 1Gi
+        documentSelector:
+          path: kind
+          value: Job
 
   # The two cases below pin the content-hash contract: a TCT-affecting change
   # rotates the immutable Job's name (so Helm creates a fresh Job instead of
@@ -156,7 +182,7 @@ tests:
     asserts:
       - equal:
           path: metadata.name
-          value: test-k8s-talos-reconcile-md0-16c1c9
+          value: test-k8s-talos-reconcile-md0-47e921
         documentSelector:
           path: kind
           value: Job
@@ -189,12 +215,12 @@ tests:
           gpus:
             - name: nvidia.com/GH200
     asserts:
-      # Only gpus changed vs the case above, yet the suffix differs (a9dc0c vs
-      # 16c1c9) — the content hash tracks the rendered spec, and the TCT the Job
+      # Only gpus changed vs the case above, yet the suffix differs (e39ca2 vs
+      # 47e921) — the content hash tracks the rendered spec, and the TCT the Job
       # applies is what changed (GPU nodeLabels).
       - equal:
           path: metadata.name
-          value: test-k8s-talos-reconcile-md0-a9dc0c
+          value: test-k8s-talos-reconcile-md0-e39ca2
         documentSelector:
           path: kind
           value: Job

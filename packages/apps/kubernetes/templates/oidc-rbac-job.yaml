@@ -168,13 +168,20 @@ spec:
               value: {{ $issuer | quote }}
             - name: OIDC_SERVER_URL
               value: {{ printf "https://%s:443" $externalHost | quote }}
+          {{- /* 512Mi, not 256Mi: this container runs `kubectl apply` (tenant
+                 ClusterRoleBindings) and `kubectl patch` against two apiservers,
+                 and kubectl loads discovery plus the aggregated OpenAPI document
+                 of each into memory before it can compute a patch. Same failure
+                 mode the talos-reconcile Job hit at 256Mi (OOMKill at exit 137,
+                 silently retried under restartPolicy: OnFailure). Request stays
+                 at 64Mi. */}}
           resources:
             requests:
               cpu: 10m
               memory: 64Mi
             limits:
               cpu: 200m
-              memory: 256Mi
+              memory: 512Mi
           command:
             - /bin/sh
             - -c

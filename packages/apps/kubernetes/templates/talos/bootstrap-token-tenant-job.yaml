@@ -75,13 +75,22 @@ spec:
             - name: tenant-admin
               mountPath: /tenant-admin
               readOnly: true
+          {{- /* 512Mi, not 256Mi: this container shells out to `kubectl apply`,
+                 which loads discovery plus the aggregated OpenAPI document of
+                 the target apiserver into memory before it can compute a patch.
+                 The tenant apiserver starts small but grows a CRD at a time as
+                 addons land (cert-manager, cilium, flux, velero), and this Job
+                 re-runs on every upgrade — so the footprint here tracks tenant
+                 growth. Same failure mode the talos-reconcile Job hit at 256Mi
+                 (OOMKill at exit 137, silently retried under
+                 restartPolicy: OnFailure). Request stays at 64Mi. */}}
           resources:
             requests:
               cpu: 10m
               memory: 64Mi
             limits:
               cpu: 100m
-              memory: 256Mi
+              memory: 512Mi
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
