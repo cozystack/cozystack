@@ -224,10 +224,13 @@ const maxGatewayListeners = 64
 // port 443 with one hostname between them, which Gateway API admits and
 // then marks Conflicted so neither serves. A TLSPassthroughListeners
 // entry is on its own port and does not collide that way. It is
-// suppressed for a different reason: the declared hostname belongs to
-// the backend, which presents its own certificate for it, so a
-// Gateway-issued one is an ACME order for a name the Gateway does not
-// serve.
+// suppressed because declaring the entry claims the name for the
+// backend, which presents its own certificate on that port, so a
+// Gateway-issued certificate for the same name orders what nobody
+// asked for. Where an HTTPRoute claims the name as well the Gateway
+// could serve it on 443, so this is a decision about who owns the name
+// rather than a name left unserved, and the route is what pays for it.
+// The next paragraph is that cost.
 //
 // That is the whole of it. A terminate listener and a passthrough
 // listener answering one SNI on two different ports is not the hazard

@@ -207,16 +207,23 @@ type TLSPassthroughListener struct {
 // every published app on the tenant, with nothing but Ready=False to
 // point at the field that caused it. Rejecting the write keeps the bad
 // spec out of etcd and the chain intact. The controller keeps its own
-// copy of these checks: during an upgrade the controller and the CRD
-// roll out separately, so it cannot assume the rules were applied to
-// what it reads, and it is the layer the unit tests can exercise
-// directly.
+// copy of these rules: during an upgrade the controller and the CRD
+// roll out separately, so it cannot assume they were applied to what it
+// reads, and it is the layer the unit tests can exercise directly. The
+// copy covers the rules written here, not the schema markers on the
+// individual fields: an apex or a tlsPassthroughServices entry that
+// slipped past its pattern is caught by Gateway API refusing the
+// rendered listener, not by the controller.
 //
 // One rule is deliberately absent. Name uniqueness is carried by the
 // listType=map/listMapKey=name markers on the field, enforced by the
 // apiserver at no CEL cost.
 //
-// Two rules stay controller-only, and for different reasons.
+// Two of the rules on this field stay controller-only, for different
+// reasons. The count is scoped to this field on purpose: renderGateway
+// also refuses a Gateway whose assembled listeners exceed the Gateway
+// API cap, and that check has no admission form either, but it judges
+// the total rather than anything declared here.
 //
 // A repeated tlsPassthroughServices entry is one of them, by choice
 // rather than by cost: a listType=set marker would express it at
