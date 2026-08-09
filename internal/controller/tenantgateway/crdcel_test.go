@@ -419,12 +419,12 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 // names become admissible, render two tls-<name> listeners, and get the
 // Gateway rejected wholesale.
 func TestPassthroughListenerNameUniquenessIsEnforcedBySchema(t *testing.T) {
-	field := v1alpha1SpecSchema(t).Properties["tlsPassthroughListeners"]
-	if field.XListType == nil || *field.XListType != "map" {
-		t.Fatalf("tlsPassthroughListeners x-kubernetes-list-type=%v, want map; duplicate names would be admissible", field.XListType)
+	listenersSchema := v1alpha1SpecSchema(t).Properties["tlsPassthroughListeners"]
+	if listenersSchema.XListType == nil || *listenersSchema.XListType != "map" {
+		t.Fatalf("tlsPassthroughListeners x-kubernetes-list-type=%v, want map; duplicate names would be admissible", listenersSchema.XListType)
 	}
-	if len(field.XListMapKeys) != 1 || field.XListMapKeys[0] != "name" {
-		t.Fatalf("tlsPassthroughListeners x-kubernetes-list-map-keys=%v, want [name]", field.XListMapKeys)
+	if len(listenersSchema.XListMapKeys) != 1 || listenersSchema.XListMapKeys[0] != "name" {
+		t.Fatalf("tlsPassthroughListeners x-kubernetes-list-map-keys=%v, want [name]", listenersSchema.XListMapKeys)
 	}
 }
 
@@ -442,11 +442,11 @@ func TestPassthroughListenerNameUniquenessIsEnforcedBySchema(t *testing.T) {
 func TestPassthroughListenerCapFitsGatewayAPI(t *testing.T) {
 	const gatewayAPIListenerCap = 64
 
-	field := v1alpha1SpecSchema(t).Properties["tlsPassthroughListeners"]
-	if field.MaxItems == nil {
+	listenersSchema := v1alpha1SpecSchema(t).Properties["tlsPassthroughListeners"]
+	if listenersSchema.MaxItems == nil {
 		t.Fatal("tlsPassthroughListeners has no maxItems; the cap is unbounded")
 	}
-	maxItems := *field.MaxItems
+	maxItems := *listenersSchema.MaxItems
 
 	listeners := make([]gatewayv1alpha1.TLSPassthroughListener, 0, maxItems)
 	for i := int64(0); i < maxItems; i++ {
