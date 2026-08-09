@@ -234,8 +234,11 @@ const maxGatewayListeners = 64
 // answers 443, which is an ordinary shape for an engine published
 // alongside a web interface. Nothing forces a choice between them.
 // Neither is it the hazard cilium#42898 reports, which is two
-// passthrough listeners sharing a hostname across ports, and Cilium
-// treats a terminate/passthrough pair as conflicting only on one port.
+// passthrough listeners sharing a hostname across ports. Cilium counts
+// a terminate/passthrough pair as conflicting only when they share a
+// port: listenersHaveSamePortCrossProtocolHostnameConflict in
+// operator/pkg/gateway-api/gateway_reconcile.go returns false as soon
+// as the ports differ, as of v1.19.6.
 // Nor is a Gateway-issued certificate wasted: if an HTTPRoute claims the
 // name, the Gateway serves it on 443 and the certificate is for that.
 //
