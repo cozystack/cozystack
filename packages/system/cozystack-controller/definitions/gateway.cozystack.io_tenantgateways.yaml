@@ -76,10 +76,13 @@ spec:
                   attach HTTPRoute or TLSRoute to this tenant's Gateway. The
                   publishing tenant namespace is implicit. The controller grants
                   access by stamping the namespace.cozystack.io/gateway label on
-                  each listed namespace; the Gateway's HTTPS and TLS-passthrough
-                  listeners select on that label. Writing it requires patch on
-                  Namespace, which tenants do not hold. Only the port-80 listener
-                  selects on kubernetes.io/metadata.name.
+                  each listed namespace. Writing it requires patch on Namespace,
+                  which tenants do not hold. The label reaches the HTTPS-terminate
+                  listeners and the port-443 passthrough listeners; the port-80
+                  listener and the native-port listeners from
+                  tlsPassthroughListeners select on kubernetes.io/metadata.name
+                  instead, so listing a namespace here does not let it attach to a
+                  database port.
                 items:
                   type: string
                 type: array

@@ -1944,9 +1944,12 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 	//     namespace. That label is written by kube-apiserver and cannot
 	//     be spoofed, which is what keeps app HTTPRoutes off :80 where
 	//     they would serve plaintext (buildHTTPListenerAllowedRoutes).
-	//   - every other listener (HTTPS-terminate, :443 passthrough, and
-	//     native-port layer-4 passthrough) selects on the
-	//     namespace.cozystack.io/gateway label, which is how child
+	//   - the native-port layer-4 passthrough listeners pin the same
+	//     unspoofable label, naming the tenant namespace alone: a
+	//     database port is no place for the subtree-wide attach set
+	//     (allowedRoutesFromValues).
+	//   - the HTTPS-terminate and :443 passthrough listeners select on
+	//     the namespace.cozystack.io/gateway label, which is how child
 	//     tenants opt in to their owner's Gateway (buildAllowedRoutes).
 	//
 	// Asserting a single shape across both classes is what previously
@@ -1956,6 +1959,7 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 	// The fixture now renders a :443 passthrough listener and a
 	// native-port one so both branches carry weight.
 	sawGatewayLabelListener := false
+	sawNativePortListener := false
 	for _, l := range gw.Spec.Listeners {
 		if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil ||
 			l.AllowedRoutes.Namespaces.From == nil ||
@@ -1996,6 +2000,7 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 		// tlsPassthroughServices renders tls-<svc> on 443 and that one
 		// does carry the gateway label.
 		if l.Port != 80 && l.Port != 443 {
+			sawNativePortListener = true
 			if len(sel.MatchLabels) != 0 || len(sel.MatchExpressions) != 1 {
 				t.Errorf("listener %s on port %d selector=%+v, want one metadata.name expression", l.Name, l.Port, sel)
 				continue
@@ -2022,6 +2027,12 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 	// loop above silently asserts nothing about them again.
 	if !sawGatewayLabelListener {
 		t.Fatal("no non-http listener rendered; the gateway-label branch asserted nothing")
+	}
+	// Same guard for the native-port branch. It was added later and
+	// inherited none of the protection above: drop TLSPassthroughListeners
+	// from the fixture and that branch stops running without a word.
+	if !sawNativePortListener {
+		t.Fatal("no native-port listener rendered; the metadata.name branch asserted nothing")
 	}
 }
 

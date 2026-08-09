@@ -83,8 +83,11 @@ func acmeServerForIssuer(name gatewayv1alpha1.IssuerName) (string, error) {
 // manager, add a TenantGateway spec field to override this.
 const acmeChallengeNamespace = "cozy-cert-manager"
 
-// buildAllowedRoutes computes the AllowedRoutes block applied to
-// HTTPS / TLS-passthrough listeners: a label selector matching
+// buildAllowedRoutes computes the AllowedRoutes block applied to the
+// HTTPS-terminate and port-443 passthrough listeners, and to nothing
+// else: the native-port listeners from tlsPassthroughListeners take a
+// narrower one from allowedRoutesFromValues. It is a label selector
+// matching
 // namespace.cozystack.io/gateway = <tgw.Namespace>. Every namespace
 // carrying that label attaches to this Gateway. The label has two
 // writers:

@@ -773,8 +773,10 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // Every listener is gated by a namespace selector, but not the same
 // one. The port-80 listener pins an unspoofable
 // kubernetes.io/metadata.name In [...] list naming the tenant
-// namespace and the ACME challenge namespace. Every other listener
-// selects on namespace.cozystack.io/gateway, which the controller
+// namespace and the ACME challenge namespace, and the native-port
+// listeners from tlsPassthroughListeners pin the same label naming the
+// tenant namespace alone. The HTTPS-terminate and port-443 passthrough
+// listeners select on namespace.cozystack.io/gateway, which the controller
 // stamps on the tenant namespace and on each
 // TenantGateway.Spec.AttachedNamespaces entry (cozy-* platform
 // namespaces), and which the tenant chart also stamps on every
