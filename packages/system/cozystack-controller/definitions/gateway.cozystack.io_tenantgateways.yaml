@@ -80,27 +80,30 @@ spec:
               listType=map/listMapKey=name markers on the field, enforced by the
               apiserver at no CEL cost.
 
-              Two of the rules on this field stay controller-only, for different
-              reasons. The count is scoped to this field on purpose: renderGateway
-              also refuses a Gateway whose assembled listeners exceed the Gateway
-              API cap, and that check has no admission form either, but it judges
-              the total rather than anything declared here.
+              Some rules have no admission form at all, and they are listed rather
+              than counted: a count here has been wrong twice, because the set
+              spans two fields and the assembled Gateway as well.
 
-              A repeated tlsPassthroughServices entry is one of them, by choice
+              A repeated tlsPassthroughServices entry is one, by choice
               rather than by cost: a listType=set marker would express it at
               admission, but list-type errors are the one kind the apiserver never
               ratchets, so it would refuse every write to an object that already
               carries a duplicate. See that field for the rest of it.
 
-              Hostname overlap is the other, and that one is about cost.
+              Hostname overlap is another, and that one is about cost.
               Expressing it needs wildcard-aware matching across two lists, which
               in CEL is a nested scan whose estimated cost the apiserver charges
-              against a budget these four rules already sit close under — adding it
+              against a budget the rules below already sit close under — adding it
               is what pushed the CRD over and made it un-installable while the
               per-request tests stayed green. TestCRDPassesInstallTimeValidation
               keeps that honest. The consequence is accepted knowingly: an
               overlapping hostname reaches etcd and surfaces as Ready=False rather
               than a rejected write.
+
+              And renderGateway refuses a Gateway whose assembled listeners exceed
+              the Gateway API cap. That one judges the finished object rather than
+              anything declared on a single field, which is why it reads as a
+              different kind of rule, but it has no admission form either.
             properties:
               apex:
                 description: |-
