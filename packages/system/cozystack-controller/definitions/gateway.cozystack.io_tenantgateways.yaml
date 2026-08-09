@@ -73,10 +73,9 @@ spec:
               what it reads, and it is the layer the unit tests can exercise
               directly.
 
-              Two rules are deliberately absent. Name uniqueness is carried by the
-              listType=map/listMapKey=name markers on the field, and duplicate
-              tlsPassthroughServices entries by listType=set — both are enforced by
-              the apiserver at no CEL cost.
+              One rule is deliberately absent. Name uniqueness is carried by the
+              listType=map/listMapKey=name markers on the field, enforced by the
+              apiserver at no CEL cost.
 
               Hostname overlap is the one real exception: it stays controller-only.
               Expressing it needs wildcard-aware matching across two lists, which
@@ -422,22 +421,31 @@ spec:
                   unbounded strings makes the estimate exceed the per-CRD budget.
                   The item length is a DNS-1123 label; the count leaves the
                   listener budget room.
-                  listType=set makes the apiserver reject a repeated entry, which
-                  would otherwise render the same tls-<svc> listener twice and get
-                  the Gateway rejected wholesale. It costs nothing at install time
-                  — unlike a CEL rule, which is why it is expressed as a marker.
                   The item pattern is a DNS-1123 label for the same reason the
                   listener hostname carries one: the entry becomes the hostname
                   <svc>.<apex>, so an upper-case or underscored value renders a
                   listener hostname Gateway API refuses, taking every app's HTTPS
                   listener down with it.
+
+                  A repeated entry is rejected by the controller, not by a listType
+                  marker, and the difference matters on a field that already has
+                  users. The apiserver ratchets the bounds and the pattern above, so
+                  an object that violates one keeps accepting writes that leave the
+                  value alone; it never ratchets a list-type error, so declaring
+                  this list a set would refuse every write to an object that already
+                  carries a duplicate. Declaring it would also change how the field
+                  merges — an unmarked list is atomic and one applier owns the whole
+                  value, while a set is owned per entry, so an entry added by
+                  another field manager would survive the chart's next apply instead
+                  of losing to a conflict. The controller reports the duplicate on
+                  TenantGateway status, which is where this API puts the rest of
+                  these failures.
                 items:
                   maxLength: 63
                   pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                   type: string
                 maxItems: 64
                 type: array
-                x-kubernetes-list-type: set
               wildcardSecretRef:
                 description: |-
                   WildcardSecretRef names a pre-existing TLS Secret in the

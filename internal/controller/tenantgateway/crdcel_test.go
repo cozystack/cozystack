@@ -317,24 +317,24 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 	}
 }
 
-// TestTightenedConstraintsOnExistingObjects pins which of the
-// constraints added to already-shipped fields an existing object has to
-// satisfy on its next write, because the two answers differ and the
-// package README states them.
+// TestTightenedConstraintsOnExistingObjects pins that every constraint
+// added to an already-shipped field is one the apiserver ratchets, so an
+// object whose stored value violates one keeps accepting writes that
+// leave that value alone. The package README states this, and stating it
+// in prose alone is how a claim drifts from the schema it describes.
 //
-// The apiserver ratchets ordinary schema validations: a stored value
-// that violates one is still accepted by an update that leaves it
-// alone, and the rule applies only once the value changes. It does not
-// ratchet list-type errors, so uniqueness declared as
-// x-kubernetes-list-type=set is enforced on every write regardless.
 // Ratcheting is on by default from Kubernetes 1.30 and the management
-// cluster requires 1.33, so the ratcheted half holds on every supported
-// cluster.
+// cluster requires 1.33, so this holds on every supported cluster. It
+// covers ordinary schema validations only: a list-type error is never
+// ratcheted, which is why the duplicate case below must stay admissible.
+// Declaring this list a set would refuse every write to an object that
+// already carries a duplicate, including a write that changes something
+// else — the controller reports the duplicate on status instead. That
+// case is the guard: it reddens if the marker comes back.
 //
-// The split decides what an upgrade does to a cluster whose values are
-// already out of spec, which is the one thing an operator needs from
-// the note — and stating it in prose alone is how the claim drifts from
-// the schema it describes.
+// The run pairs each field with the listtype validator as well, because
+// the schema validator does not implement list semantics and would call
+// a duplicate admissible whether or not the marker were there.
 func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	a := specValidator(t)
 
@@ -390,10 +390,10 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 		old:          spec("foo.example.com", "api"),
 		wantRejected: true,
 	}, {
-		name:         "repeated service entry left untouched",
+		name:         "repeated service entry stays admissible",
 		newSpec:      spec("foo.example.com", "api", "api"),
 		old:          spec("foo.example.com", "api", "api"),
-		wantRejected: true,
+		wantRejected: false,
 	}, {
 		name:         "unique service entries",
 		newSpec:      spec("foo.example.com", "api", "vm-exportproxy"),
