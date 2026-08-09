@@ -1,4 +1,39 @@
 {{- $clusterDomain := (index .Values._cluster "cluster-domain") | default "cozy.local" }}
+{{- /*
+TLS IMPLEMENTATION NOTE — operator-managed cert-manager chain
+=============================================================
+TLS is always on, and neither fact below depends on spec.secrets.ssl being set
+here: the operator defaults that name unconditionally, and runs its cert-manager
+integration regardless. TLS-on comes from spec.tls.mode defaulting to preferTLS
+together with the operator refusing a disabled-TLS CR unless unsafeFlags.tls is
+set. Setting secrets.ssl explicitly only makes the name visible in the rendered
+CR. The operator creates the full certificate chain itself:
+
+  1. Self-signed bootstrap Issuer
+  2. CA Certificate, 365-day duration renewed 730h (~30 days) before expiry.
+     The CA therefore ROTATES annually — clients must re-read the trust anchor
+     rather than bake it into an image or ConfigMap.
+  3. CA-backed Issuer
+  4. Leaf server+client cert, lifetime left to the operator's own
+     certValidityDuration default (90 days at 1.22.0 — an operator default this
+     chart deliberately does not pin, so treat the number as informational) and
+     reissued by it without client action, with a SAN
+     list covering the per-replset service (short, namespace, FQDN), the
+     matching wildcards — which is what covers the per-pod headless names,
+     rather than a separate entry each — mongos and config-replset names, and
+     localhost.
+
+The chart does NOT render cert-manager Issuer/Certificate resources to avoid
+orphaning the operator-managed ones. Chart-rendered resources would be ignored
+as trust anchors because the PSMDB operator controls the CA it embeds in pods.
+
+EXTERNAL HOSTNAME SANs:
+  When external: true, the per-pod external hostnames (<release>-rs0-<i>.<host>)
+  are advertised via replsets[].splitHorizons. PSMDB ≥ 1.22.0 folds the horizon
+  hostnames into the operator-managed leaf certificate SAN list when the CR is at
+  crVersion ≥ 1.22.0, so external clients can verify the TLS hostname. The DNS
+  names must resolve to the per-pod LoadBalancers (operational prerequisite).
+*/}}
 ---
 apiVersion: psmdb.percona.com/v1
 kind: PerconaServerMongoDB
@@ -12,8 +47,18 @@ spec:
   clusterServiceDNSSuffix: svc.{{ $clusterDomain }}
   secrets:
     users: {{ .Release.Name }}-percona-server-mongodb-users
+    ssl: {{ .Release.Name }}-ssl
   pause: false
   unmanaged: false
+
+  tls:
+    # This pins the operator's own default rather than choosing a posture: the
+    # operator defaults spec.tls.mode to preferTLS and rejects a disabled-TLS CR
+    # unless spec.unsafeFlags.tls is set, so TLS was already on before this key
+    # existed. Stated explicitly so the mode is visible in the rendered CR.
+    # preferTLS accepts plaintext connections; moving to requireTLS would break
+    # existing plaintext clients and is a separate, breaking change.
+    mode: preferTLS
   image: percona/percona-server-mongodb:{{ include "mongodb.versionMap" $ }}
   imagePullPolicy: IfNotPresent
 
@@ -111,6 +156,30 @@ spec:
         {{- else }}
         enabled: false
         {{- end }}
+      {{- if .Values.external }}
+      {{- /* Split-horizon DNS advertises per-pod external hostnames to clients
+             connecting from outside the cluster. PSMDB ≥ 1.22.0 also folds these
+             hostnames into the operator-managed leaf certificate SAN list (gated
+             on crVersion ≥ 1.22.0), so TLS hostname verification works for
+             external clients. Requires <release>-rs0-<i>.<host> to resolve to the
+             per-pod LoadBalancer (DNS is an operational prerequisite). The host
+             is injected by the cozystack controller as _namespace.host; if it is
+             absent we skip the horizons rather than render an invalid SAN.
+
+             The replicas guard is load-bearing, not defensive: with replicas: 0
+             the range body renders nothing and `splitHorizons:` would be emitted
+             with a null value. The CRD types it as object without nullable, so
+             the API server rejects the whole PerconaServerMongoDB and the
+             HelmRelease fails. Omit the key entirely instead. */}}
+      {{- $host := (.Values._namespace | default dict).host }}
+      {{- if and $host (gt (int $.Values.replicas) 0) }}
+      splitHorizons:
+        {{- range $i := until (int $.Values.replicas) }}
+        {{ $.Release.Name }}-rs0-{{ $i }}:
+          external: {{ $.Release.Name }}-rs0-{{ $i }}.{{ $host }}
+        {{- end }}
+      {{- end }}
+      {{- end }}
     {{- end }}
 
   {{- if .Values.users }}
