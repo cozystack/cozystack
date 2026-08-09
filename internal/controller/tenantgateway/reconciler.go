@@ -133,7 +133,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	if err != nil {
 		return fmt.Errorf("collect attached hostnames: %w", err)
 	}
-	_, losers := resolveHostnameOwners(claims)
+	losers := resolveHostnameOwners(claims)
 
 	// A hostname earns an HTTPS-terminate listener and a Gateway-issued
 	// certificate when an HTTPRoute claims it and no passthrough

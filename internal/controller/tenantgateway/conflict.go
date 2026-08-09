@@ -59,23 +59,21 @@ type routeRef struct {
 	parentRef gatewayv1.ParentReference // exact ref the route used to attach
 }
 
-// resolveHostnameOwners groups hostnames by owner-route and decides
-// who wins when more than one route claims the same hostname.
-// Returns:
-//   - winners: hostname -> the routeRef that owns it.
-//   - losers: routeRef -> []hostname for which this route is NOT the winner.
+// resolveHostnameOwners decides who wins when more than one route
+// claims the same hostname, and returns the routes that lost:
+// routeRef -> []hostname for which this route is NOT the winner.
 //
-// Ownership decides route status, not what gets rendered. A hostname
-// carries at most one listener however many routes claim it, and
-// runReconcileSteps derives that from the claims themselves, so a
-// winner of the wrong kind cannot take a terminate listener away from
-// an HTTPRoute that also claimed the name.
+// The winners are resolved but not returned, because ownership decides
+// route status and not what gets rendered. A hostname carries at most
+// one listener however many routes claim it, and runReconcileSteps
+// derives that from the claims themselves, so a winner of the wrong
+// kind cannot take a terminate listener away from an HTTPRoute that
+// also claimed the name.
 //
 // Rule: cozy-* namespace beats anything else; within the same priority
 // tier the route with the lexicographically smallest namespace/name
 // pair wins (deterministic).
-func resolveHostnameOwners(claims map[string][]routeRef) (map[string]routeRef, map[routeRef][]string) {
-	winners := make(map[string]routeRef, len(claims))
+func resolveHostnameOwners(claims map[string][]routeRef) map[routeRef][]string {
 	losers := make(map[routeRef][]string)
 
 	for hostname, refs := range claims {
@@ -94,7 +92,6 @@ func resolveHostnameOwners(claims map[string][]routeRef) (map[string]routeRef, m
 			return refs[i].name < refs[j].name
 		})
 		winner := refs[0]
-		winners[hostname] = winner
 		for _, lr := range refs[1:] {
 			// Same-namespace routes claiming the same hostname are
 			// not a conflict — Gateway API merges them by path /
@@ -106,7 +103,7 @@ func resolveHostnameOwners(claims map[string][]routeRef) (map[string]routeRef, m
 			losers[lr] = append(losers[lr], hostname)
 		}
 	}
-	return winners, losers
+	return losers
 }
 
 // updateRouteStatuses writes RouteParentStatus entries under our
