@@ -77,7 +77,15 @@ spec:
               listType=map/listMapKey=name markers on the field, enforced by the
               apiserver at no CEL cost.
 
-              Hostname overlap is the one real exception: it stays controller-only.
+              Two rules stay controller-only, and for different reasons.
+
+              A repeated tlsPassthroughServices entry is one of them, by choice
+              rather than by cost: a listType=set marker would express it at
+              admission, but list-type errors are the one kind the apiserver never
+              ratchets, so it would refuse every write to an object that already
+              carries a duplicate. See that field for the rest of it.
+
+              Hostname overlap is the other, and that one is about cost.
               Expressing it needs wildcard-aware matching across two lists, which
               in CEL is a nested scan whose estimated cost the apiserver charges
               against a budget the rules below already sit close under — adding it
