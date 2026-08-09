@@ -1989,6 +1989,23 @@ func TestReconcile_ListenersHaveAllowedRoutesSelector(t *testing.T) {
 			continue
 		}
 
+		// Native-port passthrough listeners are the third form: they
+		// pin the tenant's own namespace the way the port-80 listener
+		// does, so the gateway-label assertion below would be wrong
+		// for them. Keyed on the port rather than the name, because
+		// tlsPassthroughServices renders tls-<svc> on 443 and that one
+		// does carry the gateway label.
+		if l.Port != 80 && l.Port != 443 {
+			if len(sel.MatchLabels) != 0 || len(sel.MatchExpressions) != 1 {
+				t.Errorf("listener %s on port %d selector=%+v, want one metadata.name expression", l.Name, l.Port, sel)
+				continue
+			}
+			if got := sel.MatchExpressions[0].Values; len(got) != 1 || got[0] != "tenant-foo" {
+				t.Errorf("listener %s on port %d selector values=%v, want [tenant-foo]", l.Name, l.Port, got)
+			}
+			continue
+		}
+
 		sawGatewayLabelListener = true
 		if len(sel.MatchExpressions) != 0 {
 			t.Errorf("listener %s carries MatchExpressions %+v, want the gateway-label MatchLabels form", l.Name, sel.MatchExpressions)
@@ -2162,9 +2179,12 @@ func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 		// namespace selector bounds WHO may attach. Only the pair is
 		// Layer 1 — a TLSRoute-only listener open to every namespace
 		// still lets a foreign tenant SNI-route this database port.
-		// These listeners inherit the same gateway-label selector the
-		// HTTPS and :443 passthrough listeners use, so a native port
-		// never widens attachment beyond what :443 already allows.
+		// Unlike the :443 listeners, these select the publishing
+		// tenant's own namespace by kubernetes.io/metadata.name, the
+		// label kube-apiserver writes and nobody can spoof. The
+		// gateway label the :443 listeners use is stamped on every
+		// inheriting child namespace, so it would put a database port
+		// within reach of the whole tenant subtree.
 		if l.AllowedRoutes.Namespaces == nil ||
 			l.AllowedRoutes.Namespaces.From == nil ||
 			*l.AllowedRoutes.Namespaces.From != gatewayv1.NamespacesFromSelector {
@@ -2176,11 +2196,16 @@ func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 			t.Errorf("%s has nil namespace selector", l.Name)
 			continue
 		}
-		if got := sel.MatchLabels[namespaceGatewayLabel]; got != "tenant-foo" {
-			t.Errorf("%s selector %s=%q, want tenant-foo", l.Name, namespaceGatewayLabel, got)
+		if len(sel.MatchLabels) != 0 || len(sel.MatchExpressions) != 1 {
+			t.Errorf("%s selector=%+v, want exactly one metadata.name expression", l.Name, sel)
+			continue
 		}
-		if len(sel.MatchLabels) != 1 || len(sel.MatchExpressions) != 0 {
-			t.Errorf("%s selector=%+v, want exactly one %s label", l.Name, sel, namespaceGatewayLabel)
+		expr := sel.MatchExpressions[0]
+		if expr.Key != "kubernetes.io/metadata.name" || expr.Operator != metav1.LabelSelectorOpIn {
+			t.Errorf("%s selector %s %s, want kubernetes.io/metadata.name In", l.Name, expr.Key, expr.Operator)
+		}
+		if len(expr.Values) != 1 || expr.Values[0] != "tenant-foo" {
+			t.Errorf("%s selector values=%v, want [tenant-foo] only; the gateway label would reach the whole subtree", l.Name, expr.Values)
 		}
 	}
 	for name := range wanted {

@@ -947,7 +947,14 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// TLSRoute, certificate, and CA plumbing land in later phases.
 	for _, pl := range tgw.Spec.TLSPassthroughListeners {
 		host := gatewayv1.Hostname(pl.Hostname)
-		passthroughAllowed := allowedRoutes.DeepCopy()
+		// Own namespace only, by the label kube-apiserver writes, and
+		// not the gateway label the :443 listeners select on. That
+		// label is stamped on every inheriting child tenant namespace,
+		// so reusing it would put a native database port within reach
+		// of the whole subtree. Narrowing costs nothing while no chart
+		// value exposes this field; once something depends on the wide
+		// form, narrowing becomes a behaviour change instead.
+		passthroughAllowed := allowedRoutesFromValues([]string{tgw.Namespace})
 		passthroughAllowed.Kinds = []gatewayv1.RouteGroupKind{
 			{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
 		}
