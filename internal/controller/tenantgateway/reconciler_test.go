@@ -2390,9 +2390,9 @@ func TestReconcile_TLSRouteOnPassthroughServiceTerminatesNothing(t *testing.T) {
 // not have to be hostile to reach it: the shipped default publishes
 // "api", "vm-exportproxy" and "cdi-uploadproxy", so an app named after
 // one of them is enough.
-// Both spec fields feed the suppressed set, and each is its own loop, so
-// each subtest pins one of them. Covering only the services leg let the
-// listeners leg be deleted with the suite still green.
+// Only tlsPassthroughServices feeds the suppressed set. The native-port
+// field does not, and TestReconcile_NativePortPassthroughKeepsPublishedListener
+// pins the other side of that.
 func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T) {
 	const hostname = "api.foo.example.com"
 	sources := []struct {
@@ -2403,13 +2403,6 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 		{
 			name:     "tlsPassthroughServices",
 			services: []string{"api"},
-		},
-		{
-			// Native port, so this one does not even collide on 443.
-			// It is suppressed because the hostname belongs to the
-			// backend that terminates it.
-			name:      "tlsPassthroughListeners",
-			listeners: []gatewayv1alpha1.TLSPassthroughListener{{Name: "api", Port: 5432, Hostname: hostname}},
 		},
 	}
 	for _, src := range sources {
@@ -2505,20 +2498,19 @@ func TestValidateTLSPassthroughListenersNamesTheSpecEntry(t *testing.T) {
 	}
 }
 
-// TestReconcile_WildcardPassthroughKeepsPublishedListener pins the
-// boundary of the suppression above: it matches hostnames exactly, so a
-// wildcard entry withdraws nothing from the names beneath it.
+// TestReconcile_NativePortPassthroughKeepsPublishedListener pins that a
+// native-port entry withdraws nothing: an app published under the same
+// name keeps its HTTPS listener on 443 and the certificate for it.
 //
-// The neighbouring validateTLSPassthroughListeners compares declared
-// hostnames by SNI overlap, and matching that here is the natural tidy-
-// up for the next reader. It would be a much larger behaviour: one
-// "*.<apex>" entry would take the HTTPS listener and the certificate
-// away from every app on the tenant, and those apps are served on 443
-// while the passthrough listener sits on its own port, so nothing is
-// gained by it. Without this test the widening is invisible — the rest
-// of the suite stays green when the map lookup becomes an overlap scan.
-func TestReconcile_WildcardPassthroughKeepsPublishedListener(t *testing.T) {
-	const published = "pg.db.foo.example.com"
+// The two do not compete. The passthrough listener answers the engine's
+// own port and the terminate listener answers 443, which is what an
+// engine published beside a web interface looks like. Suppressing here
+// would be a choice, not a resolution, and the two arguments that could
+// have justified it do not hold: the pair is not the cilium#42898 shape,
+// which is two passthrough listeners across ports, and the certificate
+// is not wasted, because the Gateway does serve that name on 443.
+func TestReconcile_NativePortPassthroughKeepsPublishedListener(t *testing.T) {
+	const published = "pg.foo.example.com"
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
 		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
@@ -2527,7 +2519,7 @@ func TestReconcile_WildcardPassthroughKeepsPublishedListener(t *testing.T) {
 			CertMode:         gatewayv1alpha1.CertModeHTTP01,
 			GatewayClassName: "cilium",
 			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
-				{Name: "wild", Port: 5432, Hostname: "*.db.foo.example.com"},
+				{Name: "pg", Port: 5432, Hostname: published},
 			},
 		},
 	}
@@ -2560,20 +2552,19 @@ func TestReconcile_WildcardPassthroughKeepsPublishedListener(t *testing.T) {
 			if l.Protocol == gatewayv1.HTTPSProtocolType {
 				terminates = true
 			}
-		case "*.db.foo.example.com":
-			if l.Protocol == gatewayv1.TLSProtocolType {
-				passthrough = true
-			}
+		}
+		if string(*l.Hostname) == published && l.Protocol == gatewayv1.TLSProtocolType {
+			passthrough = true
 		}
 	}
 	// The wildcard listener has to be there for the absence of
 	// suppression to mean anything: a render that dropped it would leave
 	// nothing to suppress and pass the first check for free.
 	if !passthrough {
-		t.Fatalf("no wildcard passthrough listener rendered, so this proves nothing: %+v", gw.Spec.Listeners)
+		t.Fatalf("no native-port passthrough listener rendered, so this proves nothing: %+v", gw.Spec.Listeners)
 	}
 	if !terminates {
-		t.Errorf("app on %s lost its HTTPS listener to a wildcard passthrough entry: %+v", published, gw.Spec.Listeners)
+		t.Errorf("app on %s lost its HTTPS listener to a native-port passthrough entry: %+v", published, gw.Spec.Listeners)
 	}
 
 	certs := &cmv1.CertificateList{}

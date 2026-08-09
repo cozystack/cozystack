@@ -136,14 +136,15 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	losers := resolveHostnameOwners(claims)
 
 	// A hostname earns an HTTPS-terminate listener and a Gateway-issued
-	// certificate when an HTTPRoute claims it and no passthrough
-	// listener already holds it. Both halves matter, and neither is the
-	// hostname's conflict winner:
+	// certificate when an HTTPRoute claims it and no port-443
+	// passthrough listener already holds it. A native-port entry from
+	// tlsPassthroughListeners is not in that set: it answers its own
+	// port and takes nothing away from 443. Both halves matter, and
+	// neither is the hostname's conflict winner:
 	//
 	// A TLSRoute attaches to a passthrough listener, where the backend
 	// presents its own certificate and the Gateway terminates nothing.
-	// Terminating its hostname ordered a certificate nobody serves and
-	// added a second listener beside the passthrough one.
+	// Terminating its hostname ordered a certificate nobody serves.
 	//
 	// The passthrough listeners render from the spec alone, so the
 	// collision does not need a TLSRoute to appear — an HTTPRoute
@@ -161,7 +162,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// Ownership still decides who is Accepted: claims and allRefs carry
 	// TLSRoutes untouched, so conflict resolution and RouteParentStatus
 	// are unaffected.
-	reserved := passthroughHostnames(tgw)
+	reserved := passthroughServiceHostnames(tgw)
 	dynHostnames := make([]string, 0, len(claims))
 	for h, refs := range claims {
 		if _, isPassthrough := reserved[h]; isPassthrough {
