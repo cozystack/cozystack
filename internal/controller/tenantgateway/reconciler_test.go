@@ -25,6 +25,7 @@ import (
 
 	cmv1 "github.com/cert-manager/cert-manager/pkg/apis/certmanager/v1"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -2866,6 +2867,15 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 // with two listeners on the same port makes Reconcile fail loudly
 // rather than emitting a Gateway whose clashing listeners Gateway API
 // admits and then leaves Conflicted, serving nothing.
+//
+// A loud failure is only half of it, and the other half is what the
+// rules on this field are worth. These checks live in the controller,
+// not at admission, so the spec they refuse is already in etcd: the
+// object is accepted and a later reconcile is what says no. Nothing
+// keeps the bad shape out of the cluster except renderGateway refusing
+// before it writes, so the absence of a Gateway is asserted here
+// alongside the error. Returning the error after a partial write would
+// leave this test green and the cluster holding the pair.
 func TestReconcile_TLSPassthroughListenerInvalidRejected(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
@@ -2887,6 +2897,15 @@ func TestReconcile_TLSPassthroughListenerInvalidRejected(t *testing.T) {
 		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
 	}); err == nil {
 		t.Fatalf("expected Reconcile to fail on duplicate passthrough port, got nil")
+	}
+
+	gw := &gatewayv1.Gateway{}
+	err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw)
+	if err == nil {
+		t.Fatalf("refused spec still produced a Gateway with listeners %+v", gw.Spec.Listeners)
+	}
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("get Gateway: %v", err)
 	}
 }
 
