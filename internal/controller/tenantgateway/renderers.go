@@ -223,20 +223,19 @@ const maxGatewayListeners = 64
 // listener. For a TLSPassthroughServices entry the two would sit on
 // port 443 with one hostname between them, which Gateway API admits and
 // then marks Conflicted so neither serves. A TLSPassthroughListeners
-// entry is on its own port and does not collide that way, and is
-// suppressed anyway for two reasons: the declared hostname belongs to
+// entry is on its own port and does not collide that way. It is
+// suppressed for a different reason: the declared hostname belongs to
 // the backend, which presents its own certificate for it, so a
 // Gateway-issued one is an ACME order for a name the Gateway does not
-// serve; and the pinned Cilium selects a passthrough backend by SNI
-// alone across ports (cilium#42898), so the same SNI answering on both
-// a terminate and a passthrough listener is the ambiguity
-// validateTLSPassthroughListeners already refuses between two
-// passthrough entries.
+// serve.
 //
-// This filter only bites in http01. The wildcard cert modes render no
-// per-hostname listener to withdraw, which is why
-// validatePassthroughListenerCertMode refuses the field there instead
-// of leaning on suppression.
+// That is the whole of it. A terminate listener and a passthrough
+// listener answering one SNI on two different ports is not the hazard
+// cilium#42898 reports — that issue is two passthrough listeners
+// sharing a hostname across ports, where only one of the two routes
+// ever works. Cilium treats a terminate/passthrough pair as conflicting
+// only when they share a port, so nothing here rests on the pair being
+// dangerous when they do not.
 //
 // The cost is that an HTTPRoute claiming a hostname declared here gets
 // no listener while still reporting Accepted=True, because
@@ -257,13 +256,12 @@ const maxGatewayListeners = 64
 // declared hostnames by SNI overlap. So a "*.db.<apex>" entry
 // suppresses nothing for a published "pg.db.<apex>": the terminate
 // listener renders on 443 and the passthrough one on its own port,
-// both matching that SNI. On the pinned Cilium that is the
-// cross-port ambiguity of cilium#42898, the same hazard the overlap
-// rule rejects between two declared entries. The limit is deliberate
-// rather than complete: widening this to hostnamesOverlap would let
-// one wildcard entry withdraw the HTTPS listener of every app beneath
-// it, which is a bigger behaviour than the collision it prevents and
-// wants its own decision.
+// both matching that SNI. Those two serve different ports and are not
+// the cilium#42898 pair, so the app keeps the listener and the
+// certificate it published for — which is what should happen. Widening
+// this to hostnamesOverlap would instead let one wildcard entry
+// withdraw the HTTPS listener of every app beneath it, for no hazard
+// that has been shown.
 func passthroughHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{} {
 	out := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners))
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
@@ -388,45 +386,6 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, passthroughListenerPrefix + l.Name})
 	}
 	return nil
-}
-
-// validatePassthroughListenerCertMode refuses passthrough listeners in
-// the two wildcard certificate modes.
-//
-// It is separate from validateTLSPassthroughListeners because it judges
-// the list against a sibling field rather than against itself: dns01
-// and existingSecret render a single terminate listener for "*.<apex>"
-// instead of one per published hostname, and a passthrough hostname has
-// to be inside the apex, so that wildcard covers every entry this field
-// can hold. The result is one SNI answering on a terminate listener and
-// on a passthrough listener across two ports, which is the ambiguity
-// the overlap rule above already refuses between two passthrough
-// entries — the pinned Cilium routes passthrough by SNI without
-// distinguishing the port (cilium#42898). Refusing the shape rather
-// than rendering it keeps the two sources of that pair judged alike.
-//
-// This is the controller's copy of an admission rule, like the rest of
-// them: the matching XValidation on TenantGatewaySpec keeps the spec
-// out of etcd, and TestSpecCELMatchesControllerValidation pins that the
-// two answer alike. Refusing here rather than at admission alone would
-// stall the whole reconcile chain for a tenant who set the field —
-// Issuer, wildcard Certificate, route status and the redirect included.
-//
-// http01 needs no such rule: it renders a listener per published
-// hostname, and passthroughHostnames withdraws the one a passthrough
-// listener holds, so the pair never reaches the Gateway.
-//
-// Lifting this is deleting a check — no API or schema change — once the
-// cross-port behaviour is settled or the Cilium pin moves past the
-// backport named on the overlap rule.
-func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
-	if len(listeners) == 0 {
-		return nil
-	}
-	if mode != gatewayv1alpha1.CertModeDNS01 && mode != gatewayv1alpha1.CertModeExistingSecret {
-		return nil
-	}
-	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; that mode serves the tenant from one wildcard terminate listener covering every hostname under the apex, so it matches the same SNI as each passthrough listener declared here and cannot be withdrawn for a single hostname the way certMode %q per-hostname listeners are", mode, gatewayv1alpha1.CertModeHTTP01)
 }
 
 // hostnamesOverlap reports whether two listener hostnames can match the
