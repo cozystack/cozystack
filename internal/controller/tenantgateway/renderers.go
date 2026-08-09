@@ -216,46 +216,103 @@ var reservedGatewayPorts = map[int32]struct{}{80: {}, 443: {}}
 // Gateway, so renderGateway checks the assembled total against it.
 const maxGatewayListeners = 64
 
-// passthroughServiceHostnames returns the hostnames that must not also
-// get an HTTPS-terminate listener: "<svc>.<apex>" for each
-// TLSPassthroughServices entry. They render from the spec alone, with no
-// route involved, so the set is known before any claim is collected.
+// validatePassthroughListenerCertMode refuses passthrough listeners in
+// the two wildcard certificate modes.
 //
-// Only that field is here, and the reason is that only that field leaves
-// no choice. Its listeners sit on port 443, the same port the terminate
-// listeners use, so a hostname claimed by both produces two listeners on
-// one port under one name. Gateway API admits the pair and then requires
-// both to report Conflicted, and neither serves. Dropping the terminate
-// half is the only outcome that serves anything.
+// It judges the field against a sibling field rather than against
+// itself, which is why it is separate from
+// validateTLSPassthroughListeners. dns01 and existingSecret serve the
+// tenant from one terminate listener for "*.<apex>" on port 443 instead
+// of one per published hostname, and a passthrough hostname has to sit
+// inside the apex, so that wildcard SNI-intersects every entry this
+// field can hold. Suppression cannot answer it either: those modes
+// render no per-hostname listener to withdraw, and the wildcard covers
+// the whole apex.
 //
-// TLSPassthroughListeners entries are deliberately absent. They sit on
-// their own port, so there is no pair to resolve: the passthrough
-// listener answers 5432 and a terminate listener for the same name
-// answers 443, which is an ordinary shape for an engine published
-// alongside a web interface. Nothing forces a choice between them.
-// Neither is it the hazard cilium#42898 reports, which is two
-// passthrough listeners sharing a hostname across ports. Cilium counts
-// a terminate/passthrough pair as conflicting only when they share a
-// port: listenersHaveSamePortCrossProtocolHostnameConflict in
-// operator/pkg/gateway-api/gateway_reconcile.go returns false as soon
-// as the ports differ, as of v1.19.6.
-// Nor is a Gateway-issued certificate wasted: if an HTTPRoute claims the
-// name, the Gateway serves it on 443 and the certificate is for that.
+// The intersection matters because the Cilium this repo pins does not
+// keep the two apart. v1.19.5 collapses the Gateway into a single Envoy
+// listener, and toFilterChainMatch in
+// operator/pkg/model/translation/envoy_listener.go matches on
+// transport_protocol and server_names only, so the terminate chain for
+// "*.<apex>" and the passthrough chain for a name under it end up in one
+// listener with an exact match winning over the wildcard. Upstream
+// states the consequence above NeedsCrossProtocolSplit in
+// operator/pkg/model/model.go as of v1.19.6: a combined Envoy listener
+// "would otherwise erase the original Gateway listener port boundary and
+// route traffic for one listener to another". A TLS connection arriving
+// on 443 for that name reaches the database backend.
 //
-// The cost of what remains is that an HTTPRoute claiming a suppressed
-// hostname gets no listener while still reporting Accepted=True, because
-// resolveHostnameOwners records no loser for it. Nothing hostile is
-// needed to reach it: tlsPassthroughServices is a chart value shipped
-// defaulted to api, vm-exportproxy and cdi-uploadproxy, so a tenant app
-// named after one of them collides with a platform default. Suppression
-// is not what breaks that hostname — before this filter the same
-// collision rendered the Conflicted pair, equally unserved — but it does
-// remove the Conflicted condition, which was the one place the collision
-// was visible. Reporting it on the route wants a condition of its own.
-func passthroughServiceHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{} {
-	out := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughServices))
+// v1.19.6 splits the Envoy listeners per port and this stops being true.
+// Lifting the refusal is then deleting a check, with no API or schema
+// change, and the pin is the thing to watch:
+// packages/system/cilium/images/cilium/Dockerfile.
+func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
+	if len(listeners) == 0 {
+		return nil
+	}
+	if mode != gatewayv1alpha1.CertModeDNS01 && mode != gatewayv1alpha1.CertModeExistingSecret {
+		return nil
+	}
+	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; that mode serves the tenant from one wildcard terminate listener covering every hostname under the apex, and the pinned Cilium routes both by SNI alone in one Envoy listener, so a connection on 443 would reach the passthrough backend", mode)
+}
+
+// passthroughHostnames returns every hostname a passthrough listener on
+// this Gateway claims: "<svc>.<apex>" for each TLSPassthroughServices
+// entry and the declared Hostname of each TLSPassthroughListeners entry.
+// Both render from the spec alone, with no route involved, so the set is
+// known before any claim is collected.
+//
+// None of them may also get an HTTPS-terminate listener, and the reason
+// differs by field only in which layer refuses.
+//
+// A TLSPassthroughServices entry shares port 443 with the terminate
+// listeners, so a hostname claimed by both produces two listeners on one
+// port under one name. Gateway API admits the pair and then requires both
+// to report Conflicted, and neither serves.
+//
+// A TLSPassthroughListeners entry sits on its own port, and that is not
+// the protection it looks like on the Cilium this repo pins. v1.19.5
+// (packages/system/cilium/images/cilium/Dockerfile) translates the whole
+// Gateway into a single Envoy listener and hangs the ports off
+// AdditionalAddresses; toFilterChainMatch in
+// operator/pkg/model/translation/envoy_listener.go matches on
+// transport_protocol and server_names and nothing else, so the Gateway
+// listener's port never reaches the match. Two chains carrying one SNI
+// from two Gateway ports become two chains with identical criteria in one
+// Envoy listener. Upstream says what that costs, in
+// operator/pkg/model/model.go on v1.19.6, above NeedsCrossProtocolSplit:
+// a combined Envoy listener "would otherwise erase the original Gateway
+// listener port boundary and route traffic for one listener to another".
+// v1.19.6 answers it by splitting the Envoy listeners per port; v1.19.5
+// has neither the split nor the diagnostic, so the answer here is to keep
+// the pair from being rendered. Revisit when the pin moves.
+//
+// The cost is that an HTTPRoute claiming a hostname declared here gets no
+// listener while still reporting Accepted=True, because
+// resolveHostnameOwners records no loser for it. Nothing hostile is needed
+// to reach it: tlsPassthroughServices is a chart value shipped defaulted
+// to api, vm-exportproxy and cdi-uploadproxy, so a tenant app named after
+// one of them collides with a platform default. Suppression is not what
+// breaks that hostname — before this filter the same collision rendered
+// the Conflicted pair, equally unserved — but it does remove the
+// Conflicted condition, which was the one place the collision was
+// visible. Reporting it on the route wants a condition of its own.
+//
+// Matching is exact, where validateTLSPassthroughListeners compares
+// declared hostnames by SNI overlap. A "*.db.<apex>" entry therefore
+// suppresses nothing for a published "pg.db.<apex>", which leaves that
+// pair rendered and exposed to the same translation. Widening this to
+// hostnamesOverlap would let one wildcard entry withdraw the HTTPS
+// listener of every app beneath it, which is a larger behaviour than the
+// gap it closes; the gap belongs to the validator, which already
+// compares by overlap.
+func passthroughHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{} {
+	out := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners))
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
 		out[svc+"."+tgw.Spec.Apex] = struct{}{}
+	}
+	for _, pl := range tgw.Spec.TLSPassthroughListeners {
+		out[pl.Hostname] = struct{}{}
 	}
 	return out
 }

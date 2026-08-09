@@ -2390,9 +2390,9 @@ func TestReconcile_TLSRouteOnPassthroughServiceTerminatesNothing(t *testing.T) {
 // not have to be hostile to reach it: the shipped default publishes
 // "api", "vm-exportproxy" and "cdi-uploadproxy", so an app named after
 // one of them is enough.
-// Only tlsPassthroughServices feeds the suppressed set. The native-port
-// field does not, and TestReconcile_NativePortPassthroughKeepsPublishedListener
-// pins the other side of that.
+// Both spec fields feed the suppressed set, and each is its own loop, so
+// each subtest pins one of them. Covering only the services leg let the
+// listeners leg be deleted with the suite still green.
 func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T) {
 	const hostname = "api.foo.example.com"
 	sources := []struct {
@@ -2403,6 +2403,15 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 		{
 			name:     "tlsPassthroughServices",
 			services: []string{"api"},
+		},
+		{
+			// Native port, so the pair is not two listeners on one
+			// Gateway port. On the pinned Cilium that is not the
+			// protection it looks like: the port never reaches the
+			// Envoy filter-chain match, so both chains land in one
+			// listener under one SNI.
+			name:      "tlsPassthroughListeners",
+			listeners: []gatewayv1alpha1.TLSPassthroughListener{{Name: "api", Port: 5432, Hostname: hostname}},
 		},
 	}
 	for _, src := range sources {
@@ -2495,92 +2504,6 @@ func TestValidateTLSPassthroughListenersNamesTheSpecEntry(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), passthroughListenerPrefix+"api") {
 		t.Errorf("error names the rendered listener instead of the spec entry: %v", err)
-	}
-}
-
-// TestReconcile_NativePortPassthroughKeepsPublishedListener pins that a
-// native-port entry withdraws nothing: an app published under the same
-// name keeps its HTTPS listener on 443 and the certificate for it.
-//
-// The two do not compete. The passthrough listener answers the engine's
-// own port and the terminate listener answers 443, which is what an
-// engine published beside a web interface looks like. Suppressing here
-// would be a choice, not a resolution, and the two arguments that could
-// have justified it do not hold: the pair is not the cilium#42898 shape,
-// which is two passthrough listeners across ports, and the certificate
-// is not wasted, because the Gateway does serve that name on 443.
-func TestReconcile_NativePortPassthroughKeepsPublishedListener(t *testing.T) {
-	const published = "pg.foo.example.com"
-	s := newScheme(t)
-	tgw := &gatewayv1alpha1.TenantGateway{
-		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
-		Spec: gatewayv1alpha1.TenantGatewaySpec{
-			Apex:             "foo.example.com",
-			CertMode:         gatewayv1alpha1.CertModeHTTP01,
-			GatewayClassName: "cilium",
-			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
-				{Name: "pg", Port: 5432, Hostname: published},
-			},
-		},
-	}
-	route := httpRouteAttached("pg", "tenant-foo", published)
-
-	c := fake.NewClientBuilder().
-		WithScheme(s).
-		WithObjects(tgw, route).
-		WithStatusSubresource(tgw, route).
-		Build()
-
-	r := &Reconciler{Client: c, Scheme: s}
-	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
-		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	gw := &gatewayv1.Gateway{}
-	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
-		t.Fatalf("get Gateway: %v", err)
-	}
-	var terminates, passthrough bool
-	for _, l := range gw.Spec.Listeners {
-		if l.Hostname == nil {
-			continue
-		}
-		switch string(*l.Hostname) {
-		case published:
-			if l.Protocol == gatewayv1.HTTPSProtocolType {
-				terminates = true
-			}
-		}
-		if string(*l.Hostname) == published && l.Protocol == gatewayv1.TLSProtocolType {
-			passthrough = true
-		}
-	}
-	// The wildcard listener has to be there for the absence of
-	// suppression to mean anything: a render that dropped it would leave
-	// nothing to suppress and pass the first check for free.
-	if !passthrough {
-		t.Fatalf("no native-port passthrough listener rendered, so this proves nothing: %+v", gw.Spec.Listeners)
-	}
-	if !terminates {
-		t.Errorf("app on %s lost its HTTPS listener to a native-port passthrough entry: %+v", published, gw.Spec.Listeners)
-	}
-
-	certs := &cmv1.CertificateList{}
-	if err := c.List(context.TODO(), certs); err != nil {
-		t.Fatalf("list certs: %v", err)
-	}
-	var ordered bool
-	for i := range certs.Items {
-		for _, dns := range certs.Items[i].Spec.DNSNames {
-			if dns == published {
-				ordered = true
-			}
-		}
-	}
-	if !ordered {
-		t.Errorf("no Certificate orders %s, so the app it publishes serves no TLS", published)
 	}
 }
 
@@ -2791,12 +2714,22 @@ func TestValidateTLSPassthroughListenersReportsApexBeforeOverlap(t *testing.T) {
 // listener sets, and pinning only the default one let the DNS-01 pair
 // ("https" and "https-apex") share a struct undetected.
 func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
+	// The layer-4 listeners ride along only in HTTP-01:
+	// validatePassthroughListenerCertMode refuses them under the
+	// wildcard modes, so asking for them here would fail the render
+	// instead of comparing pointers. DNS-01 keeps its own supply of
+	// listeners to compare, and the two port-443 passthrough ones among
+	// them are the class that carried the aliasing this test pins.
 	modes := []struct {
-		name        string
-		mode        gatewayv1alpha1.CertMode
-		childApexes []string
+		name                string
+		mode                gatewayv1alpha1.CertMode
+		childApexes         []string
+		passthroughListener []gatewayv1alpha1.TLSPassthroughListener
 	}{
-		{name: "HTTP01", mode: gatewayv1alpha1.CertModeHTTP01},
+		{name: "HTTP01", mode: gatewayv1alpha1.CertModeHTTP01, passthroughListener: []gatewayv1alpha1.TLSPassthroughListener{
+			{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+			{Name: "mysql", Port: 3306, Hostname: "mysql.foo.example.com"},
+		}},
 		{name: "DNS01", mode: gatewayv1alpha1.CertModeDNS01, childApexes: []string{"child.foo.example.com"}},
 	}
 	for _, m := range modes {
@@ -2804,14 +2737,11 @@ func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
 			tgw := &gatewayv1alpha1.TenantGateway{
 				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
 				Spec: gatewayv1alpha1.TenantGatewaySpec{
-					Apex:                   "foo.example.com",
-					CertMode:               m.mode,
-					GatewayClassName:       "cilium",
-					TLSPassthroughServices: []string{"api", "vm-exportproxy"},
-					TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
-						{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
-						{Name: "mysql", Port: 3306, Hostname: "mysql.foo.example.com"},
-					},
+					Apex:                    "foo.example.com",
+					CertMode:                m.mode,
+					GatewayClassName:        "cilium",
+					TLSPassthroughServices:  []string{"api", "vm-exportproxy"},
+					TLSPassthroughListeners: m.passthroughListener,
 				},
 			}
 
@@ -2998,6 +2928,106 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 			}
 			if !tc.wantErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestValidatePassthroughListenerCertMode pins that the two wildcard
+// certificate modes refuse a passthrough listener outright.
+//
+// Those modes serve the tenant from one terminate listener for
+// "*.<apex>", and a passthrough hostname has to sit inside the apex, so
+// the wildcard SNI-intersects every entry the field can hold. On the
+// pinned Cilium the Gateway listener port does not survive translation
+// into the Envoy filter-chain match, so the intersection is not academic:
+// a connection on 443 for such a name reaches the passthrough backend.
+// http01 renders per-hostname listeners instead and passthroughHostnames
+// withdraws the one a passthrough listener holds.
+//
+// The empty CertMode is the Go zero value, not a mode: the CRD defaults
+// the field, so a stored object always carries one. Refusing only the two
+// named modes keeps this check from inventing a third meaning.
+func TestValidatePassthroughListenerCertMode(t *testing.T) {
+	one := []gatewayv1alpha1.TLSPassthroughListener{
+		{Name: "pg", Port: 5432, Hostname: "pg.foo.example.com"},
+	}
+	for _, tc := range []struct {
+		name      string
+		listeners []gatewayv1alpha1.TLSPassthroughListener
+		mode      gatewayv1alpha1.CertMode
+		wantErr   bool
+	}{
+		{"http01 renders per-hostname listeners", one, gatewayv1alpha1.CertModeHTTP01, false},
+		{"dns01 wildcard covers the hostname", one, gatewayv1alpha1.CertModeDNS01, true},
+		{"existingSecret wildcard covers the hostname", one, gatewayv1alpha1.CertModeExistingSecret, true},
+		{"dns01 without listeners", nil, gatewayv1alpha1.CertModeDNS01, false},
+		{"zero value is not a wildcard mode", one, "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validatePassthroughListenerCertMode(tc.listeners, tc.mode)
+			if tc.wantErr && err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestReconcile_TLSPassthroughListenerWildcardCertModeRejected proves the
+// cert-mode restriction reaches the render path rather than sitting in a
+// function nothing calls, and that it lets HTTP-01 through.
+//
+// Both wildcard modes are given the configuration they need to render, so
+// the cert-mode rule is the only thing that can fail the reconcile.
+// Leaving DNS01 without its solver config makes the subtest pass on that
+// error instead and stop testing this rule at all.
+func TestReconcile_TLSPassthroughListenerWildcardCertModeRejected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		mode    gatewayv1alpha1.CertMode
+		wantErr bool
+	}{
+		{"dns01", gatewayv1alpha1.CertModeDNS01, true},
+		{"existingSecret", gatewayv1alpha1.CertModeExistingSecret, true},
+		{"http01", gatewayv1alpha1.CertModeHTTP01, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newScheme(t)
+			tgw := &gatewayv1alpha1.TenantGateway{
+				ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+				Spec: gatewayv1alpha1.TenantGatewaySpec{
+					Apex:              "foo.example.com",
+					CertMode:          tc.mode,
+					GatewayClassName:  "cilium",
+					WildcardSecretRef: &corev1.LocalObjectReference{Name: "wildcard-tls"},
+					DNS01: &gatewayv1alpha1.DNS01Config{
+						Provider: "cloudflare",
+						Cloudflare: &gatewayv1alpha1.CloudflareDNS01{
+							APITokenSecretRef: corev1.SecretKeySelector{
+								LocalObjectReference: corev1.LocalObjectReference{Name: "cf-token"},
+								Key:                  "api-token",
+							},
+						},
+					},
+					TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+						{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+					},
+				},
+			}
+			c := fake.NewClientBuilder().WithScheme(s).WithObjects(tgw).WithStatusSubresource(tgw).Build()
+
+			r := &Reconciler{Client: c, Scheme: s}
+			_, err := r.Reconcile(context.TODO(), ctrl.Request{
+				NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+			})
+			if tc.wantErr && err == nil {
+				t.Fatalf("expected Reconcile to fail for certMode %q, got nil", tc.mode)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("unexpected Reconcile error for certMode %q: %v", tc.mode, err)
 			}
 		})
 	}

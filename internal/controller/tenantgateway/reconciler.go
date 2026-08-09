@@ -162,7 +162,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// Ownership still decides who is Accepted: claims and allRefs carry
 	// TLSRoutes untouched, so conflict resolution and RouteParentStatus
 	// are unaffected.
-	reserved := passthroughServiceHostnames(tgw)
+	reserved := passthroughHostnames(tgw)
 	dynHostnames := make([]string, 0, len(claims))
 	for h, refs := range claims {
 		if _, isPassthrough := reserved[h]; isPassthrough {
@@ -787,6 +787,9 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {
 	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
+		return nil, err
+	}
+	if err := validatePassthroughListenerCertMode(tgw.Spec.TLSPassthroughListeners, tgw.Spec.CertMode); err != nil {
 		return nil, err
 	}
 	allowedRoutes := buildAllowedRoutes(tgw)

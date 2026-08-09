@@ -411,6 +411,12 @@ spec:
                 entry; both render a tls-<name> Gateway listener'
               rule: '!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices)
                 || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))'
+            - message: 'tlsPassthroughListeners: unsupported with certMode dns01 or
+                existingSecret; those modes serve the tenant from one wildcard terminate
+                listener that the pinned Cilium cannot keep apart from a passthrough
+                listener under the same apex'
+              rule: '!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners)
+                == 0 || !has(self.certMode) || !(self.certMode in [''dns01'', ''existingSecret''])'
           status:
             description: TenantGatewayStatus reports the observed state of the tenant's
               Gateway.

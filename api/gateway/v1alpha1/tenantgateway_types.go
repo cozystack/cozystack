@@ -244,6 +244,13 @@ type TLSPassthroughListener struct {
 // overlapping hostname reaches etcd and surfaces as Ready=False rather
 // than a rejected write.
 //
+// The cert-mode rule is the cheap end of that trade: it reads two
+// scalars and the list's length, with no scan and no string building,
+// so the estimator barely charges for it. Leaving it controller-only
+// would have been expensive in the other currency, because a dns01
+// tenant that set the field would stall the whole chain above,
+// including renewal of the wildcard certificate that mode exists for.
+//
 // And renderGateway refuses a Gateway whose assembled listeners exceed
 // the Gateway API cap. That one judges the finished object rather than
 // anything declared on a single field, which is why it reads as a
@@ -258,6 +265,7 @@ type TLSPassthroughListener struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || !(self.certMode in ['dns01', 'existingSecret'])",message="tlsPassthroughListeners: unsupported with certMode dns01 or existingSecret; those modes serve the tenant from one wildcard terminate listener that the pinned Cilium cannot keep apart from a passthrough listener under the same apex"
 type TenantGatewaySpec struct {
 	// Why apex is bounded and patterned.
 	//

@@ -139,7 +139,8 @@ func (a *admissionCheck) rejects(t *testing.T, spec map[string]interface{}) bool
 // TestSpecCELMatchesControllerValidation pins that the admission-time
 // CEL rules and the controller's validateTLSPassthroughListeners agree
 // on every case the CEL rules cover: reserved ports, duplicate ports,
-// out-of-apex hostnames, and names colliding with tlsPassthroughServices.
+// out-of-apex hostnames, names colliding with tlsPassthroughServices, and
+// the cert modes that refuse the field outright.
 //
 // The two must not drift. CEL keeps a bad spec out of etcd so it never
 // aborts the reconcile chain; the Go check still has to reject objects
@@ -166,8 +167,26 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 		name       string
 		listeners  []listener
 		services   []string
+		certMode   gatewayv1alpha1.CertMode
 		wantReject bool
 	}{
+		{
+			name:      "http01 accepts a passthrough listener",
+			listeners: []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:  gatewayv1alpha1.CertModeHTTP01,
+		},
+		{
+			name:       "dns01 refuses a passthrough listener",
+			listeners:  []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:   gatewayv1alpha1.CertModeDNS01,
+			wantReject: true,
+		},
+		{
+			name:       "existingSecret refuses a passthrough listener",
+			listeners:  []listener{{"postgres", 5432, "postgres.foo.example.com"}},
+			certMode:   gatewayv1alpha1.CertModeExistingSecret,
+			wantReject: true,
+		},
 		{
 			name:      "distinct native ports within apex",
 			listeners: []listener{{"postgres", 5432, "postgres.foo.example.com"}, {"mysql", 3306, "mysql.foo.example.com"}},
@@ -264,12 +283,20 @@ func TestSpecCELMatchesControllerValidation(t *testing.T) {
 				spec["tlsPassthroughServices"] = svcs
 			}
 
+			// Left out when the row does not name one, so the rows that
+			// predate the cert-mode rule keep exercising the others with
+			// the field absent.
+			if tc.certMode != "" {
+				spec["certMode"] = string(tc.certMode)
+			}
+
 			gotCEL := a.rejects(t, spec)
 			if gotCEL != tc.wantReject {
 				t.Errorf("CEL rejected=%v, want %v", gotCEL, tc.wantReject)
 			}
 
-			gotGo := validateTLSPassthroughListeners(goList, tc.services, apex) != nil
+			gotGo := validateTLSPassthroughListeners(goList, tc.services, apex) != nil ||
+				validatePassthroughListenerCertMode(goList, tc.certMode) != nil
 			if gotGo != tc.wantReject {
 				t.Errorf("controller validation rejected=%v, want %v", gotGo, tc.wantReject)
 			}
