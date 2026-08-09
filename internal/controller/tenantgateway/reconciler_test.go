@@ -2443,6 +2443,94 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 	}
 }
 
+// TestReconcile_WildcardPassthroughKeepsPublishedListener pins the
+// boundary of the suppression above: it matches hostnames exactly, so a
+// wildcard entry withdraws nothing from the names beneath it.
+//
+// The neighbouring validateTLSPassthroughListeners compares declared
+// hostnames by SNI overlap, and matching that here is the natural tidy-
+// up for the next reader. It would be a much larger behaviour: one
+// "*.<apex>" entry would take the HTTPS listener and the certificate
+// away from every app on the tenant, and those apps are served on 443
+// while the passthrough listener sits on its own port, so nothing is
+// gained by it. Without this test the widening is invisible — the rest
+// of the suite stays green when the map lookup becomes an overlap scan.
+func TestReconcile_WildcardPassthroughKeepsPublishedListener(t *testing.T) {
+	const published = "pg.db.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "wild", Port: 5432, Hostname: "*.db.foo.example.com"},
+			},
+		},
+	}
+	route := httpRouteAttached("pg", "tenant-foo", published)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, route).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var terminates, passthrough bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname == nil {
+			continue
+		}
+		switch string(*l.Hostname) {
+		case published:
+			if l.Protocol == gatewayv1.HTTPSProtocolType {
+				terminates = true
+			}
+		case "*.db.foo.example.com":
+			if l.Protocol == gatewayv1.TLSProtocolType {
+				passthrough = true
+			}
+		}
+	}
+	// The wildcard listener has to be there for the absence of
+	// suppression to mean anything: a render that dropped it would leave
+	// nothing to suppress and pass the first check for free.
+	if !passthrough {
+		t.Fatalf("no wildcard passthrough listener rendered, so this proves nothing: %+v", gw.Spec.Listeners)
+	}
+	if !terminates {
+		t.Errorf("app on %s lost its HTTPS listener to a wildcard passthrough entry: %+v", published, gw.Spec.Listeners)
+	}
+
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list certs: %v", err)
+	}
+	var ordered bool
+	for i := range certs.Items {
+		for _, dns := range certs.Items[i].Spec.DNSNames {
+			if dns == published {
+				ordered = true
+			}
+		}
+	}
+	if !ordered {
+		t.Errorf("no Certificate orders %s, so the app it publishes serves no TLS", published)
+	}
+}
+
 // TestReconcile_TLSRouteWithoutPassthroughListenerTerminatesNothing
 // covers the TLSRoute hostname that no passthrough listener claims —
 // a sectionName pointing at nothing, or a spec edited to drop the entry
