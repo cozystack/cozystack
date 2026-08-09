@@ -28,6 +28,7 @@ import (
 	apiextvalidation "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/validation"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	schemacel "k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/listtype"
 	apiservervalidation "k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -313,6 +314,97 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 	}
 	for _, e := range apiextvalidation.ValidateCustomResourceDefinition(context.TODO(), &internal) {
 		t.Errorf("apiserver would reject this CRD: %v", e)
+	}
+}
+
+// TestTightenedConstraintsOnExistingObjects pins which of the
+// constraints added to already-shipped fields an existing object has to
+// satisfy on its next write, because the two answers differ and the
+// package README states them.
+//
+// The apiserver ratchets ordinary schema validations: a stored value
+// that violates one is still accepted by an update that leaves it
+// alone, and the rule applies only once the value changes. It does not
+// ratchet list-type errors, so uniqueness declared as
+// x-kubernetes-list-type=set is enforced on every write regardless.
+// Ratcheting is on by default from Kubernetes 1.30 and the management
+// cluster requires 1.33, so the ratcheted half holds on every supported
+// cluster.
+//
+// The split decides what an upgrade does to a cluster whose values are
+// already out of spec, which is the one thing an operator needs from
+// the note — and stating it in prose alone is how the claim drifts from
+// the schema it describes.
+func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
+	a := specValidator(t)
+
+	spec := func(apex string, services ...string) map[string]interface{} {
+		svcs := make([]interface{}, 0, len(services))
+		for _, s := range services {
+			svcs = append(svcs, s)
+		}
+		return map[string]interface{}{
+			"apex":                   apex,
+			"certMode":               "http01",
+			"gatewayClassName":       "cilium",
+			"tlsPassthroughServices": svcs,
+		}
+	}
+
+	// rejectsUpdate answers what the apiserver does to a write of new
+	// over old: the schema layer with ratcheting on, then the list-type
+	// layer, which has no old value to correlate against and so cannot
+	// ratchet anything.
+	rejectsUpdate := func(newSpec, oldSpec map[string]interface{}) bool {
+		if errs := apiservervalidation.ValidateCustomResourceUpdate(
+			field.NewPath("spec"), newSpec, oldSpec, a.schema,
+			apiservervalidation.WithRatcheting(nil),
+		); len(errs) > 0 {
+			return true
+		}
+		return len(listtype.ValidateListSetsAndMaps(field.NewPath("spec"), a.structural, newSpec)) > 0
+	}
+
+	for _, tc := range []struct {
+		name         string
+		newSpec, old map[string]interface{}
+		wantRejected bool
+	}{{
+		name:         "upper-case apex left untouched",
+		newSpec:      spec("FOO.example.com", "api"),
+		old:          spec("FOO.example.com", "api"),
+		wantRejected: false,
+	}, {
+		name:         "upper-case apex introduced by this write",
+		newSpec:      spec("FOO.example.com", "api"),
+		old:          spec("foo.example.com", "api"),
+		wantRejected: true,
+	}, {
+		name:         "malformed service entry left untouched",
+		newSpec:      spec("foo.example.com", "API_X"),
+		old:          spec("foo.example.com", "API_X"),
+		wantRejected: false,
+	}, {
+		name:         "malformed service entry introduced by this write",
+		newSpec:      spec("foo.example.com", "API_X"),
+		old:          spec("foo.example.com", "api"),
+		wantRejected: true,
+	}, {
+		name:         "repeated service entry left untouched",
+		newSpec:      spec("foo.example.com", "api", "api"),
+		old:          spec("foo.example.com", "api", "api"),
+		wantRejected: true,
+	}, {
+		name:         "unique service entries",
+		newSpec:      spec("foo.example.com", "api", "vm-exportproxy"),
+		old:          spec("foo.example.com", "api", "vm-exportproxy"),
+		wantRejected: false,
+	}} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rejectsUpdate(tc.newSpec, tc.old); got != tc.wantRejected {
+				t.Errorf("update rejected = %v, want %v", got, tc.wantRejected)
+			}
+		})
 	}
 }
 
