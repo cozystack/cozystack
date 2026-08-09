@@ -173,8 +173,7 @@ type TLSPassthroughListener struct {
 	Port int32 `json:"port"`
 
 	// Why the hostname pattern is declared rather than left to the
-	// controller. Detached from the declaration: controller-gen would
-	// ship it as the field description.
+	// controller.
 	//
 	// The pattern is copied verbatim from Gateway API's own Hostname
 	// type, so a value this field accepts is one the rendered listener
@@ -201,11 +200,7 @@ type TLSPassthroughListener struct {
 	Hostname string `json:"hostname"`
 }
 
-// Why the tlsPassthroughListeners rules sit where they do. This block
-// is deliberately detached from the declaration: it answers questions
-// from whoever next edits the markers, and controller-gen would
-// otherwise ship it as the field description that kubectl explain
-// prints to whoever is just filling the spec in.
+// Why the tlsPassthroughListeners rules sit where they do.
 //
 //
 // The tlsPassthroughListeners rules below are enforced at admission
@@ -264,9 +259,7 @@ type TLSPassthroughListener struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
 type TenantGatewaySpec struct {
-	// Why apex is bounded and patterned. Detached from the declaration:
-	// controller-gen would otherwise print this to whoever runs kubectl
-	// explain, who is asking what to put in the field, not why.
+	// Why apex is bounded and patterned.
 	//
 	// MaxLength is the DNS ceiling for a fully qualified name, so it
 	// rejects nothing that was ever resolvable. It is required rather
@@ -327,9 +320,6 @@ type TenantGatewaySpec struct {
 	AttachedNamespaces []string `json:"attachedNamespaces,omitempty"`
 
 	// Why this field carries these markers, and why not listType=set.
-	// Detached from the declaration on purpose: controller-gen turns an
-	// attached comment into the field description, and this answers a
-	// question only someone editing the markers is asking.
 	//
 	// The bounds exist for the CEL cost estimator, same as on Apex: the
 	// name-collision rule scans this list, and an unbounded list of
@@ -366,8 +356,7 @@ type TenantGatewaySpec struct {
 	TLSPassthroughServices []string `json:"tlsPassthroughServices,omitempty"`
 
 	// How the cap on this field relates to the Gateway's own listener
-	// budget. Detached from the declaration: it is arithmetic for whoever
-	// changes the bound, not for whoever fills the field in.
+	// budget.
 	//
 	// The cap bounds what THIS field contributes to the Gateway's 64
 	// listener slots; it does not by itself guarantee the total fits.
