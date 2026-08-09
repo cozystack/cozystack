@@ -786,6 +786,9 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
 		return nil, err
 	}
+	if err := validatePassthroughListenerCertMode(tgw.Spec.TLSPassthroughListeners, tgw.Spec.CertMode); err != nil {
+		return nil, err
+	}
 	allowedRoutes := buildAllowedRoutes(tgw)
 	httpAllowedRoutes := buildHTTPListenerAllowedRoutes(tgw)
 	listeners := []gatewayv1.Listener{

@@ -233,6 +233,11 @@ const maxGatewayListeners = 64
 // validateTLSPassthroughListeners already refuses between two
 // passthrough entries.
 //
+// This filter only bites in http01. The wildcard cert modes render no
+// per-hostname listener to withdraw, which is why
+// validatePassthroughListenerCertMode refuses the field there instead
+// of leaning on suppression.
+//
 // The cost is that an HTTPRoute claiming a hostname declared here gets
 // no listener while still reporting Accepted=True, because
 // resolveHostnameOwners records no loser for it. Nothing hostile is
@@ -383,6 +388,38 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, passthroughListenerPrefix + l.Name})
 	}
 	return nil
+}
+
+// validatePassthroughListenerCertMode refuses passthrough listeners in
+// the two wildcard certificate modes.
+//
+// It is separate from validateTLSPassthroughListeners because it judges
+// the list against a sibling field rather than against itself: dns01
+// and existingSecret render a single terminate listener for "*.<apex>"
+// instead of one per published hostname, and a passthrough hostname has
+// to be inside the apex, so that wildcard covers every entry this field
+// can hold. The result is one SNI answering on a terminate listener and
+// on a passthrough listener across two ports, which is the ambiguity
+// the overlap rule above already refuses between two passthrough
+// entries — the pinned Cilium routes passthrough by SNI without
+// distinguishing the port (cilium#42898). Refusing the shape rather
+// than rendering it keeps the two sources of that pair judged alike.
+//
+// http01 needs no such rule: it renders a listener per published
+// hostname, and passthroughHostnames withdraws the one a passthrough
+// listener holds, so the pair never reaches the Gateway.
+//
+// Lifting this is deleting a check — no API or schema change — once the
+// cross-port behaviour is settled or the Cilium pin moves past the
+// backport named on the overlap rule.
+func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
+	if len(listeners) == 0 {
+		return nil
+	}
+	if mode != gatewayv1alpha1.CertModeDNS01 && mode != gatewayv1alpha1.CertModeExistingSecret {
+		return nil
+	}
+	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; that mode serves the tenant from one wildcard terminate listener covering every hostname under the apex, so it matches the same SNI as each passthrough listener declared here and cannot be withdrawn for a single hostname the way certMode %q per-hostname listeners are", mode, gatewayv1alpha1.CertModeHTTP01)
 }
 
 // hostnamesOverlap reports whether two listener hostnames can match the
