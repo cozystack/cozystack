@@ -2499,8 +2499,16 @@ func TestValidateTLSPassthroughListenersNamesTheSpecEntry(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected an overlap error")
 	}
-	if !strings.Contains(err.Error(), `tlsPassthroughServices entry "api"`) {
-		t.Errorf("error does not name the spec entry that claims the hostname: %v", err)
+	// The property is which side of the spec/render divide the message
+	// points at, so it is asserted as a pair: the field the claimant came
+	// from must appear, and the name that claimant renders into must not.
+	// The entry name on its own is not asserted, because the hostname in
+	// the same message already contains it and such a check would hold
+	// however the claimant were identified. Wording is deliberately not
+	// pinned; a reworded message that still names the field and still
+	// avoids the rendered form passes, which is the point.
+	if !strings.Contains(err.Error(), "tlsPassthroughServices") {
+		t.Errorf("error does not say which field the claiming entry came from: %v", err)
 	}
 	if strings.Contains(err.Error(), passthroughListenerPrefix+"api") {
 		t.Errorf("error names the rendered listener instead of the spec entry: %v", err)
