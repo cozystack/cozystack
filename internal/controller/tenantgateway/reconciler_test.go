@@ -2443,6 +2443,32 @@ func TestReconcile_HTTPRouteOnPassthroughHostnameTerminatesNothing(t *testing.T)
 	}
 }
 
+// TestValidateTLSPassthroughListenersNamesTheSpecEntry pins that the
+// overlap error points at what the user edits.
+//
+// The two claimants reach the check from different fields, and the
+// rendered listener name is the same shape for both, so naming the
+// claimant by its rendered form sends the reader to grep the Gateway
+// for a string they never typed. The spec entry is where the fix is.
+func TestValidateTLSPassthroughListenersNamesTheSpecEntry(t *testing.T) {
+	err := validateTLSPassthroughListeners(
+		[]gatewayv1alpha1.TLSPassthroughListener{
+			{Name: "pgapi", Port: 5432, Hostname: "api.foo.example.com"},
+		},
+		[]string{"api"},
+		"foo.example.com",
+	)
+	if err == nil {
+		t.Fatal("expected an overlap error")
+	}
+	if !strings.Contains(err.Error(), `tlsPassthroughServices entry "api"`) {
+		t.Errorf("error does not name the spec entry that claims the hostname: %v", err)
+	}
+	if strings.Contains(err.Error(), passthroughListenerPrefix+"api") {
+		t.Errorf("error names the rendered listener instead of the spec entry: %v", err)
+	}
+}
+
 // TestReconcile_WildcardPassthroughKeepsPublishedListener pins the
 // boundary of the suppression above: it matches hostnames exactly, so a
 // wildcard entry withdraws nothing from the names beneath it.

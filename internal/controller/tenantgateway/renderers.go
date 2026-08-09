@@ -316,10 +316,14 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 	// occupy (<svc>.<apex>, matching renderGateway) so the check below
 	// spans both lists: a listener entry can collide with a service
 	// hostname while their names differ, which the name checks miss.
-	type claimedHostname struct{ hostname, listener string }
+	// source names the claimant the way the user wrote it, not the way
+	// it renders: an error that says tls-api sends the reader looking
+	// through the Gateway for a name they never typed, while the entry
+	// they have to edit sits in the TenantGateway spec.
+	type claimedHostname struct{ hostname, source string }
 	seenHostnames := make([]claimedHostname, 0, len(listeners)+len(passthroughServices))
 	for _, svc := range passthroughServices {
-		seenHostnames = append(seenHostnames, claimedHostname{svc + "." + apex, passthroughListenerPrefix + svc})
+		seenHostnames = append(seenHostnames, claimedHostname{svc + "." + apex, fmt.Sprintf("tlsPassthroughServices entry %q", svc)})
 	}
 	for _, l := range listeners {
 		if errs := validation.IsDNS1123Label(l.Name); len(errs) > 0 {
@@ -384,9 +388,9 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 			if !hostnamesOverlap(l.Hostname, claimed.hostname) {
 				continue
 			}
-			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps listener %q hostname %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners whose hostnames match the same ClientHello, even on different ports", l.Name, l.Hostname, claimed.listener, claimed.hostname)
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q overlaps %s hostname %q; Cilium routes TLS passthrough by SNI alone and cannot distinguish two listeners whose hostnames match the same ClientHello, even on different ports", l.Name, l.Hostname, claimed.source, claimed.hostname)
 		}
-		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, passthroughListenerPrefix + l.Name})
+		seenHostnames = append(seenHostnames, claimedHostname{l.Hostname, fmt.Sprintf("listener %q", l.Name)})
 	}
 	return nil
 }
@@ -423,6 +427,10 @@ func hostnameCovers(w, x string) bool {
 	}
 	// A wildcard covers another wildcard when it covers everything that
 	// one could match, i.e. when the other's suffix sits under ours.
+	// The equality leg is unreachable through hostnamesOverlap, which
+	// answers identical hostnames before it calls here; it stays so the
+	// predicate is right read on its own, since a wildcard does cover
+	// itself.
 	if inner, isWildcard := strings.CutPrefix(x, "*."); isWildcard {
 		return inner == suffix || strings.HasSuffix(inner, "."+suffix)
 	}
