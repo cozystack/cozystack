@@ -59,69 +59,14 @@ spec:
             description: |-
               TenantGatewaySpec describes the desired state of a per-tenant Gateway.
 
-              The tlsPassthroughListeners rules below are enforced at admission
-              rather than only in the controller because renderGateway is the first
-              thing that renders: a spec the apiserver accepts but the renderer
-              rejects aborts everything behind it — Issuer, wildcard
-              Certificate, per-listener Certificates, route status, the http→https
-              redirect. One mistyped hostname would stall certificate renewal for
-              every published app on the tenant, with nothing but Ready=False to
-              point at the field that caused it. Rejecting the write keeps the bad
-              spec out of etcd and the chain intact. The controller keeps its own
-              copy of these rules: during an upgrade the controller and the CRD
-              roll out separately, so it cannot assume they were applied to what it
-              reads, and it is the layer the unit tests can exercise directly. The
-              copy covers the rules written here, not the schema markers on the
-              individual fields: an apex or a tlsPassthroughServices entry that
-              slipped past its pattern is caught by Gateway API refusing the
-              rendered listener, not by the controller.
-
-              One rule is deliberately absent. Name uniqueness is carried by the
-              listType=map/listMapKey=name markers on the field, enforced by the
-              apiserver at no CEL cost.
-
-              Some rules have no admission form at all, and they are listed rather
-              than counted: a count here has been wrong twice, because the set
-              spans two fields and the assembled Gateway as well.
-
-              A repeated tlsPassthroughServices entry is one, by choice
-              rather than by cost: a listType=set marker would express it at
-              admission, but list-type errors are the one kind the apiserver never
-              ratchets, so it would refuse every write to an object that already
-              carries a duplicate. See that field for the rest of it.
-
-              Hostname overlap is another, and that one is about cost.
-              Expressing it needs wildcard-aware matching across two lists, which
-              in CEL is a nested scan whose estimated cost the apiserver charges
-              against a budget the rules below already sit close under — adding it
-              is what pushed the CRD over and made it un-installable while the
-              per-request tests stayed green. TestCRDPassesInstallTimeValidation
-              keeps that honest. The consequence is accepted knowingly: an
-              overlapping hostname reaches etcd and surfaces as Ready=False rather
-              than a rejected write.
-
-              And renderGateway refuses a Gateway whose assembled listeners exceed
-              the Gateway API cap. That one judges the finished object rather than
-              anything declared on a single field, which is why it reads as a
-              different kind of rule, but it has no admission form either.
+              The rules on tlsPassthroughListeners are enforced both at admission
+              and in the controller; a few have no admission form and surface as
+              Ready=False instead. The reasoning is in the comment above the type.
             properties:
               apex:
                 description: |-
                   Apex is the tenant's apex hostname. The Gateway listeners are
                   constrained to this apex and its subdomains.
-
-                  MaxLength is the DNS ceiling for a fully qualified name, so it
-                  rejects nothing that was ever resolvable. It is required rather
-                  than cosmetic: the tlsPassthroughListeners CEL rules concatenate
-                  this value, and without a declared bound the apiserver's
-                  install-time cost estimator assumes the maximum string size and
-                  refuses the whole CRD.
-                  The pattern matches the one on listener hostnames. Without it an
-                  apex containing an upper-case letter is accepted while every
-                  tlsPassthroughListeners entry under it becomes unsatisfiable —
-                  the hostname pattern forbids upper case, so no value can be both
-                  well-formed and within the apex, and the error names the hostname
-                  rather than the apex that caused it.
                 maxLength: 253
                 pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
@@ -353,15 +298,6 @@ spec:
                   terminates TLS, so the Gateway neither holds nor issues that
                   certificate. Declaring an entry without attaching a TLSRoute opens
                   the port and matches the SNI but has nowhere to forward the stream.
-                  The cap bounds what THIS field contributes to the Gateway's 64
-                  listener slots; it does not by itself guarantee the total fits.
-                  The rendered count is the port-80 listener plus one per published
-                  hostname, one per tlsPassthroughServices entry, and one per entry
-                  here — so a tenant can exceed 64 with far fewer than 62 of these.
-                  The controller checks the assembled total and fails with a named
-                  budget; this cap only keeps a single field from consuming the
-                  whole allowance. It also bounds the cost estimate for the CEL
-                  rules above.
                 items:
                   description: |-
                     TLSPassthroughListener declares one layer-4 TLS-passthrough listener
@@ -383,15 +319,6 @@ spec:
                         wildcard hostname, and must fall within the tenant apex — equal to
                         Apex or a subdomain of it — since every listener on the tenant
                         Gateway is constrained to the apex.
-
-                        The pattern is copied verbatim from Gateway API's own Hostname
-                        type, so a value this field accepts is one the rendered listener
-                        accepts. Without it only length is checked at admission, and an
-                        ordinary typo — an underscore, an upper-case letter, a leading
-                        dash — passes the apex rule (a plain suffix test) and is caught
-                        only by the controller, which is far too late: renderGateway is
-                        the first reconcile step, so the object is already in etcd and
-                        the whole chain behind it aborts.
                       maxLength: 253
                       minLength: 1
                       pattern: ^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
@@ -433,31 +360,6 @@ spec:
                   TLSPassthroughServices names services exposed via TLS-passthrough
                   (mode: Passthrough listeners). Each service gets a dedicated
                   listener; HTTPRoutes attach to TLS-terminate listeners instead.
-
-                  The bounds exist for the CEL cost estimator, same as on Apex: the
-                  name-collision rule scans this list, and an unbounded list of
-                  unbounded strings makes the estimate exceed the per-CRD budget.
-                  The item length is a DNS-1123 label; the count leaves the
-                  listener budget room.
-                  The item pattern is a DNS-1123 label for the same reason the
-                  listener hostname carries one: the entry becomes the hostname
-                  <svc>.<apex>, so an upper-case or underscored value renders a
-                  listener hostname Gateway API refuses, taking every app's HTTPS
-                  listener down with it.
-
-                  A repeated entry is rejected by the controller, not by a listType
-                  marker, and the difference matters on a field that already has
-                  users. The apiserver ratchets the bounds and the pattern above, so
-                  an object that violates one keeps accepting writes that leave the
-                  value alone; it never ratchets a list-type error, so declaring
-                  this list a set would refuse every write to an object that already
-                  carries a duplicate. Declaring it would also change how the field
-                  merges — an unmarked list is atomic and one applier owns the whole
-                  value, while a set is owned per entry, so an entry added by
-                  another field manager would survive the chart's next apply instead
-                  of losing to a conflict. The controller reports the duplicate on
-                  TenantGateway status, which is where this API puts the rest of
-                  these failures.
                 items:
                   maxLength: 63
                   pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$

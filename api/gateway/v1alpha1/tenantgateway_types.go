@@ -172,14 +172,9 @@ type TLSPassthroughListener struct {
 	// +required
 	Port int32 `json:"port"`
 
-	// Hostname is the SNI the listener matches on the incoming
-	// ClientHello. It routes the raw TLS stream by SNI, so give each
-	// engine its own per-engine subdomain (e.g.
-	// "postgres.foo.example.com") or a left-most-label wildcard (e.g.
-	// "*.db.foo.example.com"). Must be an exact RFC 1123 hostname or a
-	// wildcard hostname, and must fall within the tenant apex — equal to
-	// Apex or a subdomain of it — since every listener on the tenant
-	// Gateway is constrained to the apex.
+	// Why the hostname pattern is declared rather than left to the
+	// controller. Detached from the declaration: controller-gen would
+	// ship it as the field description.
 	//
 	// The pattern is copied verbatim from Gateway API's own Hostname
 	// type, so a value this field accepts is one the rendered listener
@@ -189,6 +184,16 @@ type TLSPassthroughListener struct {
 	// only by the controller, which is far too late: renderGateway is
 	// the first reconcile step, so the object is already in etcd and
 	// the whole chain behind it aborts.
+
+	// Hostname is the SNI the listener matches on the incoming
+	// ClientHello. It routes the raw TLS stream by SNI, so give each
+	// engine its own per-engine subdomain (e.g.
+	// "postgres.foo.example.com") or a left-most-label wildcard (e.g.
+	// "*.db.foo.example.com"). Must be an exact RFC 1123 hostname or a
+	// wildcard hostname, and must fall within the tenant apex — equal to
+	// Apex or a subdomain of it — since every listener on the tenant
+	// Gateway is constrained to the apex.
+	//
 	// +kubebuilder:validation:MinLength=1
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
@@ -196,7 +201,12 @@ type TLSPassthroughListener struct {
 	Hostname string `json:"hostname"`
 }
 
-// TenantGatewaySpec describes the desired state of a per-tenant Gateway.
+// Why the tlsPassthroughListeners rules sit where they do. This block
+// is deliberately detached from the declaration: it answers questions
+// from whoever next edits the markers, and controller-gen would
+// otherwise ship it as the field description that kubectl explain
+// prints to whoever is just filling the spec in.
+//
 //
 // The tlsPassthroughListeners rules below are enforced at admission
 // rather than only in the controller because renderGateway is the first
@@ -243,13 +253,20 @@ type TLSPassthroughListener struct {
 // the Gateway API cap. That one judges the finished object rather than
 // anything declared on a single field, which is why it reads as a
 // different kind of rule, but it has no admission form either.
+
+// TenantGatewaySpec describes the desired state of a per-tenant Gateway.
+//
+// The rules on tlsPassthroughListeners are enforced both at admission
+// and in the controller; a few have no admission form and surface as
+// Ready=False instead. The reasoning is in the comment above the type.
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.port != 80 && l.port != 443)",message="tlsPassthroughListeners: ports 80 and 443 are reserved for the Gateway's own http and TLS-terminate listeners; use the engine's native port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
 type TenantGatewaySpec struct {
-	// Apex is the tenant's apex hostname. The Gateway listeners are
-	// constrained to this apex and its subdomains.
+	// Why apex is bounded and patterned. Detached from the declaration:
+	// controller-gen would otherwise print this to whoever runs kubectl
+	// explain, who is asking what to put in the field, not why.
 	//
 	// MaxLength is the DNS ceiling for a fully qualified name, so it
 	// rejects nothing that was ever resolvable. It is required rather
@@ -263,6 +280,9 @@ type TenantGatewaySpec struct {
 	// the hostname pattern forbids upper case, so no value can be both
 	// well-formed and within the apex, and the error names the hostname
 	// rather than the apex that caused it.
+
+	// Apex is the tenant's apex hostname. The Gateway listeners are
+	// constrained to this apex and its subdomains.
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +required
@@ -306,9 +326,10 @@ type TenantGatewaySpec struct {
 	// +optional
 	AttachedNamespaces []string `json:"attachedNamespaces,omitempty"`
 
-	// TLSPassthroughServices names services exposed via TLS-passthrough
-	// (mode: Passthrough listeners). Each service gets a dedicated
-	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
+	// Why this field carries these markers, and why not listType=set.
+	// Detached from the declaration on purpose: controller-gen turns an
+	// attached comment into the field description, and this answers a
+	// question only someone editing the markers is asking.
 	//
 	// The bounds exist for the CEL cost estimator, same as on Apex: the
 	// name-collision rule scans this list, and an unbounded list of
@@ -334,11 +355,29 @@ type TenantGatewaySpec struct {
 	// of losing to a conflict. The controller reports the duplicate on
 	// TenantGateway status, which is where this API puts the rest of
 	// these failures.
+
+	// TLSPassthroughServices names services exposed via TLS-passthrough
+	// (mode: Passthrough listeners). Each service gets a dedicated
+	// listener; HTTPRoutes attach to TLS-terminate listeners instead.
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MaxLength=63
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +optional
 	TLSPassthroughServices []string `json:"tlsPassthroughServices,omitempty"`
+
+	// How the cap on this field relates to the Gateway's own listener
+	// budget. Detached from the declaration: it is arithmetic for whoever
+	// changes the bound, not for whoever fills the field in.
+	//
+	// The cap bounds what THIS field contributes to the Gateway's 64
+	// listener slots; it does not by itself guarantee the total fits.
+	// The rendered count is the port-80 listener plus one per published
+	// hostname, one per tlsPassthroughServices entry, and one per entry
+	// here — so a tenant can exceed 64 with far fewer than 62 of these.
+	// The controller checks the assembled total and fails with a named
+	// budget; this cap only keeps a single field from consuming the
+	// whole allowance. It also bounds the cost estimate for the CEL
+	// rules above.
 
 	// TLSPassthroughListeners declares layer-4 TLS-passthrough
 	// listeners on the tenant Gateway. The controller renders one
@@ -357,15 +396,6 @@ type TenantGatewaySpec struct {
 	// terminates TLS, so the Gateway neither holds nor issues that
 	// certificate. Declaring an entry without attaching a TLSRoute opens
 	// the port and matches the SNI but has nowhere to forward the stream.
-	// The cap bounds what THIS field contributes to the Gateway's 64
-	// listener slots; it does not by itself guarantee the total fits.
-	// The rendered count is the port-80 listener plus one per published
-	// hostname, one per tlsPassthroughServices entry, and one per entry
-	// here — so a tenant can exceed 64 with far fewer than 62 of these.
-	// The controller checks the assembled total and fails with a named
-	// budget; this cap only keeps a single field from consuming the
-	// whole allowance. It also bounds the cost estimate for the CEL
-	// rules above.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
