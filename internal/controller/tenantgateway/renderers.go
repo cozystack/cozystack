@@ -353,6 +353,10 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		if errs := validatePassthroughHostname(l.Hostname); len(errs) > 0 {
 			return fmt.Errorf("tlsPassthroughListeners: listener %q invalid hostname %q: %s", l.Name, l.Hostname, strings.Join(errs, "; "))
 		}
+		if !hostnameWithinApex(l.Hostname, apex) {
+			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
+		}
+
 		// Two listeners sharing a hostname on different ports are
 		// distinct to Gateway API — listeners are keyed by (port,
 		// protocol, hostname) — and the object is accepted. Cilium
@@ -361,15 +365,12 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		// backported via cilium#46826 into 1.19.6 — cozystack pins
 		// 1.19.5 in packages/system/cilium/images/cilium/Dockerfile,
 		// so revisit this restriction when that pin moves), so only
-		// one of them works and which one
-		// depends on route ordering. On a native database port that is
-		// a raw stream forwarded to the wrong backend, with Accepted
-		// and Programmed both true and nothing on the status to show
-		// for it. Reject the shape instead.
-		if !hostnameWithinApex(l.Hostname, apex) {
-			return fmt.Errorf("tlsPassthroughListeners: listener %q hostname %q is outside the tenant apex %q; it must equal the apex or be a subdomain of it (the cozystack-gateway-hostname-policy VAP rejects out-of-apex listener hostnames, failing the whole Gateway)", l.Name, l.Hostname, apex)
-		}
-
+		// one of them works and which one depends on route ordering.
+		// On a native database port that is a raw stream forwarded to
+		// the wrong backend, with Accepted and Programmed both true
+		// and nothing on the status to show for it. Reject the shape
+		// instead.
+		//
 		// Checked after the apex test on purpose: an out-of-apex
 		// hostname that also happens to overlap should report the apex
 		// violation, which names the actual mistake.
