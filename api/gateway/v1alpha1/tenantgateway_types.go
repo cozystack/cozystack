@@ -219,16 +219,24 @@ type TLSPassthroughListener struct {
 // Hostname overlap is the one real exception: it stays controller-only.
 // Expressing it needs wildcard-aware matching across two lists, which
 // in CEL is a nested scan whose estimated cost the apiserver charges
-// against a budget these four rules already sit close under — adding it
+// against a budget the rules below already sit close under — adding it
 // is what pushed the CRD over and made it un-installable while the
 // per-request tests stayed green. TestCRDPassesInstallTimeValidation
 // keeps that honest. The consequence is accepted knowingly: an
 // overlapping hostname reaches etcd and surfaces as Ready=False rather
 // than a rejected write.
+//
+// The cert-mode rule is the cheap end of that trade: it reads two
+// scalars and the list's length, with no scan and no string building,
+// so it costs the estimator almost nothing. Leaving it controller-only
+// would have been the expensive choice in the other currency — a
+// dns01 tenant that sets the field would stall the whole chain above,
+// including renewal of the wildcard certificate that mode exists for.
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.port != 80 && l.port != 443)",message="tlsPassthroughListeners: ports 80 and 443 are reserved for the Gateway's own http and TLS-terminate listeners; use the engine's native port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, self.tlsPassthroughListeners.filter(o, o.port == l.port).size() == 1)",message="tlsPassthroughListeners: each listener must occupy a distinct port"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || self.tlsPassthroughListeners.all(l, l.hostname == self.apex || l.hostname.endsWith('.' + self.apex))",message="tlsPassthroughListeners: hostname must equal the tenant apex or be a subdomain of it"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
+// +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || !(self.certMode in ['dns01', 'existingSecret'])",message="tlsPassthroughListeners: unsupported with certMode dns01 or existingSecret; those modes serve the tenant from one wildcard terminate listener that matches the same SNI as every passthrough listener"
 type TenantGatewaySpec struct {
 	// Apex is the tenant's apex hostname. The Gateway listeners are
 	// constrained to this apex and its subdomains.

@@ -405,6 +405,13 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 // distinguishing the port (cilium#42898). Refusing the shape rather
 // than rendering it keeps the two sources of that pair judged alike.
 //
+// This is the controller's copy of an admission rule, like the rest of
+// them: the matching XValidation on TenantGatewaySpec keeps the spec
+// out of etcd, and TestSpecCELMatchesControllerValidation pins that the
+// two answer alike. Refusing here rather than at admission alone would
+// stall the whole reconcile chain for a tenant who set the field —
+// Issuer, wildcard Certificate, route status and the redirect included.
+//
 // http01 needs no such rule: it renders a listener per published
 // hostname, and passthroughHostnames withdraws the one a passthrough
 // listener holds, so the pair never reaches the Gateway.
