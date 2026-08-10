@@ -2775,6 +2775,135 @@ func TestReconcile_WithdrawnHostnameOutranksTheHostnameRace(t *testing.T) {
 	}
 }
 
+// acceptedCondition returns the Accepted condition an HTTPRoute got
+// under this controller's controllerName, failing the test when there
+// is none: an assertion about a condition that was never written would
+// otherwise hold on a controller that writes no status at all.
+func acceptedCondition(t *testing.T, c client.Client, name, ns string) *metav1.Condition {
+	t.Helper()
+	got := &gatewayv1.HTTPRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: name, Namespace: ns}, got); err != nil {
+		t.Fatalf("get route %s/%s: %v", ns, name, err)
+	}
+	var found *metav1.Condition
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for i := range ps.Conditions {
+			if ps.Conditions[i].Type == "Accepted" {
+				found = &ps.Conditions[i]
+			}
+		}
+	}
+	if found == nil {
+		t.Fatalf("route %s/%s: no Accepted condition under %s: %+v", ns, name, testControllerName, got.Status.Parents)
+	}
+	return found
+}
+
+// TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother pins that
+// a route hit by both causes hears about both. One route can lose a
+// race for one hostname and have another withdrawn under it, and the
+// two are reported by different branches, so whichever branch runs
+// first decides what the operator is told. Reporting only the race
+// hides the withdrawal, which is the one fact no other object carries:
+// the terminate listener that used to show Conflicted is gone, while
+// the lost hostname at least still has the winning route to look at.
+func TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother(t *testing.T) {
+	const withdrawnName = "api.foo.example.com"
+	const contestedName = "shared.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-public", "tenant-foo"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	winner := httpRouteAttached("shared", "cozy-public", contestedName)
+	mixed := httpRouteAttached("mixed", "tenant-foo", withdrawnName)
+	mixed.Spec.Hostnames = append(mixed.Spec.Hostnames, contestedName)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, winner, mixed).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	accepted := acceptedCondition(t, c, "mixed", "tenant-foo")
+	if accepted.Status != metav1.ConditionFalse {
+		t.Errorf("Accepted=%s while neither hostname is served", accepted.Status)
+	}
+	if !strings.Contains(accepted.Message, contestedName) {
+		t.Errorf("message omits the hostname lost to another route: %q", accepted.Message)
+	}
+	if !strings.Contains(accepted.Message, withdrawnName) {
+		t.Errorf("message omits the withdrawn hostname, which no other object reports: %q", accepted.Message)
+	}
+}
+
+// TestReconcile_LoserMessageIsStableAcrossReconciles pins the same
+// property for the race branch that describeWithdrawn pins for the
+// withdrawal branch. A route losing two hostnames has them joined into
+// its condition, and an order that comes out of a map rewrites the
+// message on every pass, which writes status, which requeues this
+// object through the route watch.
+func TestReconcile_LoserMessageIsStableAcrossReconciles(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-public", "tenant-foo"},
+		},
+	}
+	// Five contested hostnames rather than two: the order comes out of
+	// a map, and with few enough entries a run can repeat the same
+	// order across every pass and let an unsorted join through.
+	contested := []gatewayv1.Hostname{"one.foo.example.com", "two.foo.example.com", "three.foo.example.com", "four.foo.example.com", "five.foo.example.com"}
+	winners := httpRouteAttached("held", "cozy-public", string(contested[0]))
+	winners.Spec.Hostnames = append(winners.Spec.Hostnames, contested[1:]...)
+	loser := httpRouteAttached("shadow", "tenant-foo", string(contested[0]))
+	loser.Spec.Hostnames = append(loser.Spec.Hostnames, contested[1:]...)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, winners, loser).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	var first string
+	for pass := range 20 {
+		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+		}); err != nil {
+			t.Fatalf("pass %d: unexpected error: %v", pass, err)
+		}
+		msg := acceptedCondition(t, c, "shadow", "tenant-foo").Message
+		if pass == 0 {
+			first = msg
+			continue
+		}
+		if msg != first {
+			t.Fatalf("the lost hostnames are listed in an unstable order, so every reconcile rewrites the condition:\n  pass 0: %q\n  pass %d: %q", first, pass, msg)
+		}
+	}
+}
+
 // TestReconcile_WildcardClaimOverlappingSeveralPassthroughNames pins
 // the case the neighbouring test cannot reach: one claimed hostname
 // overlapping more than one reserved name at once. Reserved names are

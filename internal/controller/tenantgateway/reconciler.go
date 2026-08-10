@@ -179,11 +179,13 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// pairwise non-overlapping, so a concrete claim matches at most
 		// one, but a claimed hostname is not always concrete: a route
 		// publishing "*.<apex>" covers every tlsPassthroughServices
-		// entry at once, and the shipped default carries three. The
-		// smallest match is kept rather than whichever one iteration
-		// hands back first, because the match is named in the route's
-		// condition, and a name that changes between passes is a status
-		// write that requeues this object through the route watch.
+		// entry at once, and the shipped default carries three. Which
+		// match is kept does not matter, only that the same one is kept
+		// every pass: the match is named in the route's condition, and
+		// a name that changes between passes is a status write that
+		// requeues this object through the route watch. Lexicographic
+		// order is the cheapest total order to hand, and carries no
+		// claim that the name it picks is the most specific one.
 		var answeredBy string
 		for rh := range reserved {
 			if hostnamesOverlap(rh, h) && (answeredBy == "" || rh < answeredBy) {

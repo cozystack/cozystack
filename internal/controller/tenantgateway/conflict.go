@@ -161,31 +161,41 @@ func (r *Reconciler) updateRouteStatuses(
 	// transitions; building Conditions here without it keeps the
 	// no-op reconcile no-op.
 	for ref := range allRefs {
-		if hostnames, isLoser := losers[ref]; isLoser {
-			// A route can claim multiple hostnames; conflict status
-			// takes priority over the happy path.
-			if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
-				{
-					Type:    "Accepted",
-					Status:  metav1.ConditionFalse,
-					Reason:  "HostnameConflict",
-					Message: fmt.Sprintf("Hostname(s) %s already claimed by another route on TenantGateway %s/%s", strings.Join(hostnames, ", "), tgw.Namespace, tgw.Name),
-				},
-			}); err != nil {
-				logger.Error(err, "update loser route status", "route", ref.namespace+"/"+ref.name)
+		lost, isLoser := losers[ref]
+		gone, isWithdrawn := withdrawn[ref]
+		if isLoser || isWithdrawn {
+			// One route can be hit by both causes on different
+			// hostnames, and Gateway API gives it a single Accepted
+			// condition, so the message carries both rather than
+			// whichever branch runs first. Only the reason has to
+			// choose, and it names the race: that is the half the
+			// operator can act on, by moving or removing the other
+			// route, while a withdrawn hostname is a property of the
+			// TenantGateway spec.
+			var causes []string
+			reason := string(gatewayv1.RouteReasonNoMatchingListenerHostname)
+			if isLoser {
+				// Sorted for the same reason describeWithdrawn sorts:
+				// the hostnames come out of a map, and a message that
+				// reorders between passes rewrites the condition, which
+				// writes status, which requeues this object through the
+				// route watch.
+				sort.Strings(lost)
+				causes = append(causes, fmt.Sprintf("hostname(s) %s already claimed by another route", strings.Join(lost, ", ")))
+				reason = "HostnameConflict"
 			}
-			continue
-		}
-		if hostnames, isWithdrawn := withdrawn[ref]; isWithdrawn {
+			if isWithdrawn {
+				causes = append(causes, fmt.Sprintf("hostname(s) %s answered by a TLS-passthrough listener, so no HTTPS listener is rendered for them", describeWithdrawn(gone)))
+			}
 			if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
 				{
 					Type:    "Accepted",
 					Status:  metav1.ConditionFalse,
-					Reason:  string(gatewayv1.RouteReasonNoMatchingListenerHostname),
-					Message: fmt.Sprintf("Hostname(s) %s answered by a TLS-passthrough listener on TenantGateway %s/%s; no HTTPS listener is rendered for them", describeWithdrawn(hostnames), tgw.Namespace, tgw.Name),
+					Reason:  reason,
+					Message: fmt.Sprintf("On TenantGateway %s/%s: %s", tgw.Namespace, tgw.Name, strings.Join(causes, "; ")),
 				},
 			}); err != nil {
-				logger.Error(err, "update withdrawn route status", "route", ref.namespace+"/"+ref.name)
+				logger.Error(err, "update unserved route status", "route", ref.namespace+"/"+ref.name)
 			}
 			continue
 		}
