@@ -95,6 +95,46 @@ tests:
           path: kind
           value: Job
 
+  - it: accepts a semicolon-separated module parameter
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      _namespace:
+        etcd: etcd
+        ingress: nginx
+        host: example.com
+      _cluster:
+        cluster-domain: cozy.local
+      nodeGroups:
+        md0:
+          minReplicas: 0
+          maxReplicas: 10
+          instanceType: ""
+          diskSize: 20Gi
+          roles:
+            - worker
+          resources:
+            cpu: 8
+            memory: 16Gi
+          gpus: []
+          kernelModules:
+            - name: nvidia
+              parameters:
+                - NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222
+          kubelet: {}
+    asserts:
+      # NVIDIA's documented multi-value form is semicolon-separated, and `;` is inert
+      # inside an unquoted heredoc. An allowlist that omitted it rejected a legitimate
+      # parameter, so this class denies what the shell expands rather than permitting
+      # a fixed set.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {14}  - NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222\n'
+        documentSelector:
+          path: kind
+          value: Job
+
   - it: takes an explicit kernelModules list verbatim, including parameters
     release:
       name: test-k8s
