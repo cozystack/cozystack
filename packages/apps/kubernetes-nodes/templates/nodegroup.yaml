@@ -41,6 +41,7 @@
       "resources" .Values.resources
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
+      "logSerialConsole" .Values.logSerialConsole
 }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
@@ -150,6 +151,15 @@ spec:
               interfaces:
               - name: default
                 bridge: {}
+              {{- /* Opt-in, and rendered only when true. The enclosing
+                    KubevirtMachineTemplate is content-hash named, so emitting
+                    this key for a pool that did not ask for it renames the
+                    template and rolls every live worker VM. An explicit false
+                    therefore renders the same nothing as an absent field
+                    rather than KubeVirt's tri-state false. */}}
+              {{- if .group.logSerialConsole }}
+              logSerialConsole: true
+              {{- end }}
             {{- if and .group.resources .group.resources.memory }}
             memory:
               guest: {{ .group.resources.memory }}

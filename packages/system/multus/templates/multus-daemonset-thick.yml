@@ -220,6 +220,76 @@ spec:
             - name: cnibin
               mountPath: /host/opt/cni/bin
               mountPropagation: Bidirectional
+{{- $stageCniPlugins := lower (ternary "false" (printf "%v" .Values.stageCniPlugins) (kindIs "invalid" .Values.stageCniPlugins)) }}
+{{- if not (has $stageCniPlugins (list "true" "yes" "on" "1" "false" "no" "off" "0")) }}{{- fail (printf "stageCniPlugins: expected a boolean, got %q" $stageCniPlugins) }}{{- end }}
+{{- if has $stageCniPlugins (list "true" "yes" "on" "1") }}
+        - name: install-cni-plugins
+          image: ghcr.io/cozystack/cozystack/multus-cni:v1.6.0@sha256:0a92e861ead179dd6b46f475fd8878d44b3cfa40ce4d7a8ff92f790d54250d25
+          command:
+            - "sh"
+            - "-c"
+            - |
+              set -eu
+              # cilium and kube-ovn write into this directory too, and a
+              # plugin here may be executing, so each install is a rename.
+              trap 'rm -rf /host/opt/cni/bin/.tmp-cozystack-multus-* || :' EXIT
+              if [ ! -d /cni-plugins ]; then
+                echo "no /cni-plugins in this image; skipping staging" >&2
+                exit 0
+              fi
+              failed=
+              for plugin in /cni-plugins/*; do
+                [ -e "$plugin" ] || continue
+                name="${plugin##*/}"
+                tmp="/host/opt/cni/bin/.tmp-cozystack-multus-${name}"
+                # A directory at either end makes every step succeed while
+                # installing nothing.
+                rm -rf "$tmp" || { failed="${failed} ${name}"; continue; }
+                if [ -d "/host/opt/cni/bin/${name}" ]; then
+                  echo "${name} is a directory, not a plugin binary; left as is" >&2
+                  failed="${failed} ${name}"
+                  continue
+                fi
+                if cp -f "$plugin" "$tmp" && chmod 0755 "$tmp" &&
+                   mv -f "$tmp" "/host/opt/cni/bin/${name}"; then
+                  continue
+                fi
+                rm -rf "$tmp" || :
+                failed="${failed} ${name}"
+              done
+              if [ -n "$failed" ]; then
+                echo "failed to install:${failed}" >&2
+                echo "those were left as they were" >&2
+                echo "the cause for each is earlier in this log" >&2
+                echo "failed to install:${failed}" > /dev/termination-log 2>/dev/null || true
+              fi
+              exit 0
+          resources:
+            requests:
+              cpu: "10m"
+              memory: "15Mi"
+          # cilium's install-cni-binaries copies plugin binaries into this same
+          # directory with ALL capabilities dropped, in the spc_t domain, with
+          # no privileged flag. On a node with SELinux enforcing, a container
+          # that has dropped every capability still cannot write a host-labelled
+          # directory without a domain that permits it.
+          #
+          # mountPropagation is absent: it governs mounts made INSIDE the
+          # container, which this script does not make, and the API server
+          # rejects Bidirectional unless the container is privileged.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            seLinuxOptions:
+              level: s0
+              type: spc_t
+          terminationMessagePolicy: FallbackToLogsOnError
+          volumeMounts:
+            - name: cnibin
+              mountPath: /host/opt/cni/bin
+{{- end }}
       terminationGracePeriodSeconds: 10
       volumes:
         - name: cni

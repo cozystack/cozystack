@@ -60,6 +60,16 @@ tests:
     set:
       external: false
     asserts:
+      # Anchor the rule before asserting about it. notContains passes whenever
+      # its path resolves to something that lacks the content, and a different
+      # rule at [0] qualifies, so reordering the Role would leave this green
+      # while the external bootstrap Service came back on the rule it names.
+      # A rule has no name to pin, so the anchor is the Service this rule must
+      # keep.
+      - contains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-bootstrap
+        documentIndex: 0
       - notContains:
           path: rules[0].resourceNames
           content: test-kafka-kafka-external-bootstrap
@@ -128,6 +138,16 @@ tests:
       tls:
         enabled: true
     asserts:
+      # Anchor the rule before asserting about it. notContains passes whenever
+      # its path resolves to something that lacks the content, and a different
+      # rule at [0] qualifies, so reordering the Role would leave this green
+      # while the external bootstrap Service came back on the rule it names.
+      # A rule has no name to pin, so the anchor is the Service this rule must
+      # keep.
+      - contains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-bootstrap
+        documentIndex: 0
       - notContains:
           path: rules[0].resourceNames
           content: test-kafka-kafka-external-bootstrap
@@ -143,6 +163,16 @@ tests:
       tls:
         enabled: false
     asserts:
+      # Anchor the rule before asserting about it. notContains passes whenever
+      # its path resolves to something that lacks the content, and a different
+      # rule at [0] qualifies, so reordering the Role would leave this green
+      # while the external bootstrap Service came back on the rule it names.
+      # A rule has no name to pin, so the anchor is the Service this rule must
+      # keep.
+      - contains:
+          path: rules[0].resourceNames
+          content: test-kafka-kafka-bootstrap
+        documentIndex: 0
       - notContains:
           path: rules[0].resourceNames
           content: test-kafka-kafka-external-bootstrap

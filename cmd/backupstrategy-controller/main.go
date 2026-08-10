@@ -27,6 +27,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -199,6 +200,39 @@ func main() {
 	if systemNamespaces := os.Getenv("BACKUP_STORAGE_SYSTEM_NAMESPACES"); systemNamespaces != "" {
 		if err := mgr.Add(backupcontroller.NewSystemCredentialsProjector(mgr.GetClient(), credentialsConfig, systemNamespaces, 0)); err != nil {
 			setupLog.Error(err, "unable to add SystemCredentialsProjector runnable")
+			os.Exit(1)
+		}
+	}
+
+	// The default Strategy CRs and the Velero BSL are Helm-templated behind
+	// a lookup of the BucketClaim the same chart creates, so a fresh install
+	// renders them empty — permanently, because helm-controller does not
+	// re-render an unchanged, successful release. The gate detects that and
+	// forces the one real Helm upgrade that materialises them. Disabled when
+	// the HelmRelease coordinates are not plumbed (e.g. a chart-less local run).
+	if hrName := os.Getenv("BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME"); hrName != "" {
+		gate := &backupcontroller.DefaultObjectsGate{
+			Client:          mgr.GetClient(),
+			Config:          credentialsConfig,
+			BackupClassName: os.Getenv("BACKUP_DEFAULT_OBJECTS_BACKUPCLASS"),
+			HelmRelease: types.NamespacedName{
+				Namespace: os.Getenv("BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAMESPACE"),
+				Name:      hrName,
+			},
+			VeleroNamespace: os.Getenv("BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE"),
+			// The platform bucket's <bucket>-system release renders the
+			// credentials Secret the projector reads, behind the same kind
+			// of install-time lookup — and while that Secret is missing
+			// nothing downstream can resolve. Empty when the bucket is not
+			// provisioned by Cozystack (external S3), where the Secret is
+			// admin-managed and no release renders it.
+			CredentialsHelmRelease: types.NamespacedName{
+				Namespace: os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE"),
+				Name:      os.Getenv("BACKUP_CREDENTIALS_HELMRELEASE_NAME"),
+			},
+		}
+		if err := gate.SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to add DefaultObjectsGate runnable")
 			os.Exit(1)
 		}
 	}

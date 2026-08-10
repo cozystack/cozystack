@@ -28,4 +28,380 @@ tests:
     asserts:
       - matchRegex:
           path: data["daemon-config.json"]
-          pattern: '"multusMasterCNI": "05-cilium\.conflist"'
+          # Anchored to the top level of the JSON object, whose keys the template
+          # writes at four spaces: the same text nested inside another key
+          # satisfies an unanchored match while the effective value points
+          # somewhere else. This pins the position the template produces, which
+          # is as far as a pattern can go -- deciding which key is effective
+          # needs a JSON parser, and helm-unittest has none.
+          pattern: '(?m)^    "multusMasterCNI": "05-cilium\.conflist"'
+
+  # A quoted "false" is a non-empty string; a truthiness test would read it as
+  # on. The value is compared as text.
+  - it: treats a quoted "false" as off, not as a non-empty string
+    set:
+      stageCniPlugins: "false"
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.initContainers
+          count: 1
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: install-multus-binary
+
+  - it: stages when the value arrives as a quoted "true"
+    set:
+      stageCniPlugins: "true"
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: install-cni-plugins
+
+  # The chart is reachable directly (helm install, the cozypkg dev loop), so it
+  # holds the same line as the platform helper: an unreadable spelling stops the
+  # render instead of resolving to off.
+  - it: refuses a value that is neither true nor false
+    set:
+      stageCniPlugins: maybe
+    asserts:
+      - failedTemplate:
+          errorMessage: 'stageCniPlugins: expected a boolean, got "maybe"'
+
+  # An explicit null is how a values file clears the key, and the platform helper
+  # folds it back onto its default rather than treating it as a spelling. The
+  # chart does the same with ITS default, off -- without this the render fails
+  # naming "<nil>", a spelling the operator never typed.
+  - it: reads an explicit null as the chart default rather than refusing it
+    set:
+      stageCniPlugins: null
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.initContainers
+          count: 1
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: install-multus-binary
+
+  - it: does not stage anything unless asked to
+    template: templates/multus-daemonset-thick.yml
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[0].name
+          value: install-multus-binary
+      - lengthEqual:
+          path: spec.template.spec.initContainers
+          count: 1
+
+  # The staging init container installs the plugins bundled in the image into
+  # /opt/cni/bin. Distros like k3s do not populate it with them. The container
+  # lives in patches/customize-deployment.patch so it survives every make update.
+  - it: stages the reference CNI plugins into the host cni bin dir
+    template: templates/multus-daemonset-thick.yml
+    set:
+      stageCniPlugins: true
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: install-cni-plugins
+      # What runs the script, not only what it says. The behavioural suite
+      # executes command[2] under sh and never reads command[0] and [1], so a
+      # container handed the same text to `echo` would print it, exit 0 and
+      # stage nothing while every suite stays green.
+      - equal:
+          path: spec.template.spec.initContainers[1].command[0]
+          value: sh
+      - equal:
+          path: spec.template.spec.initContainers[1].command[1]
+          value: -c
+      # restartPolicy on an init container makes it a native sidecar: the
+      # kubelet restarts it when it exits, so the staging loop would rewrite
+      # /opt/cni/bin continuously instead of once per pod recreation, which is
+      # what the bundle comment and the commit message both claim it does.
+      - notExists:
+          path: spec.template.spec.initContainers[1].restartPolicy
+      # args are appended after command[2], where they become the positional
+      # parameters of the script rather than more script.
+      - notExists:
+          path: spec.template.spec.initContainers[1].args
+      # The volume NAME, not only the mountPath: which hostPath sits behind it is
+      # decided here. Swapping cnibin for hostroot, mounted at /, keeps every
+      # other assertion true while the plugins land elsewhere.
+      - equal:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].name
+          value: cnibin
+      - equal:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].mountPath
+          value: /host/opt/cni/bin
+      # subPath moves what the mountPath actually resolves to: with
+      # `subPath: staging` the container writes into <hostPath>/staging and
+      # every step still succeeds, so the script reports a clean install while
+      # the live plugin directory is untouched. subPathExpr is the same field
+      # with variable expansion.
+      - notExists:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].subPath
+      - notExists:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].subPathExpr
+      # And exactly one mount: asserting [0] says nothing about a second one.
+      # A mount at /cni-plugins masks the image payload, so the loop would
+      # install whatever that volume holds instead of the fourteen plugins.
+      - lengthEqual:
+          path: spec.template.spec.initContainers[1].volumeMounts
+          count: 1
+      # The script writes its report to the literal /dev/termination-log, and
+      # this field decides where the kubelet reads it from. Point it elsewhere
+      # and `kubectl describe` shows nothing while the container still exits 0.
+      - notExists:
+          path: spec.template.spec.initContainers[1].terminationMessagePath
+      # FallbackToLogsOnError reads the container log into the status message
+      # only when the container exits with an ERROR and the termination file is
+      # empty (k8s.io/api core/v1: TerminationMessageFallbackToLogsOnError).
+      # This container exits 0 by design, so on the ordinary path the file is
+      # what `kubectl describe` shows and the policy changes nothing -- a failed
+      # write leaves the message empty either way, and only the container log
+      # keeps the report. It is pinned for the other path: if the script ever
+      # dies before reaching `exit 0`, the log is then the only place the reason
+      # exists, and `File` would report nothing at all.
+      - equal:
+          path: spec.template.spec.initContainers[1].terminationMessagePolicy
+          value: FallbackToLogsOnError
+      # The LSM side that is not SELinux, and the one place this container asks
+      # for nothing. Leaving the field unset means containerd's default profile
+      # applies, which permits ordinary file writes, so staging works under it.
+      # Unset is therefore the state to hold: setting it is how the container
+      # would gain LSM privilege it does not need, and cilium's nsenter escape
+      # hatch in packages/system/cilium/values-apparmor.yaml shows what asking
+      # looks like. Should a future default profile ever refuse these writes,
+      # the remedy is `appArmorProfile: {type: Unconfined}` -- and changing this
+      # assertion is then a deliberate act rather than an accident.
+      - notExists:
+          path: spec.template.spec.initContainers[1].securityContext.appArmorProfile
+      - notExists:
+          path: spec.template.spec.securityContext.appArmorProfile
+      # A read-only mount is refused by the kernel on every write, so the script
+      # reports each plugin as failed, exits 0 by design, and the pod goes Ready
+      # having staged nothing.
+      - notEqual:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].readOnly
+          value: true
+      # The volume itself, name and hostPath together: the mount names cnibin,
+      # but which host directory sits behind that name is decided in volumes,
+      # and nothing above reads it. Asserted as a pair rather than by index.
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: cnibin
+            hostPath:
+              path: /opt/cni/bin
+      # mountPropagation governs mounts made INSIDE the container; this script
+      # makes none, and its only other effect is to force privileged.
+      - notExists:
+          path: spec.template.spec.initContainers[1].volumeMounts[0].mountPropagation
+      - notExists:
+          path: spec.template.spec.initContainers[1].securityContext.privileged
+      - equal:
+          path: spec.template.spec.initContainers[1].securityContext.allowPrivilegeEscalation
+          value: false
+      - contains:
+          path: spec.template.spec.initContainers[1].securityContext.capabilities.drop
+          content: ALL
+      # `drop: [ALL]` alone is not "every capability dropped": `add` is applied
+      # after it, so a later NET_ADMIN would be granted with this assertion
+      # still green.
+      - notExists:
+          path: spec.template.spec.initContainers[1].securityContext.capabilities.add
+      # On an enforcing node a container with every capability dropped cannot
+      # write a host-labelled /opt/cni/bin without a domain that allows it.
+      - equal:
+          path: spec.template.spec.initContainers[1].securityContext.seLinuxOptions.type
+          value: spc_t
+      # The level is part of the label, not decoration: an invalid or
+      # incompatible one stops the kubelet from creating the container at all,
+      # before the script has a chance to run.
+      - equal:
+          path: spec.template.spec.initContainers[1].securityContext.seLinuxOptions.level
+          value: s0
+      # env is the other half of "what runs": the command is pinned above, but a
+      # PATH pointing at nothing makes sh itself unresolvable, and the container
+      # then stages nothing while every assertion here still holds.
+      - notExists:
+          path: spec.template.spec.initContainers[1].env
+      # envFrom reaches the same variables by another route, and a referenced
+      # ConfigMap that is missing and not optional stops the container from
+      # starting at all.
+      - notExists:
+          path: spec.template.spec.initContainers[1].envFrom
+      # workingDir is resolved before the command runs: point it at a directory
+      # that does not exist and the container never starts, so the same 'nothing
+      # was staged' outcome arrives as a crashloop instead of a clean exit.
+      - notExists:
+          path: spec.template.spec.initContainers[1].workingDir
+      # What this costs on every node. Multus is a DaemonSet, so an init
+      # container's requests are charged once per node in the fleet, and an
+      # init container's requests also set the floor for the whole pod while it
+      # runs. Pinned so a change is a decision rather than a drift.
+      - equal:
+          path: spec.template.spec.initContainers[1].resources.requests.cpu
+          value: 10m
+      - equal:
+          path: spec.template.spec.initContainers[1].resources.requests.memory
+          value: 15Mi
+      # And no limits: a memory limit low enough to kill the copy turns staging
+      # into a crashloop, and there is nothing here whose runtime is worth
+      # capping -- it copies fourteen files and exits.
+      - notExists:
+          path: spec.template.spec.initContainers[1].resources.limits
+      # Writing into the hostPath needs uid 0 IN THE CONTAINER. Nothing sets a
+      # user today, so it runs as root; a runAsUser or runAsNonRoot at either
+      # level turns every install into a permission error, and the script then
+      # reports them, exits 0 by design and leaves the pod Ready with nothing
+      # staged. hack/multus-install-cni-plugins.bats cannot see this: it runs
+      # the extracted script as whoever runs the suite, not through the kubelet.
+      # The pod level matters as much as the container level -- `make update`
+      # re-fetches this manifest from upstream, and a pod-level hardening added
+      # there would be inherited without touching the patch.
+      - notExists:
+          path: spec.template.spec.initContainers[1].securityContext.runAsUser
+      - notExists:
+          path: spec.template.spec.initContainers[1].securityContext.runAsNonRoot
+      - notExists:
+          path: spec.template.spec.securityContext.runAsUser
+      - notExists:
+          path: spec.template.spec.securityContext.runAsNonRoot
+
+  # kube-ovn installs portmap and macvlan into the same /opt/cni/bin with a
+  # plain cp, so plugins are replaced while the kubelet may be executing them.
+  # A rename is atomic within the mount; writing onto the live path is not.
+  - it: installs each plugin atomically rather than writing onto the live path
+    template: templates/multus-daemonset-thick.yml
+    set:
+      stageCniPlugins: true
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      # Index [1] is the right container only while it is still named this, and a
+      # negative assert against the wrong container passes without checking.
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: install-cni-plugins
+      # The copy must target the temp name...
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^\s*if cp -f "\$plugin" "\$tmp"'
+      # ...and only the rename may publish the final name.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^\s*mv -f "\$tmp" "/host/opt/cni/bin/\$\{name\}"'
+      # Catches the literal spellings of the regression. A copy reaching the same
+      # path through a variable has no literal to match, so
+      # hack/multus-install-cni-plugins.bats owns the real guarantee by asserting
+      # the replaced inode changes. (?m) is load-bearing: Go anchors $ to end of
+      # text, not end of line.
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^[^#\n]*\b(cp|install)\b[^\n]*/host/opt/cni/bin(/|"|\s|$)'
+
+      # Unlinking the live name before the rename is not a replacement by
+      # rename: it opens a window where the path does not exist at all, and a
+      # failure after it destroys the copy that was working. The inode still
+      # changes, so the runtime check in hack/multus-install-cni-plugins.bats
+      # cannot tell the two apart. The trap's glob is a different path.
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^[^#\n]*\brm\b[^\n]*/host/opt/cni/bin/"?\$\{?name\}?'
+
+      # release-prep bakes the digest, so between a Dockerfile change and the next
+      # bake the pinned image can predate the staging and have no /cni-plugins.
+      # A successfully built image always has the directory -- the Dockerfile's
+      # tar fails otherwise -- so the guard can only ever mask that skew.
+  - it: skips staging instead of crashlooping when the image predates the plugins
+    template: templates/multus-daemonset-thick.yml
+    set:
+      stageCniPlugins: true
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: install-cni-plugins
+      # Guard and body as one pattern: an unanchored `exit 0` is satisfied by any
+      # exit in the script. The trailing anchor matters too -- `exit 01` exits 1
+      # and contains `exit 0`.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^\s*if \[ ! -d /cni-plugins \]; then\n[^\n]*\n[^\n]*exit 0\s*$'
+      # Deleting any of the next four leaves every other assertion green -- found
+      # by deleting each executable line of the script in turn and seeing which
+      # deletions nothing noticed.
+      #
+      # The shell options, as the first command: -u turns a mistyped variable
+      # into an error instead of an empty string, which here would mean cp'ing
+      # to "" or removing the wrong path.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)\A\s*set -eu\s*$'
+      # The two operator-facing lines of the failure report. The summary and the
+      # plugin name are pinned by hack/multus-install-cni-plugins.bats; these two
+      # carry what remains and where to look, and nothing held them.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^\s*echo "those were left as they were" >&2\s*$'
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^\s*echo "the cause for each is earlier in this log" >&2\s*$'
+      # The explicit exit, as the last command. Without it the container's status
+      # is whatever the preceding command returned; that is 0 today by accident
+      # of what stands last, and the design does not want to depend on it.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: '(?m)^\s*exit 0\s*\z'
+
+      # A kill between the copy and the rename strands a temp file in a directory
+      # shared with cilium and kube-ovn, as multus's own CopyFileAtomic handles.
+      # hack/multus-install-cni-plugins.bats covers the behaviour; this pins the
+      # trap into the rendered manifest.
+  - it: does not leak temp files into the shared cni bin dir
+    template: templates/multus-daemonset-thick.yml
+    set:
+      stageCniPlugins: true
+    documentSelector:
+      path: kind
+      value: DaemonSet
+    asserts:
+      - equal:
+          path: spec.template.spec.initContainers[1].name
+          value: install-cni-plugins
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: "(?m)^\\s*trap 'rm -rf /host/opt/cni/bin/\\.tmp-cozystack-multus-\\* \\|\\| :' EXIT\\s*$"
+      # The plugins live only in the cozystack-built image. Regenerated with the
+      # upstream one, /cni-plugins is absent and the script SKIPS, staging
+      # nothing on any node.
+      - matchRegex:
+          path: spec.template.spec.initContainers[1].image
+          pattern: '^ghcr\.io/cozystack/cozystack/multus-cni:'
+      # The script is an argv string in the file the package's `image:` target
+      # rewrites with `sed s|image: .*multus-cni.*|...|g`, so a line inside it
+      # carrying both tokens would be replaced by an image reference.
+      - notMatchRegex:
+          path: spec.template.spec.initContainers[1].command[2]
+          pattern: 'image:'

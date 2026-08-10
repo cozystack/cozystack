@@ -1,0 +1,193 @@
+# In-sandbox pull-through registry mirror for ghcr.io (tenant worker image pulls).
+#
+# Why this exists: tenant Kubernetes worker Talos nodes pull their kubelet image
+# `ghcr.io/siderolabs/kubelet:<ver>` directly from public ghcr.io. That egress is
+# intermittently flaky/rate-limited from the CI runner -- the pull hits
+# `net/http: TLS handshake timeout host=ghcr.io`, the Talos kubelet service never
+# starts, the worker never registers, and the `kubernetes-*` e2e tests fail with
+# zero tenant nodes inside the 18-minute node-join budget. Diagnosed in
+# cozystack/cozystack#3548 (in-guest Talos dmesg) and tracked by #3513. This is the
+# same flaky-public-egress class as the Talos OS image (#3231 / hack/e2e-talos-image-cache.yaml).
+#
+# This addresses ONE variant of #3513, and the issue stays open past it. The same
+# thread records failures that issue no apid CSR at all inside the whole budget --
+# time lost before Talos gets anywhere near the kubelet image -- which no registry
+# mirror can touch. A green suite after this lands is not evidence the flake is
+# closed.
+#
+# This Deployment runs a standard registry:2 configured as a PULL-THROUGH cache for
+# ghcr.io: worker pulls are routed here by the chart's `talos.registryMirrors` knob
+# (machine.registries.mirrors), the cache fetches from ghcr.io ONCE per blob and
+# serves every subsequent worker locally over plain HTTP, so the many per-worker
+# pulls no longer each depend on live public egress. The retry around a failed
+# fetch is containerd's, in the guest -- distribution 2.8's proxy blobstore has
+# none of its own, so a first fetch that fails is simply a failed pull.
+#
+# CI band-aid, not a product artifact. The durable knob is the chart's
+# `talos.registryMirrors` this manifest exercises; a production operator points it at
+# their own mirror/pull-through registry.
+#
+# ASSUMPTIONS THAT NEED A CI RUN TO CONFIRM:
+#   1. Talos honours a plain-http mirror endpoint for ghcr.io via
+#      machine.registries.mirrors[ghcr.io].endpoints=[http://...]. If a scheme/TLS
+#      knob is additionally required, add machine.registries.config here too.
+#   2. The containerd pull from inside the worker VM leaves with the virt-launcher
+#      Pod's own Cilium identity, which is what the policy below selects. The label
+#      half is settled -- run-kubernetes.sh already reads tenant worker Pods by
+#      `kubevirt.io=virt-launcher` -- but that the pull is subject to that Pod's
+#      egress policy at all is what a run has to show.
+#
+# Not an assumption, though it looks like one: the guest resolving the short name
+# `ghcr-mirror.kube-system.svc`. The worker machineconfig this repo renders sets
+# machine.network.searchDomains to svc.<mgmtClusterDomain> and <mgmtClusterDomain>
+# (see the nameservers block in the reconcile Job), and the same guest already
+# depends on that list to reach `linstor-csi-nfs.cozy-linstor.svc` for NFS mounts.
+# The mechanism is in-tree and load-bearing elsewhere. If a run ever shows
+# otherwise, point GHCR_MIRROR_SVC_URL at the FQDN.
+#
+# What the registry:2 image itself no longer assumes: it is digest-pinned on
+# mirror.gcr.io below, and that exact digest was checked to run under the security
+# context here (non-root 65532, read-only rootfs, dropped caps) and to serve
+# ghcr.io/siderolabs/kubelet manifests and blobs as an anonymous pull-through. It is
+# deliberately NOT in the pre-pull set: hack/e2e-install-cozystack.bats applies this
+# manifest before the pre-pull DaemonSet runs, and one replica pulls it once, so
+# adding it there would cache it after the only pull that matters.
+apiVersion: v1
+kind: Service
+metadata:
+  name: ghcr-mirror
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ghcr-mirror
+spec:
+  selector:
+    app.kubernetes.io/name: ghcr-mirror
+  ports:
+    - name: http
+      port: 80
+      targetPort: registry
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ghcr-mirror
+  namespace: kube-system
+  labels:
+    app.kubernetes.io/name: ghcr-mirror
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ghcr-mirror
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ghcr-mirror
+    spec:
+      # No API access is needed; do not mount a ServiceAccount token.
+      automountServiceAccountToken: false
+      # Run unprivileged and PSS-restricted. fsGroup makes the emptyDir cache and
+      # tmp volumes group-writable so the non-root user can write them under a
+      # read-only root filesystem.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry
+          # registry:2 as a pull-through cache. Pulled from mirror.gcr.io and
+          # digest-pinned (as every other hack/ helper manifest does) so the
+          # mirror's own image is not a fresh anonymous Docker Hub pull -- the very
+          # flaky-egress dependency this PR exists to remove.
+          image: mirror.gcr.io/library/registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          env:
+            # Pull-through cache: proxy every request to ghcr.io and cache locally.
+            - name: REGISTRY_PROXY_REMOTEURL
+              value: https://ghcr.io
+            - name: REGISTRY_HTTP_ADDR
+              value: :5000
+            - name: REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY
+              value: /var/lib/registry
+          ports:
+            - name: registry
+              containerPort: 5000
+          readinessProbe:
+            # /v2/ returns 200 once the registry is serving.
+            httpGet:
+              path: /v2/
+              port: registry
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+              ephemeral-storage: 100Mi
+            limits:
+              memory: 512Mi
+              # Bounds the container writable layer plus the cache/tmp emptyDirs
+              # below, so a runaway cache cannot fill node-local storage and evict
+              # unrelated Pods. Sized for the CI image set (kubelet + a few).
+              ephemeral-storage: 3Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+          volumeMounts:
+            - name: cache
+              mountPath: /var/lib/registry
+            # readOnlyRootFilesystem: give the registry a writable scratch dir for
+            # any temp it touches outside its storage rootdirectory.
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: cache
+          emptyDir:
+            sizeLimit: 2Gi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi
+---
+# CI-only: allow tenant worker VM Pods to reach the mirror.
+#
+# Tenant namespaces run under a default-deny Cilium egress installed by the tenant
+# chart whose union allows same-namespace endpoints, the tenant tree and the `world`
+# entity (so public ghcr.io works, just flakily) but NOT an arbitrary kube-system
+# Service -- so a worker's containerd resolves ghcr-mirror.kube-system.svc yet its
+# TCP connect to the ClusterIP is silently dropped. This adds one tightly-scoped
+# allow: worker VM (virt-launcher) Pods in tenant-test may egress to the mirror Pod.
+# Mirrors the e2e-talos-image-cache-importer-egress policy pattern, but selects the
+# worker VM identity (kubevirt.io: virt-launcher) that actually performs the
+# kubelet-image pull, not the CDI importer.
+#
+# The helper commits the mirror endpoint once the API accepts this object, which is
+# not the same as the flow being allowed: if the selector misses the identity the
+# in-guest pull really carries, the SYNs are dropped and every worker pull pays a
+# connect timeout before Talos falls back. Assumption 2 above is exactly that gap.
+#
+# Applied at point-of-use by hack/e2e-chainsaw/_lib/ghcr-mirror.sh (after Cilium's
+# CRDs exist), not with the rest of this manifest at install time.
+apiVersion: cilium.io/v2
+kind: CiliumClusterwideNetworkPolicy
+metadata:
+  name: e2e-ghcr-mirror-worker-egress
+  labels:
+    app.kubernetes.io/name: ghcr-mirror
+spec:
+  endpointSelector:
+    matchLabels:
+      "k8s:kubevirt.io": virt-launcher
+      "k8s:io.kubernetes.pod.namespace": tenant-test
+  egress:
+    - toEndpoints:
+        - matchLabels:
+            "k8s:io.kubernetes.pod.namespace": kube-system
+            "k8s:app.kubernetes.io/name": ghcr-mirror

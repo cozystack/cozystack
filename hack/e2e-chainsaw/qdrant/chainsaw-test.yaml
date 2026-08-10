@@ -10,9 +10,60 @@ spec:
       apiVersion: helm.toolkit.fluxcd.io/v2
       kind: HelmRelease
       name: qdrant-test
+  # The app chart wraps the workload in a nested HelmRelease named
+  # `<release>-system`, and the chart behind it stamps
+  # app.kubernetes.io/instance from its own release name. So the Qdrant pods
+  # carry `qdrant-test-system`, which the unsuffixed value never matched.
+  - podLogs:
+      selector: app.kubernetes.io/instance=qdrant-test-system
+      tail: 50
+  # The unsuffixed value stays, as a second collector rather than as the one
+  # that was replaced: the parent chart's PVC-cleanup Job
+  # (templates/hooks/cleanup-pvc.yaml) labels its pod template with the PARENT
+  # release name, so it is the one thing the old selector did reach, and the
+  # delete below happens inside a `try:`, so the Job is in scope while the test
+  # is still running.
+  #
+  # What this does NOT reach, so the capture is not read as the whole story:
+  # that hook always exits 0 -- no `set -e`, the delete is guarded by
+  # `|| echo "WARNING: PVC cleanup failed"`, and the script ends on an
+  # unconditional echo. Helm therefore marks it succeeded and
+  # `hook-delete-policy: hook-succeeded` takes the pod away, warning and all.
+  # What is left is the case where the uninstall hangs and Helm is still
+  # waiting on the hook: the pod is alive then, and its log is the only account
+  # of where it stopped. The `get jobs,pods` in the cleanup step below lists
+  # the objects but reads no log.
   - podLogs:
       selector: app.kubernetes.io/instance=qdrant-test
       tail: 50
+  # podLogs cannot report that it matched nothing, so an empty capture above and
+  # a selector that has gone stale look identical. Print the instance label of
+  # every pod in the namespace instead. Deliberately no selector is repeated
+  # here: a copy would only prove itself right, and would keep matching after
+  # the collector's own selector drifted.
+  #
+  # What is and is not guarded, so the next reader does not assume more:
+  # the `-system` value above is also pinned on a resource in a `steps:` assert
+  # below, so the chart renaming that label turns a step red -- that is the
+  # drift this pin exists to catch. It does NOT catch a wrong value typed into the
+  # selector here: the assert pins the label on the resource, this pins it in
+  # the collector, and they are two literals. It also catches nothing when the
+  # run fails before reaching that assert. The census below covers neither, and
+  # is not meant to -- it answers what the labels actually are.
+  - script:
+      # The helper bounds each kubectl attempt with --request-timeout, which on
+      # a degraded cluster costs about five times the flag; one call is ~75s at
+      # worst, and this op timeout sits above that so an inner budget is what
+      # fires. A SIGKILL at the op boundary would take the census out mid-write
+      # and yield nothing, where a kubectl that gives up leaves an error to
+      # print. The helper carries the rest of the rationale and is unit-tested
+      # in hack/pod-label-census_test.bats.
+      timeout: 2m
+      content: |
+        set -eu
+        cd ../../..
+        . hack/e2e-chainsaw/_lib/pod-label-census.sh
+        pod_label_census "$NAMESPACE"
   steps:
   - name: create-qdrant
     try:
@@ -51,6 +102,13 @@ spec:
           kind: StatefulSet
           metadata:
             name: qdrant-test
+          # Pins the label the catch collector selects on. Asserts are subset
+          # matches, so this costs nothing and turns a silent drift of the
+          # instance label into a red step instead of an empty capture.
+          spec:
+            selector:
+              matchLabels:
+                app.kubernetes.io/instance: qdrant-test-system
           status:
             readyReplicas: 1
     - assert:
@@ -85,6 +143,49 @@ spec:
             name: qdrant-storage-qdrant-test-0
     catch:
     - script:
+        # Same budgeting as the census in the test-wide catch, sized for this
+        # script: it makes up to three bounded calls, so ~240s at worst rather
+        # than the census's ~75s, and the op timeout is 5m rather than 2m to
+        # stay above that. Above the inner budgets either way, so an inner one
+        # is what fires instead of a SIGKILL that would yield nothing.
+        timeout: 5m
         content: |
-          kubectl -n "$NAMESPACE" get pvc -o wide
-          kubectl -n "$NAMESPACE" get jobs,pods -l app.kubernetes.io/instance=qdrant-test -o wide
+          # `set -u` but NOT `set -e`: every lookup below is best-effort, the
+          # way the sibling redis script in the harbor suite already is. Under
+          # `-e` a failing `get pvc` would abort the script before the report
+          # runs, so the degraded cluster -- the only case this catch exists
+          # for -- is exactly the one that would produce no diagnosis at all.
+          set -u
+          cd ../../..
+          . hack/e2e-chainsaw/_lib/pod-label-census.sh
+          kubectl -n "$NAMESPACE" --request-timeout=15s get pvc -o wide || true
+          # `qdrant-test` here, unsuffixed. This runs after the parent Qdrant is
+          # deleted, and what it looks for is the parent chart's PVC-cleanup Job
+          # (templates/hooks/cleanup-pvc.yaml), which is labelled with the PARENT
+          # release name. The nested `-system` release owns the Qdrant workload,
+          # not this Job. The test-wide catch reads that Job's log on the same
+          # unsuffixed value; this reports whether the objects are there at all.
+          #
+          # The three outcomes are told apart by the shared helper rather than
+          # by a second copy of that branching: an empty `kubectl get -l` exits
+          # zero, so a stale selector here would print nothing and read as
+          # "cleanup finished", and kubectl also exits zero while logging to
+          # stderr, which folded into the value would print as a leftover
+          # object. One call feeds the report; the `-o wide` re-listing below is
+          # extra detail on objects already known to exist, not a second attempt
+          # at the question.
+          sel=app.kubernetes.io/instance=qdrant-test
+          errf=$(mktemp)
+          if found=$(kubectl -n "$NAMESPACE" --request-timeout=15s get jobs,pods -l "$sel" -o name 2>"$errf"); then
+            rc=0
+          else
+            rc=1
+          fi
+          lookup_report "$rc" "$found" "$(cat "$errf")" \
+            "cleanup lookup FAILED — it did not run, which is not the same as 'nothing left':" \
+            "cleanup selector '$sel' matched no objects: either cleanup completed, or the parent chart's label changed" \
+            "cleanup objects still present:"
+          if [ "$rc" -eq 0 ] && [ -n "$found" ]; then
+            kubectl -n "$NAMESPACE" --request-timeout=15s get jobs,pods -l "$sel" -o wide || true
+          fi
+          rm -f "$errf"

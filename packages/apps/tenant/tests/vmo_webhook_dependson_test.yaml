@@ -11,8 +11,10 @@ suite: tenant HelmReleases gate on the victoria-metrics-operator
 # rejects with connection refused, the install fails and rolls back. Pin the
 # dependsOn so the gate cannot regress.
 
-# Restrict rendering to the gated HelmRelease templates so the chart's
-# namespace.yaml `lookup` (which errors under helm-unittest) is not evaluated.
+# Render only the HelmRelease templates this suite asserts on. The reason given
+# here was that namespace.yaml's `lookup` errors under helm-unittest; it does
+# not. This suite sets `_cluster`, so the chart renders without the list; it
+# stays only to scope the suite.
 templates:
   - templates/etcd.yaml
   - templates/ingress.yaml

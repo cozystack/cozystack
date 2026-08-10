@@ -245,6 +245,18 @@ tests:
         ingest: true
         ml: false
     asserts:
+      # Anchor the pool before asserting about it. notContains passes whenever
+      # its path resolves to something lacking the content, and a different
+      # nodePool at [0] qualifies, so a pool added ahead of this one would leave
+      # the guard green while cluster_manager came back on the pool it names.
+      #
+      # The anchor is the component, not a role: roles are shared between pools,
+      # so a second data-bearing pool inserted ahead of this one would satisfy a
+      # role-based anchor while the assertion below read the wrong pool.
+      - equal:
+          path: spec.nodePools[0].component
+          value: nodes
+        documentIndex: 0
       - notContains:
           path: spec.nodePools[0].roles
           content: cluster_manager

@@ -66,12 +66,36 @@ case "$1" in
     ;;
 esac
 EOF
-  chmod +x "$t/bin/yq" "$t/bin/skopeo"
+  # sha256sum belongs in the stub for the same reason yq and skopeo do: the tests
+  # below pin PATH to "$tmp/bin:/usr/bin:/bin", and where the hashing utility
+  # lives is a property of the host, not of the thing under test. GNU coreutils
+  # puts sha256sum in /usr/bin, which is inside that PATH; macOS ships shasum
+  # there and sha256sum elsewhere, which is not -- so promote-retag.sh took its
+  # "sha256sum is required" exit and six of the eleven tests failed on the
+  # platform rather than on the code. They failed silently, too: each test
+  # cleaned up from an EXIT trap, which replaces the one the bats binary installs
+  # for its bookkeeping, so a failing test printed no TAP line at all and the run
+  # showed five passes and no failures.
+  #
+  # Resolved from absolute candidates rather than through `command -v`: this stub
+  # is first on PATH, so asking PATH for sha256sum finds this file and recurses.
+  cat >"$t/bin/sha256sum" <<'EOF'
+#!/bin/sh
+set -eu
+for _c in /usr/bin/sha256sum /bin/sha256sum /sbin/sha256sum /usr/local/bin/sha256sum; do
+  [ -x "$_c" ] && exec "$_c" "$@"
+done
+for _c in /usr/bin/shasum /bin/shasum; do
+  [ -x "$_c" ] && exec "$_c" -a 256 "$@"
+done
+echo "no sha256 implementation found outside the stub dir" >&2
+exit 127
+EOF
+  chmod +x "$t/bin/yq" "$t/bin/skopeo" "$t/bin/sha256sum"
 }
 
 @test "dry-run over the real tree retags only cozystack-owned refs" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   # `env -u REGISTRY`: the CI workflow exports REGISTRY=<OCIR build registry>
   # for every job (.github/workflows/pull-requests.yaml), but the committed
@@ -124,11 +148,11 @@ EOF
   bad=$(grep -oE 'docker://[^ ]+' "$tmp/out" | sed 's|docker://||' \
         | grep -vE '^ghcr\.io/cozystack/cozystack/' || true)
   [ -z "$bad" ]
+  rm -rf "$tmp"
 }
 
 @test "default leaves :latest unmoved" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   # :latest belongs to promotion, and only when the promoted version is the
   # newest published stable. Without MOVE_LATEST the plan retags the stable tag
@@ -147,11 +171,11 @@ EOF
   grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:v9\.9\.9' "$tmp/out"
   # ...but nothing moves :latest.
   ! grep -qE 'docker://[^ ]+:latest' "$tmp/out"
+  rm -rf "$tmp"
 }
 
 @test "MOVE_LATEST=1 also repoints :latest" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   rc=0
   env -u REGISTRY MOVE_LATEST=1 hack/promote-retag.sh v9.9.9 --dry-run \
@@ -164,11 +188,11 @@ EOF
 
   # Every promoted repo also gets a :latest copy in the plan.
   grep -qE 'docker://ghcr\.io/cozystack/cozystack/[^ ]*:latest' "$tmp/out"
+  rm -rf "$tmp"
 }
 
 @test "REGISTRY override scopes the selection" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   # No cozystack images live under example.com/nope, so the selector finds
   # nothing and exits non-zero rather than silently promoting the wrong set.
@@ -180,6 +204,7 @@ EOF
   [ "$rc" -ne 0 ]
   # The diagnostic is written to stderr.
   grep -q 'No cozystack-owned digest-pinned image refs found' "$tmp/err"
+  rm -rf "$tmp"
 }
 
 @test "retags images whose ref lives outside a values.yaml" {
@@ -191,7 +216,6 @@ EOF
   # registry the digests still resolved, so nothing failed at pull time and the
   # gap went unnoticed until a release shipped reading as a release candidate.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   rc=0
   env -u REGISTRY hack/promote-retag.sh v9.9.9 --dry-run \
@@ -208,11 +232,11 @@ EOF
   # reachable from any values.yaml.
   grep -q 'cozystack/grafana-dashboards:v9.9.9' "$tmp/out"
   grep -q 'cozystack/multus-cni:v9.9.9' "$tmp/out"
+  rm -rf "$tmp"
 }
 
 @test "raw manifest digest resolves for an OCI artifact" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_registry_mocks "$tmp"
 
   manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"layers":[]}'
@@ -233,11 +257,11 @@ EOF
   grep -q "already at ${digest}; skipping stable copy" "$tmp/out"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
   ! grep -q '^copy ' "$tmp/skopeo.log"
+  rm -rf "$tmp"
 }
 
 @test "post-copy raw manifest digest mismatch fails verification" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_registry_mocks "$tmp"
 
   manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},"layers":[]}'
@@ -256,11 +280,11 @@ EOF
   grep -q "resolved to '${actual}', expected '${expected}'" "$tmp/err"
   grep -q '^copy --multi-arch all ' "$tmp/skopeo.log"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
+  rm -rf "$tmp"
 }
 
 @test "missing stable tag remains an empty digest and proceeds to copy" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_registry_mocks "$tmp"
 
   manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.flux.config.v1+json","digest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"},"layers":[]}'
@@ -281,11 +305,11 @@ EOF
   grep -q '^copy --multi-arch all ' "$tmp/skopeo.log"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 2 ]
   grep -q 'Retagged image refs to v1.6.0' "$tmp/out"
+  rm -rf "$tmp"
 }
 
 @test "existing stable tag at a different digest is refused, not moved" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_registry_mocks "$tmp"
 
   # The stable tag already exists (MOCK_MISSING_ONCE=0) but resolves to a
@@ -307,11 +331,11 @@ EOF
   # The refusal must happen BEFORE any write.
   ! grep -q '^copy ' "$tmp/skopeo.log"
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
+  rm -rf "$tmp"
 }
 
 @test "a zero-exit empty manifest refuses to decide and never writes" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_registry_mocks "$tmp"
 
   manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:3333333333333333333333333333333333333333333333333333333333333333"},"layers":[]}'
@@ -335,11 +359,11 @@ EOF
   [ "$(grep -c '^inspect --raw ' "$tmp/skopeo.log")" -eq 1 ]
   # The empty-input hash must never appear: that is the guard being absent.
   ! grep -q 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855' "$tmp/err"
+  rm -rf "$tmp"
 }
 
 @test "a transient registry failure is not read as an unpublished tag" {
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
   _make_registry_mocks "$tmp"
 
   manifest='{"schemaVersion":2,"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":"sha256:4444444444444444444444444444444444444444444444444444444444444444"},"layers":[]}'
@@ -361,4 +385,5 @@ EOF
   grep -q 'cannot be treated as unpublished' "$tmp/err"
   grep -q '429' "$tmp/err"
   ! grep -q '^copy ' "$tmp/skopeo.log"
+  rm -rf "$tmp"
 }

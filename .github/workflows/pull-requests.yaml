@@ -11,11 +11,35 @@ on:
     types: [opened, synchronize, reopened, labeled]
 
 # Cancel in‑flight runs for the same PR when a new push arrives.
+#
+# A `labeled` event that `plan` discards gets its OWN group, so labelling an
+# open PR cannot cancel a live opened/synchronize run. Any label other than
+# full-e2e makes `plan` skip, and `e2e-report` skips with it, so without the
+# split the pair "cancel the real run, then skip" left the head SHA with no
+# "E2E Tests" status at all — and an unposted required status stays "Expected",
+# blocking the merge until someone pushes again or re-runs the cancelled run.
+# Observed on live CI: run 30614258694 (cancelled) followed by 30614280603
+# (skipped) on the same SHA, 24s apart, from a maintainer adding kind/* labels
+# just after a push. (`pr-labeler` cannot cause this — it labels with the
+# default GITHUB_TOKEN, which by design triggers no further workflow runs.)
+#
+# The condition is the exact complement of `plan`'s guard, so only a run that
+# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e does
+# publish, so it stays in the main group and supersedes the head run the way a
+# push does. That keeps exactly one publisher of the `E2E Tests` context alive
+# per head SHA, which the status depends on: two live publishers are latest-wins
+# per context, and the full suite is the superset, so a full-e2e run that fails
+# early — a build flake, a suite failing at minute twenty — would finish before
+# the narrower head run it was meant to widen, and that run's later green would
+# erase the failure. Cancelling also means opting into the full suite costs one
+# suite rather than two, and a second label landing afterwards cannot cancel the
+# full-e2e run, because it is no longer in the same group as it.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e') && '-label' || '' }}
   cancel-in-progress: true
 
-# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
 permissions:
   contents: read
 
@@ -31,6 +55,9 @@ jobs:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-e2e'
     permissions:
       contents: read
+      # For the opening `E2E Tests` status below; e2e-report writes the terminal
+      # one with the same scope.
+      statuses: write
     outputs:
       code: ${{ steps.p.outputs.code }}
       trigger_map: ${{ steps.p.outputs.trigger_map }}
@@ -38,6 +65,53 @@ jobs:
       any: ${{ steps.p.outputs.any }}
       touched: ${{ steps.p.outputs.touched }}
     steps:
+      # Claim the required context for THIS run before anything can be merged on
+      # the strength of the last one. Commit statuses are latest-wins per (sha,
+      # context) and nothing expires them, so a head SHA that already went green
+      # keeps reading green while a newly started run works — re-run all jobs, a
+      # full-e2e label, a reopen — and the PR stays mergeable through a suite
+      # that may be about to fail. While the gate was a job, GitHub created a
+      # fresh non-success check run each time and that window did not exist.
+      # Overwriting with `pending` here restores it: the run that owns the
+      # status says so at the start and concludes it in e2e-report.
+      #
+      # Same-repo only. A fork's `pull_request` token is read-only, so this call
+      # would 403 and fail `plan` on every fork PR, and that read-only token is
+      # exactly what makes the whole commit-status design safe (§10). Fork PRs
+      # get their pending from e2e-fork.yaml's `resolve` instead, which is
+      # privileged.
+      #
+      # Note what that costs a fork. `resolve` cannot start until this entire
+      # run has finished, so the window this step shuts in seconds stays open
+      # for the length of the build on the fork lane. Structural rather than an
+      # oversight, since a read-only token cannot post a status at any point in
+      # the run, and bounded by the build. §10 records it.
+      - name: Open the "E2E Tests" status for this run
+        if: ${{ !github.event.pull_request.head.repo.fork }}
+        # A transient status-API failure here must not take the run with it.
+        # This step is the first in `plan`, and `plan` is what `checks`,
+        # `build`, `build-talos`, `finalize` and `e2e` all hang off, so a
+        # failure costs a full rebuild for nothing. Skipping the opener only
+        # degrades to the behaviour that preceded it — the terminal status
+        # still gets posted by `e2e-report`, and a run that dies before that
+        # leaves the merge blocked either way.
+        continue-on-error: true
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { HEAD_SHA, RUN_URL } = process.env;
+            await github.rest.repos.createCommitStatus({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              sha: HEAD_SHA,
+              state: 'pending',
+              context: 'E2E Tests',
+              description: 'e2e in progress — this run has not reported yet',
+              target_url: RUN_URL,
+            });
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
@@ -47,8 +121,28 @@ jobs:
           BASE_REF: ${{ github.base_ref }}
         run: |
           git diff --name-only "origin/${BASE_REF}...HEAD" > /tmp/changed.txt
-          echo "Changed files:"; sed 's/^/  /' /tmp/changed.txt
-          if grep -qvE '^docs/' /tmp/changed.txt; then
+          # The docs-only decision reads a RENAME-BLIND list. `git diff
+          # --name-only` applies rename detection and reports a rename as its
+          # new path alone, so moving a code file into docs/ reads as a
+          # docs-only change: nothing builds, no e2e runs, and the removal of
+          # that code path ships untested. It also deadlocks the fork lane,
+          # which answers the same question from `pulls.listFiles` and does see
+          # the old path through `previous_filename`. That lane concludes e2e is
+          # required, then fails closed on a pr-patch artifact this lane never
+          # produced — an unfixable red on a legitimate contribution, with no
+          # label override and no push that clears it. Both lanes have to answer
+          # "is this docs-only" the same way, and the only answer that is also
+          # correct keeps both sides of a rename.
+          #
+          # The build matrix still reads the rename-detected list, which is not
+          # a claim that doing so is right. Moving a file between packages
+          # leaves the source package changed and unselected, so the matrix
+          # under-builds on a cross-package rename. That behaviour predates this
+          # line and is not what the docs-only decision is for, so it is left
+          # alone here rather than widened by a side effect.
+          git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
+          echo "Changed files:"; sed 's/^/  /' /tmp/changed_norenames.txt
+          if grep -qvE '^docs/' /tmp/changed_norenames.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
@@ -61,10 +155,10 @@ jobs:
           # unit-test job opt back in, and only that job: it deliberately does not
           # feed `code`, so a docs PR still builds nothing.
           #
-          # Detect the map by its old path too: a rename is reported as the new path
-          # alone, so a PR that moves the map would skip the very test that pins the
-          # literal below to it, and break for whoever pushes next.
-          git diff --name-only --no-renames "origin/${BASE_REF}...HEAD" > /tmp/changed_norenames.txt
+          # Detect the map by its old path too, which is why this reads the
+          # rename-blind list above: a PR that moves the map would otherwise skip
+          # the very test that pins the literal below to it, and break for
+          # whoever pushes next.
           if grep -qxF 'docs/agents/contributing.md' /tmp/changed_norenames.txt; then
             echo "trigger_map=true" >> "$GITHUB_OUTPUT"
           else
@@ -189,7 +283,9 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build ${{ matrix.pkg }}
-        run: make -C "$PKG" image
+        run: |
+          mkdir -p _out/oci
+          make -C "$PKG" image
         env:
           PKG: ${{ matrix.pkg }}
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
@@ -202,6 +298,15 @@ jobs:
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          # Fork PRs get no registry credentials, so instead of pushing, build
+          # each image to <workspace>/_out/oci/<name>.oci.tar and upload it below;
+          # the privileged e2e-fork.yaml workflow_run pushes them by digest. Empty
+          # on same-repo PRs → normal push path. Setting it also forces PUSH/LOAD
+          # off in common-envs.mk (#3257). Must be ABSOLUTE (workspace-rooted):
+          # the build runs `make -C <pkg>`, so buildx resolves a relative dest
+          # against the package dir — the archive would land in <pkg>/_out/oci and
+          # miss the repo-root _out/oci the upload reads.
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
       - name: Capture digest patch fragment
         id: frag
         env:
@@ -220,6 +325,15 @@ jobs:
         with:
           name: pr-patch-fragment-${{ steps.frag.outputs.safe }}
           path: _out/fragments/${{ steps.frag.outputs.safe }}.patch
+          if-no-files-found: error
+      # Fork PR only: the images were exported to OCI archives instead of pushed
+      # (OCI_EXPORT_DIR above). Upload them for e2e-fork.yaml to push by digest.
+      - name: Upload OCI image archives (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-${{ steps.frag.outputs.safe }}
+          path: _out/oci/*.oci.tar
           if-no-files-found: error
 
   # Talos is its own leg: the nocloud disk and the installer tarball are heavy
@@ -269,13 +383,17 @@ jobs:
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
       - name: Build Talos image (matchbox + installer tarball)
-        run: make -C packages/core/talos image
+        run: |
+          mkdir -p _out/oci
+          make -C packages/core/talos image
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          # Fork PR: export to OCI archive instead of pushing (see build job).
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
       - name: Build Talos nocloud disk
         run: make -C packages/core/talos talos-nocloud
       - name: Capture Talos patch fragment
@@ -288,6 +406,14 @@ jobs:
         with:
           name: pr-patch-fragment-talos
           path: _out/fragments/talos.patch
+          if-no-files-found: error
+      # Fork PR only: upload the Talos image OCI archive for e2e-fork.yaml.
+      - name: Upload Talos OCI image archive (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-talos
+          path: _out/oci/*.oci.tar
           if-no-files-found: error
       - name: Upload Talos image
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -451,16 +577,37 @@ jobs:
           buildkitd-config: hack/buildkitd.toml
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
-      # Builds the operator image AND flux-pushes the now-fully-patched packages
-      # tree, then patches the installer's platformSourceRef to that artifact.
+      # Same-repo PR: build the operator image AND flux-push the now-fully-patched
+      # packages tree, then patch the installer's platformSourceRef to that
+      # artifact. Fork PR: no registry creds — build ONLY the operator image to an
+      # OCI archive (image-packages/chart, which push, are skipped) and upload it;
+      # e2e-fork.yaml pushes the operator + flux-pushes the packages tree and
+      # bakes platformSourceRef there. The overlay above already ran, so the
+      # pr.patch assembled below carries the fully digest-pinned tree either way.
       - name: Build installer (operator + packages artifact)
-        run: make -C packages/core/installer image
+        run: |
+          mkdir -p _out/oci
+          if [ "$IS_FORK" = "true" ]; then
+            make -C packages/core/installer pre-checks image-operator
+          else
+            make -C packages/core/installer image
+          fi
         env:
           DOCKER_CONFIG: ${{ runner.temp }}/.docker
           BUILDER: ${{ steps.buildx.outputs.name }}
           IMAGE_TAG: pr-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
           PUBLISH_VERSIONED: '0'
           PUBLISH_FLOATING: '0'
+          IS_FORK: ${{ github.event.pull_request.head.repo.fork }}
+          OCI_EXPORT_DIR: ${{ github.event.pull_request.head.repo.fork && format('{0}/_out/oci', github.workspace) || '' }}
+      # Fork PR only: upload the operator image OCI archive for e2e-fork.yaml.
+      - name: Upload installer OCI image archive (fork PR)
+        if: ${{ github.event.pull_request.head.repo.fork }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: pr-oci-installer
+          path: _out/oci/*.oci.tar
+          if-no-files-found: error
       - name: Assemble pr.patch
         run: |
           mkdir -p _out/assets
@@ -545,8 +692,16 @@ jobs:
             core.setOutput('disk_id',     diskId);
 
 
+  # In-tree e2e for SAME-REPO PRs. Deliberately NOT named "E2E Tests": the
+  # required "E2E Tests" context is a commit status posted by the `e2e-report`
+  # job (non-fork) or by e2e-fork.yaml (fork). A required *job* that skips
+  # counts as PASSED by branch protection, which is exactly how fork PRs used
+  # to merge with e2e never run (#3257); routing the required context through
+  # a status removes that skip-to-green path. Fork PRs skip this job
+  # (they have no pushed images to pull) and run e2e in the privileged
+  # workflow_run instead.
   e2e:
-    name: "E2E Tests"
+    name: "E2E (in-tree)"
     # The sandbox boots three QEMU guests (hack/e2e-prepare-cluster.bats), each
     # with `-smp 8 -m 24576`, so the guests alone demand 24 vCPU and 72 GiB.
     # On the 24-vCPU runner that is a 1:1 CPU commit with zero host headroom for
@@ -573,8 +728,14 @@ jobs:
     # enters through resolve_assets only when a maintainer explicitly adds
     # full-e2e; without that label the immutable rc's already-green suite is not
     # repeated. The labeled trigger above makes that post-open opt-in start a run.
+    #
+    # Fork PRs never enter here: their build exports OCI archives instead of
+    # pushing images, so there is no closure for this job to test. e2e-fork.yaml
+    # runs the suite for them from the privileged workflow_run and concludes the
+    # required "E2E Tests" status; for same-repo PRs e2e-report concludes it.
     if: |
       !cancelled()
+      && !github.event.pull_request.head.repo.fork
       && (
         needs.finalize.result == 'success'
         || (
@@ -676,7 +837,18 @@ jobs:
       # Test Impact Analysis (TIA): walk the PackageSource graph for the PR
       # diff and select only the Chainsaw suites affected. Runs by default; opt
       # out via the `full-e2e` label to run the full suite.
-      # `skip=true` means nothing to test (docs-only PR).
+      #
+      # `skip=true` means every changed path was matched by one of select-e2e.sh's
+      # rules that select nothing — docs and dashboards, a disabled Chainsaw
+      # suite, a backups example with no suite, or the inert repo-meta pattern
+      # — so skipping Chainsaw and reporting green is the correct verdict. A
+      # path none of the rules recognise escalates to the full suite instead of
+      # returning empty, so `skip=true` can no longer mean "TIA had no idea"
+      # (#3392). What it still cannot rule out is a workflow nobody classified:
+      # .github/ is inert as a directory and the e2e workflows are exempted
+      # from it by name, so a workflow added under .github/workflows/ reads as
+      # inert until someone puts it on that list, and the fall-through never
+      # sees it.
       - name: Select E2E tests
         id: select
         if: ${{ !contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
@@ -700,9 +872,10 @@ jobs:
       # ▸ Run E2E tests (Chainsaw, scoped by Test Impact Analysis)
       #
       #   The "Select E2E tests" step above picks the suites impacted by the PR
-      #   diff. With the `full-e2e` label that step is skipped, SELECTED_APPS is
-      #   empty, and we fall back to the whole suite; an empty selection on a
-      #   docs-only PR skips this step entirely (the skip != 'true' guard).
+      #   diff. With the `full-e2e` label that step is skipped, so FULL_E2E is
+      #   the only way to reach this step with no selection and we run the whole
+      #   suite; an all-inert selection skips this step entirely (the
+      #   skip != 'true' guard).
       #
       #   Chainsaw discovers each named suite under hack/e2e-chainsaw/ and polls
       #   every assertion to its own timeout, so the old per-app 3-retry loop is
@@ -715,7 +888,10 @@ jobs:
           SELECTED_APPS: ${{ steps.select.outputs.apps }}
           FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
         run: |
-          if [ "$FULL_E2E" = "true" ] || [ -z "$SELECTED_APPS" ]; then
+          # Only the full-e2e label can get here with an empty selection: when
+          # `select` runs, an empty result sets skip=true and this step never
+          # starts. Testing FULL_E2E alone keeps that invariant visible.
+          if [ "$FULL_E2E" = "true" ]; then
             suites=""        # empty => test-chainsaw runs the whole suite
             echo "Running full chainsaw suite"
           else
@@ -761,10 +937,49 @@ jobs:
           if-no-files-found: ignore
 
       # ▸ Collect debug information (always runs)
+      #
+      #   A ceiling of its own, not the job's 180 minutes. `Upload
+      #   cozyreport.tgz` is the next step and the collector writes its tarball
+      #   at the very end of its run, so a read that never returns spends what
+      #   is left of the job budget, the job is cancelled, and the upload never
+      #   runs -- the artifact is lost rather than truncated, on exactly the run
+      #   where it is the only evidence left. `|| true` guards against a
+      #   non-zero exit, not against a read that does not return.
+      #
+      #   30 minutes is measured against the step: it takes 3-42s across sampled
+      #   runs, on failed e2e jobs as well as green ones. It RESERVES nothing --
+      #   `timeout-minutes` caps a step, it does not carve budget out of the job,
+      #   so a suite that has already burned 175 of the 180 leaves this step five
+      #   minutes and the upload is cancelled with everything else. What the cap
+      #   buys is that a hung read cannot be the reason.
+      #   `continue-on-error` because the ceiling must not change what the job
+      #   REPORTS. `|| true` on the make call is this step's standing statement
+      #   that collecting diagnostics is never fatal, and a step killed at its
+      #   ceiling never reaches that `|| true` -- the runner ends the process. So
+      #   without this, a passing E2E run whose collection ran long is published
+      #   as a failed one, and every later `failure()` in this job starts meaning
+      #   "the tests failed OR the report was slow".
       - name: Collect report
+        id: collect_report
         if: always()
+        timeout-minutes: 30
+        continue-on-error: true
         run: |
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more: a step can end
+      # non-zero without any ceiling firing, so naming the timeout as the cause
+      # would be the false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
 
       - name: Upload cozyreport.tgz
         if: always()
@@ -845,3 +1060,116 @@ jobs:
       - name: Tear down sandbox
         if: always()
         run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+  # Report the required "E2E Tests" gate as a commit status rather than relying
+  # on a job named "E2E Tests". A required *job* that is skipped counts
+  # as PASSED by branch protection — desired for docs-only PRs, but the exact
+  # hole that let fork PRs merge with e2e never run (#3257). This job always runs
+  # on same-repo PRs and concludes "E2E Tests" deterministically:
+  #   • plan failed              → failure
+  #   • docs-only PR (code!=true)→ success (e2e not required)
+  #   • in-tree e2e succeeded     → success
+  #   • otherwise (skipped/failed/cancelled with code changes) → failure
+  # Fork PRs skip this job; e2e-fork.yaml concludes "E2E Tests" for them, so a
+  # fork PR stays "Expected"/not-mergeable until the privileged run reports.
+  #
+  # The required "E2E Tests" merge gate is published as a COMMIT STATUS with the
+  # default GITHUB_TOKEN (+ statuses:write) — NOT as a job, and NOT as a
+  # check-run.
+  #   - Not a job: a *skipped* required job counts as passed by branch
+  #     protection, which is how fork PRs used to merge with e2e never run
+  #     (#3257). A status is "success" only when this job posts it; a
+  #     never-posted required status stays "Expected" and blocks the merge.
+  #   - Not a check-run: a check-run made with the default token floats into an
+  #     arbitrary GitHub Actions check-suite (it rendered under "PR size label"),
+  #     and an app-token check-run needs the app granted checks:write. A commit
+  #     status has neither problem — branch protection matches it by context name
+  #     and it carries no check-suite grouping. Safe with the default token: a
+  #     fork's pull_request token is read-only and cannot post a status, so only
+  #     same-repo runs (this job, guarded !fork) and the privileged workflow_run
+  #     in e2e-fork.yaml can set it.
+  # REQUIRES main branch protection to require the "E2E Tests" status context —
+  # see docs/agents/e2e-testing.md §10.
+  #
+  # The `labeled` guard must stay in lockstep with `plan`'s: this job runs if and
+  # only if `plan` runs. `labeled` events other than full-e2e are discarded there,
+  # so without the same guard this job would run with plan *skipped*, read
+  # PLAN_RESULT != 'success', and post "E2E Tests" = failure — clobbering an
+  # already-green required status every time anyone labels an open PR.
+  e2e-report:
+    name: "Report E2E status"
+    needs: ["plan", "e2e"]
+    # !cancelled() rather than always(). A cancelled run no longer owns the
+    # status for its head SHA, because something superseded it and that
+    # something is now responsible. Posting from here would stamp a red on a
+    # suite that never finished, and the run that replaced it may be one that
+    # deliberately posts nothing, leaving nothing to flip it back. A cancelled
+    # run must report nothing.
+    #
+    # Cancellation still reaches this job from a push, from a `full-e2e` label
+    # run superseding the head run, and from a manual cancel. It no longer
+    # reaches it from a label the workflow discards: those run in their own
+    # concurrency group (see the key at the top of this file) precisely so they
+    # cannot cancel a live run.
+    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Report "E2E Tests" commit status
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          CODE: ${{ needs.plan.outputs.code }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          IS_RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'release') }}
+          IS_FULL_E2E: ${{ contains(github.event.pull_request.labels.*.name, 'full-e2e') }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { PLAN_RESULT, CODE, E2E_RESULT, IS_RELEASE, IS_FULL_E2E, HEAD_SHA, RUN_URL } = process.env;
+            let state, description;
+            if (PLAN_RESULT !== 'success') {
+              state = 'failure';
+              description = `plan job did not succeed (result: ${PLAN_RESULT})`;
+            } else if (CODE !== 'true') {
+              state = 'success';
+              description = 'docs-only PR — e2e not required';
+            } else if (IS_RELEASE === 'true' && IS_FULL_E2E !== 'true') {
+              // Release promotion PRs deliberately do not repeat e2e: the rc was
+              // already verified against the immutable candidate whose digests
+              // this tree pins, which is the whole point of the rc gate. The `e2e`
+              // job skips for exactly this case, and while the gate was a job that
+              // skip satisfied branch protection. Now that the gate is a status,
+              // the skip has to be reported explicitly or every promotion needs a
+              // full suite re-run or an admin override.
+              state = 'success';
+              description = 'release promotion — verified at rc, e2e not repeated (add full-e2e to force a run)';
+            } else if (E2E_RESULT === 'success') {
+              state = 'success';
+              description = 'in-tree e2e passed';
+            } else {
+              state = 'failure';
+              description = `in-tree e2e did not pass (result: ${E2E_RESULT})`;
+            }
+            try {
+              await github.rest.repos.createCommitStatus({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                sha: HEAD_SHA,
+                state,
+                context: 'E2E Tests',
+                description,
+                target_url: RUN_URL,
+              });
+            } catch (err) {
+              // The 'E2E Tests' status is the required merge gate. If we cannot
+              // publish it, fail loudly and fail-closed: setFailed keeps the job
+              // red and the required status unreported ("Expected"), so the PR
+              // stays non-mergeable.
+              core.setFailed(`Failed to report E2E Tests status: ${err}`);
+              return;
+            }
+            core.info(`E2E Tests → ${state}: ${description}`);

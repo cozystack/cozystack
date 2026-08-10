@@ -274,3 +274,100 @@ step_line() {
   # And the head of that sort is what `backport` uses.
   printf '%s\n' "$block" | script_lines | grep -qF 'lines[0].name'
 }
+
+# ── skip a target whose backport already merged ─────────────────────────────
+# A second label event on a PR whose first backport already merged (e.g.
+# backport-previous added after backport merged) re-enters this job for the
+# already-delivered target. The cherry-pick is then empty, which the action's
+# draft_commit_conflicts handling misreads as a real conflict and reports as a
+# failed backport on the original PR — this guard skips the re-run instead.
+
+@test "the guard checks merged, not just closed, PRs on the deterministic branch" {
+  block="$(job_block backport "$BACKPORT")"
+  [ -n "$block" ]
+
+  # The branch name the action itself would have used. Checking anything else
+  # answers a different question than "did THIS backport already land".
+  printf '%s\n' "$block" | script_lines | grep -qF 'backport-${context.payload.pull_request.number}-to-${targetBranch}'
+
+  # Closed alone is not enough: a closed-without-merge PR is a stale or
+  # abandoned attempt, not proof the change reached the target. Loosening this
+  # to any closed PR would skip a real retry after a conflict was closed
+  # unmerged.
+  printf '%s\n' "$block" | script_lines | grep -qF "state: 'closed'"
+  printf '%s\n' "$block" | script_lines | grep -qF 'p.merged_at !== null'
+}
+
+@test "both the checkout and the backport-action step are gated on the guard" {
+  block="$(job_block backport "$BACKPORT")"
+  [ -n "$block" ]
+
+  # Losing the gate on either step still runs the action against a target that
+  # already has the change, reproducing the false comment the guard exists to
+  # prevent.
+  count="$(printf '%s\n' "$block" | code_lines | grep -cF "steps.guard.outputs.already_merged != 'true'" || true)"
+  [ "${count:-0}" -eq 2 ]
+}
+
+@test "the guard runs before the checkout and the backport-action step" {
+  guard="$(step_line 'Check for existing merged backport' "$BACKPORT")"
+  checkout="$(step_line 'Checkout repository' "$BACKPORT")"
+  create="$(step_line 'Create back‑port PR' "$BACKPORT")"
+  [ -n "$guard" ] && [ -n "$checkout" ] && [ -n "$create" ]
+
+  [ "$guard" -lt "$checkout" ]
+  [ "$guard" -lt "$create" ]
+}
+
+# Mirrors release-changelog-behaviour.bats's convention for a github-script
+# snippet: extract the decision expression verbatim in shape and execute it
+# under node, because a grep for "merged_at" cannot tell an `.some()` from an
+# `.every()` or a flipped comparison. Two cases are the ones that matter and
+# are NOT interchangeable: the first-ever run (branch never existed, so the
+# API returns an empty list) and a real retry (someone closed a conflicting
+# backport PR without merging it). Both must NOT skip, or either the very
+# first backport attempt or a legitimate re-creation after a manual close
+# never runs.
+@test "the guard's merged decision is correct on empty, closed-unmerged and closed-merged lists" {
+  command -v node >/dev/null || { echo "node unavailable; skipping"; return 0; }
+  tmp="$(mktemp -d)"
+
+  cat > "$tmp/guard.js" <<'JS'
+function alreadyMerged(prs) {
+  return prs.some(p => p.merged_at !== null);
+}
+const cases = {
+  'first-run-empty': [],
+  'closed-unmerged': [{ merged_at: null }],
+  'closed-merged':   [{ merged_at: '2026-01-01T00:00:00Z' }],
+};
+const lines = Object.entries(cases).map(([name, prs]) => name + '=' + alreadyMerged(prs));
+require('fs').writeFileSync(1, lines.join('\n') + '\n');
+JS
+
+  node "$tmp/guard.js" > "$tmp/out.txt" 2>"$tmp/err.txt" || {
+    echo "node failed:" >&2; cat "$tmp/err.txt" >&2; exit 1; }
+
+  want="first-run-empty=false
+closed-unmerged=false
+closed-merged=true"
+  got="$(cat "$tmp/out.txt")"
+  [ "$got" = "$want" ] || {
+    echo "guard decision table is wrong." >&2
+    echo "want:" >&2; printf '%s\n' "$want" | sed 's/^/  /' >&2
+    echo "got:"  >&2; printf '%s\n' "$got"  | sed 's/^/  /' >&2
+    exit 1
+  }
+
+  # The mirror must match the real guard's exact decision expression, not just
+  # the presence of "merged_at" somewhere in the step. Wrapped like the other
+  # tests in this file's final assertion: a bare failing command here, under a
+  # trap-installed EXIT handler, has been observed to abort the whole bats run
+  # instead of just this test on macOS.
+  block="$(job_block backport "$BACKPORT")"
+  [ -n "$block" ]
+  printf '%s\n' "$block" | script_lines | grep -qF 'prs.some(p => p.merged_at !== null)' || {
+    echo "backport.yaml's guard no longer uses prs.some(p => p.merged_at !== null)." >&2; exit 1; }
+
+  rm -rf "$tmp"
+}

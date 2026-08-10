@@ -32,13 +32,12 @@
 # sweep in every vendored upstream chart template and every Helm-templated
 # `image:` line, where a blind rewrite corrupts a value `make update`
 # regenerates. An entry here is a deliberate statement that some package's
-# `image:` target sed's a ref into a file it vendors verbatim.
+# `image:` target sed's a ref into a file it vendors from upstream.
 #
 # system/multus is the only one today: its templates/ is the upstream
 # multus-daemonset-thick.yml fetched by `make update`, and multus's Makefile
-# `image:` target sed's the built ref into two `image:` lines inside it. Left
-# undeclared, multus-cni is invisible to promotion and to the nightly mirror —
-# it receives no stable :vX.Y.Z tag and is never copied to the public registry.
+# `image:` target sed's the built ref into every `multus-cni` `image:` line
+# inside it.
 #
 # KNOWN GAP, deliberately not listed: system/capi-providers-cpprovider stamps
 # its kamaji ref into files/control-plane-components.yaml AND into the
@@ -161,14 +160,25 @@ collect_image_refs() {
 
   # Declared extras additionally get the textual scrape, even though most are
   # YAML and were already parsed above. Parsing ALONE would narrow what this
-  # shape means: an extra is a manifest vendored verbatim from upstream, so it
-  # can carry a ref inside a block scalar (a ConfigMap embedding a whole
-  # deployment, say), where yq returns the enclosing block rather than the ref
-  # and the caller's ownership filter then discards it — and it can stop
-  # parsing entirely when `make update` pulls a version yq chokes on, yielding
-  # nothing at all. Both are silent skips, which is the failure mode this
-  # library exists to remove. Running both and letting the callers' existing
-  # dedup absorb the overlap costs nothing.
+  # shape means: an extra is a manifest vendored from upstream, so it can carry
+  # a ref inside a block scalar (a ConfigMap embedding a whole deployment, say),
+  # where yq returns the enclosing block rather than the ref and the caller's
+  # ownership filter then discards it — and it can stop parsing entirely, when
+  # `make update` pulls a version yq chokes on or when the package patches Helm
+  # syntax into the vendored file. Both are silent skips, which is the failure
+  # mode this library exists to remove. Running both and letting the callers'
+  # existing dedup absorb the overlap costs nothing.
+  #
+  # The multus entry is in the second state today: its staging init container is
+  # wrapped in Helm conditionals, so yq refuses the whole file and this scrape is
+  # not a backstop for it but the only leg that reports anything. One consequence
+  # is worth knowing when reading the tests: the completeness oracle in
+  # hack/promote-rewrite-tags_test.bats builds its expected side with
+  # collect_refs_from_file, so for this file that comparison is inert -- it can
+  # neither fail nor pass on it. What pins the multus entry against the real tree
+  # is `image_ref_files enumerates all three storage shapes` for the path and
+  # `collect_image_refs finds refs the depth-2 values.yaml glob misses` for the
+  # ref, both in that same file.
   for _ir_f in $IMAGE_REF_EXTRA_FILES; do
     [ -f "$_ir_root/$_ir_f" ] || continue
     grep -Eo "[^[:space:]\"']+@sha256:[0-9a-f]{64}" "$_ir_root/$_ir_f" 2>/dev/null || true

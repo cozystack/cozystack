@@ -273,6 +273,9 @@ type NodeGroup struct {
 	InstanceType string `json:"instanceType"`
 	// Kubelet resource reservations for this node group.
 	Kubelet Kubelet `json:"kubelet,omitempty"`
+	// Stream each worker VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a worker that stalls during boot before Talos apid answers, when neither a Node nor a certificate request exists to diagnose from. Two costs the field name does not show. Changing the value rolls the node group, because it is part of the worker VM template whose name is a hash of its content -- including the stuck VM whose console was wanted, so it buys visibility into the next boot rather than the current one. And it overrides the platform's cluster-wide `disableSerialConsoleLog`, set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989), which would take the node group down rather than explain it -- so check that virt-launcher Pods reach Running after enabling it.
+	// +kubebuilder:default:=false
+	LogSerialConsole bool `json:"logSerialConsole,omitempty"`
 	// Maximum number of replicas.
 	// +kubebuilder:default:=10
 	MaxReplicas int `json:"maxReplicas"`
@@ -366,6 +369,9 @@ type Talos struct {
 	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
 	// +kubebuilder:default:="factory.talos.dev/installer"
 	InstallerRepository string `json:"installerRepository"`
+	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap.
+	// +kubebuilder:default:={}
+	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`

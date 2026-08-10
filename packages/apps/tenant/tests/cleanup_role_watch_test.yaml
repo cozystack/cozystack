@@ -11,9 +11,17 @@ suite: tenant cleanup pre-delete hook
 # and pin the command interpreter to a shell that image actually ships
 # (clastix/kubectl is Alpine — /bin/sh only, no /bin/bash) so the container
 # can exec at all.
+#
+# The two fields that stop the hook outliving the uninstall attempt are pinned
+# here because they describe the Job rather than the script, and the script
+# cannot observe them about itself. hack/tenant-pre-delete-hook.bats covers the
+# script's own behaviour by running it.
 
-# Restrict rendering to the cleanup template so the chart's namespace.yaml
-# `lookup` (which errors under helm-unittest) is not evaluated.
+# Render only the cleanup template. The reason given here was that
+# namespace.yaml's `lookup` errors under helm-unittest; it does not. This suite
+# sets no values, so for as long as keycloakgroups.yaml indexes
+# `.Values._cluster` unguarded on its first line, rendering the whole chart
+# fails with "index of untyped nil".
 templates:
   - templates/cleanup-job.yaml
 
@@ -57,6 +65,92 @@ tests:
         equal:
           path: spec.template.spec.containers[0].command[0]
           value: /bin/sh
+
+  - it: cleanup Job cannot outlive the uninstall attempt that created it
+    # flux takes the uninstall budget from spec.uninstall.timeout / spec.timeout
+    # on the tenant HelmRelease, and cozystack-api generates it with neither, so
+    # the budget is helm-controller's 300s default. At or above that value helm
+    # gives up first and the Job outlives the attempt it belongs to: it is still
+    # running, so it has not finished, so ttlSecondsAfterFinished has not begun
+    # to count, and helm.sh/hook-delete-policy carries no hook-failed either.
+    # Nothing removes it until the next attempt's before-hook-creation sweep.
+    # hack/tenant-pre-delete-hook.bats holds the same ceiling as an ordering
+    # over the four numbers; this pins the value the chart ships.
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        isKind:
+          of: Job
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.activeDeadlineSeconds
+          value: 270
+
+  - it: cleanup Job pod is not BestEffort, since it gets a single attempt
+    # backoffLimit 0 removed the retry that used to absorb an eviction, so a pod
+    # that is first in line under node pressure now fails the whole uninstall
+    # attempt rather than one run inside it. Requests are what take it out of
+    # the BestEffort class; the values match the sibling hook in
+    # packages/apps/kubernetes running the same image.
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.requests.cpu
+          value: 10m
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.containers[0].resources.requests.memory
+          value: 64Mi
+
+  - it: cleanup Job pod terminates well inside the uninstall budget
+    # Since 1.31 the Job controller withholds the terminal condition until every
+    # pod has finished terminating, so helm learns of the failure at
+    # activeDeadlineSeconds plus this period, not at the deadline. The full
+    # period is spent rather than bounded by: PID 1 is a shell running a
+    # multi-command script, so it never execs into kubectl, and a default
+    # disposition sent to PID 1 is discarded by the kernel while a
+    # non-interactive shell installs no handler for it. Nothing acts on the
+    # SIGTERM and the pod ends on the SIGKILL that closes this window. Left
+    # unset, the 30s default lands the failure at 270+30 — level with the
+    # budget, which is what the deadline is set under the budget to avoid.
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        isKind:
+          of: Job
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.terminationGracePeriodSeconds
+          value: 10
+
+  - it: cleanup Job makes a single attempt so its failure reaches helm
+    # Both halves are load-bearing and neither implies the other. At the default
+    # backoffLimit of 6 none of the retries fits in what is left of the deadline,
+    # so helm never sees a failed Job and the operator gets a bare "timed out
+    # waiting for the condition" instead of the wave that could not finish. And
+    # under restartPolicy OnFailure the cap is applied only after the fact, by
+    # summing restartCount, so the kubelet re-runs the script in place first and
+    # the wave that just expired is re-entered before the Job controller cuts it
+    # down. Never puts a failed pod in front of the controller directly.
+    asserts:
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        isKind:
+          of: Job
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.backoffLimit
+          value: 0
+      - template: templates/cleanup-job.yaml
+        documentIndex: 3
+        equal:
+          path: spec.template.spec.restartPolicy
+          value: Never
 
   - it: cleanup Job runs non-root under a restrictive securityContext
     asserts:

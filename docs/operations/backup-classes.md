@@ -93,9 +93,52 @@ On a fresh-cluster install, the Velero `BackupStorageLocation` `cozy-default` is
 
 ### Cozy-default Bucket bootstrap
 
-`cozy-default` ships an `apps.cozystack.io/Bucket cozy-backups` CR in `tenant-root`, which the bucket-application chart turns into a `BucketClaim`; the COSI driver then assigns the real S3 bucket name and writes it to the BucketClaim's `.status.bucketName`. The strategy templates and the Velero BSL all read that real bucket name (Helm `lookup` against the BucketClaim). On a fresh install the BucketClaim takes a short reconcile cycle to populate its status — until it does, the strategy templates render empty and only the `Bucket` CR + `BackupClass` are present in the cluster. The HelmRelease re-reconciles on its interval (5 minutes by default — set by the cozystack operator's `helmrelease-interval` flag, not a Flux default), at which point the populated BucketClaim status causes the missing strategy templates to materialise.
+`cozy-default` ships an `apps.cozystack.io/Bucket cozy-backups` CR in `tenant-root`, which the bucket-application chart turns into a `BucketClaim`; the COSI driver then assigns the real S3 bucket name (`bucket-<claim-UID>`, so it cannot be computed in advance) and writes it to the BucketClaim's `.status.bucketName`. The strategy templates and the Velero BSL all read that real bucket name (Helm `lookup` against the BucketClaim). On a fresh install the BucketClaim takes a reconcile cycle to populate its status — until it does, the strategy templates render empty and only the `Bucket` CR + `BackupClass` are present in the cluster.
 
-If you need the BackupClass functional immediately (e.g. an e2e), trigger a Flux reconcile (`flux reconcile helmrelease backupstrategy-controller -n cozy-backup-controller`) once you see `kubectl get bucketclaim -n tenant-root bucket-cozy-backups -o jsonpath='{.status.bucketName}'` non-empty.
+**That skip does not repair itself on a reconcile.** helm-controller re-renders a release only when its chart or values change; the interval reconcile is a no-op for a healthy release, and drift detection is off on operator-generated HelmReleases. A cluster that lost the race at install time therefore keeps `BackupClass cozy-default` with **no** `Strategy` CRs and **no** Velero BSL indefinitely — which also fail-closes the pre-adoption snapshot in the v1.6.0 etcd migration.
+
+The same trap sits one release earlier, on the Secret everything else depends on. `bucket-cozy-backups-system-credentials` is rendered by the `bucket-cozy-backups-system` release behind a `lookup` of the COSI Secret, and is skipped just as permanently when that lookup is empty. Without it the credentials projector has no source at all, so no strategy, no Velero and no v1.6.0 etcd migration can resolve — and the gate cannot even determine the bucket name, which it reads from that Secret.
+
+Convergence is driven instead by the controller's default-objects gate (`backupStorage.reconcileDefaultObjects`, on by default), which repairs both, in order. While the credentials Secret is absent or carries no bucket name, the gate stamps `reconcile.fluxcd.io/forceAt` + `requestedAt` on the **bucket's** `bucket-<name>-system` HelmRelease. Once the bucket name resolves it checks that every object `cozy-default` routes to exists and stamps the same pair on the **`backupstrategy-controller`** HelmRelease, forcing the real Helm upgrade that re-runs the lookups. The two are throttled independently (one force per 5 minutes each), so the second is not delayed by the first. Expect the objects within a minute or two of the bucket becoming ready.
+
+The gate does not force a suspended HelmRelease — helm-controller ignores both annotations while `spec.suspend` is true, so it logs the skip and leaves the force counter alone. A release left suspended (`cozyhr suspend`) is therefore never repaired until it is resumed.
+
+Watch it with:
+
+```bash
+kubectl -n cozy-backup-controller logs deploy/backupstrategy-controller | grep default-objects-gate
+```
+
+#### Manual recovery on an affected cluster
+
+Only needed on a cluster running a version without the gate (or with `reconcileDefaultObjects: false`). A plain `flux reconcile helmrelease` does **nothing** here — it does not re-render. You need a forced upgrade, and **both** annotations: `forceAt` is what makes helm-controller run a real Helm upgrade, and it is only honoured together with `requestedAt`.
+
+First confirm the bucket name is actually resolvable — forcing before that just re-runs the same empty lookup:
+
+```bash
+kubectl -n tenant-root get bucketclaim bucket-cozy-backups -o jsonpath='{.status.bucketName}'
+```
+
+Then force the two releases, **in this order**:
+
+```bash
+# 1. The credentials Secret. It is rendered by the -system release, not by
+#    bucket-cozy-backups — easy to miss, and the projector (hence every
+#    strategy and Velero) has no source without it.
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n tenant-root annotate helmrelease bucket-cozy-backups-system \
+  reconcile.fluxcd.io/forceAt="$ts" reconcile.fluxcd.io/requestedAt="$ts" --overwrite
+kubectl -n tenant-root get secret bucket-cozy-backups-system-credentials
+
+# 2. The Strategy CRs and the Velero BSL.
+ts=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+kubectl -n cozy-backup-controller annotate helmrelease backupstrategy-controller \
+  reconcile.fluxcd.io/forceAt="$ts" reconcile.fluxcd.io/requestedAt="$ts" --overwrite
+kubectl get $(kubectl get crd -o name | grep strategy.backups.cozystack.io) 2>/dev/null
+kubectl -n cozy-velero get backupstoragelocation cozy-default
+```
+
+The race is nested: step 2's `lookup` resolves from the BucketClaim status, but the projector — and the v1.6.0 etcd migration — read the Secret from step 1, so a cluster missing both needs both.
 
 ### Observability
 
@@ -105,6 +148,12 @@ The credentials projector emits two Prometheus counters labelled by `namespace` 
 - `cozystack_backup_credentials_projection_failures_total`
 
 Alert on `rate(cozystack_backup_credentials_projection_failures_total[5m]) > 0` or `absent_over_time(cozystack_backup_credentials_projection_successes_total[10m])` to catch a stale BSL credential or a malformed source Secret without log scraping.
+
+The default-objects gate emits three more:
+
+- `cozystack_backup_default_objects_missing{backupclass="cozy-default"}` — how many of the objects the platform default backups depend on are absent: the credentials Secret, the Strategy CRs `cozy-default` routes to, and the Velero BSL. **This is the alert that would have caught the missing Strategy CRs**: it is non-zero whatever the HelmRelease's `Ready` condition says. Alert on `min_over_time(cozystack_backup_default_objects_missing[15m]) > 0`.
+- `cozystack_backup_default_objects_check_errors_total{backupclass="cozy-default"}` — checks that could not reach a conclusion (an API error reading the source Secret, the BackupClass, or one of the routed objects). The gauge above is deliberately **not** written on those ticks, so that it does not flap on a transient API error — which means that while this counter climbs, the gauge is stale and a `0` on it proves nothing. Pair the two: `min_over_time(cozystack_backup_default_objects_missing[15m]) > 0 or rate(cozystack_backup_default_objects_check_errors_total[15m]) > 0`.
+- `cozystack_backup_default_objects_force_reconciles_total{namespace,name}` — forced Helm upgrades issued, labelled by the release forced (this chart's own, or the bucket's `-system` release). A counter that keeps climbing means the forced render is not producing the objects (a missing CRD, for instance), which is a different problem from the install-time race. A suspended release is skipped before the patch and is **not** counted here, so a paused release cannot masquerade as a render that keeps failing — look for the `skipped forcing a suspended HelmRelease` log line instead.
 
 ## Admin overrides for `cozy-default`
 

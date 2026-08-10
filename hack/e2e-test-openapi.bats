@@ -1,4 +1,12 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats.
+# This one is NOT debt and must not be converted. The trap sits inside an
+# explicit subshell and kills a backgrounded `kubectl proxy`; a subshell trap
+# does not replace the one the bats binary installs, so a failure there still
+# prints its `not ok`. Moving the kill to the end of the body would leak the
+# proxy on failure -- it holds a fixed port, so the next run wedges. The count
+# is declared anyway because the ratchet is exact in both directions: it fails
+# if a real test-level trap is added here, and it fails if this one is removed.
 # -----------------------------------------------------------------------------
 # Test OpenAPI endpoints in a Kubernetes cluster
 # -----------------------------------------------------------------------------

@@ -15,9 +15,10 @@
 # (the chart resolves the VirtualMachineClusterInstancetype via `lookup`, which
 # returns nil under `helm template`), so every case here uses explicit
 # `resources` sizing. The GPU and kubelet-reservation branches ARE offline
-# renderable and are covered below. Scope: only the four pool objects are
-# compared; the talos-reconcile Job's rendered output is not (its own
-# content-hash name makes a divergence there visible separately).
+# renderable and are covered below, as is the guest-console-log opt-in. Scope:
+# only the four pool objects are compared; the talos-reconcile Job's rendered
+# output is not (its own content-hash name makes a divergence there visible
+# separately).
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -147,8 +148,24 @@ kubelet:
   evictionSoftMemory: 8%
 EOF
 
+# --- Case: guest serial console logging enabled ---
+cat >"$WORK/case-serialconsole.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+logSerialConsole: true
+EOF
+
 RC=0
-for c in resources gpu kubelet; do
+for c in resources gpu kubelet serialconsole; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done

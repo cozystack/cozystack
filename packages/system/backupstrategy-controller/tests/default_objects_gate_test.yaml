@@ -1,0 +1,156 @@
+suite: DefaultObjectsGate wiring — the release the gate forces, and its RBAC
+
+# The Strategy CRs and the Velero BSL are rendered behind a `lookup` of the
+# BucketClaim this same chart creates, so a fresh install renders them empty
+# and helm-controller never re-renders (unchanged chart + values, drift
+# detection off) — the skip is permanent. The controller's DefaultObjectsGate
+# repairs that by forcing a real Helm upgrade on THIS release, so the release
+# coordinates it is given must be this chart's own release, and it must hold
+# the verbs to do it.
+
+templates:
+  - templates/deployment.yaml
+  - templates/rbac.yaml
+
+release:
+  name: backupstrategy-controller
+  namespace: cozy-backup-controller
+
+tests:
+  - it: "gate targets this chart's own HelmRelease and the cozy-default BackupClass"
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+            value: backupstrategy-controller
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAMESPACE
+            value: cozy-backup-controller
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_BACKUPCLASS
+            value: cozy-default
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
+            value: cozy-velero
+
+  # The credentials Secret is rendered one release earlier, by the platform
+  # bucket's <bucket>-system release, behind the same kind of install-time
+  # lookup. Its name is assembled from the bucket-rd release prefix and the
+  # "-system" suffix the parent bucket chart appends, and it must stay in
+  # lockstep with systemSecretName: the gate resolves the bucket name from
+  # that Secret and forces exactly this release when it is absent. Two
+  # independently written strings, so pin the relationship, not just the value.
+  - it: "gate targets the bucket release that renders the credentials Secret"
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_HELMRELEASE_NAME
+            value: bucket-cozy-backups-system
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
+            value: tenant-root
+      # BACKUP_STORAGE_SECRET_NAME is exactly the release name above with
+      # "-credentials" appended — that is what makes forcing this release the
+      # thing that creates that Secret.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_SECRET_NAME
+            value: bucket-cozy-backups-system-credentials
+
+  - it: "a renamed bucket moves both the forced release and the Secret together"
+    template: templates/deployment.yaml
+    set:
+      backupStorage.bucketName: platform-backups
+      backupStorage.systemSecretName: bucket-platform-backups-system-credentials
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_HELMRELEASE_NAME
+            value: bucket-platform-backups-system
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_STORAGE_SECRET_NAME
+            value: bucket-platform-backups-system-credentials
+
+  # External S3: the Secret is admin-managed and no release renders it, so
+  # there is nothing to force. Handing the gate stale coordinates would make
+  # it patch a HelmRelease that does not exist every MinForceInterval.
+  - it: "provisionBucket=false: no bucket release to force"
+    template: templates/deployment.yaml
+    set:
+      backupStorage.provisionBucket: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_HELMRELEASE_NAME
+            value: bucket-cozy-backups-system
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
+            value: tenant-root
+
+  - it: "velero.bslEnabled=false: the BSL is not rendered, so the gate must not look for it"
+    template: templates/deployment.yaml
+    set:
+      velero.bslEnabled: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
+            value: cozy-velero
+      # The rest of the gate stays wired: the Strategy CRs still need it.
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+            value: backupstrategy-controller
+
+  - it: "reconcileDefaultObjects=false: the gate is fully unwired (main.go disables it on an empty release name)"
+    template: templates/deployment.yaml
+    set:
+      backupStorage.reconcileDefaultObjects: false
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+            value: backupstrategy-controller
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_DEFAULT_OBJECTS_BACKUPCLASS
+            value: cozy-default
+
+  - it: "ClusterRole grants patch on helmreleases (forceAt stamp) and get on backupstoragelocations"
+    template: templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["helm.toolkit.fluxcd.io"]
+            resources: ["helmreleases"]
+            verbs: ["get", "create", "update", "patch", "delete"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["velero.io"]
+            resources: ["backupstoragelocations"]
+            verbs: ["get"]

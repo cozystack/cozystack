@@ -37,6 +37,20 @@
 {{- end -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium" $ $networkingComponents) }}
 {{include "cozystack.platform.system.common-packages" $ }}
+{{- /* Talos bundles only bridge, firewall, flannel, host-local, loopback and
+       portmap in /opt/cni/bin from its own node image; the other ten this
+       package carries are not there, so a NetworkAttachmentDefinition naming
+       macvlan, ipvlan or vlan fails on Talos exactly as it does on generic
+       Linux. Staging is therefore on here too. The four names that overlap are
+       rewritten on every pod recreation with the SAME upstream version --
+       Talos pins containernetworking/plugins v1.9.1 in siderolabs/pkgs and so
+       do we -- so this is not a downgrade of a system component; see the
+       talos-cni-plugins-checked-against marker in the multus image Dockerfile.
+       networking.stageCniPlugins turns it off, for nodes whose operator
+       manages that directory. The value is always emitted rather than left to
+       the chart default, so the rendered Package states which way it went. */ -}}
+{{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
+{{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{include "cozystack.platform.package.default" (list "cozystack.linstor" $) }}
 {{include "cozystack.platform.package" (list "cozystack.cozystack-scheduler" "linstor" $) }}
 {{- end }}
@@ -112,6 +126,16 @@
 {{- /* Use kubeovn-cilium-generic variant (no values-talos.yaml) */ -}}
 {{include "cozystack.platform.package" (list "cozystack.networking" "kubeovn-cilium-generic" $ $networkingComponents) }}
 {{include "cozystack.platform.system.common-packages" $ }}
+{{- /* multus staging: same default as the isp-full branch above, and here the
+       gap is wider -- generic Linux has no guarantee that /opt/cni/bin holds
+       any of the reference plugins, since k3s keeps its copies elsewhere and
+       Cilium installs only cilium-cni + loopback. Where staging runs it
+       installs on every pod recreation rather than only when a file is absent:
+       that rewrite is the only path a later plugin version has onto an existing
+       node, so installing only when absent would pin each node to whichever
+       version arrived there first. */ -}}
+{{- $multusComponents := dict "multus" (dict "values" (dict "stageCniPlugins" (eq (include "cozystack.platform.stageCniPlugins" (list $ true)) "true"))) -}}
+{{include "cozystack.platform.package" (list "cozystack.multus" "default" $ $multusComponents) }}
 {{- /* Pass talos.enabled: false to linstor for generic Linux */ -}}
 {{- $linstorComponents := dict "linstor" (dict "values" (dict "talos" (dict "enabled" false))) -}}
 {{include "cozystack.platform.package" (list "cozystack.linstor" "default" $ $linstorComponents) }}

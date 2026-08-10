@@ -112,7 +112,8 @@ spec:
   template:
     spec:
       generateType: none
-      talosVersion: "{{ $talosVersion }}"
+      talosVersion: "{{ $talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}"
+      {{- /* INVARIANT (cozystack/cozystack#3513): the data block below is emitted from the unquoted `cat <<EOF | kubectl apply` heredoc in the talos-reconcile Job's command, so it is subject to shell parameter expansion and command substitution at Job runtime. This spec is rendered here and nindented into that heredoc by the caller, so the invariant travels with the text rather than with the Job template. Every tenant-controlled free-form value interpolated into it must therefore be either shell-escaped for backslash, dollar and backtick (as talosVersion here and registryMirrors below are) or render-time pattern-validated to exclude those bytes (as the kubelet reservation fields are, in cluster.yaml in the kubernetes chart and in nodegroup.yaml in kubernetes-nodes; this file is byte-identical across the two, so it names both). A new such field added here without one of the two silently reopens command injection into a host-cluster Pod. Note: an asterisk-slash sequence inside this Helm comment closes it early and breaks the render, so the kubelet field names are spelled out here rather than written as globs. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc or the content hash. */}}
       data: |
         version: v1alpha1
         persist: true
@@ -192,12 +193,18 @@ spec:
                 memory.available: "256Mi"
           install:
             disk: /dev/vda
-            image: {{ $root.Values.talos.installerRepository | trimSuffix "/" }}/{{ $root.Values.talos.schematicID }}:{{ $talosVersion }}
+            image: {{ $root.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ $root.Values.talos.schematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ $talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
             wipe: false
           features:
             rbac: true
             kubePrism:
               enabled: false
+          {{- with $root.Values.talos.registryMirrors }}
+          registries:
+            mirrors:
+              {{- /* registryMirrors is free-form tenant-facing input rendered into the unquoted reconcile-Job heredoc this spec is nindented into, so the value is escaped (backslash, dollar, backtick) to render as a literal and never be shell-expanded or command-substituted at Job runtime. This is a Helm comment: it is stripped at render, so its own text never reaches the heredoc. See cozystack/cozystack#3513. */}}
+              {{- toYaml . | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" | nindent 14 }}
+          {{- end }}
         cluster:
           id: ${CLUSTER_ID}
           secret: ${CLUSTER_SECRET}

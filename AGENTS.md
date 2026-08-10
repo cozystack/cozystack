@@ -28,7 +28,7 @@ This file provides structured guidance for AI coding assistants and agents worki
 
 - **E2E tests and E2E CI** (e.g., "write/fix an e2e test", "stabilize a flaky test", "add a bats test", "change the e2e workflow", "why did e2e fail")
   - Read: [`e2e-testing.md`](./docs/agents/e2e-testing.md)
-  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no `EXIT`/`RETURN` traps, fail-fast on HelmRelease readiness
+  - Action: Read the entire file and follow the conventions exactly — no new retries on deterministic steps, event-driven backstops before every `kubectl wait`, no test-level `EXIT`/`RETURN` traps (a self-contained one inside a Chainsaw `script` step or an explicit subshell is fine — see the doc), fail-fast on HelmRelease readiness
 
 - **General questions about contributing**
   - Read: [`contributing.md`](./docs/agents/contributing.md)
