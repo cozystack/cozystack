@@ -15,7 +15,8 @@
 # (the chart resolves the VirtualMachineClusterInstancetype via `lookup`, which
 # returns nil under `helm template`), so every case here uses explicit
 # `resources` sizing. The GPU, kernel-module and kubelet-reservation branches
-# ARE offline renderable and are covered below.
+# ARE offline renderable and are covered below, as is the guest-console-log
+# opt-in.
 #
 # The machine config is compared because it is the one thing the two charts
 # duplicate outright: each renders its own copy of the TalosConfigTemplate that
@@ -190,6 +191,22 @@ kubelet:
   evictionSoftMemory: 8%
 EOF
 
+# --- Case: guest serial console logging enabled ---
+cat >"$WORK/case-serialconsole.yaml" <<'EOF'
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: []
+resources:
+  cpu: "2"
+  memory: 4Gi
+gpus: []
+kubelet: {}
+logSerialConsole: true
+EOF
+
 # --- Case: explicit kernelModules on a pool with no GPU (the field is generic,
 #     nothing about it is NVIDIA-specific) ---
 cat >"$WORK/case-kernelmodules.yaml" <<'EOF'
@@ -250,7 +267,7 @@ kubelet: {}
 EOF
 
 RC=0
-for c in resources gpu kubelet kernelmodules kernelmodules-optout schematic; do
+for c in resources gpu kubelet serialconsole kernelmodules kernelmodules-optout schematic; do
   write_values "$WORK/case-${c}.yaml"
   diff_kinds "$c" || RC=1
 done

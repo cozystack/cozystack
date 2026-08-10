@@ -69,72 +69,82 @@ render_variant() {
 }
 
 @test "default variant: ccManager and vgpuDeviceManager pinned off" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant passthrough
   grep -A 1 '^  ccManager:'         "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vgpuDeviceManager:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  rm -rf "$TMP"
 }
 
 @test "default variant: defaultWorkload is vm-passthrough" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant passthrough
   grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'defaultWorkload: vm-passthrough'
+  rm -rf "$TMP"
 }
 
 @test "default variant: driver and devicePlugin disabled, vfioManager left on" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant passthrough
   grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  devicePlugin:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vfioManager:'  "$TMP/rendered.yaml" | grep -q 'enabled: true'
+  rm -rf "$TMP"
 }
 
 @test "vgpu variant: ccManager and vgpuDeviceManager pinned off" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant vgpu
   grep -A 1 '^  ccManager:'         "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vgpuDeviceManager:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  rm -rf "$TMP"
 }
 
 @test "vgpu variant: defaultWorkload is vm-vgpu" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant vgpu
   grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'defaultWorkload: vm-vgpu'
+  rm -rf "$TMP"
 }
 
 @test "vgpu variant: vgpuManager enabled, driver and devicePlugin disabled" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant vgpu
   grep -A 1 '^  vgpuManager:'  "$TMP/rendered.yaml" | grep -q 'enabled: true'
   grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  devicePlugin:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  rm -rf "$TMP"
 }
 
 @test "container variant: ccManager and vgpuDeviceManager pinned off" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant container
   grep -A 1 '^  ccManager:'         "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vgpuDeviceManager:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  rm -rf "$TMP"
 }
 
 @test "container variant: sandboxWorkloads off, defaultWorkload stays upstream 'container'" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant container
   grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 2 '^  sandboxWorkloads:' "$TMP/rendered.yaml" | grep -q 'defaultWorkload: container'
+  rm -rf "$TMP"
 }
 
 @test "container variant: driver, toolkit, vfioManager off; devicePlugin on" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant container
   grep -A 1 '^  driver:'       "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  toolkit:'      "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  vfioManager:'  "$TMP/rendered.yaml" | grep -q 'enabled: false'
   grep -A 1 '^  devicePlugin:' "$TMP/rendered.yaml" | grep -q 'enabled: true'
+  rm -rf "$TMP"
 }
 
 @test "container variant: cdi pinned off (toolkit disabled cannot service CDI specs)" {
-  TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+  TMP=$(mktemp -d)
   render_variant container
   grep -A 1 '^  cdi:' "$TMP/rendered.yaml" | grep -q 'enabled: false'
+  rm -rf "$TMP"
 }

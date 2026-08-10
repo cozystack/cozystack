@@ -2,6 +2,29 @@
 # Sourced by the chainsaw kubernetes-latest/previous Tests after cd to repo root.
 . hack/e2e-chainsaw/_lib/remediation-guard.sh
 . hack/e2e-chainsaw/_lib/talos-image-cache.sh
+. hack/e2e-chainsaw/_lib/ghcr-mirror.sh
+
+# talos_spec_block: emit the tenant Kubernetes CR `spec.talos` block combining the
+# Talos OS image cache (imageFactoryURL) and the ghcr.io worker image-pull mirror
+# (registryMirrors), each included only when its in-sandbox mirror is up. Prints
+# nothing when both fall back to the public defaults, so the chart defaults apply.
+# Indented for insertion directly under `spec:` in the heredoc below.
+#
+# No trailing newline, unlike the single-key helper this replaced: the caller reads
+# it through `$(...)`, which strips one anyway, and `${talos_block}` sits on a line
+# of its own in the heredoc, which supplies the break before the next `spec` key.
+# An empty result therefore leaves a blank line, which is valid YAML.
+talos_spec_block() {
+  local url ghcr mirrors
+  url=$(resolve_talos_image_factory_url)
+  ghcr=$(resolve_ghcr_mirror_endpoint)
+  mirrors=$(ghcr_registry_mirrors_block "$ghcr")
+  [ -n "$url" ] || [ -n "$mirrors" ] || return 0
+  printf '  talos:\n'
+  [ -n "$url" ] && printf '    imageFactoryURL: %s\n' "$url"
+  [ -n "$mirrors" ] && printf '%s' "$mirrors"
+  return 0
+}
 
 # kubectl_wait_retry: wraps `kubectl wait` with retries against transient
 # management-cluster apiserver/etcd errors.
@@ -104,6 +127,94 @@ cozy_wait_tenant_drained() {
   done
 }
 
+# Pure predicate for ONE node row of the capture cozy_has_schedulable_node
+# scans. Encodes the scheduler's own admission rule for a Pod that tolerates
+# nothing: the NodeUnschedulable plugin rejects a node whose
+# .spec.unschedulable is set (what `kubectl get nodes` renders as
+# SchedulingDisabled), and the TaintToleration plugin rejects one carrying any
+# taint with effect NoSchedule or NoExecute. PreferNoSchedule only lowers the
+# node's score, so it is deliberately not treated as blocking. Ready is checked
+# explicitly rather than left to the not-ready taint, so the gate does not
+# depend on how promptly the node-lifecycle controller applies that taint.
+#
+# The backend Pod is not literally toleration-free: DefaultTolerationSeconds
+# admission gives every Pod a 300s NoExecute toleration for
+# node.kubernetes.io/not-ready and node.kubernetes.io/unreachable. So for those
+# two taints this predicate is stricter than the scheduler and would keep
+# waiting where the Pod could in fact be placed. That errs toward waiting,
+# never toward releasing the gate early, and requiring Ready makes the case
+# nearly unreachable anyway.
+cozy_node_accepts_pods() {
+  # $1 Ready condition status, $2 .spec.unschedulable, $3 taint effects
+  if [ "$1" != True ]; then
+    return 1
+  fi
+  case "$2" in
+    true | True) return 1 ;;
+  esac
+  case ",$3," in
+    *,NoSchedule,* | *,NoExecute,*) return 1 ;;
+  esac
+  return 0
+}
+
+# Pure exit-condition for the tenant scheduling gate
+# (cozy_wait_schedulable_node). The single argument is the capture of a
+# `kubectl get nodes --no-headers -o custom-columns=NAME,READY,UNSCHEDULABLE,TAINTS`,
+# one whitespace-separated row per node. custom-columns renders an absent field
+# as the literal "<none>" and joins several taint effects with a comma, so both
+# are matched as text. Returns 0 as soon as one row describes a node that would
+# accept a Pod that tolerates nothing. A failed probe leaves the capture empty,
+# which reports not-schedulable rather than schedulable, so an API blip can
+# never release the gate (same guard as cozy_tenant_drained). The scan runs in
+# the subshell on the right of the pipeline, so its `exit` ends that subshell
+# and becomes the function's status -- it never leaves the caller. Pure text
+# logic, unit-tested in hack/run-kubernetes-schedulable_test.bats.
+cozy_has_schedulable_node() {
+  printf '%s\n' "$1" | {
+    while read -r _name _ready _unschedulable _taints _rest; do
+      if [ -z "$_name" ]; then
+        continue
+      fi
+      if cozy_node_accepts_pods "$_ready" "$_unschedulable" "$_taints"; then
+        exit 0
+      fi
+    done
+    exit 1
+  }
+}
+
+# Block until the tenant cluster has at least one node that actually accepts a
+# Pod, then print the node table it decided on (the same table the failure path
+# prints, so the two outcomes are read the same way). The node-join gate in
+# run_kubernetes_test establishes that two nodes are Ready, which is a weaker
+# guarantee: a Ready node still carries `node.cilium.io/agent-not-ready` until
+# the tenant's cilium agent claims it, and a node the bringup has not finished
+# with is Ready,SchedulingDisabled.
+# Scheduling against such a set is not stuck, only slow, and the time it takes
+# is variable -- so it belongs in a budget of its own rather than inside the
+# workload's readiness budget, where it is indistinguishable from a slow image
+# pull or a failing probe.
+cozy_wait_schedulable_node() {
+  _kc="$1"
+  _timeout="${2:-300}"
+  _deadline=$(( $(date +%s) + _timeout ))
+  while :; do
+    _nodes=$(kubectl --kubeconfig "$_kc" get nodes --no-headers -o custom-columns='NAME:.metadata.name,READY:.status.conditions[?(@.type=="Ready")].status,UNSCHEDULABLE:.spec.unschedulable,TAINTS:.spec.taints[*].effect' 2>/dev/null) || _nodes=""
+    if cozy_has_schedulable_node "$_nodes"; then
+      echo "» tenant has a node that accepts Pods:"
+      printf '%s\n' "$_nodes" | sed 's/^/  node: /'
+      return 0
+    fi
+    if [ "$(date +%s)" -ge "$_deadline" ]; then
+      echo "» no tenant node became schedulable (Ready, not cordoned, no NoSchedule/NoExecute taint) within ${_timeout}s" >&2
+      printf '%s\n' "${_nodes:-<the node probe returned nothing>}" | sed 's/^/  node: /' >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 # Block until every ZFS storage pool on every LINSTOR satellite reports at
 # least _min_free_gib of FreeCapacity. Motivation is proven from a
 # cozyreport artefact captured by hack/cozyreport.sh (see PR #3044 run
@@ -179,6 +290,16 @@ cozy_cleanup() {
   # so they don't leak MetalLB IPs from the shared host pool. Labeled by the
   # test so a single selector reaps them all.
   kubectl -n tenant-test delete service -l cozystack-e2e.io/tenant-api-lb --ignore-not-found --wait=false 2>/dev/null || true
+  # A failed node-join capture creates a short-lived reader Certificate and a
+  # hardened helper Pod. They are labelled separately from the tenant API LB:
+  # the Secret contains a Talos client key and must be reaped even if the
+  # diagnostic collector itself returned early.
+  if ! kubectl -n tenant-test delete certificates.cert-manager.io -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=true --timeout=30s 2>/dev/null; then
+    echo "» WARNING: failed to delete tenant Talos diagnostic Certificates" >&2
+  fi
+  if ! kubectl -n tenant-test delete pod,secret -l cozystack-e2e.io/tenant-talos-diagnostics --ignore-not-found --wait=false 2>/dev/null; then
+    echo "» WARNING: failed to delete tenant Talos diagnostic Pod/Secret" >&2
+  fi
   kubectl -n tenant-test delete kuberneteses.apps.cozystack.io --all --ignore-not-found --wait=false 2>/dev/null || true
   kubectl -n tenant-test wait kuberneteses.apps.cozystack.io --all --for=delete --timeout=5m 2>/dev/null || true
   # The CR delete above finalizes once the Kubernetes CR is gone, which only
@@ -222,7 +343,10 @@ _tenant_snapshot_on_fail() {
   # Output goes to a log beside the snapshot instead of /dev/null so "complete
   # or truncated?" is answerable from the artifact, as for the host snapshot.
   _cg_rc=0
-  timeout -k 30 360 crust-gather collect -k "${CURRENT_TENANT_KC}" --duration 180s \
+  # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+  # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+  # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+  timeout -k 30 360 crust-gather collect -k "${CURRENT_TENANT_KC}" --disable-additional-logs --duration 180s \
     --exclude-kind Secret -f "$_snap/${CURRENT_TENANT_KC}" \
     >"$_snap/crust-gather-${CURRENT_TENANT_KC}.log" 2>&1 || _cg_rc=$?
   case "$_cg_rc" in
@@ -230,6 +354,1132 @@ _tenant_snapshot_on_fail() {
     124 | 137) echo "» tenant crust-gather snapshot TRUNCATED (wall-clock $_cg_rc); partial state kept, see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
     *) echo "» tenant crust-gather snapshot FAILED (exit $_cg_rc); see $_snap/crust-gather-${CURRENT_TENANT_KC}.log" ;;
   esac
+}
+
+# Render name|IP rows for worker VMIs from a `kubectl get ... -o json` document.
+# Kept pure so an absent default interface is represented by an empty IP instead
+# of silently dropping the VMI from the diagnostic report.
+cozy_tenant_worker_vmi_rows() {
+  jq -r '.items[] | [.metadata.name, ([.status.interfaces[]? | select(.name == "default") | .ipAddress][0] // "")] | join("|")'
+}
+
+# Ask cert-manager for a short-lived, read-only Talos client certificate. The
+# tenant chart deliberately uses TalosConfigTemplate generateType=none, so CABPT
+# creates no client talosconfig for this worker-only Kamaji topology. Reusing the
+# existing Talos CA Issuer avoids materialising an os:admin credential or copying
+# the CA private key out of Kubernetes.
+cozy_apply_tenant_talos_reader_certificate() {
+  local test_name="$1"
+  local release="kubernetes-${test_name}"
+  local certificate="${release}-e2e-talos-reader"
+
+  kubectl apply --request-timeout=30s -f - <<EOF
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: ${certificate}
+  namespace: tenant-test
+  labels:
+    cozystack-e2e.io/tenant-talos-diagnostics: "${test_name}"
+spec:
+  duration: 1h
+  renewBefore: 10m
+  commonName: ${certificate}
+  secretName: ${certificate}
+  secretTemplate:
+    labels:
+      cozystack-e2e.io/tenant-talos-diagnostics: "${test_name}"
+  subject:
+    organizations:
+    - os:reader
+  privateKey:
+    algorithm: Ed25519
+    rotationPolicy: Always
+  usages:
+  - digital signature
+  - client auth
+  issuerRef:
+    name: ${release}-talos-ca
+    kind: Issuer
+    group: cert-manager.io
+EOF
+}
+
+# Build a local talosconfig from the reader Certificate. All private material
+# stays below workdir, which the caller creates with mode 0700 and removes from
+# a contained subshell EXIT trap; none of it is copied into cozyreport.
+cozy_prepare_tenant_talosconfig() (
+  local test_name="$1"
+  local workdir="$2"
+  local release="kubernetes-${test_name}"
+  local certificate="${release}-e2e-talos-reader"
+
+  umask 077
+  # An interrupted prior run may have left a reader Secret signed by the old
+  # tenant CA. Remove the Certificate first so cert-manager cannot recreate that
+  # Secret between deletion and the new request, then wait for both objects to
+  # disappear before waiting for issuance below.
+  kubectl -n tenant-test delete certificate "${certificate}" \
+    --ignore-not-found --wait=true --timeout=10s >/dev/null 2>&1 || return 1
+  kubectl -n tenant-test delete secret "${certificate}" \
+    --ignore-not-found --wait=true --timeout=10s >/dev/null 2>&1 || return 1
+  cozy_apply_tenant_talos_reader_certificate "${test_name}" || return 1
+
+  # cert-manager issuance is asynchronous. Wait on its actual Ready condition;
+  # on expiry, preserve Certificate diagnostics without ever printing the
+  # generated Secret.
+  if ! kubectl_wait_retry -n tenant-test certificate "${certificate}" \
+    --for=condition=Ready --timeout=30s; then
+    echo "tenant Talos reader Certificate was not issued within 30s" >&2
+    kubectl -n tenant-test describe certificate "${certificate}" --request-timeout=30s >&2 || true
+    kubectl -n tenant-test get certificaterequests.cert-manager.io \
+      -l cert-manager.io/certificate-name="${certificate}" -o wide --request-timeout=30s >&2 || true
+    return 1
+  fi
+
+  kubectl -n tenant-test get secret "${release}-talos-ca" \
+    -o go-template='{{index .data "tls.crt" | base64decode}}' --request-timeout=30s >"${workdir}/ca.crt" || return 1
+  kubectl -n tenant-test get secret "${certificate}" \
+    -o go-template='{{index .data "tls.crt" | base64decode}}' --request-timeout=30s >"${workdir}/client.crt" || return 1
+  kubectl -n tenant-test get secret "${certificate}" \
+    -o go-template='{{index .data "tls.key" | base64decode}}' --request-timeout=30s >"${workdir}/client.key" || return 1
+
+  talosctl --talosconfig "${workdir}/talosconfig" config add "${release}" \
+    --ca "${workdir}/ca.crt" --crt "${workdir}/client.crt" \
+    --key "${workdir}/client.key" || return 1
+  talosctl --talosconfig "${workdir}/talosconfig" config context "${release}" || return 1
+  chmod 600 "${workdir}/talosconfig"
+)
+
+# Apply the helper Pod separately from its readiness/copy steps so its security
+# invariants have focused unit coverage. The Pod runs on the management cluster
+# in the same namespace as bridge-networked worker VMIs, which lets talosctl use
+# each real VMI IP as both endpoint and node and keeps server-TLS verification
+# valid. A MetalLB or localhost port-forward address would not be in the Talos
+# serving certificate SANs.
+cozy_apply_tenant_talos_diagnostics_pod() {
+  local test_name="$1"
+  local pod_name="kubernetes-${test_name}-talos-diagnostics"
+
+  kubectl apply --request-timeout=30s -f - <<EOF
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ${pod_name}
+  namespace: tenant-test
+  labels:
+    cozystack-e2e.io/tenant-talos-diagnostics: "${test_name}"
+spec:
+  activeDeadlineSeconds: 900
+  automountServiceAccountToken: false
+  enableServiceLinks: false
+  restartPolicy: Never
+  terminationGracePeriodSeconds: 1
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
+    seccompProfile:
+      type: RuntimeDefault
+  containers:
+  - name: diagnostics
+    # The E2E sandbox ships the statically linked upstream talosctl release, so
+    # reuse the digest-pinned Alpine helper already pulled by the test setup.
+    image: docker.io/alpine/k8s:1.36.2@sha256:44ef4942e171939b9c665a4a84beb80e2dcdb9a24330d4651cfdfd2e9deecc47
+    imagePullPolicy: IfNotPresent
+    command: ["sh", "-c", "sleep 900"]
+    securityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+        - ALL
+      readOnlyRootFilesystem: true
+    resources:
+      requests:
+        cpu: 10m
+        memory: 16Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    volumeMounts:
+    - name: tmp
+      mountPath: /tmp
+  volumes:
+  - name: tmp
+    emptyDir: {}
+EOF
+}
+
+# Start the helper Pod and stream talosctl plus the reader talosconfig into its
+# emptyDir. Streaming avoids a Secret volume and keeps the Pod independent of
+# kubectl-cp/tar behavior. The final cleanup selector remains the authoritative
+# backstop if any preparation step fails.
+cozy_prepare_tenant_talos_diagnostics_pod() {
+  local test_name="$1"
+  local talosconfig="$2"
+  local pod_name="kubernetes-${test_name}-talos-diagnostics"
+  local talosctl_bin
+
+  talosctl_bin=$(command -v talosctl) || return 1
+  kubectl -n tenant-test delete pod "${pod_name}" --ignore-not-found \
+    --wait=true --timeout=10s >/dev/null 2>&1 || return 1
+  cozy_apply_tenant_talos_diagnostics_pod "${test_name}" || return 1
+
+  if ! kubectl -n tenant-test wait pod "${pod_name}" \
+    --for=condition=Ready --timeout=60s; then
+    kubectl -n tenant-test describe pod "${pod_name}" --request-timeout=30s >&2 || true
+    kubectl -n tenant-test get events \
+      --field-selector involvedObject.name="${pod_name}" \
+      --sort-by=.lastTimestamp --request-timeout=30s >&2 || true
+    return 1
+  fi
+
+  if ! timeout -k 5 60 kubectl -n tenant-test exec -i "${pod_name}" \
+    -c diagnostics -- sh -ec 'cat > /tmp/talosctl && chmod 500 /tmp/talosctl' \
+    <"${talosctl_bin}"; then
+    echo "failed to stream talosctl into tenant diagnostics Pod" >&2
+    return 1
+  fi
+  if ! timeout -k 5 20 kubectl -n tenant-test exec -i "${pod_name}" \
+    -c diagnostics -- sh -ec 'umask 077; cat > /tmp/talosconfig; chmod 600 /tmp/talosconfig' \
+    <"${talosconfig}"; then
+    echo "failed to stream tenant talosconfig into diagnostics Pod" >&2
+    return 1
+  fi
+}
+
+# Capture one bounded Talos command through the helper Pod and retain the exit
+# status alongside partial output. A timeout or unreachable pre-apid worker is
+# itself useful evidence and must not erase captures from the other worker.
+cozy_capture_tenant_talos_command() {
+  local pod_name="$1"
+  local node_ip="$2"
+  local output="$3"
+  shift 3
+  local rc=0
+
+  timeout -k 5 20 kubectl -n tenant-test exec "${pod_name}" -c diagnostics -- \
+    /tmp/talosctl --talosconfig /tmp/talosconfig \
+    -e "${node_ip}" -n "${node_ip}" "$@" >"${output}" 2>&1 || rc=$?
+  printf '\n[capture exit code: %s]\n' "${rc}" >>"${output}"
+  return "${rc}"
+}
+
+cozy_capture_tenant_talos_node() {
+  local pod_name="$1"
+  local node_ip="$2"
+  local output_dir="$3"
+
+  mkdir -p "${output_dir}"
+  printf 'endpoint: %s\nnode: %s\n' "${node_ip}" "${node_ip}" >"${output_dir}/target.txt"
+  cozy_capture_tenant_talos_command "${pod_name}" "${node_ip}" \
+    "${output_dir}/dmesg.log" dmesg || true
+  cozy_capture_tenant_talos_command "${pod_name}" "${node_ip}" \
+    "${output_dir}/kubelet.log" logs kubelet --tail=500 || true
+}
+
+# Name the console experiment's own failure before the noise starts. Enabling
+# logSerialConsole punches through the platform's cluster-wide disable, and if
+# kubevirt/kubevirt#15989 still bites, guest-console-log wedges virt-launcher
+# in Init: the workers never boot, no Node registers, and the suite reports
+# "fewer than 2 tenant nodes Ready within 18m" -- byte-identical to the failure
+# this instrumentation was added to study. A triager reading that line files it
+# as the known flake and the experiment's answer is lost at the bottom of
+# POD-STATE.txt. A diagnostic whose own worst case is disguised as the bug it
+# investigates is worth less than none, so it says so itself, and says it
+# first.
+#
+# The bit it reads is `ready` on the init container. This sidecar is built with
+# no probes at all, and kubelet's UpdatePodStatus sets `ready = !exists` for a
+# container with no readiness worker once it is running -- liveness is not an
+# input to readiness anywhere. So the bit is exactly "the container is
+# running", and false means not running: never-started, waiting between
+# restarts, or already-terminated. Running-but-not-ready is not a shape this
+# container can hold, which is why the taxonomy below does not claim it.
+# Those are not one finding: the hang starts the container and then fails it,
+# so with restartPolicy Always it settles into CrashLoopBackOff and passes
+# through Error, while a superseded virt-launcher from a VM restart exits
+# cleanly and terminates Completed. ContainerState is a union, so a waiting
+# reason alone leaves the terminated case blank and cannot tell the two apart.
+# Both reasons are carried so each shape arrives labelled.
+#
+# Even so this line points rather than concludes, and it says so out loud: the
+# bit cannot separate every shape, the describe that follows can, and a
+# headline that asserts more than the bit carries is the same mislabel this
+# function exists to prevent, merely pointing the other way.
+cozy_report_guest_console_wedge() {
+  local rows read_rc=0
+  local read_err
+
+  if ! read_err=$(mktemp); then
+    # Same rule as the read-failure branch below: saying nothing here would
+    # read as "the console container is fine" when nothing was checked.
+    echo "=== could not allocate a scratch file to read virt-launcher Pod state; whether guest-console-log started is unknown, not fine ==="
+    return 0
+  fi
+  rows=$(timeout -k 5 30 kubectl -n tenant-test get pods \
+    -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{range .status.initContainerStatuses[?(@.name=="guest-console-log")]}{.ready}{" "}{.state.waiting.reason}{.state.terminated.reason}{" "}{end}{.metadata.name}{"\n"}{end}' \
+    --request-timeout=30s 2>"${read_err}") || read_rc=$?
+  if [ "${read_rc}" -ne 0 ]; then
+    # Silence here would be the same mislabel inverted: the reader would take
+    # the absent headline as "the console container is fine" when nothing was
+    # actually checked.
+    echo "=== could not read virt-launcher Pod state (exit ${read_rc}); whether guest-console-log started is unknown, not fine ==="
+    cat "${read_err}" || true
+    rm -f "${read_err}"
+    return 0
+  fi
+  rm -f "${read_err}"
+
+  case "${rows}" in
+    *"false "*) ;;
+    *) return 0 ;;
+  esac
+
+  echo "=== guest-console-log is not running on the workers below; if these are current Pods this is the console experiment failing rather than the node-join failure it instruments (kubevirt/kubevirt#15989) ==="
+  echo "=== a reason of CrashLoopBackOff or Error below is the wedge shape (kubevirt/kubevirt#15989); Completed is a superseded Pod and not this bug; any other reason, or none, is not covered by either and the describe that follows settles it ==="
+  echo "=== if it is the wedge: the cluster-wide disableSerialConsoleLog in packages/system/kubevirt exists for this, and dropping logSerialConsole from the e2e node group returns the suite to its prior behaviour ==="
+  printf '%s\n' "${rows}" | grep '^false ' || true
+}
+
+# Check that KubeVirt actually attached the guest console container, on the
+# path where the workers did boot. The capture below runs only when node-join
+# fails, so without this the suite would first learn that the node group's
+# logSerialConsole never took effect in the run that needed the console, when
+# it can no longer be recovered. The platform disables console logging
+# cluster-wide (see packages/system/kubevirt), so what this asks is whether
+# the per-VM override beat that on the KubeVirt version actually shipping.
+#
+# The read's own status is kept separate from the answer it returns, and the
+# two get different exit codes, because they are different claims. Piping
+# kubectl into grep would collapse them: a read that failed produces no output,
+# grep finds nothing, and an API blip would be reported as "the override did
+# not take effect" -- a cause that was never established, sending the next
+# reader at KubeVirt config instead of at the apiserver. A selector that
+# matched no Pod at all is the same trap one step further on, and is kept
+# apart from a Pod that matched and carries nothing -- the second is the
+# finding, the first is not a statement about any Pod.
+#
+# What it establishes is that SOME virt-launcher Pod in the namespace carries
+# the container, not that every one does. That is the direction worth erring
+# in for a check whose only job is to catch an inert setting: it can miss, but
+# it cannot fail a run over a Pod that is not this test's. The match runs over
+# the whole name=containers line, so a Pod named after the container would
+# satisfy it -- these names come from the Machine name, so that cannot happen
+# here, but a reader changing the format should know the glob spans both.
+#
+#   0  a Pod carries the container
+#   1  the read did not answer, or matched no Pod; not evidence either way
+#   2  Pods matched and none carries the container
+cozy_assert_guest_console_attached() {
+  local init_names read_rc=0
+  local attached total
+
+  # The Pod name is in the output for a reason that is not cosmetic: without
+  # it, a Pod whose initContainers list is absent emits a bare newline, command
+  # substitution strips it, and "Pods matched, none carries the container" is
+  # byte-identical to "no Pod matched". Those two must not collapse -- the
+  # first is the finding this whole check exists for, and on these workers it
+  # is also the only shape it can take, since guest-console-log is the only
+  # init container a DataVolume-booted virt-launcher Pod ever has.
+  init_names=$(timeout -k 5 30 kubectl -n tenant-test get pods \
+    -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"="}{.spec.initContainers[*].name}{" "}{.spec.containers[*].name}{"\n"}{end}' \
+    --request-timeout=30s) || read_rc=$?
+  if [ "${read_rc}" -ne 0 ]; then
+    echo "could not read tenant virt-launcher Pods to verify the guest console container (exit ${read_rc})" >&2
+    echo "this says nothing about logSerialConsole either way; continuing" >&2
+    return 1
+  fi
+
+  if [ -z "${init_names}" ]; then
+    echo "no tenant virt-launcher Pod matched; nothing to verify about the guest console container" >&2
+    echo "this says nothing about logSerialConsole either way; continuing" >&2
+    return 1
+  fi
+
+  case "${init_names}" in
+    *guest-console-log*)
+      # The positive outcome goes on the record too. This run doubles as the
+      # revalidation of a platform-wide workaround, and a check that returns
+      # 0 in silence leaves "the override worked" to be inferred from the
+      # absence of a complaint -- the inference this collector refuses to
+      # make everywhere else. Counted rather than asserted for every Pod: the
+      # check is deliberately "some Pod carries it", so the ratio is the
+      # honest way to say what was seen.
+      attached=$(printf '%s\n' "${init_names}" | grep -c 'guest-console-log' || true)
+      total=$(printf '%s\n' "${init_names}" | grep -c '=' || true)
+      echo "» guest-console-log attached on ${attached} of ${total} virt-launcher Pods"
+      return 0
+      ;;
+  esac
+
+  echo "tenant worker virt-launcher Pods carry no guest-console-log container" >&2
+  echo "the node group asked for logSerialConsole, so either the cluster-wide" >&2
+  echo "disableSerialConsoleLog won the override or the field never reached the VM" >&2
+  # Bounded like the read above, and for the same reason: these run on a path
+  # that ends in exit 1, and a hang here would take the step's whole deadline
+  # with it -- losing the tenant snapshot that the exit is supposed to reach.
+  timeout -k 5 30 kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{.metadata.name}{": "}{.spec.initContainers[*].name}{"\n"}{end}' \
+    --request-timeout=30s || true
+  timeout -k 5 30 kubectl -n tenant-test get virtualmachineinstances.kubevirt.io \
+    -o jsonpath='{range .items[*]}{.metadata.name}{": logSerialConsole="}{.spec.domain.devices.logSerialConsole}{"\n"}{end}' \
+    --request-timeout=30s || true
+  return 2
+}
+
+# Capture each tenant worker's guest serial console from the management
+# cluster. When a node group sets logSerialConsole, KubeVirt streams the
+# console into a guest-console-log container beside virt-launcher, and reading
+# it needs nothing from inside the guest: no talosctl, no client certificate,
+# no helper Pod, no reachable apid. That is the whole reason it exists. The
+# talosctl capture below can only describe a worker whose apid already answers,
+# so a worker that stalls earlier -- the case where no Node registers and no
+# certificate request is ever made -- is invisible to it by construction, and
+# the console is the only remaining surface.
+#
+# Reads start at the beginning of the stream rather than tailing it, because a
+# guest that repaints its console would push the boot output out of any tail
+# window while --limit-bytes truncates from the far end instead. That covers
+# only what kubectl returns: whatever the kubelet has already rotated out of
+# the container log (containerLogMaxSize, 10Mi x 5 by default) is gone before
+# the capture runs, and no read option recovers it.
+#
+# An absent guest-console-log container is the finding, not a gap: it says
+# console logging did not take effect on this run, which is a different fact
+# from a guest that printed nothing. kubectl's refusal is kept beside the
+# capture rather than inside it so the two stay distinguishable, and the
+# capture file says which of them happened.
+#
+# The Pod list is namespace-wide rather than scoped to one release. The two
+# virt-launcher captures immediately above the call site already select that
+# way, and suites run one at a time. Below the cap a Pod that does not belong
+# to this test costs one extra file named after itself and nothing else; at
+# the cap it can displace one of this suite's own, since kubectl returns the
+# list name-sorted. COLLECTION-TRUNCATED.txt is what keeps that visible.
+cozy_capture_tenant_serial_console() {
+  local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-serial-console"
+  local pods pod rc
+  local list_rc=0
+  local seen=0
+  local silent=0
+  local pod_err
+  local max_pods=6
+  local err_log="${report_dir}/setup-error.log"
+  local warn_log="${report_dir}/READ-WARNINGS.txt"
+
+  mkdir -p "${report_dir}"
+  # stderr goes to its own file rather than being folded into the captured
+  # stdout: a warning kubectl prints on an otherwise successful call would
+  # otherwise be read back as a Pod name. Which file it goes to is decided by
+  # the exit status, not by the fact that something was written: an apiserver
+  # Warning header or a deprecation notice arrives on stderr with a zero exit,
+  # so a warning beside a healthy read belongs in READ-WARNINGS.txt as
+  # elsewhere in this tree, while the stderr of a call that actually failed IS
+  # the diagnosis and belongs in setup-error.log. The list is wrapped in
+  # timeout for the same reason every read below it is: --request-timeout
+  # bounds the HTTP request, not a client retrying against a wedged
+  # apiserver, and a hang here would cost the whole
+  # section rather than one Pod.
+  pods=$(timeout -k 5 30 kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher \
+    -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' \
+    --request-timeout=30s 2>"${warn_log}") || list_rc=$?
+  if [ "${list_rc}" -ne 0 ]; then
+    echo "failed to list tenant virt-launcher Pods for serial console capture" >&2
+    mv "${warn_log}" "${err_log}" 2>/dev/null || true
+    printf '%s\n' \
+      "failed to list tenant virt-launcher Pods for serial console capture (exit ${list_rc})" \
+      >>"${err_log}"
+    return 1
+  fi
+  [ -s "${warn_log}" ] || rm -f "${warn_log}"
+  if [ -z "${pods}" ]; then
+    echo "no virt-launcher Pod found for serial console capture" >&2
+    printf '%s\n' 'no virt-launcher Pod found in namespace tenant-test' \
+      >"${err_log}"
+    return 1
+  fi
+
+  # Cap the walk. Every read here is bounded, but the pool can reach maxReplicas, so
+  # an uncapped loop is a term whose size the cluster sets rather than this file --
+  # inside a failure path that has to reach the tenant snapshot at the end of it.
+  # The phase budget beside COZY_DIAG_PHASE_BUDGET is what stops the collectors as a
+  # group from spending the time that snapshot needs; this cap is what stops this
+  # walk from being the collector that spends it. A cap that fired is recorded with both
+  # counts rather than leaving the shortfall implicit, since a short listing
+  # otherwise reads as a small pool rather than a truncated walk.
+  for pod in ${pods}; do
+    seen=$((seen + 1))
+    if [ "${seen}" -gt "${max_pods}" ]; then
+      echo "--- guest serial console capture stopped at ${max_pods} Pods ---"
+      printf 'capture stopped after %s Pods; %s matched in total\n' \
+        "${max_pods}" "$(printf '%s\n' ${pods} | wc -l | tr -d ' ')" \
+        >"${report_dir}/COLLECTION-TRUNCATED.txt"
+      break
+    fi
+    echo "--- capturing guest serial console: ${pod} ---"
+    rc=0
+    # stderr goes beside the capture, not into it. Folded in, kubectl's own
+    # "container guest-console-log is not valid for pod ..." would make the
+    # file non-empty and the console would look like it had said something.
+    # That error is the headline case here -- it is what a container wedged in
+    # Init looks like -- so it has to stay separable from console bytes. Which
+    # name it lands under is decided by the exit status, the same way the list
+    # read above decides it: kubectl writes warnings on stderr with a zero
+    # status too, and a warning beside a healthy capture is not an error.
+    pod_err="${report_dir}/${pod}.read-error.log"
+    timeout -k 5 30 kubectl -n tenant-test logs "${pod}" \
+      -c guest-console-log --limit-bytes=1048576 \
+      >"${report_dir}/${pod}.log" 2>"${pod_err}" || rc=$?
+    if [ ! -s "${pod_err}" ]; then
+      rm -f "${pod_err}"
+      pod_err=
+    elif [ "${rc}" -eq 0 ]; then
+      mv "${pod_err}" "${report_dir}/${pod}.READ-WARNINGS.txt" 2>/dev/null || true
+      pod_err=
+    fi
+    # Tested before the exit-code line is appended, or nothing is ever empty.
+    # Three outcomes, three labels, because only one of them is a statement
+    # about what the guest did.
+    if [ ! -s "${report_dir}/${pod}.log" ] && [ "${rc}" -ne 0 ]; then
+      silent=$((silent + 1))
+      # timeout kills the child without a word, so a read can fail having
+      # written nothing to either stream. Naming a file that was never created
+      # sends the reader looking for evidence that does not exist.
+      if [ -n "${pod_err}" ]; then
+        printf '%s\n' \
+          'the read returned no console at all; see read-error.log and POD-STATE.txt' \
+          >>"${report_dir}/${pod}.log"
+      else
+        printf '%s\n' \
+          'the read failed silently and returned no console at all; see POD-STATE.txt' \
+          >>"${report_dir}/${pod}.log"
+      fi
+    elif [ ! -s "${report_dir}/${pod}.log" ]; then
+      silent=$((silent + 1))
+      printf '%s\n' \
+        'the read succeeded and returned nothing; see POD-STATE.txt for whether the container started' \
+        >>"${report_dir}/${pod}.log"
+    elif [ "${rc}" -ne 0 ]; then
+      silent=$((silent + 1))
+      if [ -n "${pod_err}" ]; then
+        printf '%s\n' \
+          'console output is truncated; see read-error.log and POD-STATE.txt' \
+          >>"${report_dir}/${pod}.log"
+      else
+        printf '%s\n' \
+          'console output is truncated; see POD-STATE.txt for the Pod state' \
+          >>"${report_dir}/${pod}.log"
+      fi
+    fi
+    printf '\n[capture exit code: %s]\n' "${rc}" >>"${report_dir}/${pod}.log"
+  done
+
+  # An empty console log has two causes that are indistinguishable in the log
+  # itself: the guest printed nothing, or the container never started and there
+  # was no stream to read. The second is what kubevirt/kubevirt#15989 produces,
+  # and it is the reading that would otherwise be filed as a quiet guest --
+  # silence reported as a result is the failure this collector exists to
+  # prevent, so it is not allowed to produce one. The Pod's own state and its
+  # events are what separate the two, and they are read once for the whole
+  # selector rather than per Pod: several silent workers are one finding, and
+  # paying per Pod would put back the unbounded term the cap removed.
+  if [ "${silent}" -gt 0 ]; then
+    {
+      printf '=== describe pods -l kubevirt.io=virt-launcher ===\n'
+      timeout -k 5 30 kubectl -n tenant-test describe pods \
+        -l kubevirt.io=virt-launcher --request-timeout=30s 2>&1 || true
+      printf '\n=== Pod events in tenant-test (not filtered to virt-launcher) ===\n'
+      timeout -k 5 30 kubectl -n tenant-test get events \
+        --field-selector involvedObject.kind=Pod \
+        --sort-by=.lastTimestamp --request-timeout=30s 2>&1 || true
+    } >"${report_dir}/POD-STATE.txt"
+  fi
+}
+
+# Collect the guest-side evidence requested by issue #3513. This runs only after
+# the 18-minute Ready deadline has already failed. VMIs without a reported IP
+# are recorded before any Certificate or Pod is created; when at least one IP is
+# available, setup and each Talos command remain bounded. It runs before slower
+# cache diagnostics so the requested guest evidence lands first.
+cozy_capture_tenant_talos() (
+  local test_name="$1"
+  local report_dir="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${COZY_SNAPSHOT_NAME:-kubernetes}/tenant-talos"
+  local selector="cluster.x-k8s.io/cluster-name=kubernetes-${test_name},cluster.x-k8s.io/role=worker"
+  local pod_name="kubernetes-${test_name}-talos-diagnostics"
+  local workdir vmi_name node_ip
+  local has_node_ip=false
+
+  umask 077
+  workdir=$(mktemp -d) || return 1
+  chmod 700 "${workdir}"
+  trap 'rm -rf "${workdir}"' EXIT
+  mkdir -p "${report_dir}"
+
+  if ! kubectl -n tenant-test get virtualmachineinstances.kubevirt.io \
+    -l "${selector}" -o json --request-timeout=30s >"${report_dir}/vmis.json" \
+    2>"${report_dir}/vmis-error.log"; then
+    echo "failed to list tenant worker VMIs for Talos diagnostics" >&2
+    return 1
+  fi
+  cozy_tenant_worker_vmi_rows <"${report_dir}/vmis.json" >"${workdir}/vmis.rows"
+  if [ ! -s "${workdir}/vmis.rows" ]; then
+    echo "no tenant worker VMIs found for Talos diagnostics" >&2
+    printf 'no tenant worker VMIs matched selector %s\n' "${selector}" \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+
+  # Record missing addresses before spending time on Certificate issuance or a
+  # helper Pod. If no worker booted far enough for KubeVirt to report an IP,
+  # guest-side Talos is unreachable and setup cannot produce more evidence.
+  while IFS='|' read -r vmi_name node_ip; do
+    if [ -z "${node_ip}" ]; then
+      mkdir -p "${report_dir}/${vmi_name}"
+      printf '%s\n' 'default VMI interface has no reported IP address' \
+        >"${report_dir}/${vmi_name}/capture-error.log"
+      continue
+    fi
+    has_node_ip=true
+  done <"${workdir}/vmis.rows"
+  if [ "${has_node_ip}" != true ]; then
+    echo "no tenant worker VMI has a reported IP for Talos diagnostics" >&2
+    printf '%s\n' 'no tenant worker VMI has a reported IP for Talos diagnostics' \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+
+  if ! cozy_prepare_tenant_talosconfig "${test_name}" "${workdir}"; then
+    echo "failed to create short-lived tenant Talos reader config" >&2
+    printf '%s\n' 'failed to create short-lived tenant Talos reader config' \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+  if ! cozy_prepare_tenant_talos_diagnostics_pod \
+    "${test_name}" "${workdir}/talosconfig"; then
+    echo "failed to prepare tenant Talos diagnostics Pod" >&2
+    printf '%s\n' 'failed to prepare tenant Talos diagnostics Pod' \
+      >"${report_dir}/setup-error.log"
+    return 1
+  fi
+
+  while IFS='|' read -r vmi_name node_ip; do
+    [ -n "${node_ip}" ] || continue
+    echo "--- capturing tenant Talos dmesg/kubelet: ${vmi_name} (${node_ip}) ---"
+    cozy_capture_tenant_talos_node "${pod_name}" "${node_ip}" \
+      "${report_dir}/${vmi_name}"
+  done <"${workdir}/vmis.rows"
+)
+
+# _cozy_diag_seconds <value> <default> <name>: echo <value> when it is a bare
+# non-negative integer, else echo <default> and say on stderr that the value was
+# rejected.
+#
+# The rejection names no unit, because three of its four callers are seconds and the
+# fourth is a Pod count: telling someone their importer cap must be "integer seconds"
+# describes the wrong quantity, and the whole point of these notes is that they say
+# something true about what was seen.
+#
+# Every knob below is pasted somewhere that accepts digits and nothing else, and
+# each fails differently and quietly:
+#
+#   COZY_DIAG_PHASE_BUDGET=8m  -- goes into $(( )) inside cozy_diag_phase_start,
+#     which is the FIRST statement of the diagnostics block. The arithmetic error
+#     unwinds the whole function before its own headline, so the failing run
+#     produces no diagnostics at all, only the shell's complaint. The worst
+#     outcome on this path, arrived at through a knob.
+#   COZY_DIAG_READ_TIMEOUT=2m  -- becomes --request-timeout=2ms and every read
+#     fails instantly, so every note blames the cluster for a value.
+#   COZY_DIAG_MAX_IMPORTERS=3s -- `[ n -gt 3s ]` exits 2, the `if` reads false and
+#     the cap silently stops existing, which is the term this block capped on
+#     purpose.
+#
+# A leading zero is rejected along with a suffix, and it is the arm that is easy to
+# leave out. `0480` is all digits, so a digits-only check passes it through, and
+# then `$(( ))` reads it as octal and fails exactly as `8m` does -- same total loss
+# of the block, one character less obvious. For the read bound the same value is
+# quieter and worse: `timeout -k 5 0480` is 480 seconds, so the per-call bound this
+# whole change exists to add would be 24 times wider than the number says.
+#
+# Rejecting and naming the fallback is what the rest of this tree does with its own
+# knobs, including this arm: hack/e2e-capture-previous-logs.sh rejects a zero or
+# leading-zero COZY_PREVLOG_TAIL for the same octal reason, and
+# docs/agents/e2e-testing.md records that contract.
+# A fourth argument, any non-empty value, rejects zero as well; it is a flag rather
+# than a bound, and the call site spells it `positive`. Zero is all digits and
+# passes every check above, and `timeout -k 5 0` disables the timeout outright while
+# `--request-timeout=0s` means "no timeout" to kubectl -- the defect this change
+# exists to remove, reachable through the knob it adds. The phase budget must keep
+# accepting zero: the suite uses it to mean "already spent".
+_cozy_diag_seconds() {
+  if [ -n "${4:-}" ] && [ "${1}" = 0 ]; then
+    echo "» WARNING: ignoring ${3}='${1}' (zero disables the bound instead of tightening it); using ${2}" >&2
+    printf '%s\n' "${2}"
+    return 0
+  fi
+  case "${1}" in
+    '' | *[!0-9]*)
+      echo "» WARNING: ignoring ${3}='${1}' (a bare integer, no unit suffix); using ${2}" >&2
+      printf '%s\n' "${2}"
+      ;;
+    0?*)
+      echo "» WARNING: ignoring ${3}='${1}' (a leading zero is read as octal in arithmetic and as decimal elsewhere); using ${2}" >&2
+      printf '%s\n' "${2}"
+      ;;
+    *) printf '%s\n' "${1}" ;;
+  esac
+}
+
+# Per-read wall-clock bound for the on-failure diagnostics in
+# run_kubernetes_test, and the kill grace that follows it. Named once so a note
+# reporting a cut-off cannot quote a number the read never used, and overridable
+# so a test does not have to wait out the real one.
+#
+# Lower than the bound the newer collectors in this file use, and the difference is
+# count rather than confidence: those bound a single read or a short walk, while the
+# block below issues a dozen back to back, so the same per-read bound would put the
+# block's own ceiling ahead of the tenant crust-gather snapshot it exists to reach.
+# Every read here is one get/describe/logs against a small tenant or a handful of
+# cluster-scoped objects, which an apiserver that answers at all answers in under a
+# second.
+#
+# Integer seconds, no unit suffix. `timeout` would accept `2m`, but the same value
+# is pasted into `--request-timeout=${...}s`, where `2m` becomes `2ms` and every
+# read fails instantly -- a note about the cluster manufactured by a knob.
+# Each default is named once. Passed as a literal at every call site instead, a
+# changed default would leave the re-checks below still falling back to the old
+# number -- and only on the error path, where it is hardest to notice.
+COZY_DIAG_READ_TIMEOUT_DEFAULT=20
+COZY_DIAG_READ_GRACE_DEFAULT=5
+COZY_DIAG_MAX_IMPORTERS_DEFAULT=3
+COZY_DIAG_PHASE_BUDGET_DEFAULT=480
+COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT:-$COZY_DIAG_READ_TIMEOUT_DEFAULT}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+# Validated too, though a suffix is not what breaks it: `timeout -k abc 20` exits 125
+# before running the command at all, so a non-numeric grace makes every read in the
+# block report exit 125 and collects nothing -- the same total loss the other knobs
+# were validated against. Zero is allowed here: `-k 0` only skips the follow-up
+# SIGKILL, which a TERM-respecting child like kubectl does not need.
+COZY_DIAG_READ_GRACE=$(_cozy_diag_seconds "${COZY_DIAG_READ_GRACE:-$COZY_DIAG_READ_GRACE_DEFAULT}" "$COZY_DIAG_READ_GRACE_DEFAULT" COZY_DIAG_READ_GRACE)
+# How many CDI importer Pods get their logs walked. Each costs two reads, so an
+# uncapped walk is a term the cluster sizes rather than this file, inside a block
+# that has to finish. The default covers the pool at its minimum with room to spare,
+# and a walk that hits the cap says so with both counts rather than leaving the
+# shortfall implicit.
+COZY_DIAG_MAX_IMPORTERS=$(_cozy_diag_seconds "${COZY_DIAG_MAX_IMPORTERS:-$COZY_DIAG_MAX_IMPORTERS_DEFAULT}" "$COZY_DIAG_MAX_IMPORTERS_DEFAULT" COZY_DIAG_MAX_IMPORTERS)
+
+# Wall-clock budget for the on-failure diagnostics phase as a whole, on top of the
+# per-read bounds above, because the two buy different things. A per-read bound
+# buys forward progress: one hung call can no longer eat the step. It does not buy
+# an end to the phase, and the collectors on this path can together spend more than
+# what is left of the op by the time it runs. Bounding every read and stopping
+# there would have made the arithmetic in kubernetes-*/chainsaw-test.yaml legible
+# and still false.
+#
+# So the phase is bounded as a phase. Once the budget is spent, the collectors that
+# have not started are declined out loud instead of attempted, which keeps the one
+# artifact that must survive reachable: the tenant crust-gather snapshot the
+# caller's `exit 1` triggers.
+#
+# The budget is derived rather than chosen, from
+#
+#   budget + largest overshoot + snapshot <= op - bringup
+#
+# Every term but the budget belongs to something else: the op ceiling lives in both
+# kubernetes-*/chainsaw-test.yaml, the snapshot's bound is on the crust-gather call
+# above, and bringup is an observed figure rather than a ceiling. The overshoot
+# term exists because admission gates when a collector may START, not when it ends,
+# so one admitted a moment before the deadline still runs its whole cost. The
+# default below is the largest whole minute under the bound that inequality gives.
+# hack/run-kubernetes-node-join_test.bats holds the inequality against the code, so
+# a later change cannot raise the budget past what the collectors leave room for.
+#
+# `largest` is a literal in that guard, taken from the heaviest collector at the
+# pool's MINIMUM size, which makes it a floor and not a ceiling: the guest-Talos
+# walk carries no cap, so a bigger pool makes that collector cost more than the
+# figure the budget was derived against. Nor does it cover the collectors with no
+# wall-clock bound at all. On the guest-Talos path the applies, waits and deletes
+# carry `--request-timeout`/`--timeout`, which bounds one HTTP request rather than
+# a client retrying against a wedged apiserver, and the image-cache re-probe makes
+# unbounded calls of its own. Both are tracked in cozystack/cozystack#3666. So no
+# worst case is claimed here, and none can be stated while that holds.
+#
+# What the budget buys, exactly and only, is that no collector is STARTED once it
+# is spent, so the snapshot is never queued behind work begun past the deadline.
+# That is how the snapshot was being lost.
+#
+# Admission is "the budget is not spent yet" rather than "this collector fits in
+# what is left", and that is a choice. Sizing admission per collector would hold
+# the phase to its budget exactly, and would also decline the guest-Talos capture
+# on a merely slow run, throwing away the only in-guest evidence to protect a
+# snapshot that was not yet in danger. Start-gating leaves that to the cheap-first
+# order below, and the image-cache diagnosis is the collector this budget gives up
+# first, which is worth knowing before its dumps are relied on.
+COZY_DIAG_PHASE_BUDGET=$(_cozy_diag_seconds "${COZY_DIAG_PHASE_BUDGET:-$COZY_DIAG_PHASE_BUDGET_DEFAULT}" "$COZY_DIAG_PHASE_BUDGET_DEFAULT" COZY_DIAG_PHASE_BUDGET)
+# Zero until a phase opens, which is how the scheduling-gate branch -- two reads,
+# no phase -- stays ungated.
+_COZY_DIAG_PHASE_DEADLINE=0
+
+# cozy_diag_phase_start: open the diagnostics phase and stamp its deadline.
+#
+# There is no closing counterpart, because both callers end in `exit 1` a few
+# lines later and a function that only ever runs before an exit does not need
+# one. A future caller that opens a phase and then carries on would gate every
+# later read on a spent deadline, and would need to clear it.
+cozy_diag_phase_start() {
+  # Said once, here, rather than letting a dozen notes imply it, and said narrowly
+  # because the phase is not uniform. The reads that go through cozy_diag_read, the
+  # importer listing and the image-cache helper fall back to running unbounded, since
+  # bounding with a binary that is not there would turn each of them into an exit 127
+  # and each note into "read failed" -- a missing local dependency reported as the
+  # cluster refusing. Unbounded is what this path had before any of this, so a partial
+  # capture beats none, and what it costs is the guarantee.
+  #
+  # The collectors that call `timeout` directly -- the wedge check below, the
+  # serial-console family and the guest-Talos capture -- have no such fallback and do
+  # exit 127, collecting nothing. That is pre-existing and tracked in
+  # cozystack/cozystack#3666; the warning names both halves rather than promising the
+  # better one for all of them.
+  command -v timeout >/dev/null 2>&1 || \
+    echo "» WARNING: timeout is not on PATH; the bounded reads below run UNBOUNDED, so one that hangs can still take the op and the tenant snapshot with it, and the collectors that call timeout directly (wedge check, serial console, guest Talos) exit 127 and collect nothing" >&2
+  # Re-checked here, not only at assignment: a value set after this file is sourced
+  # -- which is how a test sets it -- would otherwise reach the arithmetic below
+  # unvalidated, and that is the one failure that costs the whole block.
+  COZY_DIAG_PHASE_BUDGET=$(_cozy_diag_seconds "${COZY_DIAG_PHASE_BUDGET-}" "$COZY_DIAG_PHASE_BUDGET_DEFAULT" COZY_DIAG_PHASE_BUDGET)
+  _COZY_DIAG_PHASE_DEADLINE=$(( $(date +%s) + COZY_DIAG_PHASE_BUDGET ))
+}
+
+# cozy_diag_phase_has_time <what>: 0 while the phase can still afford <what>, 1
+# once it cannot -- and on 1 it says which collector was declined and why.
+#
+# Declining out loud is the whole point. A collector that silently stops running
+# leaves a bundle that looks like one where nothing was wrong, which is the
+# reading this failure path exists to prevent; and what is missing here is
+# missing from the log, not from the cluster.
+#
+# The note goes to stderr for the same reason cozy_diag_read's do, and it is
+# called from inside that function, so it inherits the trap exactly: two of its
+# call sites pipe stdout through grep, and a note on stdout is dropped by the
+# filter at precisely the reads that were declined.
+cozy_diag_phase_has_time() {
+  [ "${_COZY_DIAG_PHASE_DEADLINE}" -ne 0 ] || return 0
+  [ "$(date +%s)" -ge "${_COZY_DIAG_PHASE_DEADLINE}" ] || return 0
+  echo "=== ${1}: not collected — the diagnostics phase spent its ${COZY_DIAG_PHASE_BUDGET}s budget and the tenant crust-gather snapshot after it needs the rest of the op; nothing here was observed either way ===" >&2
+  return 1
+}
+
+# cozy_diag_read <label> <command...>: run one diagnostic read under a wall-clock
+# bound, and name the outcome when it does not finish. Used by both on-failure
+# blocks in run_kubernetes_test, which end in the same `exit 1` and so depend on
+# the same snapshot staying reachable.
+#
+# Notes go to stderr rather than stdout because two call sites pipe the read's
+# stdout through grep to keep the log readable, and a note on stdout would be
+# filtered out by exactly the runs that need it.
+#
+# The note says what was observed and stops there. This helper is shared by every
+# bounded read here and cannot know what any one of them was asking, so "the read
+# did not finish" is the whole claim; the branch that owns a question is the only
+# place a consequence could be drawn from it. That distinction is the point: a
+# read that was cut off is silence about the cluster, not a finding about it, and
+# an empty node table reported as a finding sends the next reader after a cluster
+# that was never looked at.
+#
+# Always returns 0. Every call site sits on a path that ends in the caller's
+# `exit 1`, and a non-zero return here would replace that exit under `set -e` —
+# handing the suite's exit status, and the snapshot that hangs off it, to a
+# collector.
+cozy_diag_read() {
+  local label="$1"
+  shift
+  local rc=0
+
+  # Checked here rather than only at the section boundaries so the guarantee is
+  # total: whatever order a future edit puts these reads in, none of them can be
+  # issued after the phase is out of budget.
+  cozy_diag_phase_has_time "${label}" || return 0
+  # Re-checked here rather than only at assignment, and here rather than in
+  # cozy_diag_phase_start, because the scheduling-gate branch calls this without
+  # opening a phase. The value that makes it necessary is zero: `timeout -k 5 0`
+  # disables the timeout and `--request-timeout=0s` means no timeout to kubectl, so
+  # a zero assigned after sourcing -- which is how a caller adjusts this -- restores
+  # the unbounded read on the wedged-apiserver path with no warning and no note. The
+  # corrected value is written back so the warning is not repeated per read. That
+  # write-back is discarded at the two call sites whose stdout is piped through
+  # grep, since a pipeline runs its left side in a subshell, and it does not show:
+  # both blocks validate the knob before composing the per-request string, so the
+  # value is already corrected before any read here runs. A caller that reaches
+  # this function with a bad value and no such validation would warn per read.
+  # The node-join block validates it once more before composing its
+  # `--request-timeout` string; this check is what covers the scheduling-gate branch,
+  # which calls straight in here without opening a phase.
+  COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+  COZY_DIAG_READ_GRACE=$(_cozy_diag_seconds "${COZY_DIAG_READ_GRACE-}" "$COZY_DIAG_READ_GRACE_DEFAULT" COZY_DIAG_READ_GRACE)
+  # Unbounded when `timeout` is absent, rather than bounded-into-exit-127. Running
+  # the read is what this path did before any of this, and a partial capture beats
+  # eleven notes blaming the cluster for a missing local binary. Same shape the
+  # previous-logs collector uses, and cozy_diag_phase_start says it once out loud.
+  # `command -v` is a builtin, so asking per read costs nothing and keeps this
+  # correct when a caller adjusts PATH mid-run.
+  if command -v timeout >/dev/null 2>&1; then
+    timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" "$@" || rc=$?
+  else
+    "$@" || rc=$?
+  fi
+  case "${rc}" in
+    0) ;;
+    124)
+      # "did not finish", not "did not answer": a `logs` or `describe` read can
+      # print most of its output and still be cut off, so the claim is about the
+      # read ending early rather than about it saying nothing.
+      echo "=== ${label}: read did not finish within ${COZY_DIAG_READ_TIMEOUT}s and was cut off; whatever it had not printed is absent from this log, not absent from the cluster ===" >&2
+      ;;
+    137)
+      # 128+SIGKILL. The -k grace above produces this, and so does anything else
+      # that kills the read — a loaded runner's OOM killer, a teardown
+      # signalling the process group. "timed out after 20s" would state a cause
+      # this never observed, and a read killed at second two is not one that ran
+      # the full twenty.
+      echo "=== ${label}: read was killed before it finished (SIGKILL); whatever it had not printed is absent from this log, not absent from the cluster ===" >&2
+      ;;
+    *)
+      echo "=== ${label}: read failed (exit ${rc}); what it would have shown was not observed ===" >&2
+      ;;
+  esac
+  return 0
+}
+
+# Diagnostics for the node-join failure at the call site in run_kubernetes_test:
+# fewer than 2 tenant nodes became Ready inside its 18m deadline.
+#
+# The tenant's cilium-operator HR reports "InProgress" here purely because zero
+# worker Nodes joined, so the HelmRelease condition alone cannot tell apart
+# (2a) the worker VM never booted (virt-launcher Pending/OOMKilled) from (2b) the
+# VM booted fine but its kubelet never registered a Node (Talos/CSR/DNS/routing).
+# The captures below make that distinction legible; (2b) is the failure mode a
+# follow-up fix has to target, and it cannot be designed without this artifact.
+#
+# Every read is bounded and the one walk is capped, for the reason that makes
+# this block worth having in the first place: it runs when the cluster is
+# misbehaving, and its first read goes through the tenant kubeconfig to the
+# tenant apiserver — the component least likely to answer in a node-join
+# failure. An unbounded read here does not lose only itself. It holds the
+# Chainsaw op until the op is killed, and everything scheduled after it is then
+# lost rather than truncated, the tenant crust-gather snapshot above all, which
+# is the largest artifact this whole path exists to produce.
+#
+# No capture is allowed to fail the function either, for the same reason the
+# reads are bounded: the caller's `exit 1` is what fails the suite and what
+# triggers the snapshot.
+cozy_report_node_join_failure() {
+  local test_name="$1"
+  local tenant_kc="tenantkubeconfig-${test_name}"
+  # Validated before the per-request bound is built from it, not only inside
+  # cozy_diag_read: that one corrects the wall clock, and this string is composed
+  # once for every read below. Left to the later check, a zero assigned after
+  # sourcing would give `timeout -k 5 20` paired with `--request-timeout=0s` -- the
+  # two halves disagreeing, which is what the single value exists to prevent.
+  COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+  local request_timeout="--request-timeout=${COZY_DIAG_READ_TIMEOUT}s"
+  # importer_list is initialised, not just declared: the assignment below sits
+  # inside the phase gate, and bash under `set -u` aborts on the read that
+  # follows when the gate declined it.
+  local importer_list='' importer_names importer_rc=0 importer_seen=0 importer_total=0
+  local importer_listed=0 _p
+
+  cozy_diag_phase_start
+
+  # The headline stays here rather than at the call site so it keeps its place
+  # ahead of the wedge check: that check exists to name the console experiment's
+  # own failure before this line's wording -- which is byte-identical to the bug
+  # the instrumentation studies -- sends a triager to the known flake.
+  echo "=== node-join failed: fewer than 2 tenant nodes Ready within 18m — diagnostics follow ==="
+  cozy_report_guest_console_wedge || true
+  cozy_diag_read 'tenant node table' \
+    kubectl --kubeconfig "${tenant_kc}" describe nodes "${request_timeout}"
+  cozy_diag_read 'tenant HelmReleases' \
+    kubectl -n tenant-test get hr "${request_timeout}"
+
+  # (a) Worker VM / VMI / virt-launcher state on the MANAGEMENT cluster. A VMI
+  # stuck Pending or a virt-launcher pod OOMKilled/Pending is mode 2a; a
+  # Running+Ready VMI with a healthy virt-launcher is mode 2b. This is the key
+  # split. Full resource names (not the `vm` alias) to avoid short-name
+  # ambiguity, matching cozy_wait_tenant_drained above.
+  echo "=== (a) tenant worker VM/VMI/virt-launcher state (management cluster, ns tenant-test) ==="
+  cozy_diag_read 'worker VM/VMI list' \
+    kubectl -n tenant-test get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io -o wide "${request_timeout}"
+  cozy_diag_read 'worker VMI detail' \
+    kubectl -n tenant-test describe virtualmachineinstances.kubevirt.io "${request_timeout}"
+  cozy_diag_read 'virt-launcher Pod list' \
+    kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide "${request_timeout}"
+  cozy_diag_read 'virt-launcher Pod detail' \
+    kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher "${request_timeout}"
+
+  # (a2) Worker DataVolume IMPORT stage. A VM stuck "Provisioning" whose
+  # DataVolume is ImportInProgress at N/A progress with the importer pod
+  # looping on an HTTP error is a distinct sub-mode of 2a that the VM/VMI
+  # state alone does not show: the OS image never finishes importing, so the
+  # VM never boots. This is what took out PR #2826's CI — the CDI importer
+  # could not reach the talos-image-cache ClusterIP (`dial tcp <svc>:80: i/o
+  # timeout`) even though the cache pod was healthy. Show the DataVolume/PVC
+  # phases and the importer pod logs here; the cache ClusterIP re-probe that tells
+  # "cache path went dead mid-run" apart from "upstream factory slow/flaky" belongs
+  # to this section too, but it creates a Pod and waits on curl, so it sits with
+  # the other minute-scale collectors further down rather than here.
+  echo "=== (a2) tenant worker DataVolume import stage (management cluster, ns tenant-test) ==="
+  # The two greps keep these dumps readable. kubectl's stderr is no longer folded
+  # into them: `2>&1 | grep` sent a refusal into the filter, which dropped it for
+  # not matching, so a read that never happened looked the same as one that found
+  # nothing. It goes to the log unfiltered instead, beside cozy_diag_read's note.
+  cozy_diag_read 'worker DataVolume/PVC phases' \
+    kubectl -n tenant-test get datavolume,pvc -o wide "${request_timeout}" \
+    | grep -E 'NAME|md0|disk' || true
+  cozy_diag_read 'worker DataVolume detail' \
+    kubectl -n tenant-test describe datavolume "${request_timeout}" \
+    | grep -Ei 'Name:|Phase:|Progress:|Restart|Reason:|Message:|Running Condition|Bound Condition' || true
+
+  # The listing is read on its own rather than inline in the `for`, so a listing
+  # that never answered stays distinguishable from a namespace with no importer
+  # Pod in it. Folded together, a failed read produces no names, the walk skips,
+  # and the log carries nothing at all — which reads as "no importer ran", the
+  # opposite conclusion on the sub-mode this whole section is about.
+  #
+  # Reading it on its own is also why the phase gate is spelled out here: this is
+  # the one read in the block that does not go through cozy_diag_read, so it is
+  # the one that does not inherit the gate.
+  #
+  # kubectl's stderr is not discarded, for the reason the two grep-piped reads
+  # above stopped discarding theirs: the note below can only quote an exit status,
+  # and Unauthorized, a refused connection and an unrecognised kind are all exit 1.
+  # Only stdout is captured here, so the reason lands in the log beside the note.
+  if cozy_diag_phase_has_time 'CDI importer Pod listing'; then
+    importer_listed=1
+    if command -v timeout >/dev/null 2>&1; then
+      importer_list=$(timeout -k "${COZY_DIAG_READ_GRACE}" "${COZY_DIAG_READ_TIMEOUT}" \
+        kubectl -n tenant-test get pods -o name "${request_timeout}") || importer_rc=$?
+    else
+      importer_list=$(kubectl -n tenant-test get pods -o name "${request_timeout}") || importer_rc=$?
+    fi
+    if [ "${importer_rc}" -ne 0 ]; then
+      echo "=== could not list Pods to find the CDI importers (exit ${importer_rc}); whether any importer Pod exists is unknown, not none ==="
+      importer_list=
+    fi
+  fi
+  importer_names=$(printf '%s\n' "${importer_list}" | grep -E '^pod/importer-' || true)
+  # `|| true`: grep -c exits 1 on a count of zero, which under set -e would end
+  # the collector on the ordinary "no importer Pod" case.
+  importer_total=$(printf '%s\n' "${importer_names}" | grep -c . || true)
+  # Re-checked here for the reason every one of these knobs is re-checked where it is
+  # used: a value set after this file was sourced never passed the assignment-time
+  # check. This one fails silently -- `[ n -gt 3s ]` exits 2, the comparison below
+  # reads false, and the cap simply stops existing.
+  COZY_DIAG_MAX_IMPORTERS=$(_cozy_diag_seconds "${COZY_DIAG_MAX_IMPORTERS-}" "$COZY_DIAG_MAX_IMPORTERS_DEFAULT" COZY_DIAG_MAX_IMPORTERS)
+  # Three states, not two, and the third is why importer_listed exists. A listing
+  # that answered and matched nothing is a real finding about the import stage and
+  # is said out loud. A listing that failed said so above. A listing the phase
+  # declined never ran, and reporting that as "matched none" would put the
+  # conclusion this section exists to test -- no importer, so no import -- on the
+  # record from a read that was never issued, one line under the note saying it was
+  # not collected.
+  if [ "${importer_listed}" -eq 1 ] && [ "${importer_rc}" -eq 0 ] \
+    && [ "${importer_total}" -eq 0 ]; then
+    echo "=== no CDI importer Pod in tenant-test; the listing answered and matched none ==="
+  fi
+  for _p in ${importer_names}; do
+    importer_seen=$((importer_seen + 1))
+    if [ "${importer_seen}" -gt "${COZY_DIAG_MAX_IMPORTERS}" ]; then
+      echo "=== importer log walk stopped after ${COZY_DIAG_MAX_IMPORTERS} Pods; ${importer_total} matched in total ==="
+      break
+    fi
+    echo "--- logs ${_p} (current) ---"
+    # No --request-timeout on the log reads: it bounds an API request, and these
+    # are a log stream. The wall-clock bound is what covers them.
+    cozy_diag_read "importer log ${_p} (current)" \
+      kubectl -n tenant-test logs "${_p}" --tail=40
+    # An importer that never restarted has no previous instance and kubectl exits
+    # 1, which cozy_diag_read reports as a read that failed -- true, but the same
+    # shape as a refused call, and the ordinary outcome here. kubectl's own
+    # "previous terminated container not found" lands in the log beside the note;
+    # this line says so up front so the pair reads as one answer rather than two.
+    echo "--- logs ${_p} (previous; exit 1 here is usually the container never having restarted, and kubectl's own message below says which) ---"
+    cozy_diag_read "importer log ${_p} (previous)" \
+      kubectl -n tenant-test logs "${_p}" --previous --tail=40
+  done
+  # (c) Tenant kubelet CSRs + the talos-csr-signer sidecar log. A mode-2b node
+  # boots but blocks on a kubelet-serving/-client CSR that is never submitted
+  # or never approved; the pending CSR list (tenant cluster) plus the signer
+  # sidecar log (in the Kamaji apiserver pod on the management cluster) show
+  # which side stalled.
+  echo "=== (c) tenant CSRs + talos-csr-signer sidecar log ==="
+  cozy_diag_read 'tenant CSR list' \
+    kubectl --kubeconfig "${tenant_kc}" get csr "${request_timeout}"
+  cozy_diag_read 'talos-csr-signer sidecar log' \
+    kubectl -n tenant-test logs -l kamaji.clastix.io/name="kubernetes-${test_name}" \
+    -c talos-csr-signer --tail=200 --prefix
+
+  # Order below is load-bearing and the phase budget is why. The budget declines
+  # whatever has not started when it runs out, so what runs last is what gets
+  # declined -- and (c) is the discriminator for mode 2b, the failure this whole
+  # artifact exists to let someone fix. Cheap reads first, then the collectors
+  # that cost minutes. Everything ahead of this line is bounded reads and a capped
+  # walk, which together fit inside the budget with room left, while the two
+  # collectors below can exhaust it between them on a slow run. Putting the
+  # heavy pair first, as this block used to, spends the budget on them and
+  # declines the two 25s reads that answer the question.
+  # (b1) Guest serial console, read from the management cluster. First of the
+  # in-guest captures because it is the only one that survives a worker which
+  # never reached apid — the dominant shape of this failure, where no Node
+  # registers and no certificate request is ever made. (b) below needs that
+  # same apid to answer, so it cannot describe this class at all.
+  # Two shapes of empty result are worth telling apart from a silent guest.
+  # A virt-launcher Pod still Pending has no containers at all yet, which is
+  # the ordinary shape of a worker that never booted. A Pod wedged in Init on
+  # guest-console-log is the opposite reading: the console container is what
+  # stopped it booting, and then neither a console nor an apid exists to
+  # explain anything else. The container being absent from a Running Pod is
+  # the rarest of the three, since the per-VM field outranks the cluster-wide
+  # disable by design and the green path asserts it attached.
+  if cozy_diag_phase_has_time '(b1) tenant worker guest serial console'; then
+    echo "=== (b1) tenant worker guest serial console (management cluster, ns tenant-test) ==="
+    cozy_capture_tenant_serial_console || true
+  fi
+
+  # (b) In-guest Talos kernel and kubelet logs. The tenant chart intentionally
+  # has no admin talosconfig, so mint a one-hour os:reader client from its
+  # existing cert-manager Issuer and run talosctl from a hardened Pod that can
+  # reach the bridge-networked VMI IPs without weakening TLS verification.
+  # A worker that has not reached apid yet will produce a bounded connection
+  # error while a later-stage worker remains capturable; both outcomes are
+  # retained in cozyreport.
+  if cozy_diag_phase_has_time '(b) in-guest Talos dmesg + kubelet logs'; then
+    echo "=== (b) in-guest Talos dmesg + kubelet logs ==="
+    cozy_capture_tenant_talos "${test_name}" || true
+  fi
+
+  # The OS-image cache and the ghcr.io mirror fail independently and produce the
+  # same symptom from outside the guest, so both get dumped: this one answers
+  # whether the worker's kubelet-image pull reached the mirror or fell back to
+  # public ghcr.io, which the node-join failure alone cannot distinguish. Gated
+  # like its neighbours, and after the guest captures: its whole-log read carries
+  # no bound of its own, the console evidence it would otherwise starve is
+  # irreplaceable, and the mirror's state is partly recoverable from the reads
+  # above. Cheaper than the talos-image-cache re-probe below, which creates a
+  # Pod and waits on curl retries, so it goes ahead of it.
+  if cozy_diag_phase_has_time 'ghcr-mirror state + access log'; then
+    echo "--- ghcr-mirror state + access log ---"
+    ghcr_mirror_diagnose || true
+  fi
+
+  # Last, and gated on the phase as well as bounded per read, because it is the
+  # collector that most needs both: its reachability re-probe creates a Pod, waits
+  # on curl retries, and makes seven unbounded management-cluster calls of its own,
+  # so it has no ceiling here at all.
+  if cozy_diag_phase_has_time 're-probe talos-image-cache ClusterIP + cacher debug bundle'; then
+    echo "--- re-probe talos-image-cache ClusterIP + cacher debug bundle ---"
+    talos_image_cache_diagnose || true
+  fi
 }
 
 run_kubernetes_test() {
@@ -267,11 +1517,13 @@ YAML
 )
   fi
 
-  # Point worker DataVolume imports at the in-sandbox Talos image cache when it
-  # is up (falls back to the public factory otherwise). Emitted right under spec:
-  # as `talos: { imageFactoryURL: ... }`, or an empty line when the default applies.
+  # Point worker DataVolume imports at the in-sandbox Talos OS image cache and
+  # worker image pulls at the in-sandbox ghcr.io mirror when each is up (falls back
+  # to the public defaults otherwise). Emitted right under spec: as
+  # `talos: { imageFactoryURL: ..., registryMirrors: {...} }`, or nothing when both
+  # defaults apply.
   local talos_block
-  talos_block=$(talos_image_factory_spec_block)
+  talos_block=$(talos_spec_block)
 
   kubectl apply -f - <<EOF
 apiVersion: apps.cozystack.io/v1alpha1
@@ -333,6 +1585,12 @@ ${ouroboros_addon}
       diskSize: 20Gi
       gpus: []
       instanceType: u1.medium
+      # The failure this suite keeps hitting is a worker that stalls in the
+      # guest before Talos apid answers, which leaves nothing to read on the
+      # management side and nothing for talosctl to connect to. Turning this on
+      # attaches KubeVirt's guest-console-log container, the only artifact that
+      # covers that window.
+      logSerialConsole: true
       maxReplicas: 10
       minReplicas: 2
       resources: {}
@@ -456,7 +1714,7 @@ EOF
   # kubernetes-previous failed here at exactly 12m with zero Nodes registered
   # and the tenant cilium HR still mid-install. A less-loaded fleet run passed
   # the same suites unchanged, so this is load-induced slowness, not a stuck
-  # bring-up; 18m restores margin and still sits well inside the 40m step
+  # bring-up; 18m restores margin and still sits well inside the 50m step
   # timeout (the downstream LB/NFS/ouroboros checks add ~10-15m on the happy
   # path).
   if ! timeout 18m bash -c '
@@ -466,74 +1724,10 @@ EOF
   '; then
     # Node-join failed: fewer than 2 tenant nodes became Ready inside the 18m
     # deadline. Dump scoped diagnostics that split the failure sub-modes, then
-    # fail fast — no point running LB/NFS tests without Ready nodes.
-    #
-    # The tenant's cilium-operator HR reports "InProgress" here purely because
-    # zero worker Nodes joined, so the HelmRelease condition alone cannot tell
-    # apart (2a) the worker VM never booted (virt-launcher Pending/OOMKilled)
-    # from (2b) the VM booted fine but its kubelet never registered a Node
-    # (Talos/CSR/DNS/routing). The captures below make that distinction legible;
-    # (2b) is the failure mode a follow-up fix has to target, and it cannot be
-    # designed without this artifact. Every capture is guarded with `|| true`
-    # so a capture failure never masks the real `exit 1`.
-    echo "=== node-join failed: fewer than 2 tenant nodes Ready within 18m — diagnostics follow ==="
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes || true
-    kubectl -n tenant-test get hr || true
-
-    # (a) Worker VM / VMI / virt-launcher state on the MANAGEMENT cluster. A VMI
-    # stuck Pending or a virt-launcher pod OOMKilled/Pending is mode 2a; a
-    # Running+Ready VMI with a healthy virt-launcher is mode 2b. This is the key
-    # split. Full resource names (not the `vm` alias) to avoid short-name
-    # ambiguity, matching cozy_wait_tenant_drained above.
-    echo "=== (a) tenant worker VM/VMI/virt-launcher state (management cluster, ns tenant-test) ==="
-    kubectl -n tenant-test get virtualmachines.kubevirt.io,virtualmachineinstances.kubevirt.io -o wide || true
-    kubectl -n tenant-test describe virtualmachineinstances.kubevirt.io || true
-    kubectl -n tenant-test get pods -l kubevirt.io=virt-launcher -o wide || true
-    kubectl -n tenant-test describe pods -l kubevirt.io=virt-launcher || true
-
-    # (a2) Worker DataVolume IMPORT stage. A VM stuck "Provisioning" whose
-    # DataVolume is ImportInProgress at N/A progress with the importer pod
-    # looping on an HTTP error is a distinct sub-mode of 2a that the VM/VMI
-    # state alone does not show: the OS image never finishes importing, so the
-    # VM never boots. This is what took out PR #2826's CI — the CDI importer
-    # could not reach the talos-image-cache ClusterIP (`dial tcp <svc>:80: i/o
-    # timeout`) even though the cache pod was healthy. Show the DataVolume/PVC
-    # phases and the importer pod logs, then re-probe the cache ClusterIP from a
-    # throwaway pod (talos_image_cache_diagnose) to tell "cache path went dead
-    # mid-run" apart from "upstream factory slow/flaky".
-    echo "=== (a2) tenant worker DataVolume import stage (management cluster, ns tenant-test) ==="
-    kubectl -n tenant-test get datavolume,pvc -o wide 2>&1 | grep -E 'NAME|md0|disk' || true
-    kubectl -n tenant-test describe datavolume 2>&1 | grep -Ei 'Name:|Phase:|Progress:|Restart|Reason:|Message:|Running Condition|Bound Condition' || true
-    for _p in $(kubectl -n tenant-test get pods -o name 2>/dev/null | grep -E '^pod/importer-'); do
-      echo "--- logs ${_p} (current) ---"
-      kubectl -n tenant-test logs "${_p}" --tail=40 2>&1 || true
-      echo "--- logs ${_p} (previous) ---"
-      kubectl -n tenant-test logs "${_p}" --previous --tail=40 2>&1 || true
-    done
-    echo "--- re-probe talos-image-cache ClusterIP + cacher debug bundle ---"
-    talos_image_cache_diagnose || true
-
-    # (c) Tenant kubelet CSRs + the talos-csr-signer sidecar log. A mode-2b node
-    # boots but blocks on a kubelet-serving/-client CSR that is never submitted
-    # or never approved; the pending CSR list (tenant cluster) plus the signer
-    # sidecar log (in the Kamaji apiserver pod on the management cluster) show
-    # which side stalled.
-    echo "=== (c) tenant CSRs + talos-csr-signer sidecar log ==="
-    kubectl --kubeconfig "tenantkubeconfig-${test_name}" get csr || true
-    kubectl -n tenant-test logs -l kamaji.clastix.io/name="kubernetes-${test_name}" \
-      -c talos-csr-signer --tail=200 --prefix || true
-
-    # (b) In-guest Talos/kubelet state from the worker VMs is intentionally NOT
-    # captured here. talosctl needs a client talosconfig for the TENANT cluster,
-    # and the runner has none: the tenant workers are provisioned with their own
-    # Talos PKI whose CA differs from the sandbox's /workspace/talosconfig (which
-    # cozyreport.sh uses to reach the MANAGEMENT nodes only), and the chart
-    # materialises no tenant client talosconfig Secret. Pointing talosctl at the
-    # worker IPs with the management talosconfig would just fail mTLS and capture
-    # nothing, so it is skipped rather than shipped as a misleading no-op. (a) +
-    # (c) carry the 2a-vs-2b split; adding real in-guest capture later requires
-    # wiring a tenant talosconfig into the runner first.
-    echo "=== (b) in-guest Talos/kubelet capture skipped: no tenant talosconfig on the runner (a/c cover the 2a-vs-2b split) ==="
+    # fail fast — no point running LB/NFS tests without Ready nodes. The `exit 1`
+    # is also what triggers the tenant crust-gather snapshot (the EXIT trap
+    # registered above), so it has to be reached.
+    cozy_report_node_join_failure "${test_name}"
     exit 1
   fi
   kubectl --kubeconfig "tenantkubeconfig-${test_name}" get nodes -o wide
@@ -575,7 +1769,58 @@ EOF
   kubectl delete service --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" \
     -n tenant-test --ignore-not-found --timeout=60s || true
 
+  # Start the workload's clock from a node that accepts Pods, not from a node
+  # that is merely Ready. Both instances of run 31020254620 spent 2m18s and
+  # 1m57s of the 300s readiness budget below on FailedScheduling, against nodes
+  # that were Ready but carried `node.cilium.io/agent-not-ready` or were
+  # SchedulingDisabled, and then ran out while the image was still being
+  # pulled. This gate is not extra waiting on the happy path: it spends the
+  # seconds the Pod would otherwise spend Pending (plus at most one 5s poll
+  # interval) and moves them out of a budget that has a different job. 300s is
+  # more than twice the longest scheduling delay observed, and the gate prints
+  # the node table on both outcomes so a timeout names the taint that held it.
+  # The two budgets do stack on a failing run: one that spends the full 300s
+  # here and then overruns the readiness wait gives up at ~600s where it used
+  # to give up at 300s. That sits inside the enclosing 40m Chainsaw script op,
+  # which the kubernetes-* suites document as a ~25m bringup.
+  if ! cozy_wait_schedulable_node "tenantkubeconfig-${test_name}" 300; then
+    echo "=== tenant scheduling gate failed: no node became schedulable within 300s — diagnostics follow ==="
+    # Bounded like the node-join reads, and for the same reason: this branch also
+    # ends in the `exit 1` that triggers the tenant snapshot, and the node table
+    # is read through the tenant kubeconfig — a nodes-Ready-but-unschedulable
+    # tenant is one whose apiserver may or may not answer.
+    #
+    # Validated here for the same reason cozy_report_node_join_failure validates
+    # before composing its own string: the `--request-timeout` below is interpolated
+    # when these arguments are expanded, which is before cozy_diag_read gets to
+    # re-check the global. A post-source `8m` would otherwise send
+    # `--request-timeout=8ms` and lose the node table -- the one thing this branch
+    # exists to print -- while the note blamed the cluster.
+    COZY_DIAG_READ_TIMEOUT=$(_cozy_diag_seconds "${COZY_DIAG_READ_TIMEOUT-}" "$COZY_DIAG_READ_TIMEOUT_DEFAULT" COZY_DIAG_READ_TIMEOUT positive)
+    cozy_diag_read 'tenant node table' \
+      kubectl --kubeconfig "tenantkubeconfig-${test_name}" describe nodes \
+      "--request-timeout=${COZY_DIAG_READ_TIMEOUT}s"
+    cozy_diag_read 'tenant HelmReleases' \
+      kubectl -n tenant-test get hr "--request-timeout=${COZY_DIAG_READ_TIMEOUT}s"
+    exit 1
+  fi
+
   # Backend 1
+  #
+  # nginx is pinned by digest. The tenant workers reach no registry mirror --
+  # hack/e2e-talos-image-cache.yaml serves the Talos worker OS disk image over
+  # HTTP and is not one, and nothing else in the tree mirrors container images
+  # for a tenant -- so this is pulled from Docker Hub on every run either way.
+  # The digest does not remove that pull, it fixes what the pull returns: a
+  # floating `nginx:alpine` silently changes size and layer count under the
+  # readiness budget below, and supplies whatever content the tag points at on
+  # the day. The digest is the OCI index, not a per-architecture manifest, so
+  # the kubelet still selects the image for the worker's own architecture.
+  # Nothing will bump it: renovate's enabledManagers are gomod, dockerfile,
+  # github-actions and custom.regex, and both custom managers match packages/
+  # paths only, so no manager reads this file. That is the intent rather than an
+  # oversight -- the point of the pin is that the bytes stay the same run to
+  # run, and this is a throwaway test workload, not an image the platform ships.
   kubectl apply --kubeconfig "tenantkubeconfig-${test_name}" -f- <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -596,7 +1841,7 @@ spec:
     spec:
       containers:
       - name: nginx
-        image: nginx:alpine
+        image: nginx:1.31.3-alpine@sha256:4a73073bd557c65b759505da037898b61f1be6cbcc3c2c3aeac22d2a470c1752
         ports:
         - containerPort: 80
         readinessProbe:
@@ -624,8 +1869,20 @@ spec:
     targetPort: 80
 EOF
 
-  # Wait for pods readiness
-  kubectl wait deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test --for=condition=Available --timeout=300s
+  # Wait for pods readiness. With scheduling gated above, these 300s start from
+  # a node that accepts Pods, so they cover placement, sandbox setup, the image
+  # pull and the probe -- and no longer the wait for a node to stop rejecting
+  # the Pod, which now has a budget and a message of its own. The events in the
+  # diagnostics below tell the remaining consumers apart. The number is
+  # unchanged from when it also had to absorb scheduling; the pull alone
+  # measured 1m42s in run 31020254620.
+  if ! kubectl wait deployment --kubeconfig "tenantkubeconfig-${test_name}" "${test_name}-backend" -n tenant-test --for=condition=Available --timeout=300s; then
+    echo "=== backend readiness failed: the Pod was schedulable but did not become Available within 300s — diagnostics follow ==="
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n tenant-test describe deployment "${test_name}-backend" || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n tenant-test describe pods -l "backend=${test_name}-backend" || true
+    kubectl --kubeconfig "tenantkubeconfig-${test_name}" -n tenant-test get events --sort-by=.lastTimestamp || true
+    exit 1
+  fi
 
   # Wait for LoadBalancer to be provisioned (IP or hostname)
   timeout 90 sh -ec "
@@ -1039,6 +2296,22 @@ EOF
   if helmrelease_has_remediation_cycle "${history_statuses}"; then
     echo "Parent HelmRelease entered remediation cycle." >&2
     kubectl -n tenant-test describe hr "kubernetes-${test_name}" >&2
+    exit 1
+  fi
+
+  # Last, after everything the suite exists to prove. This checks a debugging
+  # aid, not the product: a worker boots and serves either way, so letting it
+  # run first would let a KubeVirt-side change to a diagnostic preempt the
+  # assertions that actually cover the tenant cluster. It still runs on the
+  # passing path rather than beside the collector, because the collector only
+  # runs when node-join fails and would learn the setting was inert in the one
+  # run where the console can no longer be recovered. Exit 2 alone fails the
+  # suite; see cozy_assert_guest_console_attached for why its three outcomes
+  # are not interchangeable.
+  echo "» verifying the tenant worker guest console container attached"
+  attach_rc=0
+  cozy_assert_guest_console_attached || attach_rc=$?
+  if [ "${attach_rc}" -eq 2 ]; then
     exit 1
   fi
 

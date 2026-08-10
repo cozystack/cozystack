@@ -2,7 +2,7 @@
 
 The Cozystack E2E app suite, written for [Kyverno Chainsaw](https://github.com/kyverno/chainsaw) — a declarative, Kubernetes-native E2E test framework (CNCF, part of the Kyverno project; successor to KUTTL).
 
-This directory replaces the per-app BATS suite that used to live in `hack/e2e-apps/*.bats`. The CI `e2e` job runs `chainsaw test hack/e2e-chainsaw/` after `make install-cozystack`; cluster bootstrap (`hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
+This directory replaces the per-app BATS suite that used to live in `hack/e2e-apps/*.bats`. The CI `e2e` job runs `chainsaw test hack/e2e-chainsaw/` after `make install-cozystack`; cluster bootstrap (`hack/e2e-prepare-cluster.bats`, `hack/e2e-install-cozystack.bats`) and the OpenAPI checks (`hack/e2e-test-openapi.bats`) remain BATS.
 
 ## Layout
 

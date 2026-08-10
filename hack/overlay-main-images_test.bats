@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 11 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Unit tests for hack/overlay-main-images.sh — the PR-finalize step that points
 # packages a PR did NOT rebuild at the current-main images from the
 # cozystack-packages:main artifact.

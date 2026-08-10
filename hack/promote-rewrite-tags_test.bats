@@ -596,5 +596,8 @@ ALLOW
 
   refs=$(collect_image_refs packages)
   echo "$refs" | grep -q 'cozystack/grafana-dashboards@sha256:\|cozystack/grafana-dashboards:[^ ]*@sha256:'
-  echo "$refs" | grep -q 'multus-cni'
+  # The whole ref, not just the name: the completeness oracle above builds its
+  # expected side with collect_refs_from_file, which cannot parse this file at
+  # all, so this is where the multus entry is held to a real digest.
+  echo "$refs" | grep -qE 'multus-cni[^[:space:]]*@sha256:[0-9a-f]{64}'
 }

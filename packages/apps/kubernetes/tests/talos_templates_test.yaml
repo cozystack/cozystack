@@ -118,6 +118,80 @@ tests:
           path: spec.template.spec.containers[0].command[2]
           pattern: 'extraHostEntries:'
         documentIndex: 6
+      # Default talos.registryMirrors ({}) renders NO machine-level mirrors block:
+      # the only `registries:` in the worker config is cluster.discovery.registries,
+      # so a `mirrors:` key must not appear. This keeps the default render (and thus
+      # the content-hash Job name) byte-identical to before the knob existed.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'mirrors:'
+        # Selected by kind, not by position: a negative assert that addresses the
+        # wrong document passes silently, so it must not depend on document order.
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: talos.registryMirrors renders machine.registries.mirrors into the worker TalosConfigTemplate
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://ghcr-mirror.kube-system.svc
+    asserts:
+      # The mirror lands under machine.registries.mirrors (worker image pulls),
+      # not under cluster.discovery.registries. Assert the mirrors key, the
+      # upstream host, and the in-cluster endpoint all render into the TCT literal.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'mirrors:'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'ghcr\.io:'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'http://ghcr-mirror\.kube-system\.svc'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: registryMirrors values are shell-escaped so they cannot execute in the reconcile-Job heredoc
+    templates:
+      - templates/talos/talos-reconcile-job.yaml
+    release:
+      name: test-k8s
+      namespace: tenant-test
+    set:
+      talos:
+        registryMirrors:
+          ghcr.io:
+            endpoints:
+              - http://mirror$(id)
+    asserts:
+      # registryMirrors is free-form tenant-facing input rendered into the unquoted
+      # `cat <<EOF` heredoc that applies the TalosConfigTemplate, so a `$(...)` in a
+      # value would be command-substituted at Job runtime. The template escapes `$`,
+      # so the rendered literal is `\$(id)` (backslash before the dollar), which the
+      # heredoc emits as the literal string, never executing it. If the escape were
+      # dropped the rendered form would be a bare `$(id)` and this pattern (which
+      # requires the leading backslash) would not match.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'http://mirror\\\$\(id\)'
+        documentSelector:
+          path: kind
+          value: Job
 
   # The two cases below pin the content-hash contract: a TCT-affecting change
   # rotates the immutable Job's name (so Helm creates a fresh Job instead of

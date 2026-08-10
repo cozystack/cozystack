@@ -13,7 +13,33 @@ spec:
   - name: tenant-kubernetes-previous-version
     try:
     - script:
-        timeout: 40m
+        # The on-failure diagnostics phase carries its own 8m wall-clock budget
+        # (COZY_DIAG_PHASE_BUDGET in _lib/run-kubernetes.sh): once it is spent, the
+        # collectors that have not started are declined out loud rather than
+        # attempted, so the in-process tenant crust-gather snapshot, the one the
+        # failing exit triggers and the largest artifact this path produces, still
+        # has its time. Why that budget and not another is derived beside it, from
+        # the op ceiling here minus the bringup and the snapshot; it is not repeated
+        # here, because a number kept in two places is a number that drifts.
+        #
+        # What this ceiling covers, in the order the phase spends it, cheapest first
+        # so that a budget running out drops the collectors that cost minutes rather
+        # than the reads that discriminate between failure modes:
+        #   node-join diagnostics reads
+        #   serial-console family (~5m50s at worst, ~3m30s at the pool's minimum)
+        #   guest Talos capture
+        #   ghcr-mirror state + access log dump
+        #   talos-image-cache diagnosis
+        # and then, after the phase rather than inside it, the in-process tenant
+        # crust-gather snapshot.
+        #
+        # Those do not fit what is left of this op once the bringup ahead of them and
+        # the snapshot behind them are counted, which is why the phase is bounded as a
+        # phase rather than this ceiling raised. None of it is a worst case and none is
+        # claimed: several of those collectors carry no wall-clock bound at all, and
+        # the bringup's own waits already exceed this op on ceilings before a single
+        # diagnostic runs. Those residuals are tracked in cozystack/cozystack#3666.
+        timeout: 50m
         # Co-locate the tenant crust-gather snapshot (captured by
         # run-kubernetes.sh on failure) under the same snapshots/<test>/ dir as
         # the global .chainsaw.yaml catch's host snapshot.

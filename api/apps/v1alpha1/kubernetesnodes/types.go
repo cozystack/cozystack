@@ -7,6 +7,7 @@ package kubernetesnodes
 import (
 	resource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sRuntime "k8s.io/apimachinery/pkg/runtime"
 )
 
 // +kubebuilder:object:root=true
@@ -52,6 +53,9 @@ type ConfigSpec struct {
 	// Kubelet resource reservations for this pool.
 	// +kubebuilder:default:={}
 	Kubelet Kubelet `json:"kubelet,omitempty"`
+	// Stream each worker VM's guest serial console into a `guest-console-log` container beside virt-launcher, readable with `kubectl logs`. The only view of a worker that stalls during boot before Talos apid answers, when neither a Node nor a certificate request exists to diagnose from. Two costs the field name does not show. Changing the value rolls the pool, because it is part of the worker VM template whose name is a hash of its content -- including the stuck VM whose console was wanted, so it buys visibility into the next boot rather than the current one. And it overrides the platform's cluster-wide `disableSerialConsoleLog`, set because that container has been seen holding virt-launcher in `PodInitializing` (kubevirt/kubevirt#15989), which would take the pool down rather than explain it -- so check that virt-launcher Pods reach Running after enabling it.
+	// +kubebuilder:default:=false
+	LogSerialConsole bool `json:"logSerialConsole"`
 	// Maximum number of unhealthy nodes tolerated in this pool before remediation is paused. The MachineHealthCheck admission webhook accepts either a bare integer ("0", "1", ...) or a percentage ("0%", "50%"); bare numeric strings are rejected, so the safer default is a percentage. Drop to "0%" once the pool is stable.
 	// +kubebuilder:default:="50%"
 	MaxUnhealthy string `json:"maxUnhealthy"`
@@ -118,6 +122,9 @@ type Talos struct {
 	// OCI repository prefix for the Talos installer image used by the in-guest `talos-reconcile` upgrade Job. Resolved as `<installerRepository>/<schematicID>:<version>`. Defaults to the public factory's installer path. Override for air-gapped or mirrored registries. No trailing slash.
 	// +kubebuilder:default:="factory.talos.dev/installer"
 	InstallerRepository string `json:"installerRepository"`
+	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. Keep in sync with the parent kubernetes chart.
+	// +kubebuilder:default:={}
+	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
 	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here. This pool can override it for itself via the root-level `schematicID`. The effective value is rejected if it contains `$`, a backtick, a backslash, quotes or whitespace, because it is interpolated into a worker machine config applied through a shell heredoc; a 64-hex factory digest, a readable name and a multi-segment mirror path such as `gpu/nvidia-open` all pass. That guard covers this field only, not every value reaching that heredoc.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`

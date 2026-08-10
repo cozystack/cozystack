@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 14 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Unit tests for hack/build-matrix.sh — the CI build-matrix selector.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); the

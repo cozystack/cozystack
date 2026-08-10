@@ -1,0 +1,53 @@
+suite: tenant keycloak realm groups — the oidc gate survives an uninjected _cluster
+templates:
+  - templates/keycloakgroups.yaml
+
+# `_cluster` is injected by the platform, so it is simply absent whenever the
+# chart is rendered on its own: `helm lint`, `helm template`, and this suite.
+# The template reads it with `index`, and `index` on a nil map is a hard error
+# rather than an empty result, so before the guard the chart could not be
+# rendered outside a cluster at all.
+#
+# The guard has to sit on the map, not on the value: the spelling used
+# elsewhere in the tree, `(index .Values._cluster "x") | default "y"`, does not
+# help, because `index` is evaluated first and fails before `default` ever sees
+# a result to substitute.
+#
+# The third case below is the one that pins the fix. It carries no `set:` at
+# all, because `_cluster` is absent from values.yaml, so "the platform injected
+# nothing" needs no mocking — it is just the chart's own default state.
+
+release:
+  name: tenant-alice
+  namespace: tenant-alice
+
+capabilities:
+  apiVersions:
+    - v1.edp.epam.com/v1
+
+tests:
+  - it: renders the four realm groups when oidc is enabled
+    set:
+      _cluster:
+        oidc-enabled: "true"
+    asserts:
+      - hasDocuments:
+          count: 4
+
+  - it: renders nothing when oidc is explicitly disabled
+    # The gate is an equality against the string "true", so anything else is
+    # off. Pinned alongside the enabled case so a guard that accidentally
+    # rendered unconditionally would be caught.
+    set:
+      _cluster:
+        oidc-enabled: "false"
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders nothing when the platform injected no _cluster at all
+    # Fails with `index of untyped nil` without the guard. This is the case the
+    # fix exists for, and the reason the chart can now be rendered standalone.
+    asserts:
+      - hasDocuments:
+          count: 0

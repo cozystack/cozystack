@@ -1,0 +1,747 @@
+name: E2E (fork)
+
+# Privileged half of the fork-PR e2e split (#3257).
+#
+# A fork PR's `pull_request` run (pull-requests.yaml) carries no registry
+# credentials, so it builds every image to an OCI archive and uploads it as an
+# artifact instead of pushing (OCI_EXPORT_DIR). This workflow runs from the
+# DEFAULT branch after that run completes — so it DOES have secrets — and:
+#   1. pushes the pre-built image archives to OCIR BY DIGEST and flux-pushes the
+#      digest-pinned packages tree (job `publish`); and
+#   2. runs the e2e suite against them and reports the required "E2E Tests"
+#      commit status back on the PR head SHA (jobs `e2e` + `report`).
+#
+# Security boundary: the untrusted fork code produced only opaque artifacts. The
+# OCIR push token is live ONLY in `publish`, and only after its last step that
+# runs anything but a fixed binary (git/skopeo/flux) over data. `publish` does
+# evaluate Makefiles once, with `make -n`, to derive the image allowlist — from
+# the BASE tree and before the login, never from the fork's Makefiles and never
+# with the credential loaded. No fork-authored script runs in that job at all. The
+# fork's images and test scripts run only in `e2e`, which has NO push token and
+# runs in an ephemeral sandbox. This is why the split exists instead of a
+# pull_request_target run that would hand fork code the credentials directly.
+#
+# Same-repo PRs are handled entirely by pull-requests.yaml; this workflow no-ops
+# for them (see the `resolve` job guard).
+
+on:
+  workflow_run:
+    workflows: ["Pull Request"]
+    types: [completed]
+
+# Cancel a stale privileged run when the fork pushes again (a newer Pull Request
+# run for the same fork branch supersedes it). Keyed by fork repo + branch since
+# the PR number is not known at workflow level.
+#
+# A triggering run that concluded `cancelled` or `skipped` gets a group of its
+# OWN, keyed by that run's id. Such a run built nothing — labelling an open fork
+# PR produces one, because `plan` in pull-requests.yaml discards every label
+# other than full-e2e and every job skips — and `resolve` recognises it and
+# posts no status at all. In the shared group it would still cancel the live
+# privileged run that DOES own the status for that head SHA, and the pair
+# "cancel the owner, then post nothing" leaves the SHA at "Expected" with
+# nothing left to flip it: the run that replaced the owner is the very one that
+# decided to stay silent, so only a new push recovers it. Keyed by run id, a
+# discarded run can cancel only itself.
+concurrency:
+  group: e2e-fork-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}${{ (github.event.workflow_run.conclusion == 'cancelled' || github.event.workflow_run.conclusion == 'skipped') && format('-discarded-{0}', github.event.workflow_run.id) || '' }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: iad.ocir.io/idyksih5sir9/cozystack
+
+permissions:
+  contents: read
+
+jobs:
+  # Decide whether this is a fork PR that needs e2e, resolve its PR number and
+  # head SHA, and post the pending "E2E Tests" commit status so the PR is not
+  # mergeable until `report` concludes it. Every decision is derived from data the fork
+  # cannot forge — the workflow_run conclusion, the base-repo PR list, and the
+  # base-repo PR file list — NOT from the presence/absence of an artifact the
+  # fork's own build controls. Fail-closed if the fork build failed or the
+  # pr-patch artifact is missing; green-and-stop only for a PR whose file list is
+  # entirely under docs/ (verified against the base-repo API).
+  resolve:
+    name: Resolve fork PR
+    # Only fork PRs: head_repository differs from the base repository. Same-repo
+    # PRs get "E2E Tests" from pull-requests.yaml's e2e-report job instead.
+    if: >-
+      ${{ github.event.workflow_run.event == 'pull_request'
+      && github.event.workflow_run.head_repository.full_name != github.event.workflow_run.repository.full_name }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      should_run:   ${{ steps.r.outputs.should_run }}
+      pr_number:    ${{ steps.r.outputs.pr_number }}
+      head_sha:     ${{ steps.r.outputs.head_sha }}
+      run_id:       ${{ steps.r.outputs.run_id }}
+      # TIA inputs derived from TRUSTED base-repo data (the PR file list and
+      # labels), NOT the fork-controlled merge-ref diff. That covers the INPUTS
+      # only — the selector and the suites themselves run from the fork tree in
+      # the `e2e` job; see that job's header for what actually holds.
+      changed_b64:  ${{ steps.r.outputs.changed_b64 }}
+      full_e2e:     ${{ steps.r.outputs.full_e2e }}
+    steps:
+      # Decide the verdict and post the "E2E Tests" commit status directly, with
+      # this job's default (workflow_run) token — it already has the actions:read
+      # / pull-requests:read scopes the lookups need, plus statuses:write from the
+      # job permissions. A commit status (not a check-run) is the merge gate; see
+      # pull-requests.yaml's e2e-report and docs/agents/e2e-testing.md §10.
+      - name: Resolve fork PR and post "E2E Tests" status
+        id: r
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          HEAD_SHA:   ${{ github.event.workflow_run.head_sha }}
+          RUN_ID:     ${{ github.event.workflow_run.id }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        with:
+          script: |
+            const { HEAD_SHA, RUN_ID, CONCLUSION } = process.env;
+            const { owner, repo } = context.repo;
+            // Validate the SHA before it flows into a status target / image tag.
+            if (!/^[0-9a-f]{40}$/.test(HEAD_SHA)) {
+              core.setFailed(`unexpected head_sha '${HEAD_SHA}'`);
+              return;
+            }
+            core.setOutput('head_sha', HEAD_SHA);
+            core.setOutput('run_id', String(RUN_ID));
+
+            const target_url = `${context.serverUrl}/${owner}/${repo}/actions/runs/${context.runId}`;
+            const setStatus = (state, description) => github.rest.repos.createCommitStatus({
+              owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests', description, target_url,
+            });
+            // Post a TERMINAL status (docs-only success / fail-closed failure) and
+            // stop — no privileged run needed. `report` never runs for these
+            // (guarded on should_run).
+            const decide = async (state, description) => {
+              await setStatus(state, description);
+              core.setOutput('should_run', 'false');
+            };
+
+            // A CANCELLED or wholly-SKIPPED triggering run is not a verdict.
+            // cancel-in-progress kills the live run when the fork pushes again
+            // (and, before the label-group split in pull-requests.yaml, when
+            // anyone labelled the PR); the run that replaces it reports on its
+            // own SHA. Posting `failure` from here would stamp a false red on a
+            // SHA whose e2e never ran, and nothing would flip it back — the
+            // replacement run for the SAME SHA takes the discarded-label path
+            // below and posts nothing. Checked on the conclusion rather than on
+            // the job list because a cancelled run can report no jobs at all,
+            // which would make the `Plan build` lookup below miss. Fail-closed
+            // either way: an unposted required status stays "Expected", so
+            // declining to post can only preserve a verdict a real run reached.
+            if (CONCLUSION === 'cancelled' || CONCLUSION === 'skipped') {
+              console.log(`Triggering run ${RUN_ID} concluded '${CONCLUSION}' — leaving "E2E Tests" untouched.`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Discarded label event: pull-requests.yaml triggers on `labeled` but
+            // its `plan` guard discards every label other than full-e2e, so such a
+            // run skips every job and builds nothing. Post NOTHING and stop —
+            // deciding here would overwrite an already-green status with red (via
+            // the CONCLUSION check or the missing-pr-patch check below) every time
+            // anyone labels an open fork PR. Fail-closed: statuses are per-SHA and
+            // an unposted required status stays "Expected", which blocks the merge,
+            // so declining to post can only ever preserve a verdict a real run
+            // reached — never invent one. A fork editing the workflow to force this
+            // path just leaves its head SHA with no status, i.e. not mergeable.
+            const jobs = await github.paginate(
+              github.rest.actions.listJobsForWorkflowRun,
+              { owner, repo, run_id: RUN_ID, per_page: 100 },
+            );
+            const plan = jobs.find(j => j.name === 'Plan build');
+            if (plan && plan.conclusion === 'skipped') {
+              console.log(`Triggering run ${RUN_ID} skipped 'Plan build' (discarded label event) — leaving "E2E Tests" untouched.`);
+              core.setOutput('should_run', 'false');
+              return;
+            }
+
+            // Past the two silent returns, this run owns the status for this
+            // SHA, so claim it before doing anything that can throw. Every
+            // lookup below is a network call, and github-script turns a 5xx
+            // into a failed job: `report` is then skipped for want of
+            // should_run, nothing writes the context, and a head SHA that was
+            // already green stays green with no suite behind it. Opening here
+            // makes that path leave `pending` instead, which blocks. Later
+            // branches overwrite it through `decide()` as before.
+            //
+            // The jobs lookup above cannot move below this line: the
+            // discarded-label decision depends on it, and posting before that
+            // decision is what would let a run stamp a status it does not own.
+            // A failure there therefore still leaves the SHA untouched, which
+            // is the deliberate half of the trade rather than an oversight.
+            await setStatus('pending', 'Running e2e in the privileged fork workflow…');
+
+            // Fork build did not succeed → fail the required status (fail-closed).
+            if (CONCLUSION !== 'success') {
+              await decide('failure', `Pull Request workflow concluded '${CONCLUSION}'; e2e not run`);
+              return;
+            }
+
+            // Resolve the PR number for this commit (workflow_run.pull_requests
+            // is empty for forks). Only OPEN PRs count — never fall back to a
+            // closed/merged association, which a fork could point at a stale
+            // commit to smuggle a green through.
+            // Paginated, like every other lookup in this script: the check
+            // below counts open associations, so reading only the first page
+            // would miss the second PR in exactly the case it exists to catch.
+            const assoc = await github.paginate(
+              github.rest.repos.listPullRequestsAssociatedWithCommit,
+              { owner, repo, commit_sha: HEAD_SHA, per_page: 100 },
+            );
+            // Exactly one PR AT this head, not the first association. A single
+            // branch may have several open PRs against different base branches,
+            // and every decision below is taken from whichever PR this picks:
+            // the merge-ref checkout, the docs-only verdict, the TIA file list,
+            // while the status is written to the head SHA all of them share.
+            // Taking the first would let a verdict computed for one PR satisfy
+            // another, including a docs-only green for a PR whose own base sees
+            // code. The HEAD^2 == head_sha assert downstream cannot catch that:
+            // it holds for every PR sitting on the commit.
+            //
+            // The head_sha filter is what keeps the guard as narrow as its
+            // reason. This endpoint returns PRs ASSOCIATED with the commit,
+            // which per the API docs means any open PR whose branch contains
+            // it, not only those pointing at it. Without the filter, stacking
+            // one branch on another and opening both PRs counts as two, and
+            // the lower PR fails closed on a state its author cannot clear by
+            // pushing. That is the same unfixable red this workflow refuses to
+            // inflict elsewhere. Two PRs genuinely at the same head still fail
+            // closed, which is the case the guard exists for.
+            const open = assoc.filter(p => p.state === 'open' && p.head && p.head.sha === HEAD_SHA);
+            if (open.length !== 1) {
+              await decide('failure', `expected exactly one open PR for ${HEAD_SHA}, found ${open.length}`);
+              return;
+            }
+            const pr = open[0];
+            // Validate it is a bare integer before it flows into a checkout ref.
+            const prNumber = String(pr.number);
+            if (!/^[0-9]+$/.test(prNumber)) {
+              await decide('failure', `unexpected PR number '${prNumber}' for ${HEAD_SHA}`);
+              return;
+            }
+            core.setOutput('pr_number', prNumber);
+
+            // Docs-only decision from TRUSTED data: the base-repo PR file list,
+            // NOT the presence of a fork-build artifact. A fork controls whether
+            // pull-requests.yaml emits pr-patch (its plan step runs from the fork
+            // merge commit), so inferring docs-only from a missing artifact would
+            // let a fork skip e2e and conclude green with nothing tested (#3257).
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: Number(prNumber), per_page: 100,
+            });
+            // listFiles is capped at 3000 files. A truncated list could omit the
+            // only non-docs path and green the gate, so fail closed at the cap
+            // rather than rule docs-only on a list we know may be incomplete.
+            if (files.length >= 3000) {
+              await decide('failure', 'PR file list hit the 3000-file API cap — cannot verify docs-only');
+              return;
+            }
+            // A rename reports the NEW path in `filename` and the old one in
+            // `previous_filename`. Checking only `filename` would read a
+            // packages/… -> docs/… rename as docs-only, when it in fact removes
+            // a code path. BOTH sides must be under docs/ to count as docs-only.
+            const isDocs = p => typeof p === 'string' && p.startsWith('docs/');
+            const hasNonDocs = files.some(f =>
+              !isDocs(f.filename) || (f.previous_filename && !isDocs(f.previous_filename)));
+            if (!hasNonDocs) {
+              await decide('success', 'docs-only PR (verified via PR file list) — e2e not required');
+              return;
+            }
+
+            // Non-docs change → e2e is REQUIRED. The fork build must have produced
+            // the pr-patch artifact; a missing one means the build did not
+            // complete, so fail closed (never conclude green without running e2e).
+            const arts = await github.paginate(
+              github.rest.actions.listWorkflowRunArtifacts,
+              { owner, repo, run_id: RUN_ID, per_page: 100 },
+            );
+            if (!arts.some(a => a.name === 'pr-patch')) {
+              await decide('failure', 'expected pr-patch artifact is missing — the fork build did not complete');
+              return;
+            }
+
+            // Test-Impact Analysis inputs, from the SAME trusted sources as the
+            // docs-only decision above: the base-repo PR file list drives suite
+            // selection (base64 so newlines survive the job output), and the
+            // base-repo PR labels drive the full-e2e override. Deriving these
+            // from `git diff` on the fork-controlled merge ref would hand a
+            // fork a second way to make TIA select nothing, on top of the one
+            // it already has — the selector runs from the fork tree, so this
+            // hardens the input and not the decision. select-e2e.sh now
+            // classifies every path it is given: shared build inputs and the
+            // e2e harness escalate to the full suite, paths that cannot affect
+            // what e2e exercises are named inert and select nothing, and a path
+            // matching neither escalates rather than returning empty. So an
+            // empty selection reaching this lane means some rule decided the
+            // change cannot affect a suite, not that the selector never
+            // recognised the path, which is what used to make it a fail-open
+            // (#3392).
+            // Both sides of a rename go to TIA too: the old path is a removal
+            // the selector must see (a moved packages/<app>/… still affects
+            // that app's suite). Extra paths can only widen the selection.
+            // Trailing newline: belt to the selector's braces. It used to be
+            // load-bearing, because `while IFS= read -r file` drops an
+            // unterminated last line and that silently emptied the selection
+            // for a one-file PR. select-e2e.sh now guards its own loop with
+            // `|| [ -n "$file" ]`, so the terminator no longer decides
+            // anything. It stays because emitting a text file that ends in a
+            // newline is the contract every other reader will assume, and
+            // because the guard and this line are in different files that can
+            // be changed by different people.
+            const changed = files
+              .flatMap(f => f.previous_filename ? [f.filename, f.previous_filename] : [f.filename])
+              .join('\n') + '\n';
+            core.setOutput('changed_b64', Buffer.from(changed, 'utf8').toString('base64'));
+            const fullE2e = (pr.labels || []).some(l => l.name === 'full-e2e');
+            core.setOutput('full_e2e', fullE2e ? 'true' : 'false');
+
+            // Real run: the pending status was posted above, as soon as this
+            // run was known to own the SHA. `report` flips it to the terminal
+            // state after publish + e2e.
+            core.setOutput('should_run', 'true');
+
+  # Push the fork-built image archives to OCIR by digest and flux-push the
+  # digest-pinned packages tree. No fork-authored script runs here at all, and
+  # while the OCIR token is live only fixed binaries touch the fork's content:
+  # the one step that evaluates Makefiles (`make -n` over the BASE tree, for the
+  # image allowlist) is ordered ahead of the login. Keep that order.
+  publish:
+    name: Push fork images + packages artifact
+    needs: [resolve]
+    if: ${{ needs.resolve.outputs.should_run == 'true' }}
+    runs-on: oracle-vm-4cpu-16gb-x86-64
+    timeout-minutes: 40
+    # No `packages: write`: this job authenticates to OCIR via OCIR_USER/
+    # OCIR_TOKEN (not the GHCR GITHUB_TOKEN), so it needs no GHCR push scope.
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      packages_digest: ${{ steps.push.outputs.packages_digest }}
+    steps:
+      - name: Set up toolchain (skopeo, flux)
+        env:
+          # Pin the flux CLI instead of install.sh's rolling latest. This is the
+          # one privileged job that runs a remote installer as root right before
+          # the OCIR token is loaded, so it pins where the rest of CI does not;
+          # keep it in step with the flux distro cozystack ships
+          # (packages/system/fluxcd, 2.8.x).
+          FLUX_VERSION: "2.8.6"
+        run: |
+          command -v skopeo >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq skopeo; }
+          if ! command -v flux >/dev/null; then
+            s="$(mktemp)"
+            curl -fsSL https://fluxcd.io/install.sh -o "$s"
+            sudo env "FLUX_VERSION=$FLUX_VERSION" bash "$s"
+            rm -f "$s"
+          fi
+      # The base repo's own merge ref — safe to fetch, not fork-controlled code
+      # execution. pr.patch is applied as DATA below; nothing from the tree runs.
+      - name: Checkout PR merge ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+      # Guard against a TOCTOU race: the status is stamped on the SHA `resolve`
+      # saw, but refs/pull/N/merge tracks the live PR head. If the fork pushed
+      # again between resolve and here, HEAD^2 (the merge ref's PR-head parent)
+      # no longer matches — abort rather than push/test unresolved code.
+      - name: Assert checkout matches resolved head SHA
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          got="$(git rev-parse HEAD^2)"
+          [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
+      - name: Download pr.patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-patch
+          path: _out/assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Apply pr.patch (reconstruct digest-pinned tree)
+        run: git apply --3way _out/assets/pr.patch
+      - name: Download OCI image archives
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          pattern: pr-oci-*
+          merge-multiple: true
+          path: _out/oci
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      # Trusted allowlist of image repo names. Every OCI archive a fork PR pushes
+      # under ${REGISTRY}/ must be one the BASE tree can itself export — derived
+      # from the base parent (HEAD^1), never the fork's Makefiles, so a fork
+      # cannot mint an arbitrary repo path under the CI registry by renaming an
+      # image (#3262 non-blocking hardening). `make -n` only expands recipes (no
+      # build); COZYSTACK_VERSION is set so the version probe in common-envs.mk
+      # stays dormant. The charset guard in the push loop stays as defence in
+      # depth; this narrows it to the exact expected set.
+      #
+      # Ordered BEFORE the login on purpose. `make -n` expands no recipe, but it
+      # does evaluate the base tree's Makefiles, and that is the only step in
+      # this job that runs anything other than a fixed binary over data. Keeping
+      # it above the login means it never sees the push credential, which is
+      # what lets the job comment claim no build machinery runs while the token
+      # is live. It needs nothing the login provides.
+      - name: Derive trusted image allowlist (base tree)
+        run: |
+          set -eu
+          base="$(git rev-parse HEAD^1)"
+          # Fresh path per invocation so a leftover from an earlier step in this
+          # job can't fail `git worktree add`. (The runner itself is an
+          # ephemeral Oracle ARC VM, one per job — see .github/actionlint.yaml
+          # and #2937 — so there is no cross-run leftover to defend against.)
+          bt="$(mktemp -d)/basetree"
+          git worktree add --quiet --detach "$bt" "$base"
+          git -C "$bt" ls-files 'packages/*/*/Makefile' | while IFS= read -r mk; do
+            grep -qE '^image:' "$bt/$mk" || continue
+            make -n -C "$bt/$(dirname "$mk")" image \
+              OCI_EXPORT_DIR=/oci REGISTRY=r COZYSTACK_VERSION=0 2>/dev/null || true
+          done \
+            | grep -oE '(dest=/oci/|oci-archive:/oci/)[a-z0-9._-]+\.oci\.tar' \
+            | sed -E 's#.*/##; s#\.oci\.tar$##' | sort -u > _allow.txt
+          git worktree remove --force "$bt"
+          n="$(wc -l < _allow.txt)"
+          [ "$n" -ge 1 ] || { echo "::error::image allowlist derivation produced no names"; exit 1; }
+          echo "Allowed image repos ($n):"; sed 's/^/  /' _allow.txt
+      - name: Login to OCIR
+        env:
+          OCIR_USER:  ${{ secrets.OCIR_USER }}
+          OCIR_TOKEN: ${{ secrets.OCIR_TOKEN }}
+          # Keep the push credential out of the runner's DEFAULT auth stores
+          # (~/.docker/config.json, $XDG_RUNTIME_DIR/containers/auth.json) and
+          # in a run-scoped path instead, matching every other OCIR login in
+          # this repo (pull-requests.yaml's build / build-talos / finalize).
+          # `Set up Docker config` in those jobs copies ~/.docker verbatim into
+          # the build context, so a token left in the default store is a token
+          # handed to whatever runs next.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+        run: |
+          # skopeo (image copies) and flux (artifact push, via the docker
+          # keychain) each need OCIR auth. Token via stdin, never argv.
+          mkdir -p "$DOCKER_CONFIG"
+          echo "$OCIR_TOKEN" | skopeo login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin --authfile "$REGISTRY_AUTH_FILE"
+          echo "$OCIR_TOKEN" | docker login "${REGISTRY%%/*}" -u "$OCIR_USER" --password-stdin
+      - name: Push images by digest + packages artifact
+        id: push
+        env:
+          # Tag is cosmetic — consumers resolve by @sha256 digest (baked into
+          # pr.patch) — but keep the pr-<N>-<sha> scheme for discoverability and
+          # retention. Both values are validated in `resolve`.
+          IMAGE_TAG: pr-${{ needs.resolve.outputs.pr_number }}-${{ needs.resolve.outputs.head_sha }}
+          HEAD_SHA:  ${{ needs.resolve.outputs.head_sha }}
+          # Read the auth the login step wrote, not the runner default store.
+          # skopeo honours REGISTRY_AUTH_FILE; flux resolves through the docker
+          # keychain, which honours DOCKER_CONFIG.
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+        run: |
+          set -eu
+          shopt -s nullglob
+          # A non-docs fork PR must have exported at least one image; an empty
+          # download means the build silently produced nothing — fail rather than
+          # push an empty closure and let e2e install a stale/mismatched tree.
+          # Glob into an array (nullglob → empty on no match); `ls *.tar | wc -l`
+          # would list the cwd when the glob expands to nothing and pass the guard.
+          archives=(_out/oci/*.oci.tar)
+          [ "${#archives[@]}" -ge 1 ] || { echo "::error::no OCI image archives to push"; exit 1; }
+          for f in "${archives[@]}"; do
+            name="$(basename "$f" .oci.tar)"
+            # The archive basename becomes a registry repo path — the fork picked
+            # the filename, so validate it against a strict charset before it
+            # flows into a docker:// ref (defence against a crafted artifact name).
+            case "$name" in
+              *[!a-z0-9._-]*|""|-*) echo "::error::unexpected image archive name: $name"; exit 1;;
+            esac
+            # …and against the trusted base-tree allowlist, so a charset-clean but
+            # unexpected name cannot create a junk repo under the CI registry.
+            grep -qxF "$name" _allow.txt || { echo "::error::image '$name' is not in the base-tree allowlist"; exit 1; }
+            echo "Pushing $name → ${REGISTRY}/${name}:${IMAGE_TAG}"
+            # --all so a multi-platform build copies the whole manifest list and
+            # its index digest is preserved (else containerimage.digest — the
+            # index digest baked into pr.patch — would not resolve). --preserve-
+            # digests keeps every manifest digest bit-for-bit so the
+            # ${REGISTRY}/${name}@sha256:… refs in pr.patch resolve.
+            skopeo copy --all --preserve-digests "oci-archive:$f" "docker://${REGISTRY}/${name}:${IMAGE_TAG}"
+          done
+          # Push the fully-patched packages tree — the OCI artifact the in-cluster
+          # operator pulls. This uploads data; it runs no code from the tree.
+          flux push artifact "oci://${REGISTRY}/cozystack-packages:${IMAGE_TAG}" \
+            --path=packages \
+            --source=https://github.com/cozystack/cozystack \
+            --revision="fork-pr:${HEAD_SHA}" 2>&1 | tee _push.log
+          digest="$(awk -F@ '/artifact successfully pushed/ {print $2}' _push.log)"
+          [ -n "$digest" ] || { echo "::error::failed to capture packages artifact digest"; exit 1; }
+          echo "packages_digest=${digest}" >> "$GITHUB_OUTPUT"
+          echo "Pushed packages artifact @${digest}"
+      # Drop the credential as soon as the pushes are done, so it is not live
+      # for the remainder of the job (or for anything that inherits the runner
+      # if the pool ever stops being one-VM-per-job). always() so a failed push
+      # does not leave it behind.
+      - name: Log out of OCIR
+        if: always()
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/.docker
+          REGISTRY_AUTH_FILE: ${{ runner.temp }}/.docker/config.json
+        run: |
+          skopeo logout --authfile "$REGISTRY_AUTH_FILE" "${REGISTRY%%/*}" || true
+          docker logout "${REGISTRY%%/*}" || true
+          rm -rf "$DOCKER_CONFIG"
+
+  # Run the e2e suite against the pushed closure. NO OCIR push token here — the
+  # sandbox pulls images anonymously; the fork's images/scripts run only in this
+  # ephemeral job. Mirrors pull-requests.yaml's in-tree e2e, including Chainsaw
+  # Test-Impact Analysis, whose INPUTS come from resolve's trusted base-repo
+  # file list rather than a merge-ref diff the fork could shape.
+  #
+  # What that does NOT buy: this job runs from the fork's own tree, so the
+  # selector (hack/select-e2e.sh), the suites under hack/e2e-chainsaw/, the
+  # install bats and packages/core/testing's recipes are all fork-authored. A
+  # fork that wants its own suite to pass can simply edit them, and no amount
+  # of input hardening changes that. This job is a correctness gate that stops
+  # an honest contributor shipping a regression, not a boundary against a
+  # hostile one — the boundary is the maintainer approval required before any
+  # fork run executes at all (see §10 of docs/agents/e2e-testing.md), plus the
+  # fact that nothing here holds a credential worth stealing.
+  e2e:
+    name: E2E (fork run)
+    needs: [resolve, publish]
+    if: ${{ needs.resolve.outputs.should_run == 'true' }}
+    runs-on: oracle-vm-32cpu-128gb-x86-64
+    timeout-minutes: 180
+    permissions:
+      contents: read
+      packages: read
+      actions: read
+    # Set the sandbox name as a job-level env var rather than writing it to
+    # $GITHUB_ENV from a step (which the zizmor github-env audit flags). run_id
+    # rather than the ref because in workflow_run context GITHUB_REF is always
+    # the default branch, so it would name every fork run's sandbox identically
+    # and make the logs (and any manual `docker` poke at a live sandbox)
+    # ambiguous across runs.
+    env:
+      SANDBOX_NAME: cozy-e2e-sandbox-fork-${{ github.run_id }}
+    steps:
+      - name: Checkout PR merge ref
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: refs/pull/${{ needs.resolve.outputs.pr_number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+      # Same TOCTOU guard as `publish`: refuse to test a merge ref that moved off
+      # the SHA the status is stamped on (see the publish job for the rationale).
+      - name: Assert checkout matches resolved head SHA
+        env:
+          EXPECTED_SHA: ${{ needs.resolve.outputs.head_sha }}
+        run: |
+          got="$(git rev-parse HEAD^2)"
+          [ "$got" = "$EXPECTED_SHA" ] || { echo "::error::merge ref moved: HEAD^2=$got != resolved $EXPECTED_SHA"; exit 1; }
+      - name: Set up toolchain (yq)
+        run: |
+          command -v yq >/dev/null || { sudo curl -sSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq; }
+      - name: Download Talos image
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: talos-image
+          path: _out/assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Download pr.patch
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: pr-patch
+          path: _out/assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ needs.resolve.outputs.run_id }}
+      - name: Apply pr.patch
+        run: git apply --3way _out/assets/pr.patch
+      # Point the installer at the packages artifact `publish` pushed (the
+      # artifact carries no self-digest, so pin it on the values we install).
+      - name: Pin installer to pushed packages artifact
+        env:
+          PACKAGES_DIGEST: ${{ needs.publish.outputs.packages_digest }}
+        run: |
+          yq -i ".cozystackOperator.platformSourceUrl = \"oci://${REGISTRY}/cozystack-packages\"" packages/core/installer/values.yaml
+          yq -i ".cozystackOperator.platformSourceRef = \"digest=${PACKAGES_DIGEST}\"" packages/core/installer/values.yaml
+      - name: Prepare environment
+        run: |
+          attempt=0
+          until make SANDBOX_NAME=$SANDBOX_NAME prepare-env; do
+            attempt=$((attempt + 1))
+            if [ $attempt -ge 3 ]; then echo "Attempt $attempt failed, exiting..."; exit 1; fi
+            echo "Attempt $attempt failed, retrying..."
+          done
+      - name: Install Cozystack into sandbox
+        run: |
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME install-cozystack; then
+            echo "❌ Install failed (no retry — diagnostics below)"
+            echo "::group::HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -100' || true
+            echo "::endgroup::"
+            echo "::group::not-Ready HelmReleases"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A --no-headers 2>/dev/null | awk "\$4 != \"True\" {print \$1\" \"\$2}"' \
+              | while read -r ns name; do
+                  echo "--- $ns/$name ---"
+                  docker exec "$SANDBOX_NAME" sh -c "kubectl describe hr '$name' -n '$ns' 2>&1 | tail -50" || true
+                done
+            echo "::endgroup::"
+            exit 1
+          fi
+      - name: Run OpenAPI tests
+        run: |
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-openapi
+      # Test-Impact Analysis: select only the Chainsaw suites the PR diff
+      # affects. The changed-file list is resolve's TRUSTED base-repo listFiles
+      # (base64 through the job output), NOT a git diff on the fork-controlled
+      # merge ref. The script below is the fork's own, so this hardens what the
+      # selector reads and not what it decides — see the job header.
+      # select-e2e.sh classifies every changed path explicitly: shared build
+      # inputs and the e2e harness escalate to the full suite, several rules
+      # select nothing (docs and dashboards, a disabled Chainsaw suite, a
+      # backups example with no suite, the inert repo-meta pattern), and
+      # anything matching none of them escalates rather than returning empty.
+      # So an empty selection here means some rule decided the change cannot
+      # affect a suite, not "TIA had no idea" (#3392). The exception to that,
+      # worth knowing before trusting it: a workflow added under
+      # .github/workflows/ reads as inert until it is added to the escalation
+      # list by name, because .github/ is inert as a directory and the e2e
+      # workflows are exempted from it individually.
+      # Skipped (→ full suite below) on the full-e2e label.
+      - name: Select E2E tests
+        id: select
+        if: ${{ needs.resolve.outputs.full_e2e != 'true' }}
+        env:
+          CHANGED_B64: ${{ needs.resolve.outputs.changed_b64 }}
+        run: |
+          printf '%s' "$CHANGED_B64" | base64 -d > /tmp/changed.txt
+          echo "Changed files:"; sed 's/^/  /' /tmp/changed.txt
+          apps="$(./hack/select-e2e.sh /tmp/changed.txt)"
+          echo "Selected apps: ${apps:-<none>}"
+          echo "apps=${apps}" >> "$GITHUB_OUTPUT"
+          if [ -z "${apps}" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      # Single `chainsaw test` invocation, no per-app retry loop (e2e-testing.md
+      # §1) — Chainsaw polls each assertion to its own timeout. Full suite only
+      # when the full-e2e label skipped selection: if `select` ran and came back
+      # empty it set skip=true and this step never starts.
+      - name: Run E2E tests
+        id: e2e_tests
+        if: ${{ steps.select.outputs.skip != 'true' }}
+        env:
+          SELECTED_APPS: ${{ steps.select.outputs.apps }}
+          FULL_E2E: ${{ needs.resolve.outputs.full_e2e }}
+        run: |
+          if [ "$FULL_E2E" = "true" ]; then
+            suites=""        # empty => test-chainsaw runs the whole suite
+            echo "Running full chainsaw suite"
+          else
+            suites="$SELECTED_APPS"
+            echo "Running selected chainsaw suites: $suites"
+          fi
+          if ! make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME test-chainsaw CHAINSAW_SUITES="$suites"; then
+            echo "❌ Chainsaw E2E failed (see the assertion diffs above and diagnostics below)"
+            echo "::group::Diagnostics: HelmRelease status"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get hr -A -o wide 2>&1 | tail -50' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: recent events"
+            docker exec "$SANDBOX_NAME" sh -c 'kubectl get events -A --sort-by=.lastTimestamp 2>&1 | tail -30' || true
+            echo "::endgroup::"
+            echo "::group::Diagnostics: COSI bucket state"
+            docker exec "$SANDBOX_NAME" sh -c '
+              kubectl get bucketclaims.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,READY:.status.bucketReady,BUCKET:.status.bucketName" 2>&1
+              kubectl get buckets.objectstorage.k8s.io -o custom-columns="NAME:.metadata.name,READY:.status.bucketReady,ID:.status.bucketID,CLAIMNS:.spec.bucketClaim.namespace" 2>&1
+              kubectl get bucketaccesses.objectstorage.k8s.io -A -o custom-columns="NAMESPACE:.metadata.namespace,NAME:.metadata.name,GRANTED:.status.accessGranted,CLAIM:.spec.bucketClaimName" 2>&1
+            ' || true
+            echo "::endgroup::"
+            exit 1
+          fi
+          echo "✅ All selected E2E tests passed"
+      - name: Collect chainsaw report
+        if: always()
+        run: |
+          mkdir -p _out
+          docker cp "$SANDBOX_NAME":/workspace/hack/e2e-chainsaw/chainsaw-report.xml \
+            _out/chainsaw-report.xml || true
+      - name: Upload chainsaw report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: chainsaw-report
+          path: _out/chainsaw-report.xml
+          if-no-files-found: ignore
+      - name: Collect report
+        if: always()
+        run: |
+          make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+      - name: Upload cozyreport.tgz
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: cozyreport
+          path: _out/cozyreport.tgz
+          if-no-files-found: warn
+      - name: Tear down sandbox
+        if: always()
+        run: make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME delete || true
+
+  # Flip the pending "E2E Tests" commit status posted by `resolve` to its
+  # terminal state. Runs on failure too, so a failed publish or e2e turns the
+  # status red rather than leaving it stuck pending; success only when the e2e
+  # job passed.
+  #
+  # `!cancelled()` rather than `always()`, matching e2e-report on the same-repo
+  # lane. A cancelled privileged run no longer owns the status for its head SHA
+  # — something superseded it, and that something is now responsible — so
+  # stamping `failure` from here paints a red on a suite that never finished,
+  # on a SHA whose real verdict is still hours away. Staying silent is
+  # fail-closed: the `pending` this run already posted survives until the
+  # superseding run concludes.
+  report:
+    name: Report fork E2E status
+    needs: [resolve, publish, e2e]
+    if: ${{ !cancelled() && needs.resolve.outputs.should_run == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      statuses: write
+    steps:
+      - name: Report "E2E Tests" commit status
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          PUBLISH_RESULT: ${{ needs.publish.result }}
+          E2E_RESULT:     ${{ needs.e2e.result }}
+          HEAD_SHA:       ${{ needs.resolve.outputs.head_sha }}
+          RUN_URL:        ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        with:
+          script: |
+            const { PUBLISH_RESULT, E2E_RESULT, HEAD_SHA, RUN_URL } = process.env;
+            const { owner, repo } = context.repo;
+            let state, description;
+            if (E2E_RESULT === 'success') {
+              state = 'success';
+              description = 'fork e2e passed (privileged run)';
+            } else if (PUBLISH_RESULT !== 'success') {
+              state = 'failure';
+              description = `image/artifact publish did not succeed (result: ${PUBLISH_RESULT})`;
+            } else {
+              state = 'failure';
+              description = `fork e2e did not pass (result: ${E2E_RESULT})`;
+            }
+            await github.rest.repos.createCommitStatus({
+              owner, repo, sha: HEAD_SHA, state, context: 'E2E Tests',
+              description, target_url: RUN_URL,
+            });
+            core.info(`E2E Tests → ${state}: ${description}`);

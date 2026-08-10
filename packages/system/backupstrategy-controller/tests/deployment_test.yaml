@@ -28,6 +28,15 @@ tests:
     set:
       backupStrategyController.metrics.enabled: false
     asserts:
+      # Anchor first: the two assertions below address a container by index, and
+      # notContains passes whenever its path resolves to something without the
+      # forbidden content — including a different container. A sidecar inserted
+      # ahead of this one would leave both of them green while the flag they
+      # exist to forbid came back on the controller. This equal is what fails in
+      # that case; the negatives cannot.
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: backupstrategy-controller
       - notContains:
           path: spec.template.spec.containers[0].args
           content: --metrics-bind-address=:8443

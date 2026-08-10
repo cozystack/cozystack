@@ -90,7 +90,6 @@
     # Snapshot type lives at
     # github.com/fluxcd/helm-controller/api/v2.Snapshot (via go.mod).
     tmp=$(mktemp -d)
-    trap 'rm -rf "$tmp"' EXIT
 
     cat > "$tmp/hr.yaml" <<'YAML'
 apiVersion: helm.toolkit.fluxcd.io/v2
@@ -124,4 +123,5 @@ YAML
         echo "expected detected for pinned HR snippet with uninstalled + deployed history" >&2
         exit 1
     fi
+    rm -rf "$tmp"
 }

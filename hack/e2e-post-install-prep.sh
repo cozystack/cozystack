@@ -13,28 +13,80 @@
 # (timeout 60 / timeout 300) were anchored to this script's start, so they
 # raced that reconcile latency; when one lost (linstor HR appeared at ~+70s
 # against a 60s budget) `set -e` aborted the whole script and the install
-# failed. Instead, drive every wait off one shared deadline -- the same 15m
-# window the installer's `kubectl wait hr --all` uses -- and tolerate
-# not-yet-created objects without aborting, while still failing hard if a
-# resource never becomes ready inside the budget.
+# failed. So every wait below tolerates a not-yet-created object without
+# aborting, and each gets its own budget, started when the link before it
+# completed rather than when this script did -- the same shape the LINSTOR
+# node and MetalLB CRD waits further down already have.
+#
+# One budget shared by the whole chain instead fails the install whenever the
+# chain merely runs long, because the head of it eats the window and the tail
+# inherits the remainder. Both halves were observed inside a single 15m window
+# on one run: the linstor HR went Ready 452s in, and the Deployment needed a
+# further ~520s because the controller's DB migration lost its connection to
+# the apiserver and retried four times before succeeding. Neither figure is
+# anomalous and neither exceeds the budget on its own; only their sum did, and
+# the install failed naming the Deployment as though it were broken.
+#
+# What a per-link budget buys is not speed but a guarantee: every link gets its
+# whole allowance no matter what the links ahead of it spent, so the tail of the
+# chain can no longer be failed by the head merely being slow. Detecting a link
+# that is genuinely stuck does not get faster, and for the second link it gets
+# slower, because its budget starts when the first one finished: a Deployment
+# that never converges is reported later by however long the HelmRelease took.
+# A first link that never becomes Ready is reported at the same moment as
+# before, since its budget still starts with the script.
+#
+# The cost is the ceiling: two waits at LINK_BUDGET each put the worst case at
+# twice that figure rather than once, ahead of the 300s node wait and the 300s
+# MetalLB wait below, and still well inside the timeout the job carries.
 set -eu
 
-DEADLINE=$(( $(date +%s) + 900 ))
+# Per-link budget in seconds, applied by wait_for_linstor to each link separately.
+LINK_BUDGET=900
 
-# wait_for <description> <kubectl-wait-args...>
-# Polls `kubectl wait` until it succeeds or the shared deadline elapses.
+# wait_for_linstor <description> <kubectl-wait-args...>
+# Polls `kubectl wait` until it succeeds or this link's budget elapses. The
+# name says linstor because the timeout diagnostics below read cozy-linstor
+# unconditionally: the wait itself is generic over its kubectl arguments, but
+# what it dumps on the way out is not, and a caller elsewhere would get the
+# wrong namespace's pods presented as evidence.
 # kubectl wait exits non-zero immediately when the object does not exist yet,
 # so the loop tolerates "not created yet" without the set -e cliff that a bare
 # `kubectl wait` would trigger on a NotFound. The per-attempt timeout shrinks
 # to the budget remaining, so the final attempt can consume the rest of it.
-wait_for() {
+wait_for_linstor() {
   desc=$1
   shift
   echo "[post-install-prep] waiting for ${desc}"
+  deadline=$(( $(date +%s) + LINK_BUDGET ))
   while :; do
-    remaining=$(( DEADLINE - $(date +%s) ))
+    remaining=$(( deadline - $(date +%s) ))
     if [ "$remaining" -le 0 ]; then
-      echo "[post-install-prep] timed out waiting for ${desc}" >&2
+      echo "[post-install-prep] timed out after ${LINK_BUDGET}s waiting for ${desc}" >&2
+      # The description names the object waited on, not the link of the chain
+      # that held it up, and those differ: the same "Deployment not Available"
+      # has been reached with the controller pod crash-looping its migration
+      # init container and with that pod unschedulable because cert-manager had
+      # not issued its client TLS Secret yet. The pod list separates the two,
+      # and the namespace events carry the reason a volume or an image failed.
+      # `kubectl events` rather than `kubectl get events`: it orders by when an
+      # event was last seen, so a condition that has been repeating for minutes
+      # -- which is what a stuck mount looks like -- stays inside the window
+      # instead of being pushed out of it by newer one-off events. It also has
+      # no --sort-by, so it cannot fail the whole read the way a sort key does
+      # when it is absent from any single item; .lastTimestamp is unset on an
+      # Event written through events.k8s.io/v1, and that failure prints nothing
+      # at all. Both reads keep their stderr, because a diagnostic that fails
+      # silently is indistinguishable from a namespace with nothing to report
+      # -- the very distinction being drawn here. Both are bounded, since the
+      # caller is blocked in `wait` and a wedged apiserver would otherwise hold
+      # the install open until the job's own timeout; the client budget is
+      # strictly the smaller of the two, so kubectl gets to name the reason
+      # before the outer kill takes it away.
+      timeout -k 5 30 kubectl get pods -n cozy-linstor -o wide \
+        --request-timeout=10s 2>&1 | tail -n 30 >&2
+      timeout -k 5 30 kubectl events -n cozy-linstor \
+        --request-timeout=10s 2>&1 | tail -n 30 >&2
       return 1
     fi
     if kubectl wait "$@" --timeout="${remaining}s" 2>/dev/null; then
@@ -57,9 +109,9 @@ controller_reachable() {
     -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null)" ]
 }
 
-wait_for "linstor HelmRelease to be Ready" \
+wait_for_linstor "linstor HelmRelease to be Ready" \
   helmrelease/linstor -n cozy-linstor --for=condition=Ready
-wait_for "linstor-controller Deployment to be Available" \
+wait_for_linstor "linstor-controller Deployment to be Available" \
   deployment/linstor-controller -n cozy-linstor --for=condition=available
 
 # Wait for 3 satellites to register Online, but gate every probe on a ready

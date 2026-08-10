@@ -1,3 +1,86 @@
+{{/*
+  Maintainer notes on the rollout strategy. The operator-facing constraints it
+  implies are in plain # comments further down, because those ship to whoever
+  applies the rendered _out/assets/cozystack-operator-*.yaml. Everything here
+  is about this repository and stays inside the template.
+
+  tests/rollout_strategy_test.yaml pins the strategy values and the four
+  preconditions below against every variant the chart ships, all on one shared
+  anchor, so gating any of them on a variant is caught by the variants it was
+  not gated to. Three preconditions are pinned airtight; precondition 2 is not,
+  and says where the gap is rather than leaving the reader to assume coverage
+  that is not there:
+
+  1. No container or initContainer declares a port. Asserted with a
+     containers[*] wildcard rather than containers[0], because the constraint
+     binds every container in the pod and not only the first: under hostNetwork
+     a declared containerPort defaults to the same hostPort, and the surge pod
+     then has nowhere to go on a single-node cluster.
+  2. Neither listener is bound at runtime. --metrics-bind-address=0 and
+     --health-probe-bind-address=0 are asserted explicitly, because the
+     operator's own defaults are :8080 and :8081. The arguments are the only
+     thing holding this, and the scheduler cannot see it either way. This is
+     the loosely pinned one, and the reason is worth stating precisely so
+     nobody trusts the wrong model of it. contains is a membership test with
+     no notion of position, while Go's flag package keeps the last occurrence,
+     so a duplicate appearing AFTER the disabled one wins and the assert still
+     passes; a duplicate before it loses, and the assert passes just the same.
+     Moving the disabled flag last therefore fixes the process but not the
+     test, which stays green either way. notContains on :8080 and :8081 closes
+     that for those two addresses, again regardless of position, and they are
+     the ones a values-gated block added to let users enable metrics would
+     reach for, since they are this binary's own flag defaults. Any other
+     address slips through: helm-unittest cannot express "this flag appears no
+     more than once". So changing a value in place is caught, and duplicating
+     one is caught only for those two addresses.
+  3. --leader-elect stays on. maxSurge: 1 means a second manager process
+     exists by construction on every upgrade, so the lease is what keeps the
+     incoming pod's reconcile loops off the cluster until the outgoing one is
+     gone. Turning it off lets two managers reconcile at once.
+  4. No probe uses httpGet. This follows from 2: with both listeners disabled
+     an httpGet probe has no port left to target. Only the httpGet field is
+     asserted absent, not the probes themselves, so an exec probe stays
+     legitimate — but under maxUnavailable: 0 an exec probe that cannot pass
+     while the outgoing pod is still alive wedges the rollout permanently
+     rather than transiently, since the outgoing pod is not retired until the
+     incoming one is available. A readiness gate that depends on the old
+     process being gone deadlocks against the strategy.
+
+  Read precondition 3 for exactly what it says and no more. The lease governs
+  the reconcile loops; it does not govern everything the two pods do at once,
+  and two overlaps sit outside it. The routine one happens on every healthy
+  upgrade and is bounded by the outgoing pod's termination grace: for that
+  moment an old binary keeps reconciling against schema the incoming pod has
+  already moved. The rare one needs the outgoing pod to be broken and
+  restarting, and it is the worse of the two, because one ordering of it
+  silently reverts the incoming pod's install phase and does not heal itself
+  afterwards. Both are known and accepted, not oversights. Unlike the binders
+  below, neither is hypothetical.
+
+  What pays for carrying them, since Recreate would make Available honest with
+  no second pod at all: when the replacement never starts — a surge pod that
+  cannot be scheduled, an image that cannot be pulled — maxUnavailable: 0 keeps
+  the outgoing operator running while the rollout wedges, where Recreate would
+  have deleted it first and left none. That is the whole of the gain, and it
+  covers only that class. A replacement that starts and then dies is already
+  counted available, so the outgoing pod is gone by then under either strategy.
+
+  The variant loop is not ceremony: the template branches on variant inside the
+  container spec, so a port added under one branch renders for that variant
+  alone and a single-variant suite would not see it. The container-name assert
+  pins containers[0] for the three argument asserts, which would otherwise start
+  describing a different container if one were inserted ahead of the operator.
+
+  The manager is also configured with a webhook server on 9443, which reads
+  like a third binder and is not one: controller-runtime adds that server to
+  its runnables only inside GetWebhookServer(), and this binary registers no
+  webhook and never calls it, so nothing listens. Registering one would bind
+  9443 in the host namespace and wedge the rollout the same way, and no
+  chart-level test can reach that — it is a Go-side change. PprofBindAddress is
+  a fourth binder of the same kind: unset today, with no flag exposing it and
+  no path to it from this chart, so it is inert for the same reason and would
+  wedge the rollout for the same reason if it were ever set.
+*/}}
 {{- $validVariants := list "talos" "generic" "hosted" -}}
 {{- if not (has .Values.cozystackOperator.variant $validVariants) -}}
 {{- fail (printf "Invalid cozystackOperator.variant %q: must be one of talos, generic, hosted" .Values.cozystackOperator.variant) -}}
@@ -35,8 +118,34 @@ spec:
   strategy:
     type: RollingUpdate
     rollingUpdate:
-      maxSurge: 0
-      maxUnavailable: 1
+      # This pair is what Kubernetes itself would pick here: the default
+      # 25% / 25% resolves at replicas: 1 to maxSurge 1 and maxUnavailable 0,
+      # because the surge rounds up and the unavailability rounds down. Spelling
+      # it out is not tuning, it is declining to override the default.
+      # maxUnavailable must stay 0. At replicas: 1 anything higher makes the
+      # minimum available replica count replicas - maxUnavailable = 0, and the
+      # Available condition then reports True with no running pod at all, which
+      # hides a dead operator from every consumer of that status.
+      # Kubernetes rejects maxUnavailable: 0 together with maxSurge: 0, so the
+      # surge cannot go the other way either. The surge pod shares the node
+      # network namespace (hostNetwork below), so nothing in this pod may need
+      # a port, and the two ways of needing one fail differently. Declaring a
+      # containerPort makes the surge pod unschedulable on a single-node
+      # cluster: it never runs, so maxUnavailable: 0 keeps the outgoing pod
+      # serving and the rollout simply wedges. Binding a port at runtime, by
+      # pointing --metrics-bind-address or --health-probe-bind-address at a
+      # real address, is worse, because this pod has no readiness probe and
+      # counts as available the moment its container starts. The outgoing pod
+      # is retired at that point, and the incoming one dies with EADDRINUSE
+      # afterwards, leaving no operator at all rather than the old one. Do not
+      # read maxUnavailable: 0 as protection against that second class; what
+      # catches it is whatever waits on the resources the operator is supposed
+      # to create.
+      # This also rules out an httpGet probe of any kind on this Deployment: the
+      # port it would target is one of the two disabled above. Only an exec
+      # probe can ever work here.
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -47,6 +156,10 @@ spec:
       - name: cozystack-operator
         image: "{{ .Values.cozystackOperator.image }}"
         args:
+        # Must stay on. maxSurge: 1 above means a second manager pod exists on
+        # every upgrade, and the lease is what keeps the incoming one's
+        # reconcile loops off the cluster until the outgoing one is gone.
+        # Turning it off lets two managers reconcile the same cluster at once.
         - --leader-elect=true
         - --install-flux=true
         # The operator applies embedded CRDs via server-side apply on every

@@ -28,14 +28,14 @@ spec:
   # Global failure handler: on any test error, capture a crust-gather snapshot of
   # the HOST cluster BEFORE Chainsaw's cleanup deletes the test's resources. This
   # is the Chainsaw analog of the per-failed-test EXIT-trap host snapshot in
-  # hack/cozytest.sh (which only covers the BATS install/openapi tests) — without
-  # it the Chainsaw app suite uploads a cozyreport.tgz with zero per-test
-  # snapshots. Combines additively with the per-test events/describe catches in
-  # each suite; the nested-tenant snapshot for the kubernetes-* tests is captured
-  # separately by hack/e2e-chainsaw/_lib/run-kubernetes.sh while its LB is alive.
-  # The snapshot lands under the _out/cozyreport/snapshots/<test>/ tree that
-  # hack/cozyreport.sh folds into the uploaded artifact, so each failed test
-  # keeps its own `crust-gather serve`-able cluster state.
+  # hack/cozytest.sh (which covers the BATS prepare-cluster, install and openapi
+  # tests) — without it the Chainsaw app suite uploads a cozyreport.tgz with zero
+  # per-test snapshots. Combines additively with the per-test events/describe
+  # catches in each suite; the nested-tenant snapshot for the kubernetes-* tests
+  # is captured separately by hack/e2e-chainsaw/_lib/run-kubernetes.sh while its
+  # LB is alive. The snapshot lands under the _out/cozyreport/snapshots/<test>/
+  # tree that hack/cozyreport.sh folds into the uploaded artifact, so each failed
+  # test keeps its own `crust-gather serve`-able cluster state.
   #
   # Every catch script below carries an explicit `timeout:`. A Chainsaw script
   # op is bounded by `timeouts.exec` (5m above) unless it overrides it, and the
@@ -83,9 +83,9 @@ spec:
           name="${TEST_NAME:-unknown-test}"
           snap="${COZY_REPORT_DIR:-/workspace/_out/cozyreport}/snapshots/${name}"
           # The global catch fires once per failed operation; capture once per
-          # test. Creating the directory up front (rather than letting the
-          # helper create it only when it finds something) is what makes this
-          # dedupe hold on a test with no restarts at all.
+          # test. The directory is created here, before the helper runs, so the
+          # `-d` check below is decided by whether this block already ran rather
+          # than by what the helper found.
           if [ -d "${snap}/previous-logs" ]; then exit 0; fi
           mkdir -p "${snap}/previous-logs" 2>/dev/null || true
           # `kubectl logs` shows only the CURRENT container instance, so for a
@@ -166,7 +166,10 @@ spec:
           # Output goes to a log inside the snapshot instead of /dev/null so
           # "is this snapshot complete or truncated?" is answerable from the
           # uploaded artifact rather than a guess.
-          timeout -k 30 360 crust-gather collect --duration 180s \
+          # --disable-additional-logs: the host-log leg spawns a privileged debug pod per
+          # node, which baseline PodSecurity rejects (403); its retry loop then burns the
+          # whole --duration and crust-gather exits 1. Skip it — it collects nothing here.
+          timeout -k 30 360 crust-gather collect --disable-additional-logs --duration 180s \
             --exclude-kind Secret -f "${snap}/host" >"${snap}/crust-gather.log" 2>&1
           rc=$?
           case "${rc}" in
@@ -185,7 +188,18 @@ spec:
           # op, so it keeps the wider budget.
           if [ -x ../../e2e-capture-dataplane.sh ]; then
             echo "» capturing host->pod data-plane for NotReady pods -> ${snap}/dataplane"
-            timeout -k 30 300 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1 || true
+            timeout -k 30 300 ../../e2e-capture-dataplane.sh "${snap}/dataplane" 2>&1
+            dp_rc=$?
+            # Read, not propagated: the `exit 0` below still stands. The
+            # collector names every read of its own it could not finish, so this
+            # backstop is the last way its leg can die without a word, and a
+            # truncated dataplane/ then reads exactly like a complete one that
+            # found little. The 300s here cuts sooner than the 600s the
+            # cozytest.sh call site allows, so this is the likelier of the two
+            # to fire, and the previous-logs leg above already reports its own.
+            if [ "${dp_rc}" -ne 0 ]; then
+              echo "» data-plane capture INCOMPLETE (exit ${dp_rc}); kept what landed in ${snap}/dataplane"
+            fi
           fi
           # A non-zero collector must not fail the catch and bury the test's own
           # error, which is the thing worth reading.

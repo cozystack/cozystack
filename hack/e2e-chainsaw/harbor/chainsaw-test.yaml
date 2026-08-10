@@ -34,16 +34,79 @@ spec:
       format: yaml
   - script:
       content: kubectl -n cozy-objectstorage-controller get pods
+  # The app chart wraps the workload in a nested HelmRelease named
+  # `<release>-system`, and the chart behind it stamps
+  # app.kubernetes.io/instance from its own release name. So the Harbor pods
+  # carry `harbor-test-system`, and the unsuffixed value this collector used to
+  # hold reached none of them, on every failed run.
+  #
+  # Coverage boundary, so the absence of a component here is not read as its
+  # health: this selector reaches the workload of the nested release — core,
+  # registry, portal, jobservice, nginx, exporter, and trivy when it is
+  # enabled (the manifest for this suite disables it). The Redis pods carry
+  # `harbor-test-redis`, so this selector misses them, but the script below
+  # collects their logs by `rf[rs]-` name prefix. The CNPG database is covered
+  # by the podLogs op below, on a different label.
+  #
+  # Nothing here collects the parent chart's post-delete cleanup Job, which
+  # labels its pod template with the unsuffixed parent release name. That is
+  # not an oversight: this suite has no `delete` op, so the parent release is
+  # uninstalled only in Chainsaw's cleanup phase, and catch cannot observe it
+  # -- catch is a defer inside the step, while the cleaner runs from t.Cleanup,
+  # after the test function has returned. A collector on the unsuffixed value
+  # would be a permanently-empty capture, the defect these selectors exist to
+  # avoid. The qdrant suite deletes inside a `try:`, so there the Job is at
+  # least in scope, and that suite carries the collector with its own note on
+  # how narrow the window is.
   - podLogs:
-      selector: app.kubernetes.io/instance=harbor-test
+      selector: app.kubernetes.io/instance=harbor-test-system
       tail: 50
+  # harbor-test readiness gates on this database, so its logs are the evidence
+  # for a whole class of failed runs. Selected on `cnpg.io/cluster`, CNPG's own
+  # primary label, rather than on app.kubernetes.io/instance, which CNPG only
+  # derives from the Cluster name: the primary label has nothing to drift from,
+  # and it is what the postgres suite and the WorkloadMonitors already use.
+  - podLogs:
+      selector: cnpg.io/cluster=harbor-test-db
+      tail: 50
+  # podLogs cannot report that it matched nothing, so an empty capture above and
+  # a selector that has gone stale look identical. Print the instance label of
+  # every pod in the namespace instead. Deliberately no selector is repeated
+  # here: a copy would only prove itself right, and would keep matching after
+  # the collector's own selector drifted. The census shows the values that
+  # actually exist, so a reader can see whether the selector above can match.
+  #
+  # What is and is not guarded, so the next reader does not assume more:
+  # the `-system` value above is also pinned on a resource in a `steps:` assert
+  # below, so the chart renaming that label turns a step red -- that is the
+  # drift this pin exists to catch. It does NOT catch a wrong value typed into the
+  # selector here: the assert pins the label on the resource, this pins it in
+  # the collector, and they are two literals. It also catches nothing when the
+  # run fails before reaching that assert. The census below covers neither, and
+  # is not meant to -- it answers what the labels actually are.
+  # The `cnpg.io/cluster` selector has no pin at all; it rides on CNPG's
+  # primary label instead, which is the reason for choosing it.
+  - script:
+      # The helper bounds each kubectl attempt with --request-timeout, which on
+      # a degraded cluster costs about five times the flag; one call is ~75s at
+      # worst, and this op timeout sits above that so an inner budget is what
+      # fires. A SIGKILL at the op boundary would take the census out mid-write
+      # and yield nothing, where a kubectl that gives up leaves an error to
+      # print. The helper carries the rest of the rationale and is unit-tested
+      # in hack/pod-label-census_test.bats.
+      timeout: 2m
+      content: |
+        set -eu
+        cd ../../..
+        . hack/e2e-chainsaw/_lib/pod-label-census.sh
+        pod_label_census "$NAMESPACE"
   # harbor-test readiness is gated by the inline RedisFailover
   # harbor-test-redis: its three sentinels stay NotReady until the spotahome
   # redis-operator elects a master and rewrites their monitored-master config.
-  # None of the collectors above see that path: the harbor-test instance
-  # selector matches neither the operator (namespace cozy-redis-operator) nor
-  # the rfr-/rfs- pods, and the RedisFailover CRD ships no status subresource,
-  # so there is nothing to assert on declaratively.
+  # None of the collectors above see that path: the instance selector above
+  # matches neither the operator (namespace cozy-redis-operator) nor the
+  # rfr-/rfs- pods, which carry `harbor-test-redis`, and the RedisFailover CRD
+  # ships no status subresource, so there is nothing to assert on declaratively.
   - describe:
       apiVersion: databases.spotahome.com/v1
       kind: RedisFailover
@@ -141,6 +204,16 @@ spec:
           kind: Deployment
           metadata:
             name: harbor-test-core
+          # Pins the label the catch collector selects on. Harbor's matchLabels
+          # carry only release+app, so pin the pod template, which is what
+          # podLogs actually matches. Asserts are subset matches, so this costs
+          # nothing and turns a silent drift of the instance label into a red
+          # step instead of an empty capture.
+          spec:
+            template:
+              metadata:
+                labels:
+                  app.kubernetes.io/instance: harbor-test-system
           status:
             (conditions[?type == 'Available']):
             - status: "True"

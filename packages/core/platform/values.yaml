@@ -109,6 +109,37 @@ networking:
   # has no effect.
   encryption:
     enabled: false
+  # Install the upstream reference CNI plugins (bridge, macvlan, ipvlan, ...)
+  # into /opt/cni/bin on every node, from the multus image. Multus-backed
+  # NetworkAttachmentDefinitions delegate to these. Talos puts six binaries in
+  # that directory -- bridge, firewall, host-local, loopback and portmap from the
+  # same upstream release, plus flannel from a different repo -- and generic Linux
+  # gives no guarantee at all, so a bridge-type NAD fails there with
+  # `failed to find plugin "bridge" in path [/opt/cni/bin]`. A NAD naming one of
+  # the other ten needs staging on either platform.
+  #
+  # On for both variants when unset. Four of the names Talos carries are ones
+  # staging writes, so it rewrites those with the same upstream version (v1.9.1
+  # on both sides) and adds the ten it does not carry; loopback is not staged and
+  # flannel was never part of the reference set. Set it explicitly to decline.
+  #
+  # A spelling this chart does not recognise stops the whole platform render, not
+  # just multus, so a typo here halts reconciliation cluster-wide. That is
+  # deliberate -- reading an unreadable value as "off" would defeat the opt-out --
+  # but it is why the accepted spellings are worth getting right first time.
+  #
+  # When on, the plugins are written every time the Multus pod is recreated,
+  # replacing files of the same name. 14 of the upstream reference plugins are
+  # installed; loopback, dhcp, dummy and tap are left alone. See
+  # docs/vm-external-vlan.md.
+  #
+  # On a running cluster this is set on the `platform` component of the
+  # `cozystack.cozystack-platform` Package CR, the same path as backupStorage
+  # (see docs/operations/backup-classes.md). Editing the multus HelmRelease or
+  # the child Package cozystack.multus directly is reverted by the platform
+  # reconcile.
+  # stageCniPlugins: true
+
 # Service publishing and ingress configuration
 publishing:
   host: "example.org"

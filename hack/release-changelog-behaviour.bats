@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 9 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # EXECUTES the release-changelog logic instead of asserting about its YAML.
 #
 # Its companion, hack/release-changelog-contract.bats, greps the workflow files.

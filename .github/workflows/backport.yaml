@@ -8,7 +8,8 @@ concurrency:
   group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
 permissions:
   contents: read
 
@@ -132,15 +133,47 @@ jobs:
             echo "Target branch: ${{ needs.prepare.outputs.previous_branch }}"
           fi
       
-      # 2. Checkout (required by backport‑action)
-      - name: Checkout repository
+      # 2. Skip if this target already has a merged backport.
+      #
+      # The action's backport branch name is deterministic,
+      # backport-<pull_number>-to-<target_branch>. A merged PR with that head
+      # means an earlier run already delivered this change to the target — a
+      # second label event (e.g. backport-previous added after backport
+      # already merged) would re-enter this job and cherry-pick commits the
+      # target branch already has. Git reports that as an empty pick (exit 1)
+      # rather than a conflict, which draft_commit_conflicts below misreads
+      # as a real conflict and reports as a failed backport on the original
+      # PR. Skipping here avoids the false report; it does not touch the
+      # empty-pick behavior itself, which lives in the action.
+      - name: Check for existing merged backport
+        id: guard
         if: steps.target.outcome == 'success'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        with:
+          script: |
+            const targetBranch = '${{ steps.target.outputs.branch }}';
+            const head = `backport-${context.payload.pull_request.number}-to-${targetBranch}`;
+            const { data: prs } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'closed',
+              head: `${context.repo.owner}:${head}`,
+            });
+            const alreadyMerged = prs.some(p => p.merged_at !== null);
+            core.setOutput('already_merged', alreadyMerged ? 'true' : 'false');
+            if (alreadyMerged) {
+              console.log(`Skipping backport to ${targetBranch}: ${head} already merged.`);
+            }
+
+      # 3. Checkout (required by backport‑action)
+      - name: Checkout repository
+        if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      # 3. Create the back‑port pull request
+      # 4. Create the back‑port pull request
       - name: Create back‑port PR
         id: backport
-        if: steps.target.outcome == 'success'
+        if: steps.target.outcome == 'success' && steps.guard.outputs.already_merged != 'true'
         uses: korthout/backport-action@0193454f0c5947491d348f33a275c119f30eb736 # v3.2.1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

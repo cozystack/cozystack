@@ -8,13 +8,22 @@ release:
 
 # The cleanup hook scopes its ACME solver sweep to this release's TLS host,
 # which defaults to "<release>.<_namespace.host>".
+#
+# The template renders a Job, a ServiceAccount, a Role and a RoleBinding, each
+# unique by kind, so every test names the one it wants instead of counting
+# positions. Document indices are assigned in template source order rather than
+# the kind-sorted order `helm template` prints, which makes them easy to get
+# wrong by reading the rendered output, and a document added ahead silently
+# shifts every later index onto the wrong object.
 set:
   _namespace:
     host: example.org
 
 tests:
   - it: renders the cleanup Job as a post-delete hook
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       - equal:
           path: kind
@@ -30,7 +39,9 @@ tests:
           value: harbor-test-cleanup
 
   - it: targets both kept PVCs (jobservice + trivy) via the shared release label and ACME objects
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       # The upstream Harbor subchart runs as the "<release>-system"
       # HelmRelease. Its kept PVCs must be selected by release=<release>-system:
@@ -50,7 +61,9 @@ tests:
           pattern: harbor-test-ingress-tls
 
   - it: scopes the ACME solver sweep to this release's TLS host
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       # The solver sweep must be scoped to this release's host, not a
       # namespace-wide label sweep, so sibling apps' in-flight challenges in
@@ -75,7 +88,9 @@ tests:
           pattern: kubectl delete[^\n]*-l acme.cert-manager.io/http01-solver=true
 
   - it: pins the cleanup image by digest and routes it through the images registry
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       # The image must be digest-pinned (immutable) rather than a moving tag,
       # and must NOT hardcode docker.io so a mirrored/air-gapped registry can be
@@ -89,7 +104,9 @@ tests:
           pattern: docker\.io
 
   - it: prefixes the cleanup image with the cluster images registry when set
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     set:
       _cluster:
         images-registry: registry.example.com
@@ -101,7 +118,9 @@ tests:
           pattern: ^registry\.example\.com/clastix/kubectl:v[0-9]+\.[0-9]+(\.[0-9]+)?@sha256:[0-9a-f]{64}$
 
   - it: leaves no leading slash when the images registry is empty (default)
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       # With images-registry defaulting to "", the rendered ref must still be a
       # valid image reference (no leading "/") so a standard install resolves it.
@@ -114,7 +133,9 @@ tests:
           pattern: ^/
 
   - it: does not emit a double slash when the images registry has a trailing slash
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     set:
       _cluster:
         images-registry: registry.example.com/
@@ -129,7 +150,9 @@ tests:
           pattern: //
 
   - it: sets resource requests and limits on the cleanup container
-    documentIndex: 0
+    documentSelector:
+      path: kind
+      value: Job
     asserts:
       - equal:
           path: spec.template.spec.containers[0].resources.requests.cpu
@@ -145,7 +168,9 @@ tests:
           value: 128Mi
 
   - it: creates a ServiceAccount for the cleanup job
-    documentIndex: 1
+    documentSelector:
+      path: kind
+      value: ServiceAccount
     asserts:
       - equal:
           path: kind
@@ -155,7 +180,9 @@ tests:
           value: harbor-test-cleanup
 
   - it: grants RBAC for PVCs and cert-manager ACME resources
-    documentIndex: 2
+    documentSelector:
+      path: kind
+      value: Role
     asserts:
       - equal:
           path: kind
@@ -214,7 +241,9 @@ tests:
             verbs: ["get", "list", "delete"]
 
   - it: binds the Role to the cleanup ServiceAccount
-    documentIndex: 3
+    documentSelector:
+      path: kind
+      value: RoleBinding
     asserts:
       - equal:
           path: kind

@@ -334,10 +334,36 @@ jobs:
           path: _out/chainsaw-report.xml
           if-no-files-found: ignore
 
+      # A ceiling of its own, not the job's 180 minutes. `Upload cozyreport.tgz`
+      # is the next step and the collector writes its tarball at the very end of
+      # its run, so a read that never returns spends what is left of the job
+      # budget, the job is cancelled, and the upload never runs -- the artifact
+      # is lost rather than truncated. 30 minutes is measured against the step:
+      # it takes 3-42s across sampled runs, failed e2e jobs included.
+      # `continue-on-error` because the ceiling must not change what the job
+      # reports: `|| true` says collecting diagnostics is never fatal, and a step
+      # killed at its ceiling never reaches it.
       - name: Collect report
+        id: collect_report
         if: always()
+        timeout-minutes: 30
+        continue-on-error: true
         run: |
           make -C packages/core/testing SANDBOX_NAME=$SANDBOX_NAME collect-report || true
+
+      # `continue-on-error` keeps the overrun out of the job's result, which also
+      # keeps it out of everyone's view: a step that ended at its ceiling renders
+      # green and the only trace is in the raw log. This branch's own standard is
+      # that a bound which fires is recorded, and that has to hold for the outer
+      # bound too.
+      #
+      # The wording says what `outcome` establishes and no more: a step can end
+      # non-zero without any ceiling firing, so naming the timeout as the cause
+      # would be the false-mechanism claim the collector refuses to make for a 137.
+      - name: Report collection overran its ceiling
+        if: always() && steps.collect_report.outcome == 'failure'
+        run: |
+          echo "::warning title=cozyreport::Collect report ended non-zero -- its timeout-minutes fired, or the step failed before the collector ran; cozyreport.tgz is missing or partial for this run"
 
       - name: Upload cozyreport.tgz
         if: always()

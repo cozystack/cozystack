@@ -23,7 +23,6 @@
   [ -f "$values_file" ]
 
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   helm template invariant packages/apps/kubernetes \
     --namespace tenant-root \
@@ -69,6 +68,7 @@
   fi
 
   echo "Invariant holds for $matched Deployment(s)"
+  rm -rf "$tmp"
 }
 
 @test "chart emits zero admin-kubeconfig Deployments when tenant has no etcd DataStore" {
@@ -81,7 +81,6 @@
   # with etcd empty and asserts no Deployment references the admin-kubeconfig
   # Secret.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   helm template invariant packages/apps/kubernetes \
     --namespace tenant-root \
@@ -108,6 +107,7 @@
   fi
 
   echo "No admin-kubeconfig Deployments rendered for empty etcd (as expected)"
+  rm -rf "$tmp"
 }
 
 @test "chart emits zero admin-kubeconfig HelmReleases when tenant has no etcd DataStore" {
@@ -118,7 +118,6 @@
   # the operator sees and contradicting the "awaiting-etcd beacon only"
   # contract of the soft-skip path.
   tmp=$(mktemp -d)
-  trap 'rm -rf "$tmp"' EXIT
 
   helm template invariant packages/apps/kubernetes \
     --namespace tenant-root \
@@ -142,4 +141,5 @@
   fi
 
   echo "No admin-kubeconfig HelmReleases rendered for empty etcd (as expected)"
+  rm -rf "$tmp"
 }

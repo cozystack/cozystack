@@ -1,0 +1,141 @@
+# The tenant addon HelmRelease that ships this chart remediates a failed
+# install by uninstalling the release, and an uninstall deletes whatever the
+# chart rendered. Deleting a CRD makes the API server garbage-collect every
+# custom resource of that kind, so an unannotated CRD here costs the cluster
+# every Gateway, HTTPRoute and ReferenceGrant it holds.
+#
+# The first case selects every CustomResourceDefinition at once, so a CRD that
+# `make update` starts rendering is covered without being listed here. The
+# ValidatingAdmissionPolicy pair the experimental kustomization also emits
+# holds no user data and is deliberately left out of that selection. The named
+# cases below pin each CRD individually, so a failure says which one lost the
+# annotation. A selector that matches nothing fails with "document not found"
+# rather than passing on an empty document set.
+suite: Gateway API CRDs survive a release uninstall
+templates:
+  - templates/crds-experimental.yaml
+tests:
+  - it: annotates every CustomResourceDefinition the chart renders
+    documentSelector:
+      path: kind
+      value: CustomResourceDefinition
+      matchMany: true
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  # Pins the rendered document count, so a change in what the kustomization
+  # emits is visible here rather than only in whichever case happens to break.
+  - it: renders twelve CRDs and the admission policy pair
+    asserts:
+      - hasDocuments:
+          count: 14
+
+  - it: keeps the backendtlspolicies CRD
+    documentSelector:
+      path: metadata.name
+      value: backendtlspolicies.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the gatewayclasses CRD
+    documentSelector:
+      path: metadata.name
+      value: gatewayclasses.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the gateways CRD
+    documentSelector:
+      path: metadata.name
+      value: gateways.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the grpcroutes CRD
+    documentSelector:
+      path: metadata.name
+      value: grpcroutes.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the httproutes CRD
+    documentSelector:
+      path: metadata.name
+      value: httproutes.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the listenersets CRD
+    documentSelector:
+      path: metadata.name
+      value: listenersets.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the referencegrants CRD
+    documentSelector:
+      path: metadata.name
+      value: referencegrants.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the tcproutes CRD
+    documentSelector:
+      path: metadata.name
+      value: tcproutes.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the tlsroutes CRD
+    documentSelector:
+      path: metadata.name
+      value: tlsroutes.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the udproutes CRD
+    documentSelector:
+      path: metadata.name
+      value: udproutes.gateway.networking.k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the xbackendtrafficpolicies CRD
+    documentSelector:
+      path: metadata.name
+      value: xbackendtrafficpolicies.gateway.networking.x-k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep
+
+  - it: keeps the xmeshes CRD
+    documentSelector:
+      path: metadata.name
+      value: xmeshes.gateway.networking.x-k8s.io
+    asserts:
+      - equal:
+          path: metadata.annotations["helm.sh/resource-policy"]
+          value: keep

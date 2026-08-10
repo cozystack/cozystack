@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 5 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Tests for hack/nightly-mirror.sh — the OCIR->GHCR nightly image-mirror selector.
 #
 # Guards the ref selection and host rewrite: only cozystack-owned component

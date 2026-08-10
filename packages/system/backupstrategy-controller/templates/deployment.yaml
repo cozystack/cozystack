@@ -50,6 +50,49 @@ spec:
           value: {{ .Values.backupStorage.forcePathStyle | quote }}
         - name: BACKUP_STORAGE_SYSTEM_NAMESPACES
           value: {{ .Values.backupStorage.systemNamespaces | join "," | quote }}
+        {{- if .Values.backupStorage.reconcileDefaultObjects }}
+        # DefaultObjectsGate: the Strategy CRs and the Velero BSL are gated
+        # on a `lookup` of the BucketClaim this same chart creates, so a
+        # fresh install renders them empty — permanently, because
+        # helm-controller does not re-render an unchanged, successful
+        # release. The gate detects the missing objects once the bucket name
+        # is resolvable and forces exactly one real Helm upgrade on THIS
+        # release, which is the only thing that re-runs the lookups.
+        - name: BACKUP_DEFAULT_OBJECTS_BACKUPCLASS
+          value: cozy-default
+        - name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAME
+          value: {{ .Release.Name | quote }}
+        - name: BACKUP_DEFAULT_OBJECTS_HELMRELEASE_NAMESPACE
+          value: {{ .Release.Namespace | quote }}
+        {{- if .Values.backupStorage.provisionBucket }}
+        # The credentials Secret named by BACKUP_STORAGE_SECRET_NAME is
+        # itself rendered behind an install-time `lookup` — of the COSI
+        # Secret, by packages/system/bucket/templates/user-credentials.yaml —
+        # so it is subject to the same permanent skip, one release earlier in
+        # the chain. While it is missing the projector has no source, every
+        # Strategy CR and the Velero BSL stay gated off, and migration 50
+        # cannot resolve its snapshot target. These coordinates let the gate
+        # force the release that renders it.
+        #
+        # The name is the Bucket CR name carrying the bucket-rd release
+        # prefix (packages/system/bucket-rd/cozyrds/bucket.yaml) plus the
+        # "-system" suffix the parent chart appends
+        # (packages/apps/bucket/templates/helmrelease.yaml), which is exactly
+        # BACKUP_STORAGE_SECRET_NAME minus "-credentials". tests/
+        # default_objects_gate_test.yaml asserts the two stay in lockstep.
+        #
+        # Omitted on provisionBucket=false (external S3): the Secret is
+        # admin-managed there and no release renders it.
+        - name: BACKUP_CREDENTIALS_HELMRELEASE_NAME
+          value: {{ printf "bucket-%s-system" .Values.backupStorage.bucketName | quote }}
+        - name: BACKUP_CREDENTIALS_HELMRELEASE_NAMESPACE
+          value: {{ .Values.backupStorage.namespace | quote }}
+        {{- end }}
+        {{- if .Values.velero.bslEnabled }}
+        - name: BACKUP_DEFAULT_OBJECTS_VELERO_NAMESPACE
+          value: {{ .Values.velero.namespace | quote }}
+        {{- end }}
+        {{- end }}
         ports:
         {{- if .Values.backupStrategyController.metrics.enabled }}
         - name: metrics

@@ -18,7 +18,8 @@ concurrency:
   group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
-# Top-level token defaults to read-only; jobs request the minimum extra scopes.
+# Top-level token defaults to read-only. A job-level block replaces this one
+# rather than adding to it, so each job restates every scope it needs.
 permissions:
   contents: read
 

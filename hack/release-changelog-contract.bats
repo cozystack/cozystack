@@ -1,4 +1,5 @@
 #!/usr/bin/env bats
+# EXIT-TRAP DEBT: 1 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Guards the contract that makes a release publish WITH its changelog.
 #
 # The release body is no longer written by hand or synced after the fact: it is
