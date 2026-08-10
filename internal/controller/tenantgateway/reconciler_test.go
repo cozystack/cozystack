@@ -2866,6 +2866,72 @@ func TestReconcile_TLSRouteLoserOnAPassthroughHostnameKeepsItsConflict(t *testin
 	}
 }
 
+// TestReconcile_TwoTLSRoutesOnAnUnansweredHostnameBothHearTheSameThing
+// pins that the race stops mattering once nothing answers the name.
+// Two TLSRoutes claiming a hostname no passthrough listener declares
+// are both unserved for the same reason, and telling the loser it lost
+// to the other sends it to look at a route that is equally unserved.
+// The reserved-hostname branch already drops the record for exactly
+// this reason; the branch for a name nothing answers has to as well.
+func TestReconcile_TwoTLSRoutesOnAnUnansweredHostnameBothHearTheSameThing(t *testing.T) {
+	const orphaned = "gone.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-public", "tenant-foo"},
+		},
+	}
+	first := tlsRouteAttached("aaa", "cozy-public", orphaned, "tls-gone", "tenant-foo")
+	second := tlsRouteAttached("zzz", "tenant-foo", orphaned, "tls-gone", "tenant-foo")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, first, second).
+		WithStatusSubresource(tgw, first, second).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, want := range []types.NamespacedName{
+		{Name: "aaa", Namespace: "cozy-public"},
+		{Name: "zzz", Namespace: "tenant-foo"},
+	} {
+		got := &gatewayv1alpha2.TLSRoute{}
+		if err := c.Get(context.TODO(), want, got); err != nil {
+			t.Fatalf("get %s: %v", want, err)
+		}
+		var accepted *metav1.Condition
+		for _, ps := range got.Status.Parents {
+			if string(ps.ControllerName) != testControllerName {
+				continue
+			}
+			for i := range ps.Conditions {
+				if ps.Conditions[i].Type == "Accepted" {
+					accepted = &ps.Conditions[i]
+				}
+			}
+		}
+		if accepted == nil {
+			t.Fatalf("%s: no Accepted condition under %s: %+v", want, testControllerName, got.Status.Parents)
+		}
+		if accepted.Reason == "HostnameConflict" {
+			t.Errorf("%s: told it lost %s to another route, which is equally unserved: %q", want, orphaned, accepted.Message)
+		}
+		if n := strings.Count(accepted.Message, orphaned); n != 1 {
+			t.Errorf("%s: hostname named %d times in one condition, want 1: %q", want, n, accepted.Message)
+		}
+	}
+}
+
 // TestReconcile_TLSRouteKeepsAcceptedWhenAnHTTPRouteWinsAPassthroughName
 // pins the mixed-kind race on a passthrough hostname. Ownership ranks
 // by namespace with no notion of kind, so a cozy-* HTTPRoute outranks

@@ -352,8 +352,10 @@ type TenantGatewaySpec struct {
 	// The bounds exist for the CEL cost estimator, same as on Apex: the
 	// name-collision rule scans this list, and an unbounded list of
 	// unbounded strings makes the estimate exceed the per-CRD budget.
-	// The item length is a DNS-1123 label; the count leaves the
-	// listener budget room.
+	// The item length is a DNS-1123 label. The count is not chosen to
+	// fit the listener budget: it is the Gateway API cap itself, so a
+	// list at the bound plus the mandatory port-80 listener exceeds
+	// what a Gateway holds and the controller refuses it.
 	// The item pattern is a DNS-1123 label for the same reason the
 	// listener hostname carries one: the entry becomes the hostname
 	// <svc>.<apex>, so an upper-case or underscored value renders a
