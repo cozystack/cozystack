@@ -127,6 +127,16 @@
         "source": "storageclass"
       }
     },
+    "version": {
+      "description": "ClickHouse major.minor version to deploy. Applies to both the ClickHouse server and ClickHouse Keeper images. Downgrading to an older major is unsafe (ClickHouse cannot read data written by a newer server and Keeper snapshots are not backward compatible) — only increase this value.",
+      "type": "string",
+      "default": "v24.9",
+      "enum": [
+        "v25.8",
+        "v25.3",
+        "v24.9"
+      ]
+    },
     "logStorageSize": {
       "description": "Size of Persistent Volume for logs.",
       "default": "2Gi",
