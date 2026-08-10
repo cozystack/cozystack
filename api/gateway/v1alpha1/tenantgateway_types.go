@@ -21,6 +21,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// A comment block separated from its declaration by a blank line is
+// detached on purpose. controller-gen turns an attached comment into
+// the CRD description, which kubectl explain prints to whoever is
+// filling the spec in, so rationale meant for whoever next edits the
+// validation markers goes in a detached block: it stays beside the
+// code without shipping to every cluster.
+//
+// This note is itself detached, for the same reason: it is a
+// convention for editors of this package, not documentation of the
+// API it declares.
+
 // CertMode selects how the per-tenant Gateway sources TLS certificates.
 // +kubebuilder:validation:Enum=http01;dns01;existingSecret
 type CertMode string

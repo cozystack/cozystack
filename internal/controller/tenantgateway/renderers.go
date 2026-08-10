@@ -245,9 +245,10 @@ const maxGatewayListeners = 64
 // v1.19.6 splits the Envoy listeners per port and this stops being
 // true, though not unconditionally: NeedsPerPortListeners requires
 // more than one HTTPS port, or more than one routed passthrough port,
-// or a cross-port SNI overlap. A tenant keeping any shipped
-// tlsPassthroughServices entry has a routed passthrough listener on
-// 443 already, so a native-port entry satisfies the second of those.
+// or a cross-port SNI overlap, and every one of the three counts only
+// listeners a TLSRoute attaches to. A native-port entry on its own
+// satisfies none of them, and the entry is all this field creates, so
+// the split arrives with the route rather than with the bump.
 // Lifting the refusal means deleting two copies of it, this one and
 // the matching CEL rule in the CRD, which is a schema change even
 // though no field or type moves. The pin is the thing to watch:
@@ -290,8 +291,8 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // a combined Envoy listener "would otherwise erase the original Gateway
 // listener port boundary and route traffic for one listener to another".
 // v1.19.6 answers it by splitting the Envoy listeners per port when
-// NeedsPerPortListeners holds, which a Gateway carrying both a
-// port-443 passthrough listener and a native-port one does; v1.19.5
+// NeedsPerPortListeners holds, which needs a TLSRoute behind the
+// native-port listener before that listener counts at all; v1.19.5
 // has neither the split nor the diagnostic, so the answer here is to
 // keep the pair from being rendered. Revisit when the pin moves.
 //
@@ -300,8 +301,10 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // tlsPassthroughServices is a chart value shipped defaulted to api,
 // vm-exportproxy and cdi-uploadproxy, so a tenant app named after one of
 // them collides with a platform default. Suppression is not what breaks
-// that hostname — before this filter the same collision rendered the
-// Conflicted pair, equally unserved — but it does take away the
+// that hostname — before this filter the same collision rendered a
+// terminate listener and a passthrough listener under one SNI, and
+// which of them answered was not something the objects said — but it
+// does take away the
 // Conflicted condition, which was the one place the collision was
 // visible on the Gateway. updateRouteStatuses puts it back on the route
 // instead, as Accepted=False with NoMatchingListenerHostname naming the
