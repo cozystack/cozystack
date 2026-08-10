@@ -16,16 +16,20 @@ limitations under the License.
 
 // Package v1alpha1 contains API Schema definitions for the
 // gateway.cozystack.io v1alpha1 API group.
-//
+// +kubebuilder:object:generate=true
+// +groupName=gateway.cozystack.io
+package v1alpha1
+
 // A comment block separated from its declaration by a blank line is
 // detached on purpose. controller-gen turns an attached comment into
 // the CRD description, which kubectl explain prints to whoever is
 // filling the spec in, so rationale meant for whoever next edits the
 // validation markers goes in a detached block: it stays beside the
 // code without shipping to every cluster.
-// +kubebuilder:object:generate=true
-// +groupName=gateway.cozystack.io
-package v1alpha1
+//
+// This note is itself detached, for the same reason: it is a
+// convention for editors of this package, not documentation of the
+// API it declares.
 
 import (
 	"k8s.io/apimachinery/pkg/runtime/schema"

@@ -196,18 +196,27 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		}
 		if answeredBy != "" {
 			// A TLSRoute on this hostname is the passthrough listener's
-			// intended user and stays accepted; only the HTTPRoute that
-			// expected termination lost something.
+			// intended user, so nothing is withdrawn from it and its
+			// status is left to conflict resolution. Only the HTTPRoute
+			// that expected termination lost something here.
 			//
-			// The hostname also leaves the ownership race. Losing it to
-			// another route is true and beside the point once nothing
-			// terminates it, and leaving the entry in would name the
-			// same hostname under both causes in one condition, sending
-			// the loser to look at a route that is not served either.
+			// For that HTTPRoute the hostname also leaves the ownership
+			// race: losing it to another route is true and beside the
+			// point once nothing terminates it, and leaving the entry
+			// in would name one hostname under both causes in a single
+			// condition, sending the loser to look at a route that is
+			// not served either.
+			//
+			// The race between two TLSRoutes on this hostname is not
+			// moot the same way, so their loser records stay. The
+			// listener does exist, exactly one of them is served
+			// through it, and the other has to hear that from
+			// somewhere.
 			for _, ref := range refs {
-				if ref.kind == routeKindHTTP {
-					withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})
+				if ref.kind != routeKindHTTP {
+					continue
 				}
+				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})
 				if rest := slices.DeleteFunc(losers[ref], func(lost string) bool { return lost == h }); len(rest) > 0 {
 					losers[ref] = rest
 				} else {

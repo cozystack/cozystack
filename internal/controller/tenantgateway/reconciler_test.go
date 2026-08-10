@@ -2802,6 +2802,70 @@ func acceptedCondition(t *testing.T, c client.Client, name, ns string) *metav1.C
 	return found
 }
 
+// TestReconcile_TLSRouteLoserOnAPassthroughHostnameKeepsItsConflict
+// pins the half of the withdrawal cleanup that does not apply to
+// TLSRoutes. Dropping a withdrawn hostname from the ownership race is
+// right for an HTTPRoute, which loses nothing it could have had once
+// no terminate listener is rendered. A TLSRoute is the passthrough
+// listener's intended user, so the race between two of them is real
+// and still has a winner: exactly one gets served, and the other has
+// to be told, or a tenant route claiming a shipped passthrough
+// hostname attaches with a clean bill of health while Cilium picks
+// between the two backends by SNI.
+func TestReconcile_TLSRouteLoserOnAPassthroughHostnameKeepsItsConflict(t *testing.T) {
+	const contested = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-public", "tenant-bar"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	platform := tlsRouteAttached("api", "cozy-public", contested, "tls-api", "tenant-foo")
+	hijack := tlsRouteAttached("api-hijack", "tenant-bar", contested, "tls-api", "tenant-foo")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, platform, hijack).
+		WithStatusSubresource(tgw, &gatewayv1alpha2.TLSRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "api-hijack", Namespace: "tenant-bar"}, got); err != nil {
+		t.Fatalf("get losing TLSRoute: %v", err)
+	}
+	var accepted *metav1.Condition
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for i := range ps.Conditions {
+			if ps.Conditions[i].Type == "Accepted" {
+				accepted = &ps.Conditions[i]
+			}
+		}
+	}
+	// No entry of ours means no claim was judged, and the assertion
+	// below would hold on a controller that writes nothing at all.
+	if accepted == nil {
+		t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status != metav1.ConditionFalse || accepted.Reason != "HostnameConflict" {
+		t.Errorf("losing TLSRoute on %s reports Accepted=%s reason=%s; the winner in cozy-public is the one being served", contested, accepted.Status, accepted.Reason)
+	}
+}
+
 // TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother pins that
 // a route hit by both causes hears about both. One route can lose a
 // race for one hostname and have another withdrawn under it, and
