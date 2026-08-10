@@ -453,7 +453,7 @@ This track consolidates work across the [cozystack/website](https://github.com/c
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (current: v1.4, v1.5, v1.6; future: stable / LTS / fast). |
+| 2026 Q3 | **Documentation Information Architecture v2** — reorganize around user journeys: *Get Started*, *Operate*, *Develop*, *Administer*, *Reference*, *Tutorials*, *Migrate*. **Versioned docs** per supported release line (the latest stable line and the previous one; future: stable / LTS / fast). |
 | 2026 Q3 | **Install & upgrade docs** brought to production quality for every supported host OS profile (Talos Tier-1; Ubuntu / Debian / Flatcar Tier-2). |
 | 2026 Q4 | **Auto-generated API reference** from CRDs and `cozystack-api` OpenAPI spec, published per release. Tested code samples — every code block in docs runs in CI against a live cluster, broken samples block release. |
 | 2026 Q4 | **Operator's Handbook** — production-grade runbook collection for common operations: cluster upgrades, tenant onboarding, backup restore, DR exercises, storage migration, network troubleshooting. |
