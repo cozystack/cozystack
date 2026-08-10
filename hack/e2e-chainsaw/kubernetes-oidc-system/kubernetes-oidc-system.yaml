@@ -1,15 +1,33 @@
-# nodeGroups (and storageClass) intentionally omitted — this is a render-side
-# test that only asserts on the KamajiControlPlane + the cozy-realm Keycloak
-# objects. With the schema default `{}`, the chart helper emits the default
+# nodeGroups (and storageClass) intentionally omitted — this test asserts on the
+# KamajiControlPlane and the cozy-realm Keycloak objects and needs no worker
+# node for either. It does need a serving tenant control plane, because its last
+# step waits for the release to finish installing; see the suite header.
+#
+# With the schema default `{}`, the chart helper emits the default
 # `md0` group with `minReplicas: 0` — exactly one MachineDeployment renders
 # (API-surface completeness) but the chart no longer manages `spec.replicas`,
 # so CAPI's defaulting webhook seeds it to 0 from the autoscaler min-size
-# annotation. Result: zero KubevirtMachines, zero worker DataVolumes, no DRBD
-# churn overlapping the kubernetes-previous suite (see #3231).
-# Unlike the bats original, no talos.imageFactoryURL block is injected here:
-# the helper emits it only when the in-sandbox Talos image cache is up, and
-# with zero worker replicas this render-side test instantiates no DataVolume
-# imports for it to redirect — the static fixture stays equivalent.
+# annotation.
+#
+# That is where the group STARTS, and not where it stays. The chart also ships
+# a cluster-autoscaler, and the in-tenant addon Pods have no node to schedule
+# on, so it scales md0 to 1 within about a minute of install — documented
+# behaviour of an empty-nodeGroups install, see the nodeGroups parameter in
+# packages/apps/kubernetes/values.yaml. CI events from both OIDC suites carry
+# the whole chain: `SuccessfulScale machinedeployment/<release>-md0 … 0 -> 1`,
+# then an `importer-<release>-md0-…-disk-system` Pod and a
+# `virt-launcher-<release>-md0-…` Pod. So a worker Machine and its
+# DataVolume-backed disk DO get provisioned here, and the suite carries no
+# drain barrier before the kubernetes-* suites that run after it — the churn
+# #3231 removed, reintroduced by a different actor. Tracked in #3739 and left
+# as it is here: making an empty-nodeGroups install genuinely nodeless is a
+# change to the chart or to the autoscaler's reach, not to this fixture.
+# No talos.imageFactoryURL block is injected here, because a static fixture
+# cannot condition on the in-sandbox Talos image cache being up -- that needed a
+# helper deciding at runtime, which this file has no way to do. The consequence
+# pairs with the autoscaler behaviour described above: the md0 disk import it
+# triggers resolves against the upstream image factory rather than that cache.
+# It is one import and no assertion here depends on it.
 apiVersion: apps.cozystack.io/v1alpha1
 kind: Kubernetes
 metadata:

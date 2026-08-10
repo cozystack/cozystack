@@ -142,9 +142,12 @@ tests:
   # defaulting preserves the live value". Two matched cases so a future
   # refactor cannot silently re-hardcode the field nor break the
   # annotation-driven min/max wiring:
-  #   * minReplicas: 0 (the render-side OIDC bats path — MachineDeployment
-  #     emitted with the min-size annotation "0", no chart-owned replicas
-  #     field, no worker DataVolumes provisioned until scale-out).
+  #   * minReplicas: 0 (the OIDC chainsaw suites — MachineDeployment emitted
+  #     with the min-size annotation "0", no chart-owned replicas field, no
+  #     worker DataVolumes provisioned until scale-out. Those suites are not
+  #     render-side: they wait for their release to finish installing, and the
+  #     cluster-autoscaler then scales this group to one worker, which is the
+  #     scale-out named above).
   #   * minReplicas: 2 (the kubernetes-latest / kubernetes-previous bats
   #     path — MachineDeployment emitted with the min-size annotation "2",
   #     no chart-owned replicas field, defaulting webhook fills it to 2 on
