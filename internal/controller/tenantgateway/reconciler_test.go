@@ -2866,6 +2866,86 @@ func TestReconcile_TLSRouteLoserOnAPassthroughHostnameKeepsItsConflict(t *testin
 	}
 }
 
+// TestReconcile_TLSRouteOutsideTheTenantOnANativePortHostnameIsRefused
+// pins the consequence of narrowing the native-port attach set. Those
+// listeners admit only the tenant's own namespace, while hostname
+// claims are still collected from every attached namespace, so a
+// TLSRoute elsewhere claims a name it can never attach to. Saying
+// Accepted=True there is the same silent lie the withdrawal machinery
+// exists to remove, and it is on the path of the next phase: the
+// platform's own TLSRoutes live in default.
+func TestReconcile_TLSRouteOutsideTheTenantOnANativePortHostnameIsRefused(t *testing.T) {
+	const published = "postgres.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"default"},
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: published},
+			},
+		},
+	}
+	outside := tlsRouteAttached("pg", "default", published, "tls-postgres", "tenant-foo")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, outside).
+		WithStatusSubresource(tgw, outside).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The listener has to exist for the case to mean anything: without
+	// it the route would be unserved for an entirely different reason.
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var sawNativePort bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Name == "tls-postgres" {
+			sawNativePort = true
+		}
+	}
+	if !sawNativePort {
+		t.Fatalf("no tls-postgres listener rendered: %+v", gw.Spec.Listeners)
+	}
+
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "pg", Namespace: "default"}, got); err != nil {
+		t.Fatalf("get route: %v", err)
+	}
+	var accepted *metav1.Condition
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for i := range ps.Conditions {
+			if ps.Conditions[i].Type == "Accepted" {
+				accepted = &ps.Conditions[i]
+			}
+		}
+	}
+	if accepted == nil {
+		t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status == metav1.ConditionTrue {
+		t.Fatalf("route in default reports Accepted=True on a listener that admits only tenant-foo")
+	}
+	if !strings.Contains(accepted.Message, published) {
+		t.Errorf("condition does not name the hostname it refuses: reason=%s message=%q", accepted.Reason, accepted.Message)
+	}
+}
+
 // TestReconcile_TwoTLSRoutesOnAnUnansweredHostnameBothHearTheSameThing
 // pins that the race stops mattering once nothing answers the name.
 // Two TLSRoutes claiming a hostname no passthrough listener declares

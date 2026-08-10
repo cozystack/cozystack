@@ -127,15 +127,34 @@ func resolveHostnameOwners(claims map[string][]routeRef) map[routeRef][]string {
 	return losers
 }
 
+// withdrawalCause names why the controller declined to serve a
+// hostname. Named rather than inferred from an empty field, because
+// the three cases read differently to an operator and the difference
+// decides where they go looking.
+type withdrawalCause int
+
+const (
+	// withdrawnAnswered: a passthrough listener answers the name, so no
+	// terminate listener is rendered for it.
+	withdrawnAnswered withdrawalCause = iota
+	// withdrawnUnanswered: nothing answers the name at all.
+	withdrawnUnanswered
+	// withdrawnForeignNamespace: a native-port listener answers the
+	// name but admits only the tenant's own namespace, so this route
+	// cannot attach to it however the hostname resolves.
+	withdrawnForeignNamespace
+)
+
 // withdrawnHostname pairs a hostname the controller declined to serve
-// with the TLS-passthrough hostname whose SNI answers it, or with the
-// empty string when nothing answers it at all. The pair is carried
-// rather than the claimed name alone because a wildcard entry is not
-// derivable from the route: the route claims pg.db.<apex> and the spec
-// that took it away says *.db.<apex>.
+// with the passthrough hostname involved, empty when the cause is that
+// nothing answers it. The pair is carried rather than the claimed name
+// alone because a wildcard entry is not derivable from the route: the
+// route claims pg.db.<apex> and the spec that took it away says
+// *.db.<apex>.
 type withdrawnHostname struct {
 	hostname   string
 	answeredBy string
+	cause      withdrawalCause
 }
 
 // describeWithdrawn renders the pairs in a stable order, dropping
@@ -144,20 +163,26 @@ type withdrawnHostname struct {
 // every reconcile, so an unstable order would rewrite the condition
 // each pass and churn the route's status forever.
 //
-// An empty answeredBy means no listener answers the name at all, which
-// reads differently and is rendered differently.
-func describeWithdrawn(hostnames []withdrawnHostname) (answered, unserved string) {
-	var withListener, without []string
+// Each cause is rendered separately, because a route hit by more than
+// one of them has to be told about each.
+func describeWithdrawn(hostnames []withdrawnHostname) (answered, unserved, foreign string) {
+	var withListener, without, elsewhere []string
 	for _, h := range hostnames {
-		if h.answeredBy == "" {
+		switch h.cause {
+		case withdrawnUnanswered:
 			without = append(without, h.hostname)
-			continue
+		case withdrawnForeignNamespace:
+			elsewhere = append(elsewhere, fmt.Sprintf("%s (listener %s)", h.hostname, h.answeredBy))
+		default:
+			withListener = append(withListener, fmt.Sprintf("%s (answered by %s)", h.hostname, h.answeredBy))
 		}
-		withListener = append(withListener, fmt.Sprintf("%s (answered by %s)", h.hostname, h.answeredBy))
 	}
 	sort.Strings(withListener)
 	sort.Strings(without)
-	return strings.Join(slices.Compact(withListener), ", "), strings.Join(slices.Compact(without), ", ")
+	sort.Strings(elsewhere)
+	return strings.Join(slices.Compact(withListener), ", "),
+		strings.Join(slices.Compact(without), ", "),
+		strings.Join(slices.Compact(elsewhere), ", ")
 }
 
 // updateRouteStatuses writes RouteParentStatus entries under our
@@ -222,12 +247,15 @@ func (r *Reconciler) updateRouteStatuses(
 				reason = "HostnameConflict"
 			}
 			if isWithdrawn {
-				answered, unserved := describeWithdrawn(gone)
+				answered, unserved, foreign := describeWithdrawn(gone)
 				if answered != "" {
 					causes = append(causes, fmt.Sprintf("hostname(s) %s answered by a TLS-passthrough listener, so no HTTPS listener is rendered for them", answered))
 				}
 				if unserved != "" {
 					causes = append(causes, fmt.Sprintf("hostname(s) %s claimed only by a TLSRoute, which needs a passthrough listener this Gateway does not declare", unserved))
+				}
+				if foreign != "" {
+					causes = append(causes, fmt.Sprintf("hostname(s) %s served by a native-port listener that admits routes from namespace %s only", foreign, tgw.Namespace))
 				}
 			}
 			if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{

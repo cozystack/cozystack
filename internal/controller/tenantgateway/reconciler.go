@@ -169,6 +169,15 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// listener there, which the TLSRoute still cannot attach to, and
 	// that gap predates this change.
 	reserved := passthroughHostnames(tgw)
+	// Native-port listeners admit only the tenant's own namespace,
+	// while claims are collected from every attached namespace, so a
+	// route elsewhere can claim a name it could never attach to. The
+	// port-443 entries do not have this gap: their allowedRoutes select
+	// on the gateway label, which every attached namespace carries.
+	nativePort := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughListeners))
+	for _, pl := range tgw.Spec.TLSPassthroughListeners {
+		nativePort[pl.Hostname] = struct{}{}
+	}
 	dynHostnames := make([]string, 0, len(claims))
 	withdrawn := map[routeRef][]withdrawnHostname{}
 	for h, refs := range claims {
@@ -224,7 +233,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 					tls = append(tls, ref)
 					continue
 				}
-				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})
+				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy, cause: withdrawnAnswered})
 				dropLostHostname(losers, ref, h)
 			}
 			// The race was decided with no notion of kind, so its
@@ -234,9 +243,15 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			// TLSRoutes, the only routes a passthrough listener can
 			// serve, and clear what the mixed count produced.
 			if len(tls) > 0 {
+				_, isNativePort := nativePort[answeredBy]
 				rankRouteRefs(tls)
 				tlsWinner := tls[0]
 				for _, ref := range tls {
+					if isNativePort && ref.namespace != tgw.Namespace {
+						withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy, cause: withdrawnForeignNamespace})
+						dropLostHostname(losers, ref, h)
+						continue
+					}
 					if ref.namespace == tlsWinner.namespace {
 						dropLostHostname(losers, ref, h)
 					}
@@ -251,7 +266,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			// the Gateway serves this name and nothing on the Gateway
 			// says so either. An empty answeredBy marks that shape.
 			for _, ref := range refs {
-				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h})
+				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, cause: withdrawnUnanswered})
 				// Dropped for every claimant here, where the branch
 				// above keeps it for a TLSRoute that lost to another
 				// TLSRoute. The difference is whether anything is on
