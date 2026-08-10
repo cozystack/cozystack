@@ -2,6 +2,26 @@ apiVersion: cozystack.io/v1alpha1
 kind: ApplicationDefinition
 metadata:
   name: vm-instance
+  annotations:
+    # A VMInstance renders a KubeVirt VirtualMachine. From cozystack v1.5.0
+    # (helm-controller v1.4.3 to v1.5.0) the generated HelmRelease is
+    # health-assessed by the kstatus poller, which returns InProgress for any
+    # object whose status.observedGeneration trails metadata.generation. That is
+    # a built-in pre-check in fluxcd/pkg/runtime/cel (status_evaluator.go) that
+    # runs before, and cannot be overridden by, healthCheckExprs. KubeVirt keeps
+    # a VirtualMachine's observedGeneration behind its generation whenever a
+    # spec.template change is pending a restart, the VM is stopped, or a
+    # live-updatable change never converges (kubevirt/kubevirt#18700), so a
+    # healthy Running VM is read as permanently InProgress and the release never
+    # reaches Ready. The release then loops upgrade/timeout and, on HelmReleases
+    # still carrying the pre-1.5.0 remediation.retries:-1 + rollback spec,
+    # reverts to the previous manifest (dropping just-applied changes such as
+    # opened ports). Disable the readiness wait so the release settles once the
+    # VirtualMachine is applied; VM health is observed on the VirtualMachine
+    # itself (status.printableStatus / Ready), not on the HelmRelease. This
+    # restores the pre-1.5.0 behaviour under which the VM was never a helm
+    # readiness gate. Regression-guarded by tests/readiness_gate_test.yaml.
+    release.cozystack.io/helm-install-disable-wait: "true"
 spec:
   application:
     kind: VMInstance
