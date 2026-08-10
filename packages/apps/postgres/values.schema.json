@@ -204,6 +204,14 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "bypassRls": {
+            "description": "Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.",
+            "type": "boolean"
+          },
+          "createRole": {
+            "description": "Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer.",
+            "type": "boolean"
+          },
           "password": {
             "description": "Password for the user.",
             "type": "string"

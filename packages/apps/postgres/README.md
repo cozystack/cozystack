@@ -242,11 +242,13 @@ For `sslmode=verify-full` to work, the CA bundle retrieved above must be saved t
 
 ### Users configuration
 
-| Name                      | Description                                  | Type                | Value   |
-| ------------------------- | -------------------------------------------- | ------------------- | ------- |
-| `users`                   | Users configuration map.                     | `map[string]object` | `{}`    |
-| `users[name].password`    | Password for the user.                       | `string`            | `""`    |
-| `users[name].replication` | Whether the user has replication privileges. | `bool`              | `false` |
+| Name                      | Description                                                                                                                                                                                                                                     | Type                | Value   |
+| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- | ------- |
+| `users`                   | Users configuration map.                                                                                                                                                                                                                        | `map[string]object` | `{}`    |
+| `users[name].password`    | Password for the user.                                                                                                                                                                                                                          | `string`            | `""`    |
+| `users[name].replication` | Whether the user has replication privileges.                                                                                                                                                                                                    | `bool`              | `false` |
+| `users[name].createRole`  | Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer.                                                                                                                                                     | `bool`              | `false` |
+| `users[name].bypassRls`   | Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role. | `bool`              | `false` |
 
 
 ### Databases configuration
