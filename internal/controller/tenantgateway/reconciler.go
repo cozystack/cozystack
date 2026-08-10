@@ -27,7 +27,6 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"sort"
 
@@ -165,6 +164,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// are unaffected.
 	reserved := passthroughHostnames(tgw)
 	dynHostnames := make([]string, 0, len(claims))
+	withdrawn := map[routeRef][]withdrawnHostname{}
 	for h, refs := range claims {
 		// Matched by SNI overlap rather than by string equality,
 		// because the pinned Cilium answers a passthrough listener by
@@ -174,9 +174,27 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// one Envoy listener the Gateway becomes. Declaring the
 		// wildcard is what asks for that: it says everything under
 		// that suffix bypasses termination.
-		if slices.ContainsFunc(slices.Collect(maps.Keys(reserved)), func(rh string) bool {
-			return hostnamesOverlap(rh, h)
-		}) {
+		//
+		// At most one entry can match: validateTLSPassthroughListeners
+		// refuses a spec whose passthrough hostnames overlap each
+		// other, and two non-overlapping hostnames cannot both answer
+		// one concrete name.
+		var answeredBy string
+		for rh := range reserved {
+			if hostnamesOverlap(rh, h) {
+				answeredBy = rh
+				break
+			}
+		}
+		if answeredBy != "" {
+			// A TLSRoute on this hostname is the passthrough listener's
+			// intended user and stays accepted; only the HTTPRoute that
+			// expected termination lost something.
+			for _, ref := range refs {
+				if ref.kind == routeKindHTTP {
+					withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})
+				}
+			}
 			continue
 		}
 		if !slices.ContainsFunc(refs, func(ref routeRef) bool { return ref.kind == routeKindHTTP }) {
@@ -220,7 +238,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	if err := r.reconcilePerListenerCertificates(ctx, tgw, dynHostnames); err != nil {
 		return err
 	}
-	if err := r.updateRouteStatuses(ctx, tgw, allRefs, losers); err != nil {
+	if err := r.updateRouteStatuses(ctx, tgw, allRefs, losers, withdrawn); err != nil {
 		return err
 	}
 	if err := r.reconcileHTTPToHTTPSRedirect(ctx, tgw); err != nil {

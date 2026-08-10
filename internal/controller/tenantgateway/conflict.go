@@ -106,6 +106,28 @@ func resolveHostnameOwners(claims map[string][]routeRef) map[routeRef][]string {
 	return losers
 }
 
+// withdrawnHostname pairs a hostname the controller declined to serve
+// with the TLS-passthrough hostname whose SNI answers it. The pair is
+// carried rather than the claimed name alone because a wildcard entry
+// is not derivable from the route: the route claims pg.db.<apex> and
+// the spec that took it away says *.db.<apex>.
+type withdrawnHostname struct {
+	hostname   string
+	answeredBy string
+}
+
+// describeWithdrawn renders the pairs in a stable order. The message
+// is rebuilt on every reconcile, so an unstable order would rewrite
+// the condition each pass and churn the route's status forever.
+func describeWithdrawn(hostnames []withdrawnHostname) string {
+	parts := make([]string, 0, len(hostnames))
+	for _, h := range hostnames {
+		parts = append(parts, fmt.Sprintf("%s (answered by %s)", h.hostname, h.answeredBy))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, ", ")
+}
+
 // updateRouteStatuses writes RouteParentStatus entries under our
 // ControllerName, one per (route, parentRef) tuple that attached to
 // this TenantGateway. Accepted=True for tuples not in losers,
@@ -117,11 +139,20 @@ func resolveHostnameOwners(claims map[string][]routeRef) map[routeRef][]string {
 // collectHostnameClaims — without it, multi-parentRef routes would
 // only get a status entry for whichever ref happened to win the
 // per-hostname race, dropping per-section visibility for the others.
+//
+// withdrawn carries the tuples whose hostname a TLS-passthrough
+// listener answers. They lost no race, so HostnameConflict would
+// misname the cause; they get NoMatchingListenerHostname, which is
+// literally true — the controller rendered no listener for that
+// hostname, and the route condition is the only object left that can
+// say why, the terminate listener that used to carry Conflicted
+// having been withdrawn along with it.
 func (r *Reconciler) updateRouteStatuses(
 	ctx context.Context,
 	tgw *gatewayv1alpha1.TenantGateway,
 	allRefs map[routeRef]struct{},
 	losers map[routeRef][]string,
+	withdrawn map[routeRef][]withdrawnHostname,
 ) error {
 	logger := log.FromContext(ctx)
 
@@ -142,6 +173,19 @@ func (r *Reconciler) updateRouteStatuses(
 				},
 			}); err != nil {
 				logger.Error(err, "update loser route status", "route", ref.namespace+"/"+ref.name)
+			}
+			continue
+		}
+		if hostnames, isWithdrawn := withdrawn[ref]; isWithdrawn {
+			if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
+				{
+					Type:    "Accepted",
+					Status:  metav1.ConditionFalse,
+					Reason:  string(gatewayv1.RouteReasonNoMatchingListenerHostname),
+					Message: fmt.Sprintf("Hostname(s) %s answered by a TLS-passthrough listener on TenantGateway %s/%s; no HTTPS listener is rendered for them", describeWithdrawn(hostnames), tgw.Namespace, tgw.Name),
+				},
+			}); err != nil {
+				logger.Error(err, "update withdrawn route status", "route", ref.namespace+"/"+ref.name)
 			}
 			continue
 		}

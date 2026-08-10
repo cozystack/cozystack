@@ -2598,6 +2598,115 @@ func TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt(t *testing.T) {
 	}
 }
 
+// TestReconcile_WithdrawnHostnameIsReportedOnTheRoute pins that a
+// route whose hostname this controller declines to serve is told so
+// under this controller's own controllerName. Withdrawing the
+// terminate listener leaves nothing on the Gateway for the route to
+// attach to, and Accepted=True would then describe a hostname the
+// controller deliberately dropped. Before the withdrawal the pair
+// still rendered and the listener carried Conflicted, so the operator
+// had one object to look at; after it there is none, which is what
+// makes the route condition the only remaining place to say it.
+//
+// The reason must differ from HostnameConflict, which states that
+// another route won the same hostname. Nothing won this one.
+func TestReconcile_WithdrawnHostnameIsReportedOnTheRoute(t *testing.T) {
+	const published = "pg.db.foo.example.com"
+	const answeredBy = "*.db.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "wild", Port: 5432, Hostname: answeredBy},
+			},
+		},
+	}
+	// A second name under the same wildcard, listed after the first so
+	// that spec order and sorted order disagree.
+	const alsoPublished = "es.db.foo.example.com"
+	route := httpRouteAttached("pg", "tenant-foo", published)
+	route.Spec.Hostnames = append(route.Spec.Hostnames, alsoPublished)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	readAccepted := func() *metav1.Condition {
+		t.Helper()
+		got := &gatewayv1.HTTPRoute{}
+		if err := c.Get(context.TODO(), types.NamespacedName{Name: "pg", Namespace: "tenant-foo"}, got); err != nil {
+			t.Fatalf("get route: %v", err)
+		}
+		var found *metav1.Condition
+		for _, ps := range got.Status.Parents {
+			if string(ps.ControllerName) != testControllerName {
+				continue
+			}
+			for i := range ps.Conditions {
+				if ps.Conditions[i].Type == "Accepted" {
+					found = &ps.Conditions[i]
+				}
+			}
+		}
+		// Without an entry of our own there is no claim to judge, and
+		// every assertion below would pass on a controller that writes
+		// no status at all.
+		if found == nil {
+			t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+		}
+		return found
+	}
+
+	// The two withdrawn hostnames come out of a map, so a single pass
+	// says nothing about stability: it could be ordered by luck. Passes
+	// are compared against each other because a message that differs
+	// between them rewrites the condition on every reconcile forever.
+	var accepted *metav1.Condition
+	for pass := range 8 {
+		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+		}); err != nil {
+			t.Fatalf("pass %d: unexpected error: %v", pass, err)
+		}
+		cur := readAccepted()
+		if accepted == nil {
+			accepted = cur
+			continue
+		}
+		if cur.Message != accepted.Message {
+			t.Fatalf("message differs between reconciles, so every pass rewrites the condition:\n  pass 0: %q\n  pass %d: %q", accepted.Message, pass, cur.Message)
+		}
+	}
+	if accepted.Status != metav1.ConditionFalse {
+		t.Errorf("Accepted=%s for %s, which no listener serves", accepted.Status, published)
+	}
+	if accepted.Reason == "HostnameConflict" {
+		t.Errorf("reason HostnameConflict for %s, which lost to no route", published)
+	}
+	if !strings.Contains(accepted.Message, answeredBy) {
+		t.Errorf("message does not name the passthrough hostname answering %s: %q", published, accepted.Message)
+	}
+	// Order, not wording: both names must be there, and the smaller one
+	// first, so the message is the same on every pass.
+	smaller, larger := strings.Index(accepted.Message, alsoPublished), strings.Index(accepted.Message, published)
+	if smaller < 0 {
+		t.Fatalf("message omits withdrawn hostname %s: %q", alsoPublished, accepted.Message)
+	}
+	if larger < 0 {
+		t.Fatalf("message omits withdrawn hostname %s: %q", published, accepted.Message)
+	}
+	if smaller > larger {
+		t.Errorf("withdrawn hostnames not in a stable order: %s precedes %s in %q", published, alsoPublished, accepted.Message)
+	}
+}
+
 // TestReconcile_TLSRouteWithoutPassthroughListenerTerminatesNothing
 // covers the TLSRoute hostname that no passthrough listener claims —
 // a sectionName pointing at nothing, or a spec edited to drop the entry
