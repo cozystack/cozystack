@@ -136,11 +136,13 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	losers := resolveHostnameOwners(claims)
 
 	// A hostname earns an HTTPS-terminate listener and a Gateway-issued
-	// certificate when an HTTPRoute claims it and no port-443
-	// passthrough listener already holds it. A native-port entry from
-	// tlsPassthroughListeners is not in that set: it answers its own
-	// port and takes nothing away from 443. Both halves matter, and
-	// neither is the hostname's conflict winner:
+	// certificate when an HTTPRoute claims it and no passthrough
+	// listener answers it. Both forms of passthrough count, the
+	// port-443 tlsPassthroughServices entry and the native-port
+	// tlsPassthroughListeners one: the pinned Cilium selects a
+	// passthrough filter chain by SNI without the port, so a native
+	// port is not the separation it looks like. Both halves of the
+	// rule matter, and neither is the hostname's conflict winner:
 	//
 	// A TLSRoute attaches to a passthrough listener, where the backend
 	// presents its own certificate and the Gateway terminates nothing.
@@ -198,10 +200,10 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			// expected termination lost something.
 			//
 			// The hostname also leaves the ownership race. Losing it to
-			// another route is true but beside the point once nothing
-			// terminates it, and updateRouteStatuses reports the race
-			// first, so leaving the entry there would tell the loser to
-			// go and look at a route that is not being served either.
+			// another route is true and beside the point once nothing
+			// terminates it, and leaving the entry in would name the
+			// same hostname under both causes in one condition, sending
+			// the loser to look at a route that is not served either.
 			for _, ref := range refs {
 				if ref.kind == routeKindHTTP {
 					withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})

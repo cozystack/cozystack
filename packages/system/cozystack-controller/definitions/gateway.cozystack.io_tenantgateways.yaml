@@ -291,7 +291,7 @@ spec:
                   alongside the layer-7 terminate listeners. This lets a database
                   engine present its own certificate directly to clients while
                   sharing the tenant Gateway's address. It is independent of
-                  TLSPassthroughServices, the layer-7 passthrough-on-443 form; the
+                  TLSPassthroughServices, the passthrough-on-443 form; the
                   two do not replace each other.
 
                   The listener is all this field creates. Nothing is routed until a

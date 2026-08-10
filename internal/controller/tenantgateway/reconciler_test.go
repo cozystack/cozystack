@@ -2117,7 +2117,7 @@ func TestReconcile_TLSPassthroughListenersRendered(t *testing.T) {
 // Passthrough, the entry's per-engine SNI hostname, and AllowedRoutes
 // restricted to TLSRoute so the listener yields a single Envoy filter
 // chain. This is distinct from TestReconcile_TLSPassthroughListenersRendered,
-// which covers the legacy layer-7 spec.tlsPassthroughServices field on
+// which covers the older spec.tlsPassthroughServices field on
 // the shared port 443.
 func TestReconcile_TLSPassthroughListenerObjects(t *testing.T) {
 	s := newScheme(t)
@@ -2804,12 +2804,13 @@ func acceptedCondition(t *testing.T, c client.Client, name, ns string) *metav1.C
 
 // TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother pins that
 // a route hit by both causes hears about both. One route can lose a
-// race for one hostname and have another withdrawn under it, and the
-// two are reported by different branches, so whichever branch runs
-// first decides what the operator is told. Reporting only the race
-// hides the withdrawal, which is the one fact no other object carries:
-// the terminate listener that used to show Conflicted is gone, while
-// the lost hostname at least still has the winning route to look at.
+// race for one hostname and have another withdrawn under it, and
+// Gateway API gives it a single Accepted condition to say so in, which
+// is what makes it tempting to report whichever cause is found first.
+// Reporting only the race hides the withdrawal, and the withdrawal is
+// the one fact no other object carries: the terminate listener that
+// used to show Conflicted is gone, while the lost hostname at least
+// still has the winning route to look at.
 func TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother(t *testing.T) {
 	const withdrawnName = "api.foo.example.com"
 	const contestedName = "shared.foo.example.com"

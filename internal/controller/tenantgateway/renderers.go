@@ -200,7 +200,7 @@ const passthroughListenerPrefix = "tls-"
 // reservedGatewayPorts are the ports renderGateway always occupies with
 // its own listeners: 80 (the http listener carrying the ACME challenge
 // and the http->https redirect) and 443 (the HTTPS-terminate listeners
-// and the layer-7 TLSPassthroughServices listeners). A native-port
+// and the port-443 TLSPassthroughServices listeners). A native-port
 // passthrough listener must avoid both: a TLS listener on port 80
 // alongside the HTTP listener, or on 443 alongside a terminate listener
 // for the same hostname, is a protocol conflict. Gateway API admits
@@ -294,16 +294,17 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // has neither the split nor the diagnostic, so the answer here is to
 // keep the pair from being rendered. Revisit when the pin moves.
 //
-// The cost is that an HTTPRoute claiming a hostname declared here gets no
-// listener while still reporting Accepted=True, because
-// resolveHostnameOwners records no loser for it. Nothing hostile is needed
-// to reach it: tlsPassthroughServices is a chart value shipped defaulted
-// to api, vm-exportproxy and cdi-uploadproxy, so a tenant app named after
-// one of them collides with a platform default. Suppression is not what
-// breaks that hostname — before this filter the same collision rendered
-// the Conflicted pair, equally unserved — but it does remove the
+// The cost is that an HTTPRoute claiming a hostname declared here gets
+// no listener. Nothing hostile is needed to reach it:
+// tlsPassthroughServices is a chart value shipped defaulted to api,
+// vm-exportproxy and cdi-uploadproxy, so a tenant app named after one of
+// them collides with a platform default. Suppression is not what breaks
+// that hostname — before this filter the same collision rendered the
+// Conflicted pair, equally unserved — but it does take away the
 // Conflicted condition, which was the one place the collision was
-// visible. Reporting it on the route wants a condition of its own.
+// visible on the Gateway. updateRouteStatuses puts it back on the route
+// instead, as Accepted=False with NoMatchingListenerHostname naming the
+// passthrough hostname that answers the claim.
 //
 // The caller matches a claimed hostname against this set by SNI overlap
 // rather than by equality, because a "*.db.<apex>" entry answers
@@ -339,7 +340,7 @@ func passthroughHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{
 // reject wholesale, taking every other listener (including every app's
 // HTTP/HTTPS listener) down with it.
 //
-// passthroughServices is tgw.Spec.TLSPassthroughServices: the layer-7
+// passthroughServices is tgw.Spec.TLSPassthroughServices: the port-443
 // passthrough list whose rendered tls-<svc> names share the listener
 // namespace with this list. Both loops use passthroughListenerPrefix, so
 // a raw name == svc comparison is exactly a rendered-name collision.
