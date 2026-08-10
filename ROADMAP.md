@@ -24,7 +24,7 @@ the destination.
 Concretely, success by the end of the horizon means all of the following are
 true at once:
 
-- **CNCF maturity.** Project is **Incubating** (achieved 2026 Q3) with a
+- **CNCF maturity.** Project is **Incubating** (application submitted 2026 Q3) with a
   Graduated application drafted (2028 Q1). Third-party security audit complete
   and findings remediated.
 - **Open specifications.** **Eight Cozystack-authored specifications** —
@@ -118,7 +118,7 @@ Cozystack is shaped as a layered offering:
 - **Cozystack Fleet** — multi-cluster, multi-region, unified policy and
   identity, federated networking and lifecycle.
 
-## 3. Current State (May 2026)
+## 3. Current State (July 2026)
 
 ### 3.1 What is shipped
 
@@ -698,7 +698,7 @@ Initial public versions land in 2028 Q1–Q2.
 SIGs are formed in two waves:
 
 - **Wave 1 (2026 Q3):** SIG-Platform, SIG-Security, SIG-Testing,
-  SIG-Storage, SIG-Docs. These are mandatory for Incubation review.
+  SIG-Storage, SIG-Docs. We consider these necessary to have in place before the Incubation review.
 - **Wave 2 (2026 Q4):** SIG-Network, SIG-AI, SIG-Apps, SIG-DX, SIG-OS,
   SIG-Governance.
 
@@ -821,7 +821,7 @@ Server, openSUSE MicroOS) to validate themselves against the contract.
 Ubuntu/Debian/Flatcar Tier-2).
 
 **Target venue.** CNCF TAG Runtime; engagement with Sidero (Talos),
-Kinvolk (Flatcar), Amazon (Bottlerocket), and Canonical (Ubuntu) for
+Flatcar (Kinvolk / Microsoft), Amazon (Bottlerocket), and Canonical (Ubuntu) for
 co-authorship.
 
 **Timeline.**
@@ -1023,7 +1023,7 @@ proposals, and reports back to the maintainer group.
 | **CNCF TAG Storage** | Owns CSI sub-project evolution. | Engage on BR-CSI (§8.1.7) and blockstor sub-project. |
 | **CNCF TAG Network** | Owns CNI, Gateway API, multi-cluster networking. | Engage via Cilium and kilo-clustermesh-operator. |
 | **CNCF CNAI Working Group** | Owns Cloud Native AI landscape and standards. | CN-AI-Inference (§8.1.6); submit to CNAI landscape (Track 6 Q3 2026). |
-| **CNCF Multicluster SIG** | Owns multi-cluster harmonization. | Fleet API (§8.1.5); harmonization with Karmada/OCM/Liqo. |
+| **Kubernetes SIG Multicluster** | Owns multi-cluster harmonization. | Fleet API (§8.1.5); harmonization with Karmada/OCM/Liqo. |
 | **OpenSSF** | Owns Best Practices, Scorecard, OSPS Baseline. | Cozystack as OpenSSF-member project; quarterly status reports. |
 | **OpenChain Project** | Owns ISO/IEC 5230 license compliance. | Self-certify (Track 3.10 2026 Q4). |
 | **Kubernetes SIG Multi-Tenancy** | Owns tenancy patterns. | CT-API (§8.1.2) engagement. |
@@ -1268,8 +1268,8 @@ goal:
   this document. The current Project V2 board remains the granular
   issue-level source of truth for in-quarter work; this document gives the
   multi-quarter view.
-- The initial roadmap (this document) is ratified via a maintainer roadmap
-  review on this PR; thereafter, material changes to the roadmap are proposed
+- The initial roadmap (this document) was ratified via maintainer review when
+  it was first merged; thereafter, material changes to the roadmap are proposed
   via a CzEP (Cozystack Enhancement Proposal) in
   [cozystack/community/design-proposals](https://github.com/cozystack/community/tree/main/design-proposals).
 - The document is versioned in `git` history; major revisions are tagged.
