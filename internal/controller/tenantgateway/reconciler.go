@@ -175,24 +175,39 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// wildcard is what asks for that: it says everything under
 		// that suffix bypasses termination.
 		//
-		// At most one entry can match: validateTLSPassthroughListeners
-		// refuses a spec whose passthrough hostnames overlap each
-		// other, and two non-overlapping hostnames cannot both answer
-		// one concrete name.
+		// Several entries can match one claim. Reserved hostnames are
+		// pairwise non-overlapping, so a concrete claim matches at most
+		// one, but a claimed hostname is not always concrete: a route
+		// publishing "*.<apex>" covers every tlsPassthroughServices
+		// entry at once, and the shipped default carries three. The
+		// smallest match is kept rather than whichever one iteration
+		// hands back first, because the match is named in the route's
+		// condition, and a name that changes between passes is a status
+		// write that requeues this object through the route watch.
 		var answeredBy string
 		for rh := range reserved {
-			if hostnamesOverlap(rh, h) {
+			if hostnamesOverlap(rh, h) && (answeredBy == "" || rh < answeredBy) {
 				answeredBy = rh
-				break
 			}
 		}
 		if answeredBy != "" {
 			// A TLSRoute on this hostname is the passthrough listener's
 			// intended user and stays accepted; only the HTTPRoute that
 			// expected termination lost something.
+			//
+			// The hostname also leaves the ownership race. Losing it to
+			// another route is true but beside the point once nothing
+			// terminates it, and updateRouteStatuses reports the race
+			// first, so leaving the entry there would tell the loser to
+			// go and look at a route that is not being served either.
 			for _, ref := range refs {
 				if ref.kind == routeKindHTTP {
 					withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})
+				}
+				if rest := slices.DeleteFunc(losers[ref], func(lost string) bool { return lost == h }); len(rest) > 0 {
+					losers[ref] = rest
+				} else {
+					delete(losers, ref)
 				}
 			}
 			continue

@@ -2707,6 +2707,146 @@ func TestReconcile_WithdrawnHostnameIsReportedOnTheRoute(t *testing.T) {
 	}
 }
 
+// TestReconcile_WithdrawnHostnameOutranksTheHostnameRace pins which
+// cause a contested hostname reports when the contest is moot. Two
+// HTTPRoutes claiming one shipped passthrough name is enough: the race
+// still has a winner and a loser, but the hostname is withdrawn, so no
+// terminate listener exists for either of them. Telling the loser its
+// hostname is "already claimed by another route" names a cause that
+// changes nothing, and sends the operator to look at a route that is
+// not being served either.
+func TestReconcile_WithdrawnHostnameOutranksTheHostnameRace(t *testing.T) {
+	const contested = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-public", "tenant-foo"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	winner := httpRouteAttached("api", "cozy-public", contested)
+	loser := httpRouteAttached("api-shadow", "tenant-foo", contested)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, winner, loser).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Both routes are checked rather than the loser alone, because
+	// which one loses is resolveHostnameOwners' business and neither is
+	// served here.
+	for _, want := range []types.NamespacedName{
+		{Name: "api", Namespace: "cozy-public"},
+		{Name: "api-shadow", Namespace: "tenant-foo"},
+	} {
+		got := &gatewayv1.HTTPRoute{}
+		if err := c.Get(context.TODO(), want, got); err != nil {
+			t.Fatalf("get %s: %v", want, err)
+		}
+		var accepted *metav1.Condition
+		for _, ps := range got.Status.Parents {
+			if string(ps.ControllerName) != testControllerName {
+				continue
+			}
+			for i := range ps.Conditions {
+				if ps.Conditions[i].Type == "Accepted" {
+					accepted = &ps.Conditions[i]
+				}
+			}
+		}
+		if accepted == nil {
+			t.Fatalf("%s: no Accepted condition under %s: %+v", want, testControllerName, got.Status.Parents)
+		}
+		if accepted.Reason == "HostnameConflict" {
+			t.Errorf("%s: reported as losing the race for %s, which nothing serves: %q", want, contested, accepted.Message)
+		}
+	}
+}
+
+// TestReconcile_WildcardClaimOverlappingSeveralPassthroughNames pins
+// the case the neighbouring test cannot reach: one claimed hostname
+// overlapping more than one reserved name at once. Reserved names are
+// pairwise non-overlapping, which is why a concrete claim can match at
+// most one of them, but a claimed wildcard is not concrete and covers
+// every shipped tlsPassthroughServices entry under the apex.
+//
+// The fixture is the stock one. No tlsPassthroughListeners, the
+// shipped passthrough services, and an ordinary tenant HTTPRoute that
+// publishes a wildcard, which the hostname policy admits because it
+// ends in the tenant's own apex. Picking the match by map order there
+// names a different entry on different passes, and each rename is a
+// status write that requeues the TenantGateway through the HTTPRoute
+// watch, so the controller rewrites the condition for as long as the
+// spec stands.
+func TestReconcile_WildcardClaimOverlappingSeveralPassthroughNames(t *testing.T) {
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: []string{"api", "vm-exportproxy", "cdi-uploadproxy"},
+		},
+	}
+	route := httpRouteAttached("wild", "tenant-foo", "*.foo.example.com")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	var first string
+	for pass := range 20 {
+		if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+			NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+		}); err != nil {
+			t.Fatalf("pass %d: unexpected error: %v", pass, err)
+		}
+		got := &gatewayv1.HTTPRoute{}
+		if err := c.Get(context.TODO(), types.NamespacedName{Name: "wild", Namespace: "tenant-foo"}, got); err != nil {
+			t.Fatalf("pass %d: get route: %v", pass, err)
+		}
+		var msg string
+		for _, ps := range got.Status.Parents {
+			if string(ps.ControllerName) != testControllerName {
+				continue
+			}
+			for i := range ps.Conditions {
+				if ps.Conditions[i].Type == "Accepted" {
+					msg = ps.Conditions[i].Message
+				}
+			}
+		}
+		// A pass that writes no condition of ours would make every
+		// comparison below trivially equal.
+		if msg == "" {
+			t.Fatalf("pass %d: no Accepted condition under %s: %+v", pass, testControllerName, got.Status.Parents)
+		}
+		if pass == 0 {
+			first = msg
+			continue
+		}
+		if msg != first {
+			t.Fatalf("the passthrough entry named for one claimed hostname is not stable, so every reconcile rewrites the condition:\n  pass 0: %q\n  pass %d: %q", first, pass, msg)
+		}
+	}
+}
+
 // TestReconcile_TLSRouteWithoutPassthroughListenerTerminatesNothing
 // covers the TLSRoute hostname that no passthrough listener claims —
 // a sectionName pointing at nothing, or a spec edited to drop the entry
