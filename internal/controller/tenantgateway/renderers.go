@@ -298,14 +298,14 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // Conflicted condition, which was the one place the collision was
 // visible. Reporting it on the route wants a condition of its own.
 //
-// Matching is exact, where validateTLSPassthroughListeners compares
-// declared hostnames by SNI overlap. A "*.db.<apex>" entry therefore
-// suppresses nothing for a published "pg.db.<apex>", which leaves that
-// pair rendered and exposed to the same translation. Widening this to
-// hostnamesOverlap would let one wildcard entry withdraw the HTTPS
-// listener of every app beneath it, which is a larger behaviour than the
-// gap it closes; the gap belongs to the validator, which already
-// compares by overlap.
+// The caller matches a claimed hostname against this set by SNI overlap
+// rather than by equality, because a "*.db.<apex>" entry answers
+// "pg.db.<apex>" on the pinned Cilium exactly as an explicit entry would:
+// the filter chain match carries ServerNames and no port. Comparing by
+// equality leaves that pair rendered and exposed to the translation this
+// filter exists to avoid. Withdrawing the whole subtree is the intended
+// reading of a wildcard entry, which declares that everything under the
+// name bypasses termination.
 func passthroughHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{} {
 	out := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners))
 	for _, svc := range tgw.Spec.TLSPassthroughServices {

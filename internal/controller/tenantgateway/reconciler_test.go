@@ -2515,6 +2515,89 @@ func TestValidateTLSPassthroughListenersNamesTheSpecEntry(t *testing.T) {
 	}
 }
 
+// TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt pins that
+// suppression follows SNI, not string equality.
+//
+// A wildcard entry answers every name under it on the pinned Cilium,
+// because the Gateway listener port does not reach the Envoy filter
+// chain match, so leaving a terminate listener for a published name
+// beneath the wildcard puts both chains on one SNI. Withdrawing that
+// listener is the whole point of the entry: declaring "*.db.<apex>" as
+// passthrough says everything under db.<apex> bypasses termination.
+//
+// Only http01 is covered. dns01 and existingSecret serve the tenant
+// from one wildcard terminate listener that cannot be withdrawn per
+// hostname, which is why the field is refused there outright, and the
+// same intersection between that listener and tlsPassthroughServices is
+// recorded on cozystack/cozystack#3718.
+func TestReconcile_WildcardPassthroughWithdrawsTheNamesBeneathIt(t *testing.T) {
+	const published = "pg.db.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "wild", Port: 5432, Hostname: "*.db.foo.example.com"},
+			},
+		},
+	}
+	route := httpRouteAttached("pg", "tenant-foo", published)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, route).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gw := &gatewayv1.Gateway{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"}, gw); err != nil {
+		t.Fatalf("get Gateway: %v", err)
+	}
+	var wildcard bool
+	for _, l := range gw.Spec.Listeners {
+		if l.Hostname == nil {
+			continue
+		}
+		switch string(*l.Hostname) {
+		case "*.db.foo.example.com":
+			if l.Protocol == gatewayv1.TLSProtocolType {
+				wildcard = true
+			}
+		case published:
+			if l.Protocol == gatewayv1.HTTPSProtocolType {
+				t.Errorf("listener %s terminates %s, which the wildcard passthrough entry answers on the same SNI", l.Name, published)
+			}
+		}
+	}
+	// Without the wildcard listener there would be nothing to suppress,
+	// and the absence of a terminate listener would prove nothing.
+	if !wildcard {
+		t.Fatalf("no wildcard passthrough listener rendered: %+v", gw.Spec.Listeners)
+	}
+
+	certs := &cmv1.CertificateList{}
+	if err := c.List(context.TODO(), certs); err != nil {
+		t.Fatalf("list certs: %v", err)
+	}
+	for i := range certs.Items {
+		for _, dns := range certs.Items[i].Spec.DNSNames {
+			if dns == published {
+				t.Errorf("Certificate %s orders %s, which the wildcard passthrough entry answers", certs.Items[i].Name, published)
+			}
+		}
+	}
+}
+
 // TestReconcile_TLSRouteWithoutPassthroughListenerTerminatesNothing
 // covers the TLSRoute hostname that no passthrough listener claims —
 // a sectionName pointing at nothing, or a spec edited to drop the entry

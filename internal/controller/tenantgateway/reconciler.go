@@ -27,6 +27,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"sort"
 
@@ -165,7 +166,17 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	reserved := passthroughHostnames(tgw)
 	dynHostnames := make([]string, 0, len(claims))
 	for h, refs := range claims {
-		if _, isPassthrough := reserved[h]; isPassthrough {
+		// Matched by SNI overlap rather than by string equality,
+		// because the pinned Cilium answers a passthrough listener by
+		// SNI without the port. A "*.db.<apex>" entry therefore holds
+		// every published name beneath it, and leaving those names a
+		// terminate listener would put both chains on one SNI in the
+		// one Envoy listener the Gateway becomes. Declaring the
+		// wildcard is what asks for that: it says everything under
+		// that suffix bypasses termination.
+		if slices.ContainsFunc(slices.Collect(maps.Keys(reserved)), func(rh string) bool {
+			return hostnamesOverlap(rh, h)
+		}) {
 			continue
 		}
 		if !slices.ContainsFunc(refs, func(ref routeRef) bool { return ref.kind == routeKindHTTP }) {
