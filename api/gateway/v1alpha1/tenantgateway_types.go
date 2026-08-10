@@ -162,11 +162,14 @@ type TLSPassthroughListener struct {
 	// +required
 	Name string `json:"name"`
 
-	// Port is the TCP port the passthrough listener binds on the
-	// tenant Gateway's shared address. Set it to the engine's native
-	// port (e.g. 5432 for PostgreSQL). Must be 1..65535, unique across
-	// the list, and neither 80 nor 443 — the Gateway's own http (80)
-	// and TLS-terminate (443) listeners already own those ports.
+	// Port is the TCP port this passthrough listener is published on,
+	// on the tenant Gateway's shared address. Set it to the engine's
+	// native port (e.g. 5432 for PostgreSQL). Must be 1..65535, unique
+	// across the list, and neither 80 nor 443 — the Gateway's own http
+	// (80) and TLS-terminate (443) listeners already own those ports.
+	// It is not an access boundary: on the Cilium version this
+	// platform pins, the backend answers this listener's SNI on every
+	// port the Gateway exposes, so the hostname is what gates reach.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	// +required

@@ -242,7 +242,12 @@ const maxGatewayListeners = 64
 // route traffic for one listener to another". A TLS connection arriving
 // on 443 for that name reaches the database backend.
 //
-// v1.19.6 splits the Envoy listeners per port and this stops being true.
+// v1.19.6 splits the Envoy listeners per port and this stops being
+// true, though not unconditionally: NeedsPerPortListeners requires
+// more than one HTTPS port, or more than one routed passthrough port,
+// or a cross-port SNI overlap. A tenant keeping any shipped
+// tlsPassthroughServices entry has a routed passthrough listener on
+// 443 already, so a native-port entry satisfies the second of those.
 // Lifting the refusal is then deleting a check, with no API or schema
 // change, and the pin is the thing to watch:
 // packages/system/cilium/images/cilium/Dockerfile.
@@ -283,9 +288,11 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // operator/pkg/model/model.go on v1.19.6, above NeedsCrossProtocolSplit:
 // a combined Envoy listener "would otherwise erase the original Gateway
 // listener port boundary and route traffic for one listener to another".
-// v1.19.6 answers it by splitting the Envoy listeners per port; v1.19.5
-// has neither the split nor the diagnostic, so the answer here is to keep
-// the pair from being rendered. Revisit when the pin moves.
+// v1.19.6 answers it by splitting the Envoy listeners per port when
+// NeedsPerPortListeners holds, which a Gateway carrying both a
+// port-443 passthrough listener and a native-port one does; v1.19.5
+// has neither the split nor the diagnostic, so the answer here is to
+// keep the pair from being rendered. Revisit when the pin moves.
 //
 // The cost is that an HTTPRoute claiming a hostname declared here gets no
 // listener while still reporting Accepted=True, because
