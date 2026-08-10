@@ -90,8 +90,8 @@ The following items from [Project V2 #1](https://github.com/orgs/cozystack/proje
 - Selecting managed application versions (#1246) — rescheduled to Q3 2026.
 - Grafana dashboard with SLA for each service (#1262) — rescheduled to Q3 2026.
 - API Gateway support (#1265) — closed.
-- Distroless images (#1261) — Q3 2026.
-- Automated platform updates (#1266) — Q3 2026.
+- Distroless images (#1261) — Q4 2026.
+- Automated platform updates (#1266) — Q4 2026.
 
 ### 3.4 Tracks in flight not yet captured in Project V2
 
@@ -160,8 +160,8 @@ The legacy and still-required "Passing / Silver / Gold" badge program. CNCF Grad
 | Quarter | Target | Concrete tasks |
 |---|---|---|
 | 2026 Q3 | **Passing** (67 criteria) | Enroll project on [bestpractices.dev](https://www.bestpractices.dev/). Address all `MUST` items: public version-controlled source ✓, distinct contributing/security/code-of-conduct docs ✓ (already present), public bug tracker ✓, OSS license (Apache-2.0) ✓, build reproducibility documentation, automated test suite documented, public release notes per version, secure communication for vulnerability reports (private maintainer mailbox), warn on common cryptographic mistakes, vulnerability response policy with SLA, no public exposure of sensitive data in commits/issues. |
-| 2026 Q4 | **Silver** (55 additional criteria) | DCO or CLA documented and enforced, two-person review for substantive changes (already required), branch protection on all release branches, automated `golangci-lint` + `gosec` on every PR (extend coverage), documented coding standards, documented release-signing process, signed Git tags for releases, security policy with vulnerability disclosure timeline, README references security policy, contribution metadata documented (size, scope, review). |
-| 2027 Q2 | **Gold** (23 additional criteria) | Documented secure-design / threat model, fuzzing for critical components (blockstor, custom-scheduler, controllers), public SAST findings management, dynamic analysis (`go vet -race`, kube-conformance), CI-driven dependency-license check (FOSSA/ScanCode), reproducible builds for container images, branch protection includes required signed commits where supported. |
+| 2027 Q2 | **Silver** (55 additional criteria) | DCO or CLA documented and enforced, two-person review for substantive changes (already required), branch protection on all release branches, automated `golangci-lint` + `gosec` on every PR (extend coverage), documented coding standards, documented release-signing process, signed Git tags for releases, security policy with vulnerability disclosure timeline, README references security policy, contribution metadata documented (size, scope, review). |
+| 2027 Q4 | **Gold** (23 additional criteria) | Documented secure-design / threat model, fuzzing for critical components (blockstor, custom-scheduler, controllers), public SAST findings management, dynamic analysis (`go vet -race`, kube-conformance), CI-driven dependency-license check (FOSSA/ScanCode), reproducible builds for container images, branch protection includes required signed commits where supported. |
 
 #### Track 3.2 — OSPS Baseline (Open Source Project Security Baseline)
 
@@ -292,7 +292,7 @@ A `PCI-DSS.md` reference architecture for deploying Cozystack as a CDE (Cardhold
 
 | Cert / Badge | 2026 Q3 | 2026 Q4 | 2027 Q1 | 2027 Q2 | 2027 Q3 | 2027 Q4 | 2028 Q1+ |
 |---|---|---|---|---|---|---|---|
-| OpenSSF Best Practices | Passing | — | — | Silver | — | — | Gold |
+| OpenSSF Best Practices | Passing | — | — | Silver | — | Gold | — |
 | OSPS Baseline | L1 | L2 | — | L3 | maintain | maintain | maintain |
 | OpenSSF Scorecard | ≥ 6.0 | ≥ 7.0 | — | ≥ 8.0 | — | ≥ 9.0 | maintain |
 | SLSA Build | L1 | L2 | — | — | L3 | maintain | maintain |
@@ -417,7 +417,8 @@ Guardrail: any write-action by AI assistance requires **explicit user approval**
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | Form SIGs: SIG-Platform, SIG-Storage, SIG-Network, SIG-AI, SIG-Security, SIG-Testing, SIG-DX, SIG-Apps, SIG-OS, SIG-Governance. Weekly SIG meetings on a public calendar. |
+| 2026 Q3 | Form SIGs (wave 1): SIG-Platform, SIG-Security, SIG-Testing, SIG-Storage, SIG-Docs. Weekly SIG meetings on a public calendar. |
+| 2026 Q4 | Form SIGs (wave 2): SIG-Network, SIG-AI, SIG-Apps, SIG-DX, SIG-OS, SIG-Governance. |
 | 2026 Q3 | Onboard 2+ maintainers from organizations other than the founding company. (CNCF Incubation expectation.) |
 | 2026 Q3 | **Adopter list ≥ 10** production adopters published in `ADOPTERS.md`. |
 | 2026 Q3 | **Submit CNCF Incubation application**. |
@@ -483,7 +484,7 @@ Documents that ship in-repo and are kept current as Track 3 progresses.
 
 | Quarter | Deliverables |
 |---|---|
-| 2026 Q3 | `ROADMAP.md` (this document). `OSPS-BASELINE.md` self-assessment. `CNCF-SELF-ASSESSMENT.md`. `CRA-COMPLIANCE.md`. `HOST-OS-CONTRACT.md` (paired with Track 5). Update `SECURITY.md` with private mailbox and Vulnerability SLA. |
+| 2026 Q3 | `ROADMAP.md` (this document). `OSPS-BASELINE.md` self-assessment. `SECURITY-SELF-ASSESSMENT.md`. `CRA-COMPLIANCE.md`. `HOST-OS-CONTRACT.md` (paired with Track 5). Update `SECURITY.md` with private mailbox and Vulnerability SLA. |
 | 2026 Q4 | `LICENSE-COMPLIANCE.md` for OpenChain. `SBOM/` directory with SPDX + CycloneDX per release. **Cozystack Annual Report 2026** as PDF and web-native page. **Documented Release Engineering Handbook** for maintainers. |
 | 2027 Q1 | `SOC2-EVIDENCE/` evidence pack (paired with Track 3.8). **Shared Responsibility Matrix** for CRA compliance between maintainers and downstream commercial vendors. |
 | 2027 Q2 | `PCI-DSS.md` reference architecture doc with QSA-readability check. **Cozystack Enhancement Proposal (CzEP)** process documented in `community/design-proposals/process.md`. |
@@ -568,14 +569,14 @@ These are interfaces where no widely adopted standard exists today and where Coz
 
 **Reference implementation.** Cozystack core (`cozystack-operator`, `cozystack-controller`, `cozyhr`).
 
-**Target venue.** CNCF TAG App Delivery as a draft spec; long-term, a CNCF-hosted sub-project (sibling to OCI / SLSA).
+**Target venue.** CNCF TAG Workloads Foundation as a draft spec; long-term, a CNCF-hosted sub-project (sibling to OCI / SLSA).
 
 **Timeline.**
 
 | Quarter | Milestone |
 |---|---|
 | 2026 Q4 | First public CzEP draft of CP-API v0.1. |
-| 2027 Q1 | Submit to CNCF TAG App Delivery for community review. |
+| 2027 Q1 | Submit to CNCF TAG Workloads Foundation for community review. |
 | 2027 Q2 | Conformance test suite for CP-API published. |
 | 2027 Q4 | Second independent implementation lands (target: a Marketplace partner). |
 | 2028 Q2 | CP-API v1.0 ratified. |
@@ -588,14 +589,14 @@ These are interfaces where no widely adopted standard exists today and where Coz
 
 **Reference implementation.** Cozystack `tenant` core package plus Cilium-based network isolation.
 
-**Target venue.** Kubernetes SIG Multi-Tenancy and CNCF TAG App Delivery co-sponsorship.
+**Target venue.** Kubernetes SIG Auth (multi-tenancy) and CNCF TAG Workloads Foundation co-sponsorship.
 
 **Timeline.**
 
 | Quarter | Milestone |
 |---|---|
 | 2027 Q1 | First public CzEP draft of CT-API v0.1. |
-| 2027 Q2 | Engagement with SIG Multi-Tenancy upstream. |
+| 2027 Q2 | Engagement with Kubernetes SIG Auth (multi-tenancy) upstream. |
 | 2027 Q3 | Conformance assertions integrated into the Cozystack Conformance Suite. |
 | 2028 Q1 | Second independent implementation lands. |
 
@@ -607,7 +608,7 @@ These are interfaces where no widely adopted standard exists today and where Coz
 
 **Reference implementation.** Cozystack host OS profiles (Talos Tier-1; Ubuntu/Debian/Flatcar Tier-2).
 
-**Target venue.** CNCF TAG Runtime; engagement with Sidero (Talos), Flatcar (Kinvolk / Microsoft), Amazon (Bottlerocket), and Canonical (Ubuntu) for co-authorship.
+**Target venue.** CNCF TAG Infrastructure; engagement with Sidero (Talos), Flatcar (Kinvolk / Microsoft), Amazon (Bottlerocket), and Canonical (Ubuntu) for co-authorship.
 
 **Timeline.**
 
@@ -646,7 +647,7 @@ These are interfaces where no widely adopted standard exists today and where Coz
 
 **Reference implementation.** Cozystack `Fleet API` planned for Track 9 (2027 Q1 alpha → 2027 Q4 GA).
 
-**Target venue.** Kubernetes SIG Multicluster co-sponsored with CNCF TAG App Delivery.
+**Target venue.** Kubernetes SIG Multicluster co-sponsored with CNCF TAG Workloads Foundation.
 
 **Timeline.**
 
@@ -736,7 +737,7 @@ These are existing standards where Cozystack's role is to be a visible, high-fid
 | **CSAF VEX** | Vulnerability disclosure | Roadmap Track 3.7 | Adopt by 2026 Q3. |
 | **SPDX + CycloneDX** | SBOM formats | Roadmap Track 3.11 | Publish both per release. |
 | **Sigstore (cosign, Rekor, Fulcio)** | Signing & transparency | Adopted for releases | Extend to all `ApplicationDefinitions`. |
-| **OpenSSF Best Practices Badge** | Security hygiene | Roadmap Track 3.1 | Target Gold by 2027 Q2. |
+| **OpenSSF Best Practices Badge** | Security hygiene | Roadmap Track 3.1 | Target Gold by 2027 Q4. |
 | **OpenSSF Scorecard** | Automated security | Roadmap Track 3.3 | Target ≥ 9.0 by 2027 Q4. |
 | **OpenChain ISO/IEC 5230** | License compliance | Roadmap Track 3.10 | Self-certify 2026 Q4. |
 | **DCO** (Developers Certificate of Origin) | Contribution licensing | Adopted | Maintain. |
@@ -753,15 +754,15 @@ Standards engagement is people work. Each body listed below needs a designated C
 
 | Body / Group | Why | Cozystack role |
 |---|---|---|
-| **CNCF TAG App Delivery** | Owns App Delivery WG and OpenGitOps WG; CP-API, GEI, CT-API venues. | Submit proposals; nominate a Cozystack representative. |
-| **CNCF TAG Security** | Owns self-assessments, third-party audit framework. | Run self-assessment; engage on threat-model reviews. |
-| **CNCF TAG Storage** | Owns CSI sub-project evolution. | Engage on BR-CSI (§8.1.7) and blockstor sub-project. |
-| **CNCF TAG Network** | Owns CNI, Gateway API, multi-cluster networking. | Engage via Cilium and kilo-clustermesh-operator. |
+| **CNCF TAG Workloads Foundation** | Successor to TAG App Delivery; owns app-delivery / GitOps patterns; CP-API, GEI, CT-API venues. | Submit proposals; nominate a Cozystack representative. |
+| **CNCF TAG Security and Compliance** | Owns self-assessments, third-party audit framework. | Run self-assessment; engage on threat-model reviews. |
+| **CNCF TAG Infrastructure** (storage) | Owns storage / CSI sub-project evolution. | Engage on BR-CSI (§8.1.7) and blockstor sub-project. |
+| **CNCF TAG Infrastructure** (networking) | Owns CNI, Gateway API, multi-cluster networking. | Engage via Cilium and kilo-clustermesh-operator. |
 | **CNCF CNAI Working Group** | Owns Cloud Native AI landscape and standards. | CN-AI-Inference (§8.1.6); submit to CNAI landscape (Track 6 Q3 2026). |
 | **Kubernetes SIG Multicluster** | Owns multi-cluster harmonization. | Fleet API (§8.1.5); harmonization with Karmada/OCM/Liqo. |
 | **OpenSSF** | Owns Best Practices, Scorecard, OSPS Baseline. | Cozystack as OpenSSF-member project; quarterly status reports. |
 | **OpenChain Project** | Owns ISO/IEC 5230 license compliance. | Self-certify (Track 3.10 2026 Q4). |
-| **Kubernetes SIG Multi-Tenancy** | Owns tenancy patterns. | CT-API (§8.1.2) engagement. |
+| **Kubernetes SIG Auth** | Owns AuthN/AuthZ and multi-tenancy discussions (wg-multitenancy was archived in 2023). | CT-API (§8.1.2) engagement. |
 
 #### Tier 2 — Engage from H1 2027
 
@@ -774,7 +775,7 @@ Standards engagement is people work. Each body listed below needs a designated C
 | **MLCommons** | Owns AI/ML benchmarks. | Inference benchmark publication. |
 | **OASIS CSAF Technical Committee** | Owns CSAF / VEX format. | Adopt and contribute back. |
 | **Sigstore Community / Cosign WG** | Owns signing primitives. | Cozystack as visible adopter; SLSA Build L3 work. |
-| **CNCF TAG Sustainability** | Owns green-cloud-native posture. | Carbon metrics (Track 10 2027 Q3); Kepler integration. |
+| **CNCF TAG Operational Resilience** | Owns efficiency / green posture (energy, cost, sustainability). | Carbon metrics (Track 10 2027 Q3); Kepler integration. |
 
 #### Tier 3 — Engage from H2 2027
 
