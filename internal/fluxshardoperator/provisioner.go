@@ -264,10 +264,11 @@ func mergeResourceList(dst *corev1.ResourceList, overrides corev1.ResourceList) 
 //     replicas off one node) is dropped, since it targets
 //     app.kubernetes.io/name=flux and would otherwise leave every shard
 //     Pending on a single-node cluster;
-//   - the corporate-proxy env (HTTP_PROXY/HTTPS_PROXY/NO_PROXY) inherited from
-//     flux-aio is dropped: a standalone shard needs no external egress, and an
-//     unreachable proxy stalls a blocking startup HTTPS call, so the manager
-//     never serves /healthz and the pod crashloops;
+//   - the corporate-proxy env inherited from flux-aio is dropped, in both the
+//     upper- and lower-case spellings (HTTP_PROXY/HTTPS_PROXY/NO_PROXY): a
+//     standalone shard needs no external egress, and behind an unreachable
+//     proxy a stalled startup call leaves the manager never serving /healthz,
+//     so the liveness probe crashloops the pod;
 //   - a startupProbe is derived from the liveness handler (generous failure
 //     budget, liveness handler and TimeoutSeconds inherited) so a slow but
 //     progressing start is not killed by the short inherited liveness window.
@@ -324,17 +325,20 @@ func BuildShardDeployment(flux *appsv1.Deployment, idx int, cfg *Config) (*appsv
 		case "KUBERNETES_SERVICE_HOST", "KUBERNETES_SERVICE_PORT":
 			continue
 		// Corporate-proxy env inherited from flux-aio. A standalone shard needs
-		// no external egress (source-controller does artifact fetching and
-		// cosign/TUF verification), so the proxy only harms it: a blocking
-		// external HTTPS call at startup stalls through an unreachable proxy,
-		// the manager never serves /healthz, and the liveness probe then
-		// crashloops the pod. (flux-aio itself is unaffected in practice: it is
-		// long-lived and does not restart, so it never re-hits this startup
-		// path.) Drop the proxy env (and the now-pointless NO_PROXY) so the
-		// shard reaches the in-cluster apiserver directly. A HelmRelease
-		// targeting a remote cluster via spec.kubeConfig reachable only through
-		// the proxy is the one theoretical exception; cozystack guest-cluster
-		// apiservers are in-cluster, so this does not apply here.
+		// no external egress: source-controller does artifact fetching and
+		// cosign/TUF verification, and every hop the shard makes is in-cluster
+		// (artifacts advertise as flux.$(RUNTIME_NAMESPACE).svc, guest-cluster
+		// apiservers are reached over .svc kubeconfigs). NO_PROXY=.svc covers
+		// those, but not the management apiserver: the KUBERNETES_SERVICE_HOST
+		// case above makes the shard fall back to the kubelet-injected
+		// ClusterIP, a bare IP that no .svc suffix matches, so that startup
+		// call is the one that stalls through an unreachable proxy and leaves
+		// the manager never serving /healthz until the liveness probe
+		// crashloops the pod. Dropping the proxy env (and the then-pointless
+		// NO_PROXY) keeps every hop direct. A HelmRelease targeting a remote
+		// cluster via spec.kubeConfig reachable only through the proxy is the
+		// one theoretical exception; cozystack guest-cluster apiservers are
+		// in-cluster, so this does not apply here.
 		case "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY",
 			"http_proxy", "https_proxy", "no_proxy":
 			continue
