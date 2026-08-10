@@ -271,6 +271,14 @@
       "additionalProperties": {
         "type": "object",
         "properties": {
+          "bypassRls": {
+            "description": "Whether the user can bypass row-level security policies (BYPASSRLS). A role can only create other roles carrying BYPASSRLS if it holds the attribute itself, so this is required alongside `createRole` to provision a privileged service role.",
+            "type": "boolean"
+          },
+          "createRole": {
+            "description": "Whether the user can create and manage roles (CREATEROLE). Requires PostgreSQL 16 or newer. Setting it back to `false` withdraws the attribute only: the roles the user created, and its ADMIN and SET memberships in them, stay. Once any user has held it, the chart no longer adopts an existing role it did not create, so a user or database declared later under the name of such a role fails the init job until a platform administrator drops that role.",
+            "type": "boolean"
+          },
           "replication": {
             "description": "Whether the user has replication privileges.",
             "type": "boolean"

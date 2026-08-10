@@ -169,8 +169,72 @@ stringData:
       sleep 5
     done
 
+    {{- /*
+      Role comments cannot tell which roles this chart manages: on PostgreSQL 16 a
+      CREATEROLE holder may COMMENT ON ROLE every role it created, and it may drop
+      the intermediate role that created one, leaving no pg_auth_members trace of
+      who did. Membership in "cozystack:managed" can only be granted by a holder of
+      ADMIN on it, which no role but the superuser ever gets, so the delete passes
+      and the adoption checks below trust that instead. The name sits outside the
+      username and database charsets, so values can never declare it. Its first run
+      marks every role the chart had commented before the marker existed; no role
+      could have held CREATEROLE through the chart by then. On PostgreSQL 16 and
+      later the membership carries neither INHERIT nor SET, so it is a record and
+      nothing else; the role holds no privileges on older majors either.
+    */}}
+    {{- $pgMajor := atoi (trimPrefix "v" .Values.version) }}
+    {{- $markOptions := ternary " WITH INHERIT FALSE, SET FALSE" "" (ge $pgMajor 16) }}
+    echo "== mark managed roles"
+    psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
+    DO $$
+    DECLARE
+        managed record;
+    BEGIN
+        IF NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = 'cozystack:managed') THEN
+            CREATE ROLE "cozystack:managed" NOLOGIN;
+            FOR managed IN SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description IN ('user managed by helm', 'role managed by helm') LOOP
+                EXECUTE format('GRANT %I TO %I{{ $markOptions }}', 'cozystack:managed', managed.rolname);
+            END LOOP;
+        END IF;
+    END$$;
+    EOT
+
     echo "== create users"
     {{- if .Values.users }}
+    {{- /*
+      A CREATEROLE holder can create a role under a name values will declare later,
+      plant objects owned by it, role settings and default privileges, then drop the
+      intermediate role it did this through, so the squatted role shows no member at
+      all by the time it is declared. No catalog check can tell that apart from a
+      role a platform administrator created, so once any user has held createRole
+      the chart refuses to adopt a role it did not mark. Before that, adopting is
+      safe, and it is what a declared users.app does on install with the role CNPG
+      bootstraps. The flag is read at the start of this session and set only after
+      it, so the run that first grants createRole still adopts, and every user is
+      created and marked before any of them holds CREATEROLE.
+    */}}
+    {{- $grantsCreateRole := false }}
+    psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
+    {{- range $user, $u := .Values.users }}
+    {{- if and (default false $u.createRole) (lt $pgMajor 16) }}
+    {{- fail (printf "SECURITY: users.%s.createRole requires PostgreSQL 16 or newer. On PostgreSQL 15 and older, a role holding CREATEROLE can grant itself any non-superuser role, including pg_execute_server_program, which escalates to command execution on the instance." $user) }}
+    {{- end }}
+    {{- if default false $u.createRole }}
+    {{- $grantsCreateRole = true }}
+    {{- end }}
+    SELECT format('DO $$BEGIN RAISE EXCEPTION %L; END$$', 'role "{{ $user }}" already exists and this chart did not create it; a user of this instance has held createRole, so the role may be controlled by that user and users.{{ $user }} will not adopt it. A platform administrator must inspect the role and drop it as the superuser, or declare the user under another name')
+    FROM pg_catalog.pg_roles r
+    WHERE r.rolname = '{{ $user }}'
+      AND current_setting('cozystack.createrole_granted', true) = 'on'
+      AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid)\gexec
+    SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
+    GRANT "cozystack:managed" TO "{{ $user }}"{{ $markOptions }};
+    {{- end }}
+    EOT
+    {{- if $grantsCreateRole }}
+    psql -v ON_ERROR_STOP=1 --echo-all -c "ALTER DATABASE postgres SET cozystack.createrole_granted = 'on';"
+    {{- end }}
     {{- /*
       Each password is read from the mounted <release>-credentials Secret at run
       time rather than rendered into this script: the init-script Secret is stored
@@ -187,9 +251,22 @@ stringData:
     {{- range $user, $u := .Values.users }}
     pw=$(cat "/credentials/{{ $user }}")
     psql -v ON_ERROR_STOP=1 -v pw="$pw" <<\EOT
-    SELECT 'CREATE ROLE "{{ $user }}" LOGIN INHERIT;'
-    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $user }}')\gexec
-    ALTER ROLE "{{ $user }}" WITH PASSWORD :'pw' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }};
+    ALTER ROLE "{{ $user }}" WITH PASSWORD :'pw' LOGIN INHERIT {{ ternary "REPLICATION" "NOREPLICATION" (default false $u.replication) }} {{ ternary "CREATEROLE" "NOCREATEROLE" (default false $u.createRole) }} {{ ternary "BYPASSRLS" "NOBYPASSRLS" (default false $u.bypassRls) }};
+    {{- /*
+      PostgreSQL 16 grants a CREATEROLE holder only ADMIN OPTION on the roles it
+      creates, governed by createrole_self_grant, whose default is empty. ADMIN
+      OPTION alone allows granting the role onward but not SET ROLE to it, and
+      creating an object owned by another role requires SET. Without this the
+      attribute looks functional — CREATE ROLE succeeds — yet the very next
+      statement a tenant writes, CREATE SCHEMA ... AUTHORIZATION <new role>,
+      fails with "must be able to SET ROLE". Set as a role-level default so it
+      applies to every session, and reset when the attribute is withdrawn.
+    */}}
+    {{- if default false $u.createRole }}
+    ALTER ROLE "{{ $user }}" SET createrole_self_grant = 'set, inherit';
+    {{- else }}
+    ALTER ROLE "{{ $user }}" RESET createrole_self_grant;
+    {{- end }}
     COMMENT ON ROLE "{{ $user }}" IS 'user managed by helm';
     EOT
     {{- end }}
@@ -207,8 +284,18 @@ stringData:
       database: an object the user owns elsewhere would otherwise fail DROP USER
       and wedge every later run. Identifiers are quoted because the username
       charset admits "-", "." and uppercase.
+
+      The objects go to pg_database_owner, never to the superuser. A removed user
+      may own SECURITY DEFINER functions, views or triggers, whose bodies it wrote
+      and which run with their owner's privileges, so handing them to postgres
+      hands whoever can still call them the superuser, COPY ... TO PROGRAM
+      included. pg_database_owner is no superuser even in the postgres database,
+      and the owner of each database keeps the objects, as its members do.
+      PostgreSQL 13 has no pg_database_owner and cannot carry createRole, so it
+      keeps the superuser.
     */}}
-    MANAGED_USERS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm'")
+    {{- $heir := ternary "pg_database_owner" "postgres" (ge $pgMajor 14) }}
+    MANAGED_USERS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT r.rolname FROM pg_roles r JOIN pg_shdescription s ON s.objoid = r.oid AND s.classoid = 'pg_authid'::regclass WHERE s.description = 'user managed by helm' AND r.oid IN (SELECT m.member FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed')")
     DEFINED_USERS="{{ $defined := list }}{{ range $user, $u := .Values.users }}{{ $defined = append $defined (trunc 63 $user) }}{{ end }}{{ join " " $defined }}"
     DELETE_USERS=$(for user in $MANAGED_USERS; do case " $DEFINED_USERS " in *" $user "*) :;; *) echo $user;; esac; done)
     ALL_DBS=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT datname FROM pg_database WHERE datallowconn AND NOT datistemplate")
@@ -217,7 +304,7 @@ stringData:
     for user in $DELETE_USERS; do
     for db in $ALL_DBS; do
     psql -v ON_ERROR_STOP=1 --echo-all --dbname "$db" <<EOT
-    REASSIGN OWNED BY "$user" TO postgres;
+    REASSIGN OWNED BY "$user" TO {{ $heir }};
     DROP OWNED BY "$user";
     EOT
     done
@@ -260,7 +347,7 @@ stringData:
     fi
 
     echo "== delete orphaned managed roles"
-    MANAGED_ROLES=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT rolname FROM pg_roles r JOIN pg_shdescription s ON r.oid = s.objoid WHERE s.description = 'role managed by helm'")
+    MANAGED_ROLES=$(psql -v ON_ERROR_STOP=1 -t -A -c "SELECT rolname FROM pg_roles r JOIN pg_shdescription s ON r.oid = s.objoid WHERE s.description = 'role managed by helm' AND r.oid IN (SELECT m.member FROM pg_auth_members m JOIN pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed')")
     DEFINED_ROLES="{{ range $database, $d := .Values.databases }}{{ $database }}_admin {{ $database }}_readonly {{ end }}"
     DELETE_ROLES=$(for role in $MANAGED_ROLES; do case " $DEFINED_ROLES " in *" $role "*) :;; *) echo $role;; esac; done)
 
@@ -275,7 +362,7 @@ stringData:
             EXECUTE format('REVOKE %I FROM %I', '$role', member.rolname);
         END LOOP;
     END\$\$;
-    REASSIGN OWNED BY "$role" TO postgres;
+    REASSIGN OWNED BY "$role" TO {{ $heir }};
     DROP OWNED BY "$role";
     DROP ROLE IF EXISTS "$role";
     EOT
@@ -283,17 +370,29 @@ stringData:
 
     echo "== create databases and roles"
     {{- if .Values.databases }}
+    {{- /*
+      The same adoption check as for users. This session starts after the create
+      users pass has recorded createRole, so the run that first grants it already
+      refuses: its CREATEROLE holders exist from that pass on.
+    */}}
     psql -v ON_ERROR_STOP=1 --echo-all <<\EOT
     {{- range $database, $d := .Values.databases }}
+    SELECT format('DO $$BEGIN RAISE EXCEPTION %L; END$$', format('role "%s" already exists and this chart did not create it; a user of this instance has held createRole, so the role may be controlled by that user and databases.{{ $database }} will not adopt it. A platform administrator must inspect the role and drop it as the superuser, or declare the database under another name', r.rolname))
+    FROM pg_catalog.pg_roles r
+    WHERE r.rolname IN ('{{ $database }}_admin', '{{ $database }}_readonly')
+      AND current_setting('cozystack.createrole_granted', true) = 'on'
+      AND NOT EXISTS (SELECT FROM pg_catalog.pg_auth_members m JOIN pg_catalog.pg_roles g ON g.oid = m.roleid WHERE g.rolname = 'cozystack:managed' AND m.member = r.oid)\gexec
     SELECT 'CREATE DATABASE "{{ $database }}"'
     WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '{{ $database }}')\gexec
     COMMENT ON DATABASE "{{ $database }}" IS 'database managed by helm';
     SELECT 'CREATE ROLE "{{ $database }}_admin" NOINHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $database }}_admin')\gexec
     COMMENT ON ROLE "{{ $database }}_admin" IS 'role managed by helm';
+    GRANT "cozystack:managed" TO "{{ $database }}_admin"{{ $markOptions }};
     SELECT 'CREATE ROLE "{{ $database }}_readonly" NOINHERIT;'
     WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = '{{ $database }}_readonly')\gexec
     COMMENT ON ROLE "{{ $database }}_readonly" IS 'role managed by helm';
+    GRANT "cozystack:managed" TO "{{ $database }}_readonly"{{ $markOptions }};
     {{- end }}
     EOT
     {{- end }}
