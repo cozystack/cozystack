@@ -45,19 +45,38 @@ func WaitForCRDsEstablished(ctx context.Context, k8sClient client.Client, crdNam
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
+	// The CRD named if the wait is cut short. Until a poll observes the set
+	// nothing is known about which one lags, so the first of it stands in;
+	// after that it holds the CRD the last poll stopped on.
+	pendingCRD := crdNames[0]
+
+	// Cancellation leaves the loop from two places and reads the same from
+	// both, which is the point rather than an accident. When the deadline and
+	// a tick come ready together, select picks between them at random, so any
+	// difference between the two exits would reach the operator at random too.
+	cancelled := func() error {
+		return fmt.Errorf("context cancelled while waiting for CRD %q to be established: %w", pendingCRD, ctx.Err())
+	}
+
 	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for CRDs to be established: %w", ctx.Err())
-		default:
+		// Polling a dead context spends a Get to learn nothing: a client
+		// refuses it, and the refusal would land on the first name in the list
+		// whichever CRD is actually lagging, renaming what gets reported.
+		if ctx.Err() != nil {
+			return cancelled()
 		}
 
 		allEstablished := true
-		var pendingCRD string
 		for _, name := range crdNames {
 			crd := &unstructured.Unstructured{}
 			crd.SetGroupVersionKind(crdGVK)
 			if err := k8sClient.Get(ctx, types.NamespacedName{Name: name}, crd); err != nil {
+				// The poll was entered on a live context, so this is the CRD
+				// it stopped on and not whichever name a blanket refusal
+				// reached first. A context dying inside the poll still lands
+				// here and does record the first name to fail: this branch
+				// cannot tell a refused request from a CRD status, which is
+				// the wider problem it has for RBAC and connection errors too.
 				allEstablished = false
 				pendingCRD = name
 				break
@@ -97,7 +116,7 @@ func WaitForCRDsEstablished(ctx context.Context, k8sClient client.Client, crdNam
 
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("context cancelled while waiting for CRD %q to be established: %w", pendingCRD, ctx.Err())
+			return cancelled()
 		case <-ticker.C:
 		}
 	}
