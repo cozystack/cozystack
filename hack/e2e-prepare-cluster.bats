@@ -188,8 +188,18 @@ cluster:
     cni:
       name: none
     dnsDomain: cozy.local
+    # Deliberately NOT the kube-ovn POD_CIDR (10.244.0.0/16, set as
+    # networking.podCIDR by the install step). kube-ovn owns pod IPAM and
+    # allocates flat from POD_CIDR; cilium is chained behind it and allocates
+    # no pod addresses, but it still carves its own per-node router and
+    # Ingress IPs out of Node.spec.podCIDR, which kube-controller-manager
+    # slices from this value. Overlap and kube-ovn eventually hands a pod an
+    # address cilium already holds. hack/sandbox-cidr-disjoint.bats guards it.
+    # Picking a replacement: 100.64.0.0/16 is the kube-ovn join range and
+    # 100.66.0.0/16 is kilo's transit range, so the free slot in this corner of
+    # RFC 6598 is the one below.
     podSubnets:
-    - 10.244.0.0/16
+    - 100.65.0.0/16
     serviceSubnets:
     - 10.96.0.0/16
 EOF
