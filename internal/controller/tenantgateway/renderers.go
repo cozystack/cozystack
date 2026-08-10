@@ -248,8 +248,9 @@ const maxGatewayListeners = 64
 // or a cross-port SNI overlap. A tenant keeping any shipped
 // tlsPassthroughServices entry has a routed passthrough listener on
 // 443 already, so a native-port entry satisfies the second of those.
-// Lifting the refusal is then deleting a check, with no API or schema
-// change, and the pin is the thing to watch:
+// Lifting the refusal means deleting two copies of it, this one and
+// the matching CEL rule in the CRD, which is a schema change even
+// though no field or type moves. The pin is the thing to watch:
 // packages/system/cilium/images/cilium/Dockerfile.
 func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthroughListener, mode gatewayv1alpha1.CertMode) error {
 	if len(listeners) == 0 {
@@ -401,8 +402,9 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		// native port, where a second listener means two engines
 		// answering on one port and the SNI deciding which, and
 		// nothing downstream (routing, certificates) exists yet to
-		// make that configuration testable. Lifting the restriction is
-		// removing this check — no API or schema change — so it stays
+		// make that configuration testable. Lifting it means removing
+		// this check and the matching CEL rule in the CRD, which is a
+		// schema change with no field or type change, so the shape stays
 		// available once the later phases land.
 		if _, dup := seenPorts[l.Port]; dup {
 			return fmt.Errorf("tlsPassthroughListeners: duplicate port %d (listener %q)", l.Port, l.Name)

@@ -184,8 +184,8 @@ type TLSPassthroughListener struct {
 	// ordinary typo — an underscore, an upper-case letter, a leading
 	// dash — passes the apex rule (a plain suffix test) and is caught
 	// only by the controller, which is far too late: renderGateway is
-	// the first reconcile step, so the object is already in etcd and
-	// the whole chain behind it aborts.
+	// the first thing that renders, so the object is already in etcd
+	// and the whole chain behind it aborts.
 
 	// Hostname is the SNI the listener matches on the incoming
 	// ClientHello. It routes the raw TLS stream by SNI, so give each
@@ -218,10 +218,11 @@ type TLSPassthroughListener struct {
 // copy of these rules: during an upgrade the controller and the CRD
 // roll out separately, so it cannot assume they were applied to what it
 // reads, and it is the layer the unit tests can exercise directly. The
-// copy covers the rules written here, not the schema markers on the
-// individual fields: an apex or a tlsPassthroughServices entry that
-// slipped past its pattern is caught by Gateway API refusing the
-// rendered listener, not by the controller.
+// copy covers the rules written here, and among the field markers
+// only the ones whose violation the renderer cannot survive: the
+// listener name and hostname patterns are mirrored in Go, while an
+// apex or a tlsPassthroughServices entry that slipped past its pattern
+// is caught by Gateway API refusing the rendered listener.
 //
 // One rule is deliberately absent. Name uniqueness is carried by the
 // listType=map/listMapKey=name markers on the field, enforced by the
