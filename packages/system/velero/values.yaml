@@ -1,6 +1,13 @@
 velero:
+<<<<<<< HEAD
   # Disable CRD upgrade job - CRDs are installed as part of helm chart
   # The upgrade job has issues with kubectl image compatibility
+=======
+  # Disable the upgrade-crds Job: CRD lifecycle is owned by the generated
+  # HelmRelease instead (upgradeCRDs: CreateReplace on the velero PackageSource),
+  # which applies the chart's crds/ directory on install and on every upgrade,
+  # so the Job is redundant.
+>>>>>>> f4d812c (fix(velero): apply CRD updates on upgrade via CreateReplace)
   upgradeCRDs: false
   initContainers:
     - name: velero-plugin-for-aws

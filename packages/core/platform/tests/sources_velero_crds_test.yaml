@@ -1,0 +1,22 @@
+suite: velero applies CRD updates on upgrade
+# velero evolves its CRD schema between versions (v1.18 adds the Queued and
+# ReadyToStart backup phases). Helm never upgrades CRDs shipped in crds/, and
+# the velero package disables the chart's upgrade-crds Job, so the PackageSource
+# must opt into CreateReplace; without it the server binary upgrades while the
+# live CRDs stay at first-install state, the apiserver rejects the new phases,
+# and backups sit in New while the HelmRelease stays green. Pin the policy so an
+# upgrade cannot silently regress.
+templates:
+  - templates/sources.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  - it: velero PackageSource sets upgradeCRDs to CreateReplace
+    documentSelector:
+      path: metadata.name
+      value: cozystack.velero
+    asserts:
+      - equal:
+          path: spec.variants[0].components[0].install.upgradeCRDs
+          value: CreateReplace

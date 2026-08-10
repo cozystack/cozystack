@@ -26,11 +26,18 @@ tests:
           path: spec.template.spec.initContainers[1].image
           value: quay.io/kubevirt/kubevirt-velero-plugin:v0.8.0
 
+<<<<<<< HEAD
   # Cozystack disables the upgrade-crds Job (upgradeCRDs: false) because CRDs
   # ship via the chart's crds/ directory, making the Job redundant, and because
   # on this chart (11.0.0) the Job runs a kubectl image whose tag defaults to the
   # chart's Kubernetes version and need not match the cluster. Pin that
   # invariant — it silently regressed once.
+=======
+  # Cozystack disables the upgrade-crds Job (upgradeCRDs: false): CRD lifecycle
+  # is owned by the generated HelmRelease (upgradeCRDs: CreateReplace on the
+  # velero PackageSource), making the Job redundant. Pin that invariant — it
+  # silently regressed once.
+>>>>>>> f4d812c (fix(velero): apply CRD updates on upgrade via CreateReplace)
   - it: does not emit the upgrade-crds Job when upgradeCRDs is disabled
     template: charts/velero/templates/upgrade-crds/upgrade-crds.yaml
     asserts:
