@@ -2969,6 +2969,48 @@ func TestReconcile_LoserMessageIsStableAcrossReconciles(t *testing.T) {
 	}
 }
 
+// TestReconcile_RepeatedHostnameIsNamedOnce pins that a route listing
+// one hostname twice hears about it once. Gateway API declares
+// spec.hostnames a plain array with no listType, so the duplicate is
+// admissible, and the claim map then carries the same ref twice for
+// that name. A condition that says the same thing twice reads as two
+// different problems.
+func TestReconcile_RepeatedHostnameIsNamedOnce(t *testing.T) {
+	const published = "pg.db.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "wild", Port: 5432, Hostname: "*.db.foo.example.com"},
+			},
+		},
+	}
+	route := httpRouteAttached("pg", "tenant-foo", published)
+	route.Spec.Hostnames = append(route.Spec.Hostnames, published)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, route).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msg := acceptedCondition(t, c, "pg", "tenant-foo").Message
+	if n := strings.Count(msg, published); n != 1 {
+		t.Errorf("hostname named %d times in one condition, want 1: %q", n, msg)
+	}
+}
+
 // TestReconcile_WildcardClaimOverlappingSeveralPassthroughNames pins
 // the case the neighbouring test cannot reach: one claimed hostname
 // overlapping more than one reserved name at once. Reserved names are
@@ -3082,6 +3124,40 @@ func TestReconcile_TLSRouteWithoutPassthroughListenerTerminatesNothing(t *testin
 		if l.Hostname != nil && string(*l.Hostname) == "gone.foo.example.com" {
 			t.Errorf("listener %s (%s) serves a TLSRoute-only hostname with no passthrough listener behind it", l.Name, l.Protocol)
 		}
+	}
+
+	// Rendering nothing is only half the contract. Before this rule the
+	// hostname did get a terminate listener, which Cilium then refused
+	// with ResolvedRefs=False, so the operator had one object saying the
+	// route was going nowhere. Withdrawing the listener takes that away,
+	// and the route condition is the only place left to put it back.
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "orphan", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get route: %v", err)
+	}
+	var accepted *metav1.Condition
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for i := range ps.Conditions {
+			if ps.Conditions[i].Type == "Accepted" {
+				accepted = &ps.Conditions[i]
+			}
+		}
+	}
+	if accepted == nil {
+		t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status == metav1.ConditionTrue {
+		t.Fatalf("TLSRoute on gone.foo.example.com reports Accepted=True with no listener rendered for it and none it could attach to")
+	}
+	// The flag alone is not the deliverable. Withdrawing the listener
+	// removed the object that named the hostname, so a condition that
+	// says False without saying which name and why leaves the operator
+	// exactly where the missing listener did.
+	if !strings.Contains(accepted.Message, "gone.foo.example.com") {
+		t.Errorf("condition does not name the hostname it declines to serve: reason=%s message=%q", accepted.Reason, accepted.Message)
 	}
 
 	certs := &cmv1.CertificateList{}

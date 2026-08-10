@@ -229,11 +229,13 @@ type TLSPassthroughListener struct {
 // copy of these rules: during an upgrade the controller and the CRD
 // roll out separately, so it cannot assume they were applied to what it
 // reads, and it is the layer the unit tests can exercise directly. The
-// copy covers the rules written here, and among the field markers
-// only the ones whose violation the renderer cannot survive: the
-// listener name and hostname patterns are mirrored in Go, while an
-// apex or a tlsPassthroughServices entry that slipped past its pattern
-// is caught by Gateway API refusing the rendered listener.
+// copy covers the rules written here, and among the field markers the
+// ones whose violation the renderer cannot survive. That criterion is
+// stated rather than the members listed, because a list here has been
+// wrong twice: what belongs in it moves whenever a marker is added.
+// An apex or a tlsPassthroughServices entry that slipped past its
+// pattern is outside it, caught instead by Gateway API refusing the
+// rendered listener.
 //
 // One rule is deliberately absent. Name uniqueness is carried by the
 // listType=map/listMapKey=name markers on the field, enforced by the

@@ -161,9 +161,10 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// so a TLSRoute that merely sorted first would take the hostname
 	// while the HTTPRoute still reported Accepted=True.
 	//
-	// Ownership still decides who is Accepted: claims and allRefs carry
-	// TLSRoutes untouched, so conflict resolution and RouteParentStatus
-	// are unaffected.
+	// Ownership still decides who is Accepted between routes: claims and
+	// allRefs carry TLSRoutes untouched, so conflict resolution is
+	// unaffected. Their RouteParentStatus is not untouched, though — a
+	// TLSRoute whose hostname nothing answers is told so below.
 	reserved := passthroughHostnames(tgw)
 	dynHostnames := make([]string, 0, len(claims))
 	withdrawn := map[routeRef][]withdrawnHostname{}
@@ -226,6 +227,14 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			continue
 		}
 		if !slices.ContainsFunc(refs, func(ref routeRef) bool { return ref.kind == routeKindHTTP }) {
+			// Claimed only by TLSRoutes, and no passthrough listener
+			// answers it. No terminate listener is rendered, and a
+			// TLSRoute could not attach to one anyway, so nothing on
+			// the Gateway serves this name and nothing on the Gateway
+			// says so either. An empty answeredBy marks that shape.
+			for _, ref := range refs {
+				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h})
+			}
 			continue
 		}
 		dynHostnames = append(dynHostnames, h)

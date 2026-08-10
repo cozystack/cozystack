@@ -19,6 +19,7 @@ package tenantgateway
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -107,25 +108,36 @@ func resolveHostnameOwners(claims map[string][]routeRef) map[routeRef][]string {
 }
 
 // withdrawnHostname pairs a hostname the controller declined to serve
-// with the TLS-passthrough hostname whose SNI answers it. The pair is
-// carried rather than the claimed name alone because a wildcard entry
-// is not derivable from the route: the route claims pg.db.<apex> and
-// the spec that took it away says *.db.<apex>.
+// with the TLS-passthrough hostname whose SNI answers it, or with the
+// empty string when nothing answers it at all. The pair is carried
+// rather than the claimed name alone because a wildcard entry is not
+// derivable from the route: the route claims pg.db.<apex> and the spec
+// that took it away says *.db.<apex>.
 type withdrawnHostname struct {
 	hostname   string
 	answeredBy string
 }
 
-// describeWithdrawn renders the pairs in a stable order. The message
-// is rebuilt on every reconcile, so an unstable order would rewrite
-// the condition each pass and churn the route's status forever.
-func describeWithdrawn(hostnames []withdrawnHostname) string {
-	parts := make([]string, 0, len(hostnames))
+// describeWithdrawn renders the pairs in a stable order, dropping
+// repeats: one route may list a hostname twice, since Gateway API
+// declares spec.hostnames a plain array. The message is rebuilt on
+// every reconcile, so an unstable order would rewrite the condition
+// each pass and churn the route's status forever.
+//
+// An empty answeredBy means no listener answers the name at all, which
+// reads differently and is rendered differently.
+func describeWithdrawn(hostnames []withdrawnHostname) (answered, unserved string) {
+	var withListener, without []string
 	for _, h := range hostnames {
-		parts = append(parts, fmt.Sprintf("%s (answered by %s)", h.hostname, h.answeredBy))
+		if h.answeredBy == "" {
+			without = append(without, h.hostname)
+			continue
+		}
+		withListener = append(withListener, fmt.Sprintf("%s (answered by %s)", h.hostname, h.answeredBy))
 	}
-	sort.Strings(parts)
-	return strings.Join(parts, ", ")
+	sort.Strings(withListener)
+	sort.Strings(without)
+	return strings.Join(slices.Compact(withListener), ", "), strings.Join(slices.Compact(without), ", ")
 }
 
 // updateRouteStatuses writes RouteParentStatus entries under our
@@ -140,13 +152,14 @@ func describeWithdrawn(hostnames []withdrawnHostname) string {
 // only get a status entry for whichever ref happened to win the
 // per-hostname race, dropping per-section visibility for the others.
 //
-// withdrawn carries the tuples whose hostname a TLS-passthrough
-// listener answers. They lost no race, so HostnameConflict would
-// misname the cause; they get NoMatchingListenerHostname, which is
-// literally true — the controller rendered no listener for that
-// hostname, and the route condition is the only object left that can
-// say why, the terminate listener that used to carry Conflicted
-// having been withdrawn along with it.
+// withdrawn carries the tuples the controller declined to serve: a
+// hostname a TLS-passthrough listener answers, or one claimed only by
+// a TLSRoute with no passthrough listener behind it. Neither lost a
+// race, so HostnameConflict would misname the cause; they get
+// NoMatchingListenerHostname, which is literally true — the controller
+// rendered no listener for that hostname, and the route condition is
+// the only object left that can say why, the listener that used to
+// carry a condition of its own having gone with it.
 func (r *Reconciler) updateRouteStatuses(
 	ctx context.Context,
 	tgw *gatewayv1alpha1.TenantGateway,
@@ -185,7 +198,13 @@ func (r *Reconciler) updateRouteStatuses(
 				reason = "HostnameConflict"
 			}
 			if isWithdrawn {
-				causes = append(causes, fmt.Sprintf("hostname(s) %s answered by a TLS-passthrough listener, so no HTTPS listener is rendered for them", describeWithdrawn(gone)))
+				answered, unserved := describeWithdrawn(gone)
+				if answered != "" {
+					causes = append(causes, fmt.Sprintf("hostname(s) %s answered by a TLS-passthrough listener, so no HTTPS listener is rendered for them", answered))
+				}
+				if unserved != "" {
+					causes = append(causes, fmt.Sprintf("hostname(s) %s claimed only by a TLSRoute, which needs a passthrough listener this Gateway does not declare", unserved))
+				}
 			}
 			if err := r.updateRouteParentStatus(ctx, ref, []metav1.Condition{
 				{
