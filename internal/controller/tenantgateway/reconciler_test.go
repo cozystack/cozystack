@@ -2866,6 +2866,72 @@ func TestReconcile_TLSRouteLoserOnAPassthroughHostnameKeepsItsConflict(t *testin
 	}
 }
 
+// TestReconcile_TLSRouteKeepsAcceptedWhenAnHTTPRouteWinsAPassthroughName
+// pins the mixed-kind race on a passthrough hostname. Ownership ranks
+// by namespace with no notion of kind, so a cozy-* HTTPRoute outranks
+// a tenant TLSRoute for a name a passthrough listener answers. That
+// HTTPRoute is then withdrawn, because no terminate listener is
+// rendered for such a name — and the TLSRoute, which is the one the
+// passthrough listener actually serves, was left holding a conflict
+// naming a route that this same reconcile declined to serve.
+//
+// cert-manager makes the shape reachable rather than theoretical: its
+// HTTP-01 challenge route lives in cozy-cert-manager and carries the
+// hostname under validation.
+func TestReconcile_TLSRouteKeepsAcceptedWhenAnHTTPRouteWinsAPassthroughName(t *testing.T) {
+	const contested = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-public", "tenant-foo"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	// The TLSRoute is the passthrough listener's intended user; the
+	// HTTPRoute merely outranks it by namespace.
+	served := tlsRouteAttached("kubernetes-api", "tenant-foo", contested, "tls-api", "tenant-foo")
+	outranking := httpRouteAttached("challenge", "cozy-public", contested)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, served, outranking).
+		WithStatusSubresource(tgw, served, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "kubernetes-api", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get served TLSRoute: %v", err)
+	}
+	var accepted *metav1.Condition
+	for _, ps := range got.Status.Parents {
+		if string(ps.ControllerName) != testControllerName {
+			continue
+		}
+		for i := range ps.Conditions {
+			if ps.Conditions[i].Type == "Accepted" {
+				accepted = &ps.Conditions[i]
+			}
+		}
+	}
+	if accepted == nil {
+		t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status != metav1.ConditionTrue {
+		t.Errorf("the route the passthrough listener serves reports Accepted=%s reason=%s: %q", accepted.Status, accepted.Reason, accepted.Message)
+	}
+}
+
 // TestReconcile_RouteLosingOneHostnameAndWithdrawnOnAnother pins that
 // a route hit by both causes hears about both. One route can lose a
 // race for one hostname and have another withdrawn under it, and
@@ -3008,6 +3074,45 @@ func TestReconcile_RepeatedHostnameIsNamedOnce(t *testing.T) {
 	msg := acceptedCondition(t, c, "pg", "tenant-foo").Message
 	if n := strings.Count(msg, published); n != 1 {
 		t.Errorf("hostname named %d times in one condition, want 1: %q", n, msg)
+	}
+}
+
+// TestReconcile_RepeatedLostHostnameIsNamedOnce is the same property on
+// the other half of the message. Both halves are built from claims that
+// may carry a hostname twice, and fixing one and not the other leaves
+// the same condition inconsistent with itself.
+func TestReconcile_RepeatedLostHostnameIsNamedOnce(t *testing.T) {
+	const contested = "harbor.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:               "foo.example.com",
+			CertMode:           gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:   "cilium",
+			AttachedNamespaces: []string{"cozy-public", "tenant-foo"},
+		},
+	}
+	winner := httpRouteAttached("harbor", "cozy-public", contested)
+	loser := httpRouteAttached("harbor-shadow", "tenant-foo", contested)
+	loser.Spec.Hostnames = append(loser.Spec.Hostnames, contested)
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, winner, loser).
+		WithStatusSubresource(tgw, &gatewayv1.HTTPRoute{}).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msg := acceptedCondition(t, c, "harbor-shadow", "tenant-foo").Message
+	if n := strings.Count(msg, contested); n != 1 {
+		t.Errorf("lost hostname named %d times in one condition, want 1: %q", n, msg)
 	}
 }
 

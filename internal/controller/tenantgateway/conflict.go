@@ -60,6 +60,36 @@ type routeRef struct {
 	parentRef gatewayv1.ParentReference // exact ref the route used to attach
 }
 
+// rankRouteRefs orders claimants the way ownership decides them:
+// cozy-* namespaces first, then by namespace and name. Shared rather
+// than inlined because a hostname a passthrough listener answers has
+// its race recounted over the TLSRoutes alone, and a second copy of
+// the order would let the two counts disagree about who won.
+func rankRouteRefs(refs []routeRef) {
+	sort.Slice(refs, func(i, j int) bool {
+		ic := strings.HasPrefix(refs[i].namespace, "cozy-")
+		jc := strings.HasPrefix(refs[j].namespace, "cozy-")
+		if ic != jc {
+			return ic // cozy-* sorts first
+		}
+		if refs[i].namespace != refs[j].namespace {
+			return refs[i].namespace < refs[j].namespace
+		}
+		return refs[i].name < refs[j].name
+	})
+}
+
+// dropLostHostname removes one hostname from a route's loser record,
+// deleting the entry when nothing is left, so an empty slice never
+// reads as "lost something".
+func dropLostHostname(losers map[routeRef][]string, ref routeRef, hostname string) {
+	if rest := slices.DeleteFunc(losers[ref], func(lost string) bool { return lost == hostname }); len(rest) > 0 {
+		losers[ref] = rest
+	} else {
+		delete(losers, ref)
+	}
+}
+
 // resolveHostnameOwners decides who wins when more than one route
 // claims the same hostname, and returns the routes that lost:
 // routeRef -> []hostname for which this route is NOT the winner.
@@ -81,17 +111,7 @@ func resolveHostnameOwners(claims map[string][]routeRef) map[routeRef][]string {
 		if len(refs) == 0 {
 			continue
 		}
-		sort.Slice(refs, func(i, j int) bool {
-			ic := strings.HasPrefix(refs[i].namespace, "cozy-")
-			jc := strings.HasPrefix(refs[j].namespace, "cozy-")
-			if ic != jc {
-				return ic // cozy-* sorts first
-			}
-			if refs[i].namespace != refs[j].namespace {
-				return refs[i].namespace < refs[j].namespace
-			}
-			return refs[i].name < refs[j].name
-		})
+		rankRouteRefs(refs)
 		winner := refs[0]
 		for _, lr := range refs[1:] {
 			// Same-namespace routes claiming the same hostname are
@@ -194,7 +214,11 @@ func (r *Reconciler) updateRouteStatuses(
 				// writes status, which requeues this object through the
 				// route watch.
 				sort.Strings(lost)
-				causes = append(causes, fmt.Sprintf("hostname(s) %s already claimed by another route", strings.Join(lost, ", ")))
+				// Compacted for the same reason describeWithdrawn
+				// compacts: spec.hostnames is a plain array, so one
+				// route may list a name twice, and the message would
+				// then say it twice.
+				causes = append(causes, fmt.Sprintf("hostname(s) %s already claimed by another route", strings.Join(slices.Compact(lost), ", ")))
 				reason = "HostnameConflict"
 			}
 			if isWithdrawn {

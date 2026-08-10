@@ -208,20 +208,35 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			// condition, sending the loser to look at a route that is
 			// not served either.
 			//
-			// The race between two TLSRoutes on this hostname is not
-			// moot the same way, so their loser records stay. The
-			// listener does exist, exactly one of them is served
-			// through it, and the other has to hear that from
-			// somewhere.
+			// A race between two TLSRoutes on this hostname is not moot
+			// the same way: the listener does exist, exactly one of
+			// them is served through it, and the other has to hear
+			// that from somewhere. Which of them lost is recounted
+			// below, because the record left here was decided against
+			// a field of claimants that included the HTTPRoutes just
+			// withdrawn.
+			var tls []routeRef
 			for _, ref := range refs {
 				if ref.kind != routeKindHTTP {
+					tls = append(tls, ref)
 					continue
 				}
 				withdrawn[ref] = append(withdrawn[ref], withdrawnHostname{hostname: h, answeredBy: answeredBy})
-				if rest := slices.DeleteFunc(losers[ref], func(lost string) bool { return lost == h }); len(rest) > 0 {
-					losers[ref] = rest
-				} else {
-					delete(losers, ref)
+				dropLostHostname(losers, ref, h)
+			}
+			// The race was decided with no notion of kind, so its
+			// winner may be one of the HTTPRoutes just withdrawn, and
+			// a TLSRoute would then hold a conflict naming a route
+			// this same pass declined to serve. Recount over the
+			// TLSRoutes, the only routes a passthrough listener can
+			// serve, and clear what the mixed count produced.
+			if len(tls) > 0 {
+				rankRouteRefs(tls)
+				tlsWinner := tls[0]
+				for _, ref := range tls {
+					if ref.namespace == tlsWinner.namespace {
+						dropLostHostname(losers, ref, h)
+					}
 				}
 			}
 			continue
