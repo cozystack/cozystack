@@ -245,10 +245,12 @@ const maxGatewayListeners = 64
 // v1.19.6 splits the Envoy listeners per port and this stops being
 // true, though not unconditionally: NeedsPerPortListeners requires
 // more than one HTTPS port, or more than one routed passthrough port,
-// or a cross-port SNI overlap, and every one of the three counts only
-// listeners a TLSRoute attaches to. A native-port entry on its own
-// satisfies none of them, and the entry is all this field creates, so
-// the split arrives with the route rather than with the bump.
+// or a cross-port SNI overlap. The passthrough side of every term is
+// counted from attached routes, so a listener with no TLSRoute behind
+// it contributes no port and no filter chain to any of the three, and
+// the listener is all this field creates: the split arrives with the
+// route rather than with the bump. The HTTPS side is not route-gated,
+// but this field adds nothing there.
 // Lifting the refusal means deleting two copies of it, this one and
 // the matching CEL rule in the CRD, which is a schema change even
 // though no field or type moves. The pin is the thing to watch:
