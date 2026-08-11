@@ -113,15 +113,38 @@ spec:
                 *) BASE="https://\${S3_ENDPOINT}" ;;
               esac
 
+              # Split the endpoint into scheme/host/port. The Strimzi image ships
+              # curl 7.76.1, whose --aws-sigv4 has a bug fixed only in 7.87.0: it
+              # omits a non-default port from the SigV4 canonical Host even though
+              # it sends the port in the Host header. seaweedfs recomputes the
+              # signature from the received "host:port" and so rejects the PUT
+              # with 403 whenever the endpoint carries a non-default port (the
+              # e2e harness points S3_ENDPOINT at the :8333 in-cluster Service).
+              # Strip the port from the signed/sent URL and redirect the
+              # connection to the real port with --connect-to, so the signed,
+              # sent and server-side Host all agree on the bare host. This is
+              # also correct on curl >= 7.87, which drops the default port too.
+              SCHEME="\${BASE%%://*}"
+              HOSTPORT="\${BASE#*://}"; HOSTPORT="\${HOSTPORT%%/*}"
+              HOST="\${HOSTPORT%%:*}"
+              PORT="\${HOSTPORT##*:}"
+              if [ "\${PORT}" = "\${HOSTPORT}" ]; then PORT=""; fi
+              if [ "\${SCHEME}" = http ]; then DEFPORT=80; else DEFPORT=443; fi
+              CONNECT_TO=""
+              if [ -n "\${PORT}" ] && [ "\${PORT}" != "\${DEFPORT}" ]; then
+                CONNECT_TO="--connect-to \${HOST}:\${DEFPORT}:\${HOST}:\${PORT}"
+              fi
+
               if [ "\${MODE}" = backup ]; then SRC="\${SRC_BACKUP}"; else SRC="\${SRC_RESTORE}"; fi
               KEY="\${SRC}/kafka-topics.tar"
-              OBJ_URL="\${BASE}/\${S3_BUCKET}/\${KEY}"
+              OBJ_URL="\${SCHEME}://\${HOST}/\${S3_BUCKET}/\${KEY}"
 
               # curl --aws-sigv4 signs the request (SigV4) so no separate S3
               # client image is needed. -k accepts seaweedfs's internal
               # self-signed cert; a production strategy would mount the tenant
-              # CA and drop -k.
-              s3() { curl -fsS -k --aws-sigv4 "aws:amz:\${S3_REGION}:s3" --user "\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}" "\$@"; }
+              # CA and drop -k. \${CONNECT_TO} is deliberately unquoted so an
+              # empty value expands to no argument.
+              s3() { curl -fsS -k \${CONNECT_TO} --aws-sigv4 "aws:amz:\${S3_REGION}:s3" --user "\${AWS_ACCESS_KEY_ID}:\${AWS_SECRET_ACCESS_KEY}" "\$@"; }
 
               WORK=/tmp/kafka-dump
               rm -rf "\${WORK}"; mkdir -p "\${WORK}"
