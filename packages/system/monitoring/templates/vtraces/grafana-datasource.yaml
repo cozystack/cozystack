@@ -7,13 +7,17 @@ metadata:
 spec:
   datasource:
     access: proxy
-    # VictoriaTraces exposes a Jaeger-compatible query API, and `jaeger` is a
-    # built-in Grafana datasource (no plugin install needed, unlike the logs
-    # datasource). The exact select service name, port and query path below are
-    # confirm-before-implementation against the pinned VictoriaTraces version
-    # (see design-proposals/distributed-tracing in cozystack/community#38); the
-    # upstream query API is also converging on a Tempo-compatible surface, so
-    # `type` may switch to `tempo` once confirmed on a live cluster.
+    # VictoriaTraces serves a Jaeger Query Service API on its select component;
+    # `jaeger` is a built-in Grafana datasource (no plugin install needed,
+    # unlike the logs datasource). Ports/paths are per upstream docs
+    # (https://docs.victoriametrics.com/victoriatraces/querying/grafana/):
+    #   cluster -> vtselect  :10471/select/jaeger
+    #   single  -> vtsingle  :10428/select/jaeger
+    # Service names follow the operator's vt-prefix convention (as vlselect-*
+    # for VLCluster). VictoriaTraces also serves a Tempo Query API
+    # (/select/tempo, Grafana `tempo` datasource, v0.9.4+) with richer TraceQL
+    # UX, but that surface is upstream-experimental, so the stable Jaeger API is
+    # the default here.
     type: jaeger
     name: vtraces-{{ .name }}
     {{- if eq (.mode | default "cluster") "single" }}

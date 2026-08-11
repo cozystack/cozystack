@@ -83,7 +83,7 @@ tests:
           path: spec.storage.retentionMaxDiskSpaceUsageBytes
           value: "8GB"
 
-  - it: renders a Jaeger-typed Grafana datasource per tracingStorages entry
+  - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
     templates:
       - templates/vtraces/grafana-datasource.yaml
     asserts:
@@ -94,6 +94,23 @@ tests:
       - equal:
           path: spec.datasource.type
           value: jaeger
+      - equal:
+          path: spec.datasource.url
+          value: http://vtselect-generic.tenant-root.svc:10471/select/jaeger
+
+  - it: points the datasource at vtsingle:10428 for single mode
+    templates:
+      - templates/vtraces/grafana-datasource.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - equal:
+          path: spec.datasource.url
+          value: http://vtsingle-generic.tenant-root.svc:10428/select/jaeger
 
   - it: fails the render when tracingStorages is empty
     templates:
