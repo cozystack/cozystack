@@ -323,6 +323,59 @@
         }
       }
     },
+    "tracingStorages": {
+      "description": "Configuration of traces storage instances.",
+      "type": "array",
+      "default": [
+        {
+          "mode": "cluster",
+          "name": "generic",
+          "retentionPeriod": "14d",
+          "storage": "10Gi",
+          "storageClassName": "replicated"
+        }
+      ],
+      "items": {
+        "type": "object",
+        "required": [
+          "mode",
+          "name",
+          "retentionPeriod",
+          "storage",
+          "storageClassName"
+        ],
+        "properties": {
+          "mode": {
+            "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters.",
+            "type": "string",
+            "default": "cluster"
+          },
+          "name": {
+            "description": "Name of the storage instance.",
+            "type": "string"
+          },
+          "retentionDiskUsageBytes": {
+            "description": "Optional disk-usage cap as a byte quantity (e.g. \"8GB\"); bounds disk in addition to the age-based retentionPeriod.",
+            "type": "string"
+          },
+          "retentionPeriod": {
+            "description": "Retention period for traces.",
+            "type": "string",
+            "default": "14d"
+          },
+          "storage": {
+            "description": "Persistent volume size.",
+            "type": "string",
+            "default": "10Gi"
+          },
+          "storageClassName": {
+            "description": "StorageClass used to store the data.",
+            "type": "string",
+            "default": "replicated"
+          }
+        }
+      }
+    },
     "alerta": {
       "description": "Configuration for the Alerta service.",
       "type": "object",

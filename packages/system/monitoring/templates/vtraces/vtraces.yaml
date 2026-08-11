@@ -1,0 +1,84 @@
+{{- /*
+  Reject an empty tracingStorages outright, mirroring the logsStorages guard
+  (issue #3181). With no entry no VTCluster/VTSingle is rendered, the
+  monitoring-system HelmRelease readiness gate (which keys on the traces CR) has
+  nothing to match, and OTLP producers ship spans to a backend that never
+  exists — silently dropping traces. Fail the render instead so the
+  misconfiguration is loud, not silent.
+*/ -}}
+{{- if not .Values.tracingStorages }}
+{{- fail "monitoring: tracingStorages must define at least one entry; an empty list renders no VictoriaTraces backend and OTLP producers silently drop spans" }}
+{{- end }}
+{{- range .Values.tracingStorages }}
+---
+{{- if eq (.mode | default "cluster") "single" }}
+apiVersion: operator.victoriametrics.com/v1
+kind: VTSingle
+metadata:
+  name: {{ .name }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  retentionPeriod: {{ .retentionPeriod | quote }}
+  {{- with .retentionDiskUsageBytes }}
+  retentionMaxDiskSpaceUsageBytes: {{ . | quote }}
+  {{- end }}
+  # Stamped on the storage PVC so the monitoring post-delete cleanup hook can
+  # select it by this label (same release-scoped cleanup as logs/metrics).
+  storageMetadata:
+    labels:
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  storage:
+    {{- with .storageClassName }}
+    storageClassName: {{ . }}
+    {{- end }}
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: {{ .storage }}
+{{- else }}
+apiVersion: operator.victoriametrics.com/v1
+kind: VTCluster
+metadata:
+  name: {{ .name }}
+spec:
+  managedMetadata:
+    labels:
+      apps.cozystack.io/application.group: apps.cozystack.io
+      apps.cozystack.io/application.kind: Monitoring
+      apps.cozystack.io/application.name: {{ $.Release.Name }}
+  insert:
+    replicaCount: 2
+    resources: {}
+  select:
+    replicaCount: 2
+    resources: {}
+  storage:
+    retentionPeriod: {{ .retentionPeriod | quote }}
+    {{- with .retentionDiskUsageBytes }}
+    retentionMaxDiskSpaceUsageBytes: {{ . | quote }}
+    {{- end }}
+    replicaCount: 2
+    resources: {}
+    storage:
+      volumeClaimTemplate:
+        metadata:
+          # Stamped on the claim template so vm-operator copies it onto the
+          # storage PVCs; managedMetadata is not applied to PVCs. The monitoring
+          # post-delete cleanup hook selects PVCs by this label to stay
+          # release-scoped (mirrors vlogs/vmcluster).
+          labels:
+            apps.cozystack.io/application.name: {{ $.Release.Name }}
+        spec:
+          {{- with .storageClassName }}
+          storageClassName: {{ . }}
+          {{- end }}
+          resources:
+            requests:
+              storage: {{ .storage }}
+{{- end }}
+{{- end }}

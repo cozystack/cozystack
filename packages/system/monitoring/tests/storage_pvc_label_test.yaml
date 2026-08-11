@@ -47,3 +47,14 @@ tests:
       - equal:
           path: spec.vlstorage.storage.volumeClaimTemplate.metadata.labels["apps.cozystack.io/application.name"]
           value: monitoring-system
+
+  - it: stamps the cleanup label on the VTCluster storage claim template
+    templates:
+      - templates/vtraces/vtraces.yaml
+    documentSelector:
+      path: metadata.name
+      value: generic
+    asserts:
+      - equal:
+          path: spec.storage.storage.volumeClaimTemplate.metadata.labels["apps.cozystack.io/application.name"]
+          value: monitoring-system

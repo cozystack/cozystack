@@ -48,9 +48,24 @@ spec:
   # nothing to match. That configuration is rejected at render time by the
   # system/monitoring chart (templates/vlogs/vlogs.yaml fails on an empty
   # logsStorages), so the "Ready with no log store" hole cannot be reached.
+  #
+  # The traces backend (VTCluster / VTSingle) uses the same operator and the
+  # same status.updateStatus contract as VLCluster, so it is gated identically.
+  # tracingStorages is likewise render-rejected when empty (templates/vtraces/
+  # vtraces.yaml), so the "Ready with no trace store" hole cannot be reached.
   healthCheckExprs:
     - apiVersion: operator.victoriametrics.com/v1
       kind: VLCluster
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1
+      kind: VTCluster
+      inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
+      failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
+      current:    has(status.updateStatus) && status.updateStatus == 'operational'
+    - apiVersion: operator.victoriametrics.com/v1
+      kind: VTSingle
       inProgress: has(status.updateStatus) && status.updateStatus == 'expanding'
       failed:     has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'
       current:    has(status.updateStatus) && status.updateStatus == 'operational'
