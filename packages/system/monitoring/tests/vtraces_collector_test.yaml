@@ -1,0 +1,219 @@
+suite: OTLP traces collector
+templates:
+  - templates/vtraces/collector.yaml
+
+release:
+  name: monitoring
+  namespace: tenant-root
+
+# The per-tenant OpenTelemetry Collector is the app-facing OTLP gateway and
+# trust boundary: it receives OTLP, head-samples, optionally redacts, and
+# exports over OTLP/HTTP to the tracingStorages backend. It renders in the
+# tenant namespace only when tracingCollector.enabled is true.
+tests:
+  - it: renders exactly the ConfigMap, Deployment and Service when enabled
+    asserts:
+      - hasDocuments:
+          count: 3
+
+  - it: renders the collector ConfigMap
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: otel-traces
+
+  - it: renders the collector Deployment
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - isKind:
+          of: Deployment
+      - equal:
+          path: metadata.name
+          value: otel-traces
+
+  - it: renders the collector Service
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - isKind:
+          of: Service
+      - equal:
+          path: metadata.name
+          value: otel-traces
+
+  - it: renders nothing when the collector is disabled
+    set:
+      tracingCollector:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: fails the render when an enabled collector fronts more than one backend
+    set:
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: audit
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: "monitoring: tracingCollector fronts a single traces backend, but tracingStorages has more than one entry — the collector would export to the first and leave the rest empty. Reduce tracingStorages to one entry or set tracingCollector.enabled=false (apps then send OTLP straight to each backend)."
+
+  - it: allows more than one backend when the collector is disabled
+    set:
+      tracingCollector:
+        enabled: false
+      tracingStorages:
+        - name: generic
+          mode: cluster
+          retentionPeriod: "14d"
+          storage: 10Gi
+        - name: audit
+          mode: single
+          retentionPeriod: "7d"
+          storage: 10Gi
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: honours the configured replica count
+    set:
+      tracingCollector:
+        enabled: true
+        replicas: 2
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 2
+
+  - it: exposes the OTLP gRPC and HTTP ports on the app-facing Service
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - contains:
+          path: spec.ports
+          content:
+            name: otlp-grpc
+            port: 4317
+            targetPort: 4317
+            protocol: TCP
+      - contains:
+          path: spec.ports
+          content:
+            name: otlp-http
+            port: 4318
+            targetPort: 4318
+            protocol: TCP
+
+  - it: exports to the cluster vtinsert OTLP/HTTP endpoint by default
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "traces_endpoint: http://vtinsert-generic\\.tenant-root\\.svc:10481/insert/opentelemetry/v1/traces"
+
+  - it: exports to the VTSingle OTLP/HTTP endpoint in single mode
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "traces_endpoint: http://vtsingle-generic\\.tenant-root\\.svc:10428/insert/opentelemetry/v1/traces"
+
+  - it: applies the configured head-sampling percentage
+    set:
+      tracingCollector:
+        enabled: true
+        samplingPercentage: 25
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "sampling_percentage: 25"
+
+  - it: adds the redaction processor to the pipeline only when redactAttributes is set
+    set:
+      tracingCollector:
+        enabled: true
+        redactAttributes:
+          - db.statement
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "attributes/redact:"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, probabilistic_sampler, attributes/redact, batch\\]"
+
+  - it: omits the redaction processor by default
+    documentSelector:
+      path: kind
+      value: ConfigMap
+    asserts:
+      - notMatchRegex:
+          path: data["config.yaml"]
+          pattern: "attributes/redact"
+      - matchRegex:
+          path: data["config.yaml"]
+          pattern: "processors: \\[memory_limiter, probabilistic_sampler, batch\\]"
+
+  - it: ships a PSS-restricted-compliant pod and container security context
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - equal:
+          path: spec.template.spec.securityContext.runAsNonRoot
+          value: true
+      - equal:
+          path: spec.template.spec.securityContext.seccompProfile.type
+          value: RuntimeDefault
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem
+          value: true
+      - contains:
+          path: spec.template.spec.containers[0].securityContext.capabilities.drop
+          content: ALL
+
+  - it: pins the collector image through the cozy-lib.image helper
+    documentSelector:
+      path: kind
+      value: Deployment
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].image
+          pattern: "opentelemetry-collector-contrib:.*@sha256:"

@@ -372,6 +372,120 @@
         }
       }
     },
+    "tracingCollector": {
+      "description": "OpenTelemetry Collector for trace ingestion.",
+      "type": "object",
+      "default": {},
+      "required": [
+        "enabled",
+        "replicas",
+        "samplingPercentage"
+      ],
+      "properties": {
+        "enabled": {
+          "description": "Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction).",
+          "type": "boolean",
+          "default": true
+        },
+        "redactAttributes": {
+          "description": "Span attribute keys to drop before export (the PII/secret control point, e.g. db.statement).",
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          }
+        },
+        "replicas": {
+          "description": "Number of collector replicas. Head sampling is trace-id-deterministic, so replicas\u003e1 are safe and remove the single-ingest-path SPOF.",
+          "type": "integer",
+          "default": 1
+        },
+        "resources": {
+          "description": "Resource configuration for the collector.",
+          "type": "object",
+          "default": {},
+          "properties": {
+            "limits": {
+              "description": "Resource limits.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU limit.",
+                  "default": 1,
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory limit.",
+                  "default": "1Gi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            },
+            "requests": {
+              "description": "Resource requests.",
+              "type": "object",
+              "default": {},
+              "properties": {
+                "cpu": {
+                  "description": "CPU request.",
+                  "default": "100m",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                },
+                "memory": {
+                  "description": "Memory request.",
+                  "default": "256Mi",
+                  "pattern": "^(\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\\+|-)?(([0-9]+(\\.[0-9]*)?)|(\\.[0-9]+))))?$",
+                  "anyOf": [
+                    {
+                      "type": "integer"
+                    },
+                    {
+                      "type": "string"
+                    }
+                  ],
+                  "x-kubernetes-int-or-string": true
+                }
+              }
+            }
+          }
+        },
+        "samplingPercentage": {
+          "description": "Head-sampling percentage applied at the collector before export.",
+          "type": "integer",
+          "default": 10,
+          "maximum": 100,
+          "minimum": 0
+        }
+      }
+    },
     "alerta": {
       "description": "Configuration for the Alerta service.",
       "type": "object",

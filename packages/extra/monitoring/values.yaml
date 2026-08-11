@@ -112,6 +112,33 @@ logsStorages:
 tracingStorages: []
 
 ##
+## @section Traces collector configuration
+##
+
+## @typedef {struct} TracingCollector - Per-tenant OpenTelemetry Collector that fronts the traces backend. It is the app-facing OTLP ingest gateway and the point where sampling/redaction are enforced; tenant isolation itself comes from the tenant NetworkPolicies, not from this workload.
+## @field {bool} enabled=true - Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction).
+## @field {int} replicas=1 - Number of collector replicas. Head sampling is trace-id-deterministic, so replicas>1 are safe and remove the single-ingest-path SPOF.
+## @field {int} samplingPercentage=10 - Head-sampling percentage applied at the collector before export.
+## @minimum 0
+## @maximum 100
+## @field {[]string} [redactAttributes] - Span attribute keys to drop before export (the PII/secret control point, e.g. db.statement).
+## @field {Resources} [resources] - Resource configuration for the collector.
+
+## @param {TracingCollector} tracingCollector - OpenTelemetry Collector for trace ingestion.
+tracingCollector:
+  enabled: true
+  replicas: 1
+  samplingPercentage: 10
+  redactAttributes: []
+  resources:
+    limits:
+      cpu: "1"
+      memory: 1Gi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+##
 ## @section Alerta configuration
 ##
 
