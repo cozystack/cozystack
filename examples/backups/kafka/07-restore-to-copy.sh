@@ -30,8 +30,7 @@ spec:
   topics: []
 EOF
 
-log_substep "Waiting for restore-target Kafka HelmRelease..."
-kubectl -n "$NAMESPACE" wait hr "kafka-${KAFKA_RESTORE_NAME}" --for=condition=ready --timeout=300s
+wait_hr_ready "kafka-${KAFKA_RESTORE_NAME}"
 log_substep "Waiting for the restore-target Strimzi Kafka cluster to be Ready..."
 kubectl -n "$NAMESPACE" wait kafka.kafka.strimzi.io "kafka-${KAFKA_RESTORE_NAME}" \
     --for=condition=Ready --timeout=600s
@@ -56,7 +55,7 @@ spec:
 EOF
 
 log_substep "Waiting for to-copy RestoreJob to Succeed..."
-wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600
+wait_for_field restorejob "$RESTOREJOB_TOCOPY_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 
 log_substep "Verifying topic records exist on the copy..."
 count=$(topic_message_count "$KAFKA_RESTORE_NAME")

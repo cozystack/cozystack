@@ -31,7 +31,7 @@ log_substep "Waiting for BackupJob to Succeed (this drains the topic to S3)..."
 # `kubectl wait --for=jsonpath='{.status.phase}'=Running` would time out even
 # though the BackupJob actually finished. wait_for_field already polls until
 # the terminal phase, which covers both the slow and the fast path.
-wait_for_field backupjob "$BACKUPJOB_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600
+wait_for_field backupjob "$BACKUPJOB_NAME" '{.status.phase}' Succeeded "$NAMESPACE" 600 Failed
 
 backup_ref=$(kubectl -n "$NAMESPACE" get backupjob "$BACKUPJOB_NAME" -o jsonpath='{.status.backupRef.name}')
 [[ -n "$backup_ref" ]] || { log_error "BackupJob succeeded but BackupRef is empty"; exit 1; }
