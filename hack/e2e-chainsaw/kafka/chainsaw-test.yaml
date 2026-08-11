@@ -160,11 +160,19 @@ spec:
   - describe:
       apiVersion: backups.cozystack.io/v1alpha1
       kind: RestoreJob
-  # The drain/replay runs in backupstrategy-controller-created Jobs; a failed
-  # upload or connect leaves its error in those Pods' logs. Capture the source
-  # instance's Pods too. The example uses its default app names (kafka-test
-  # source, kafka-restore to-copy target); the Cozystack chart prefixes the
-  # Strimzi cluster with "kafka-", so the source cluster is kafka-kafka-test.
+  # The drain/replay runs in backupstrategy-controller-created Job Pods; a
+  # failed S3 upload/connect or a SigV4 rejection prints there, not on the
+  # broker. Those Pods carry job.strategy.backups.cozystack.io/mode=backup|
+  # restore (never app.kubernetes.io/instance) and are not TTL-reaped, so they
+  # are still present at catch time - select on that label to capture the
+  # actual backup/restore error.
+  - podLogs:
+      selector: job.strategy.backups.cozystack.io/mode
+      tail: 200
+  # Broker Pods too, for the drain/replay's server side. The example uses its
+  # default app names (kafka-test source, kafka-restore to-copy target); the
+  # Cozystack chart prefixes the Strimzi cluster with "kafka-", so the source
+  # cluster is kafka-kafka-test.
   - podLogs:
       selector: app.kubernetes.io/instance=kafka-kafka-test
       tail: 200

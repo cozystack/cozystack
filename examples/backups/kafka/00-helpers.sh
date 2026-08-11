@@ -52,6 +52,12 @@ print_header() {
 }
 
 # Wait until a JSONPath value on a resource matches the desired string.
+# Optional 7th arg is a TERMINAL failure value: once the field reaches it the
+# wait returns 1 immediately instead of polling to the timeout. BackupJob and
+# RestoreJob settle on a terminal phase=Failed that never becomes Succeeded (the
+# strategy Job exhausts its backoffLimit), so failing fast on it keeps
+# wall-clock - and the strategy Pod's log - in reach instead of burning the full
+# timeout and then mislabelling a deterministic failure as "Timeout".
 wait_for_field() {
     local resource_type="$1"
     local resource_name="$2"
@@ -59,6 +65,7 @@ wait_for_field() {
     local desired="$4"
     local namespace="${5:-}"
     local timeout="${6:-300}"
+    local fail_value="${7:-}"
 
     log_substep "Waiting for $resource_type/$resource_name $jsonpath to become '$desired'..."
     local elapsed=0
@@ -72,8 +79,51 @@ wait_for_field() {
             log_success "$resource_type/$resource_name reached '$desired'"
             return 0
         fi
+        if [[ -n "$fail_value" && "$current" == "$fail_value" ]]; then
+            log_error "$resource_type/$resource_name reached terminal '$current' (expected '$desired')"
+            return 1
+        fi
         if [[ $elapsed -ge $timeout ]]; then
             log_error "Timeout waiting for $resource_type/$resource_name (current: '$current', expected: '$desired')"
+            return 1
+        fi
+        sleep 5
+        elapsed=$((elapsed + 5))
+    done
+}
+
+# Wait for a HelmRelease to become Ready, with an existence backstop (the apps
+# controller creates the HR asynchronously, so a bare `kubectl wait` right after
+# `kubectl apply` races it) and a fail-fast on Stalled=True - a stalled HR has
+# exhausted its remediation retries and will never turn Ready, so polling to the
+# timeout only hides the real error.
+wait_hr_ready() {
+    local name="$1"
+    local timeout="${2:-300}"
+    local elapsed=0
+
+    log_substep "Waiting for HelmRelease/$name to become Ready..."
+    while true; do
+        if kubectl -n "$NAMESPACE" get hr "$name" >/dev/null 2>&1; then
+            local ready stalled
+            ready=$(kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || true)
+            if [[ "$ready" == "True" ]]; then
+                log_success "HelmRelease/$name is Ready"
+                return 0
+            fi
+            stalled=$(kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{.status.conditions[?(@.type=="Stalled")].status}' 2>/dev/null || true)
+            if [[ "$stalled" == "True" ]]; then
+                log_error "HelmRelease/$name is Stalled (terminal): $(kubectl -n "$NAMESPACE" get hr "$name" \
+                    -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' 2>/dev/null)"
+                return 1
+            fi
+        fi
+        if [[ $elapsed -ge $timeout ]]; then
+            log_error "Timeout waiting for HelmRelease/$name to become Ready:"
+            kubectl -n "$NAMESPACE" get hr "$name" \
+                -o jsonpath='{.status.conditions[?(@.type=="Ready")].message}' >&2 2>/dev/null || true
             return 1
         fi
         sleep 5
