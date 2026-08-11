@@ -1,0 +1,27 @@
+{{- range .Values.tracingStorages }}
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: vtraces-{{ .name }}
+spec:
+  datasource:
+    access: proxy
+    # VictoriaTraces exposes a Jaeger-compatible query API, and `jaeger` is a
+    # built-in Grafana datasource (no plugin install needed, unlike the logs
+    # datasource). The exact select service name, port and query path below are
+    # confirm-before-implementation against the pinned VictoriaTraces version
+    # (see design-proposals/distributed-tracing in cozystack/community#38); the
+    # upstream query API is also converging on a Tempo-compatible surface, so
+    # `type` may switch to `tempo` once confirmed on a live cluster.
+    type: jaeger
+    name: vtraces-{{ .name }}
+    {{- if eq (.mode | default "cluster") "single" }}
+    url: http://vtsingle-{{ .name }}.{{ $.Release.Namespace }}.svc:10428/select/jaeger
+    {{- else }}
+    url: http://vtselect-{{ .name }}.{{ $.Release.Namespace }}.svc:10471/select/jaeger
+    {{- end }}
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+{{- end }}

@@ -93,6 +93,26 @@ logsStorages:
   storageClassName: replicated
 
 ##
+## @section Traces storage configuration
+##
+
+## @typedef {struct} TracingStorage - Configuration of traces storage instance.
+## @field {string} name - Name of the storage instance.
+## @field {string} mode="cluster" - Deployment mode: "cluster" renders a VTCluster; "single" renders a single-binary VTSingle for edge/dev/small clusters.
+## @field {string} retentionPeriod="14d" - Retention period for traces.
+## @field {string} storage="10Gi" - Persistent volume size.
+## @field {string} storageClassName="replicated" - StorageClass used to store the data.
+## @field {string} [retentionDiskUsageBytes] - Optional disk-usage cap as a byte quantity (e.g. "8GB"); bounds disk in addition to the age-based retentionPeriod.
+
+## @param {[]TracingStorage} tracingStorages - Configuration of traces storage instances.
+tracingStorages:
+- name: generic
+  mode: cluster
+  retentionPeriod: "14d"
+  storage: 10Gi
+  storageClassName: replicated
+
+##
 ## @section Alerta configuration
 ##
 

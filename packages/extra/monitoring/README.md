@@ -53,6 +53,19 @@
 | `logsStorages[i].storageClassName` | StorageClass used to store the data.     | `string`   | `replicated` |
 
 
+### Traces storage configuration
+
+| Name                                         | Description                                                                                                            | Type       | Value        |
+| -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------- | ------------ |
+| `tracingStorages`                            | Configuration of traces storage instances.                                                                             | `[]object` | `[...]`      |
+| `tracingStorages[i].name`                    | Name of the storage instance.                                                                                          | `string`   | `""`         |
+| `tracingStorages[i].mode`                    | Deployment mode: "cluster" renders a VTCluster; "single" renders a single-binary VTSingle for edge/dev/small clusters. | `string`   | `cluster`    |
+| `tracingStorages[i].retentionPeriod`         | Retention period for traces.                                                                                           | `string`   | `14d`        |
+| `tracingStorages[i].storage`                 | Persistent volume size.                                                                                                | `string`   | `10Gi`       |
+| `tracingStorages[i].storageClassName`        | StorageClass used to store the data.                                                                                   | `string`   | `replicated` |
+| `tracingStorages[i].retentionDiskUsageBytes` | Optional disk-usage cap as a byte quantity (e.g. "8GB"); bounds disk in addition to the age-based retentionPeriod.     | `string`   | `""`         |
+
+
 ### Alerta configuration
 
 | Name                                      | Description                                                           | Type       | Value   |
