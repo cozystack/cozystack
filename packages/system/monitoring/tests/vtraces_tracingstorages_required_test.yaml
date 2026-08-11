@@ -68,7 +68,7 @@ tests:
           path: spec.storage.retentionPeriod
           value: "14d"
 
-  - it: renders an optional disk-usage cap only when set
+  - it: renders an optional disk-usage cap only when set (cluster mode)
     templates:
       - templates/vtraces/vtraces.yaml
     set:
@@ -82,6 +82,21 @@ tests:
       - equal:
           path: spec.storage.retentionMaxDiskSpaceUsageBytes
           value: "8GB"
+
+  - it: renders the disk-usage cap at the top level for single mode
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+          retentionDiskUsageBytes: "4GB"
+    asserts:
+      - equal:
+          path: spec.retentionMaxDiskSpaceUsageBytes
+          value: "4GB"
 
   - it: renders a Jaeger-typed Grafana datasource at vtselect:10471 for cluster mode
     templates:
