@@ -42,3 +42,44 @@ tests:
       - equal:
           path: spec.healthCheckExprs[0].failed
           value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  # The traces backend (VTCluster/VTSingle from tracingStorages) is gated the
+  # same way and by the same operator status contract, closing the same
+  # "Ready with no store" hole (#3181) for traces. Pin both entries so a
+  # dropped/reordered block or a typo'd CEL expression fails a test rather than
+  # silently regressing the gate.
+  - it: gates readiness on the VTCluster status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[1].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[1].kind
+          value: VTCluster
+      - equal:
+          path: spec.healthCheckExprs[1].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[1].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[1].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
+
+  - it: gates readiness on the VTSingle status.updateStatus
+    asserts:
+      - equal:
+          path: spec.healthCheckExprs[2].apiVersion
+          value: operator.victoriametrics.com/v1
+      - equal:
+          path: spec.healthCheckExprs[2].kind
+          value: VTSingle
+      - equal:
+          path: spec.healthCheckExprs[2].current
+          value: "has(status.updateStatus) && status.updateStatus == 'operational'"
+      - equal:
+          path: spec.healthCheckExprs[2].inProgress
+          value: "has(status.updateStatus) && status.updateStatus == 'expanding'"
+      - equal:
+          path: spec.healthCheckExprs[2].failed
+          value: "has(status.updateStatus) && status.updateStatus != 'operational' && status.updateStatus != 'expanding'"
