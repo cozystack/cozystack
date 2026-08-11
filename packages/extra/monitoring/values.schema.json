@@ -348,7 +348,11 @@
           "mode": {
             "description": "Deployment mode: \"cluster\" renders a VTCluster; \"single\" renders a single-binary VTSingle for edge/dev/small clusters.",
             "type": "string",
-            "default": "cluster"
+            "default": "cluster",
+            "enum": [
+              "cluster",
+              "single"
+            ]
           },
           "name": {
             "description": "Name of the storage instance.",
