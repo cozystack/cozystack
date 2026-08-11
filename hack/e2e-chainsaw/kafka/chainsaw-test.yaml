@@ -197,11 +197,15 @@ spec:
           set -eu
           cd ../../..
           [ -x examples/backups/kafka/run-all.sh ] || { echo "kafka backup example scripts not found at examples/backups/kafka" >&2; exit 1; }
-          # Reuse the exact Kafka image the operator provisions brokers with, so
-          # the backup Pod hits a warm image cache and never skews version.
+          # Reuse a Kafka image the operator already caches on the nodes, so the
+          # backup Pod hits a warm image cache. STRIMZI_KAFKA_IMAGES is a
+          # newline-separated "version=image" map (one entry per supported Kafka
+          # version), so split on whitespace, drop the "version=" prefix and take
+          # the last (newest) image rather than concatenating every line into one
+          # malformed reference.
           KAFKA_IMAGE=$(kubectl -n cozy-kafka-operator get deploy strimzi-cluster-operator \
             -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="STRIMZI_KAFKA_IMAGES")].value}' \
-            | sed 's/.*=//' | tr -d '[:space:]')
+            | tr '[:space:]' '\n' | grep -E '=.*/kafka:' | sed 's/.*=//' | tail -n1)
           [ -n "$KAFKA_IMAGE" ] || { echo "could not resolve Kafka image from strimzi-cluster-operator" >&2; exit 1; }
           NAMESPACE="$NAMESPACE" KAFKA_IMAGE="$KAFKA_IMAGE" \
             S3_ENDPOINT="https://seaweedfs-s3.tenant-root:8333" \
