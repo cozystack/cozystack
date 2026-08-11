@@ -58,3 +58,24 @@ tests:
       - equal:
           path: spec.storage.storage.volumeClaimTemplate.metadata.labels["apps.cozystack.io/application.name"]
           value: monitoring-system
+
+  # Single mode stamps the label through a different field (spec.storageMetadata)
+  # than cluster mode, so it needs its own assertion — the post-delete cleanup
+  # hook selects PVCs by this label, and a dropped storageMetadata block would
+  # orphan the VTSingle PVC on tenant deletion.
+  - it: stamps the cleanup label on the VTSingle storage metadata (single mode)
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: single
+          retentionPeriod: "14d"
+          storage: 10Gi
+    documentSelector:
+      path: metadata.name
+      value: generic
+    asserts:
+      - equal:
+          path: spec.storageMetadata.labels["apps.cozystack.io/application.name"]
+          value: monitoring-system
