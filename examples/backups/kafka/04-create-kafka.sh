@@ -31,8 +31,7 @@ spec:
   topics: []
 EOF
 
-log_substep "Waiting for Kafka HelmRelease..."
-kubectl -n "$NAMESPACE" wait hr "kafka-${KAFKA_NAME}" --for=condition=ready --timeout=300s
+wait_hr_ready "kafka-${KAFKA_NAME}"
 
 log_substep "Waiting for the Strimzi Kafka cluster to be Ready (brokers + ZooKeeper up)..."
 kubectl -n "$NAMESPACE" wait kafka.kafka.strimzi.io "kafka-${KAFKA_NAME}" \
