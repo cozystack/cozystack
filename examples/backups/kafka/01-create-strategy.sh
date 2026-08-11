@@ -156,7 +156,15 @@ spec:
                 if [ -n "\${TOPICS}" ]; then
                   TLIST=\$(printf '%s' "\${TOPICS}" | tr ', ' '  ')
                 else
-                  TLIST=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --list | grep -v '^_' || true)
+                  # Fail closed: run --list as its own command so a broker
+                  # error (unreachable / auth) aborts the Pod under set -e
+                  # instead of the pipe masking the exit status to grep's and
+                  # || true swallowing it. Only then filter internal topics, so
+                  # an empty TLIST means genuinely no non-internal topics -
+                  # never a silently swallowed failure that would PUT an empty
+                  # tarball and report success.
+                  raw=\$("\${BIN}"/kafka-topics.sh --bootstrap-server "\${BOOT}" --list)
+                  TLIST=\$(printf '%s\n' "\${raw}" | grep -v '^_' || true)
                 fi
                 echo "backing up topics [\${TLIST}] from \${BOOT}"
                 MANIFEST="\${WORK}/manifest.txt"
