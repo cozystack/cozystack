@@ -10,8 +10,12 @@
 {{- fail "monitoring: tracingStorages must define at least one entry; an empty list renders no VictoriaTraces backend and OTLP producers silently drop spans" }}
 {{- end }}
 {{- range .Values.tracingStorages }}
+{{- $mode := .mode | default "cluster" }}
+{{- if and (ne $mode "cluster") (ne $mode "single") }}
+{{- fail (printf "monitoring: tracingStorages[%s].mode must be either \"cluster\" or \"single\"" .name) }}
+{{- end }}
 ---
-{{- if eq (.mode | default "cluster") "single" }}
+{{- if eq $mode "single" }}
 apiVersion: operator.victoriametrics.com/v1
 kind: VTSingle
 metadata:

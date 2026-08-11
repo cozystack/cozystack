@@ -96,9 +96,13 @@ logsStorages:
 ## @section Traces storage configuration
 ##
 
+## @enum {string} TracingMode - Deployment mode for a traces storage instance.
+## @value cluster
+## @value single
+
 ## @typedef {struct} TracingStorage - Configuration of traces storage instance.
 ## @field {string} name - Name of the storage instance.
-## @field {string} mode="cluster" - Deployment mode: "cluster" renders a VTCluster; "single" renders a single-binary VTSingle for edge/dev/small clusters.
+## @field {TracingMode} mode="cluster" - Deployment mode: "cluster" renders a VTCluster; "single" renders a single-binary VTSingle for edge/dev/small clusters.
 ## @field {string} retentionPeriod="14d" - Retention period for traces.
 ## @field {string} storage="10Gi" - Persistent volume size.
 ## @field {string} storageClassName="replicated" - StorageClass used to store the data.

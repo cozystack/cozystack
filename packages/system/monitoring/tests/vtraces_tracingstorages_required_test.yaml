@@ -120,3 +120,16 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "monitoring: tracingStorages must define at least one entry; an empty list renders no VictoriaTraces backend and OTLP producers silently drop spans"
+
+  - it: fails the render when mode is neither cluster nor single
+    templates:
+      - templates/vtraces/vtraces.yaml
+    set:
+      tracingStorages:
+        - name: generic
+          mode: singel
+          retentionPeriod: "14d"
+          storage: 10Gi
+    asserts:
+      - failedTemplate:
+          errorMessage: 'monitoring: tracingStorages[generic].mode must be either "cluster" or "single"'
