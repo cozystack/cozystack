@@ -138,14 +138,14 @@ func buildAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRo
 // itself runs in (see acmeChallengeNamespace).
 //
 // Why: app HTTPRoutes (harbor, keycloak, dashboard, bucket) attach
-// by hostname with no sectionName, so without this narrower filter
-// they would also bind to the HTTP listener — Gateway API
-// tie-breaks merged routes by creationTimestamp, so an app route
-// created before the controller's redirect would silently serve
-// plaintext on port 80 and leak credentials. Restricting the HTTP
-// listener's allowedRoutes namespaces excludes the cozy-* / tenant-*
-// namespaces apps live in, while keeping cert-manager's challenge
-// namespace open so ACME still completes.
+// by hostname with no sectionName, so any of them the filter admits
+// reaches the HTTP listener and can serve plaintext there. The filter
+// keeps out the ones published from elsewhere; an app in the Gateway's
+// own namespace is admitted and is not covered by this. Restricting the HTTP
+// listener's allowedRoutes namespaces keeps out routes from the other
+// cozy-* namespaces and from inheriting child tenants. The Gateway's
+// own namespace stays open, because the redirect and the ACME solver
+// route both live there, and so does acmeChallengeNamespace.
 func buildHTTPListenerAllowedRoutes(tgw *gatewayv1alpha1.TenantGateway) *gatewayv1.AllowedRoutes {
 	values := []string{tgw.Namespace}
 	if acmeChallengeNamespace != tgw.Namespace {
@@ -470,6 +470,14 @@ func (r *Reconciler) renderHTTPRedirect(tgw *gatewayv1alpha1.TenantGateway) (*ga
 	// HTTPRoute schema. That surfaces as an apiserver validation error
 	// naming the route rather than the field, which is a poor thing to
 	// hand an operator.
+	//
+	// This wins the race in HTTP-01 without tlsPassthroughServices: the
+	// listener set is built from route hostnames alone there, so however
+	// many routes are attached, reconcileGateway never reads the apex
+	// ahead of this point. DNS-01 and existingSecret render an apex
+	// listener, and any tlsPassthroughServices entry builds
+	// "<service>.<apex>", so in those the operator meets the equivalent
+	// schema error against the Gateway first.
 	if tgw.Spec.Apex == "" {
 		return nil, fmt.Errorf("spec.apex is empty on TenantGateway %s/%s: the http-to-https redirect route derives its hostnames from the apex and cannot be rendered without one", tgw.Namespace, tgw.Name)
 	}
@@ -498,7 +506,23 @@ func (r *Reconciler) renderHTTPRedirect(tgw *gatewayv1alpha1.TenantGateway) (*ga
 			// "*.<apex>" covers every subdomain at every depth, but it
 			// does not cover the bare "<apex>", hence the plain apex
 			// first.
-
+			//
+			// Naming them costs no coverage, and the other half of
+			// this change is why: the port-80 listener admits routes
+			// only from this namespace and cert-manager's, and the
+			// tightened cozystack-route-hostname-policy requires every
+			// route here to declare hostnames inside the apex. So any
+			// host published from this namespace is already one of
+			// these two.
+			//
+			// An inheriting child cannot widen that set either.
+			// cozystack-gateway-hostname-policy compares every listener
+			// against the host label of the Gateway's own namespace, so
+			// a child apex outside it never gets its listener: the
+			// Gateway write carrying it is refused at admission whole,
+			// in reconcileGateway and before this route is rendered. A
+			// child apex under this one passes that check, and the
+			// wildcard above already covers it.
 			Hostnames: []gatewayv1.Hostname{
 				gatewayv1.Hostname(tgw.Spec.Apex),
 				gatewayv1.Hostname("*." + tgw.Spec.Apex),

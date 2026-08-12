@@ -509,12 +509,17 @@ spec:
   # pin that the terms are present in the expression — this step is what proves
   # the apiserver acts on them.
   #
-  # HTTPRoute carries both cases; TLSRoute contributes only the absent one,
-  # because at v1 the CRD schema requires spec.hostnames and rejects an empty
-  # list on minItems, leaving the deprecated v1alpha2 the only version where a
-  # hostname-less TLSRoute reaches admission at all. Scripted rather than an
-  # apply/expect pair so the grep can prove the VAP did the denying: a bare
-  # "the apply failed" assertion would be satisfied by a typo in the manifest.
+  # HTTPRoute carries both cases. The TLSRoute probe is applied at v1alpha2
+  # because v1 and v1alpha3 mark spec.hostnames required with minItems: 1,
+  # leaving v1alpha2 the only version where a hostname-less TLSRoute reaches
+  # admission at all. It carries the absent case only, and that is a coverage
+  # choice rather than a reachability fact: v1alpha2 sets neither constraint,
+  # so an explicitly empty list reaches admission there just as an absent
+  # field does. Both policies render one byte-identical CEL string, so the
+  # HTTPRoute pair above already proves the empty-list term end to end.
+  # Scripted rather than an apply/expect pair so the grep can prove the VAP
+  # did the denying: a bare "the apply failed" assertion would be satisfied
+  # by a typo in the manifest.
   - name: hostname-less-route-denied
     try:
     - script:

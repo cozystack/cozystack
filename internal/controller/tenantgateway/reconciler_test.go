@@ -1141,8 +1141,11 @@ func TestReconcile_OtherControllerOwnedRouteStillClaimsHostnames(t *testing.T) {
 // hostnames ["", "*."], and both fail the HTTPRoute CRD's minLength and
 // pattern, so the create is rejected and the reconcile dies on an
 // apiserver validation error that says nothing about which field is at
-// fault. Before the redirect carried hostnames an empty apex reached
-// Ready, so this is a narrowing this branch is responsible for closing.
+// fault. Under HTTP-01 an empty apex reached Ready before the redirect
+// carried hostnames, so that much is a narrowing this branch closes.
+// DNS-01 and existingSecret never reached Ready on an empty apex, at
+// merge base or now: renderGateway builds its listener hostnames off
+// the same field and fails ahead of the redirect either way.
 //
 // MinLength=1 on the field is the real guard and it stops this at
 // admission. This check is the second layer, for the window where the
@@ -1150,6 +1153,12 @@ func TestReconcile_OtherControllerOwnedRouteStillClaimsHostnames(t *testing.T) {
 // rolled out separately, so the controller cannot assume the field
 // validation it needs is already present. It must fail on its own terms
 // and name the field.
+//
+// Which layer fires first depends on the cert mode; renderHTTPRedirect
+// states the condition at the guard itself. This case stays green
+// either way because the fake client does not validate against the CRD
+// schema, so read it as pinning the error text, not as evidence of
+// which layer fires.
 func TestReconcile_EmptyApexFailsWithNamedError(t *testing.T) {
 	s := newScheme(t)
 	tgw := &gatewayv1alpha1.TenantGateway{
