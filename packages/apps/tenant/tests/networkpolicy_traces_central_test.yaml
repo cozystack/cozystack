@@ -1,0 +1,43 @@
+suite: tenant collector egress to the shared-central traces backend
+# Shared-central tracing exports spans across the tenant boundary to the shared
+# VictoriaTraces (vtinsert) in an ancestor namespace. Only the per-tenant OTLP
+# collector pods may make that hop — the rule is endpoint-scoped to
+# app.kubernetes.io/name=otel-traces so no other tenant workload gains
+# cross-boundary egress. Pin the selector and target so a widened scope or a
+# dropped rule fails a test rather than silently regressing tenant isolation.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  # A nested tenant (own namespace tenant-ktj) provisioned from tenant-root. The
+  # egress target below is a fixed tenant-root, so it is correct at any depth —
+  # not derived from the namespace ancestry.
+  name: tenant-ktj
+  namespace: tenant-root
+set:
+  tracingCentral: true
+tests:
+  - it: scopes the cross-boundary egress to only the collector pods
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-egress-traces-central
+    asserts:
+      - isKind:
+          of: CiliumClusterwideNetworkPolicy
+      - equal:
+          path: spec.endpointSelector.matchLabels["k8s:app.kubernetes.io/name"]
+          value: otel-traces
+      - equal:
+          path: spec.endpointSelector.matchLabels["k8s:io.kubernetes.pod.namespace"]
+          value: tenant-ktj
+
+  - it: allows egress only to the shared vtinsert in tenant-root
+    documentSelector:
+      path: metadata.name
+      value: tenant-ktj-egress-traces-central
+    asserts:
+      - equal:
+          path: spec.egress[0].toEndpoints[0].matchLabels["k8s:app.kubernetes.io/name"]
+          value: vtinsert
+      - equal:
+          path: spec.egress[0].toEndpoints[0].matchLabels["k8s:io.kubernetes.pod.namespace"]
+          value: tenant-root

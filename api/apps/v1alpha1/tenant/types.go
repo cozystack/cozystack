@@ -26,6 +26,9 @@ type ConfigSpec struct {
 	// Deploy own Monitoring Stack.
 	// +kubebuilder:default:=false
 	Monitoring bool `json:"monitoring"`
+	// Opt into the shared-central tracing topology: allow this tenant's OTLP collector to export traces to the shared VictoriaTraces in tenant-root (account 0, distinguished by a `tenant` attribute) instead of a per-tenant backend. Renders a narrow, collector-scoped Cilium egress rule. Set alongside the monitoring chart's `tracingCollector.backend=central`. The default per-tenant backend gives stronger isolation; see design-proposals/distributed-tracing in cozystack/community.
+	// +kubebuilder:default:=false
+	TracingCentral bool `json:"tracingCentral"`
 	// Deploy own Ingress Controller.
 	// +kubebuilder:default:=false
 	Ingress bool `json:"ingress"`

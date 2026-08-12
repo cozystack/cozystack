@@ -1,0 +1,18 @@
+suite: shared-central traces egress never renders for tenant-root
+# tenant-root hosts the shared backend, so it must never get the cross-boundary
+# egress rule — even when tracingCentral is set. Pin the ne-tenant-root guard.
+templates:
+  - templates/networkpolicy-traces-central.yaml
+release:
+  name: tenant-root
+  namespace: tenant-root
+set:
+  tracingCentral: true
+tests:
+  - it: is excluded even when tracingCentral is opted in
+    asserts:
+      - containsDocument:
+          apiVersion: cilium.io/v2
+          kind: CiliumClusterwideNetworkPolicy
+          name: tenant-root-egress-traces-central
+        not: true

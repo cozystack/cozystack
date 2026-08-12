@@ -7,10 +7,16 @@
   backend" stays a clean off-state — there is deliberately no fail-on-empty
   guard here (contrast the logsStorages #3181 guard, which must fire because
   fluent-bit ships logs unconditionally, so an absent log store drops data).
+
+  Shared-central topology (tracingCollector.backend: central): this tenant has
+  no local backend — the collector exports to the shared VictoriaTraces in
+  tenant-root — so no VTCluster/VTSingle is rendered here either.
+
   The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
   Flux evaluates them only against CRs present in the release inventory, so with
   nothing rendered they are inert.
 */ -}}
+{{- if ne (.Values.tracingCollector.backend | default "local") "central" }}
 {{- range .Values.tracingStorages }}
 {{- $mode := .mode | default "cluster" }}
 {{- if and (ne $mode "cluster") (ne $mode "single") }}
@@ -86,5 +92,6 @@ spec:
           resources:
             requests:
               storage: {{ .storage }}
+{{- end }}
 {{- end }}
 {{- end }}
