@@ -1,0 +1,85 @@
+suite: telemetry opt-out bundle wiring
+templates:
+  - templates/bundles/system.yaml
+release:
+  name: cozystack
+  namespace: cozy-system
+tests:
+  # Telemetry has two senders: cozystack-operator (cluster facts) and
+  # cozystack-controller (application counts). The operator is switched off on
+  # the cozy-installer chart, which cannot reach a package the platform
+  # deploys — so without the wiring asserted here, an operator who followed the
+  # documented opt-out kept sending cozy_application_count indefinitely, with
+  # nothing failing to signal it. The regression is silent by construction,
+  # which is why it is pinned.
+  - it: threads disableTelemetry into cozystack-controller when telemetry.disabled is set (isp-full)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      telemetry:
+        disabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
+          value: true
+
+  - it: leaves the controller untouched by default, so telemetry stays opt-out (isp-full)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - notExists:
+          path: spec.components
+
+  - it: threads the flag on the oidc variant too (isp-full)
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full
+      authentication:
+        oidc:
+          enabled: true
+      telemetry:
+        disabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.variant
+          value: oidc
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
+          value: true
+
+  # isp-full-generic already carries a cozystack-api override. The telemetry
+  # key must be added beside it, not replace it.
+  - it: coexists with the generic variant's cozystack-api nodeSelector override
+    set:
+      bundles:
+        system:
+          enabled: true
+          variant: isp-full-generic
+      telemetry:
+        disabled: true
+    documentSelector:
+      path: metadata.name
+      value: cozystack.cozystack-engine
+    asserts:
+      - equal:
+          path: spec.components.cozystack-controller.values.cozystackController.disableTelemetry
+          value: true
+      - equal:
+          path: spec.components.cozystack-api.values.cozystackAPI.nodeSelector["node-role.kubernetes.io/control-plane"]
+          value: "true"
