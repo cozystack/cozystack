@@ -22,8 +22,33 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
+    # 11m rather than the usual 5-6m, because this wait is not the cheap one it
+    # looks like: helm-controller defaults spec.waitStrategy to `poller`, so the
+    # install action waits through kstatus, and kstatus maps the operator CR's
+    # Ready=False onto InProgress. Readiness here may therefore span a first
+    # boot, whose startup probe alone may spend 310s -- see
+    # packages/apps/mariadb/templates/mariadb.yaml -- with the artifact fetch,
+    # the operator reconcile, the PVC bind and the image pull ahead of it and
+    # the readiness probe behind it. 11m leaves about 350s for all of that once
+    # a boot has spent its 310s. "May", because the wait can also end early:
+    # see the condition-less-CR window described under the endpoint assert
+    # below.
+    #
+    # 11m and not 10m so this assert outlives the release's own install timeout,
+    # which cozystack-api sets to 10m. At equal budgets the assert expires first
+    # and the failure reads as a chainsaw timeout; a minute later and the
+    # HelmRelease has already recorded why its install failed.
+    # hack/mariadb-first-boot-waits.bats holds this above the LARGER of the
+    # startup budget and the release's own install timeout, which today is the
+    # install timeout at 600s.
+    #
+    # The minute is headroom, not a guarantee: this assert's clock starts when
+    # the step runs, the install's 600s when helm-controller begins installing,
+    # after the Application is reconciled and the chart artifact fetched. A cold
+    # cache can spend the margin there, and the assert then expires mid-install
+    # as before -- no worse than the old number, just not always better.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -44,15 +69,25 @@ spec:
           spec:
             (ports[0].port): 3306
     # The chart hands the operator a MariaDB CR and ships no built-in workload,
-    # so the HelmRelease above goes Ready as soon as helm applies the manifests
-    # -- it never waits for a pod. This assert is the first gate that does: an
-    # endpoint address appears only once a replica has passed its startup and
-    # then its readiness probe. The startup probe grants each replica 310s of
-    # first-boot budget (see packages/apps/mariadb/templates/mariadb.yaml for
-    # why), so a ceiling under that would fail runs the probe was still willing
-    # to wait for. One ready address satisfies this assert, so it has to clear
-    # one budget, not two, plus the operator reconcile, PVC bind and image pull
-    # that precede it. 10m leaves room for all of that.
+    # so the release holds nothing helm itself knows how to wait for -- but the
+    # wait above is not free of pods either. helm-controller leaves
+    # spec.waitStrategy unset and defaults it to `poller`, so the install action
+    # waits through kstatus, and kstatus maps the CR's Ready=False (reason
+    # StatefulSetNotReady) onto InProgress. HelmRelease readiness may therefore
+    # already span a first boot, whose startup probe alone may spend 310s (see
+    # packages/apps/mariadb/templates/mariadb.yaml for why it is 310s). One
+    # window covers both replicas -- mariadb-operator sets
+    # PodManagementPolicy: Parallel, so they boot concurrently.
+    #
+    # What is left for this assert is the window kstatus cannot see. A CR that
+    # has only just been applied carries no conditions at all, and kstatus reads
+    # a condition-less custom resource as current, so a poll landing ahead of
+    # the operator's first status write would end the wait early. An endpoint
+    # address appears only once a replica has passed its startup probe and then
+    # its readiness probe, which closes that window. One ready address satisfies
+    # this assert, and the replicas boot concurrently anyway, so it clears one
+    # startup budget plus the operator reconcile, PVC bind and image pull that
+    # precede it. 10m leaves room for all of that.
     - assert:
         timeout: 10m
         resource:
@@ -131,8 +166,9 @@ spec:
 
   - name: wait-helmrelease-ready
     try:
+    # Same 11m and the same reasons as the replicated suite above.
     - assert:
-        timeout: 6m
+        timeout: 11m
         resource:
           apiVersion: helm.toolkit.fluxcd.io/v2
           kind: HelmRelease
@@ -152,10 +188,11 @@ spec:
             name: mariadb-single
           spec:
             (ports[0].port): 3306
-    # Same gate as the replicated case above -- the HelmRelease does not wait
-    # for a pod, so this is where first boot is actually covered. One replica
-    # means one 310s startup budget, plus the operator reconcile, PVC bind and
-    # image pull ahead of it.
+    # Same gate as the replicated case above, and for the same reason: the
+    # HelmRelease wait already spans first boot through kstatus, and this assert
+    # covers the window where a CR with no conditions yet reads as current. One
+    # replica means one 310s startup budget, plus the operator reconcile, PVC
+    # bind and image pull ahead of it.
     - assert:
         timeout: 10m
         resource:
@@ -277,15 +314,62 @@ spec:
           NAMESPACE="$NAMESPACE" examples/backups/mariadb/cleanup.sh
         check:
           ($error == null): true
-    # The 30m budget is the whole documented flow: bucket provisioning, a
-    # 2-replica source MariaDB (each replica's operator startup probe grants
-    # 310s of first-boot budget — see the mariadb app suite above), the logical
-    # dump to S3, an empty 2-replica target, and the to-copy restore + verify
-    # (convention 6: justified in-line). run-all.sh fails fast on terminal
-    # BackupJob/RestoreJob phases and stalled HelmReleases rather than polling
-    # out the budget.
+    # 42m runs the whole documented flow: bucket provisioning, a 2-replica
+    # source MariaDB, the logical dump to S3, an empty 2-replica target, and
+    # the to-copy restore + verify (convention 6: justified in-line). An
+    # instance costs one first-boot budget, not one per replica: the operator
+    # sets PodManagementPolicy: Parallel, so its replicas start together.
+    #
+    # 42m is what the two 660s HelmRelease waits in run-all.sh leave room for.
+    # Whether a failure is reported or SIGKILLed depends on how much time has
+    # elapsed when the failing wait starts: a target-side install failure is
+    # reported for any prefix up to 1860s, and each minute taken off this op
+    # takes a minute off that band, so a range of prefixes stops producing a
+    # diagnosis and starts producing a killed process group.
+    #
+    # Three quantities live on this number and they are easy to read as one,
+    # so name which is which. Op minus both mariadb waits is 1200s: what the
+    # flow has for the applies, the dump, the restore and the verifies once
+    # the two waits have taken their ceilings. The reported-prefix band is
+    # 1860s: how slow the run may already be and still get a diagnosis rather
+    # than a kill. The remainder this suite's own contract pins, op minus the
+    # ceilings ahead of the source wait, is 960s.
+    #
+    # What 42m bounds is narrower than it looks, so read it as covering one
+    # case rather than the flow. It covers a failure at the source HelmRelease
+    # wait -- the mode this suite has hit -- because only the bucket stage runs
+    # ahead of that wait, and those four ceilings together stay inside it.
+    # Note what that sum does not count: the applies and the secret
+    # materialisation draw on the same 42m, and after the four ceilings (300 +
+    # 300 + 300 + 660 = 1560s) about sixteen minutes are left for them on
+    # paper -- and the bucket provisioning is not among those stages, since
+    # three of those four ceilings are its own waits. Less in practice: the
+    # wait helpers advance their own counter by the sleep alone while each
+    # iteration also pays two kubectl round-trips, so a ceiling of N seconds
+    # costs more than N of wall clock. The figure is a ratchet on what the
+    # flow has today, not a budget anything is measured against.
+    #
+    # A run that is slow at every stage and then fails at a later wait does not
+    # fit: `set -e` drops the ceilings AFTER the wait that expires, never the
+    # ones before it, and each of those may burn its budget and still succeed.
+    # Such a run is SIGKILLed process-group-wide, losing the script's own error
+    # and the diagnostics behind it.
+    #
+    # Raising this literal does not BOUND that, and the 42m above is not an
+    # attempt to: the ceilings sum to several times it and grow with every wait
+    # added, so a complete bound needs a phase budget of the kind
+    # docs/agents/e2e-testing.md describes. The two are separate questions, and
+    # conflating them is how the slack gets spent quietly -- "no number fixes
+    # the general case" is not a reason to let a specific change consume the
+    # margin the number already had.
+    #
+    # The fail-fast in run-all.sh does not cover the case that matters most
+    # here. `wait_hr_ready` returns early on Stalled=True, but a release whose
+    # install is still running is neither Ready nor Stalled, and stays that way
+    # until its own 10m install timeout fires -- which is the state the source
+    # instance was in when this suite last failed.
     - script:
-        timeout: 30m
+        timeout: 42m
         content: |
           set -eu
           cd ../../..
