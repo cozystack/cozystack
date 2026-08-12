@@ -17,6 +17,11 @@
       "type": "boolean",
       "default": false
     },
+    "tracingCentral": {
+      "description": "Opt into the shared-central tracing topology: allow this tenant's OTLP collector to export traces to the shared VictoriaTraces in tenant-root (account 0, distinguished by a `tenant` attribute) instead of a per-tenant backend. Renders a narrow, collector-scoped Cilium egress rule. Set alongside the monitoring chart's `tracingCollector.backend=central`. The default per-tenant backend gives stronger isolation; see design-proposals/distributed-tracing in cozystack/community.",
+      "type": "boolean",
+      "default": false
+    },
     "ingress": {
       "description": "Deploy own Ingress Controller.",
       "type": "boolean",

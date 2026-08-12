@@ -1,14 +1,19 @@
 {{- /*
   tracingStorages is empty by default, so tracing is off out of the box and no
   VTCluster/VTSingle is provisioned. Unlike logsStorages, an absent backend
-  drops no data here: nothing produces spans until the trace collector ships (a
-  later PR), so there is no loud-failure guard yet. The collector PR re-adds a
-  fail-on-empty guard — at that point an enabled producer with no backend really
-  would drop spans, exactly as the logsStorages #3181 guard prevents for logs.
+  drops no data here: nothing produces spans until the trace collector ships, so
+  there is no loud-failure guard yet (the collector likewise renders only once a
+  backend is configured).
+
+  Shared-central topology (tracingCollector.backend: central): this tenant has
+  no local backend — the collector exports to the shared VictoriaTraces in
+  tenant-root — so no VTCluster/VTSingle is rendered here either.
+
   The readiness-gate healthCheckExprs on VTCluster/VTSingle stay unconditional:
   Flux evaluates them only against CRs present in the release inventory, so with
   nothing rendered they are inert.
 */ -}}
+{{- if ne (.Values.tracingCollector.backend | default "local") "central" }}
 {{- range .Values.tracingStorages }}
 {{- $mode := .mode | default "cluster" }}
 {{- if and (ne $mode "cluster") (ne $mode "single") }}
@@ -84,5 +89,6 @@ spec:
           resources:
             requests:
               storage: {{ .storage }}
+{{- end }}
 {{- end }}
 {{- end }}

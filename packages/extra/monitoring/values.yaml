@@ -115,8 +115,13 @@ tracingStorages: []
 ## @section Traces collector configuration
 ##
 
+## @enum {string} TracingBackend - Where the collector exports spans.
+## @value local
+## @value central
+
 ## @typedef {struct} TracingCollector - Per-tenant OpenTelemetry Collector that fronts the traces backend. It is the app-facing OTLP ingest gateway and the point where sampling/redaction are enforced; tenant isolation itself comes from the tenant NetworkPolicies, not from this workload.
 ## @field {bool} enabled=true - Deploy the OTLP collector. When disabled, applications must send OTLP straight to the traces backend (no central sampling/redaction).
+## @field {TracingBackend} backend="local" - Export target. "local": the tenant's own tracingStorages backend in this namespace. "central": the shared VictoriaTraces in tenant-root (shared-central topology) — no local backend is deployed, spans are stamped with the tenant name, and the cross-boundary hop uses the collector-scoped Cilium egress rule.
 ## @field {int} replicas=1 - Number of collector replicas. Head sampling is trace-id-deterministic, so replicas>1 are safe and remove the single-ingest-path SPOF.
 ## @field {int} samplingPercentage=10 - Head-sampling percentage applied at the collector before export.
 ## @minimum 0
@@ -127,6 +132,7 @@ tracingStorages: []
 ## @param {TracingCollector} tracingCollector - OpenTelemetry Collector for trace ingestion.
 tracingCollector:
   enabled: true
+  backend: local
   replicas: 1
   samplingPercentage: 10
   redactAttributes: []
