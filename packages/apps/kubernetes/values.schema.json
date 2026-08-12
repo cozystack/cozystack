@@ -1000,7 +1000,7 @@
       }
     },
     "oidc": {
-      "description": "OIDC authentication and per-user RBAC for the tenant kube-apiserver. See docs/oidc-tenant.md for the operator guide.",
+      "description": "OIDC authentication and per-user RBAC for the tenant kube-apiserver. See https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/ for the operator guide.",
       "type": "object",
       "default": {},
       "required": [

@@ -118,7 +118,7 @@ EOF
 
   # Give any reconciler a moment; then assert neither cozy-realm object
   # exists. Chart-owned KeycloakRealmGroups were removed entirely (see
-  # design note in docs/oidc-grafana.md) so no group assertions here.
+  # design note in https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/) so no group assertions here.
   sleep 5
   ! kubectl -n tenant-test get keycloakclient.v1.edp.epam.com "${CID}" 2>/dev/null
   ! kubectl -n tenant-test get keycloakclientscope.v1.edp.epam.com "${CID}-audience" 2>/dev/null

@@ -22,7 +22,7 @@
       per-user authorization layer that runs INSIDE Grafana after the
       Keycloak-side gate has already admitted the login.
   No KeycloakRealmGroup is provisioned by this chart — group directory
-  ownership stays with the tenant chart. See docs/oidc-grafana.md.
+  ownership stays with the tenant chart. See https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/.
 
   Nothing is rendered for `mode: CustomConfig` or `mode: None`: in
   those modes `cozy` is not in the path.

@@ -25,7 +25,7 @@ RUN ./hack/build-go.sh
 #   dhcp       needs a long-running host daemon this package does not run.
 #   tap, dummy no consumer in this tree.
 #
-# The list here, the count, and docs/vm-external-vlan.md are asserted against
+# The list here, the count, and packages/system/multus/README.md are asserted against
 # each other in hack/cni-plugins-staging-contract.bats.
 #
 # kube-ovn installs portmap and macvlan into the same directory from its own

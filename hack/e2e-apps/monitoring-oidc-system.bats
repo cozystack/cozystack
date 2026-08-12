@@ -16,7 +16,7 @@
 # KeycloakClientScope / persistent client-secret Secret / Grafana CR /
 # users-reconcile Job carry the expected shape. Chart-owned
 # KeycloakRealmGroups + role_attribute_path are gone (see the
-# design note in docs/oidc-grafana.md); authorization is driven by
+# design note in https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/); authorization is driven by
 # spec.oidc.users reconciled into Grafana orgs by the users-Job.
 
 # cozytest.sh (the e2e runner) is not real bats: it never invokes

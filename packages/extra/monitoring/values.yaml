@@ -216,7 +216,7 @@ vmagent:
 ## @field {OIDCCustomConfig} [customConfig] - Tenant-supplied `[auth.generic_oauth]` payload; consumed only when `mode: CustomConfig`.
 ## @field {[]OIDCUser} [users] - Users granted access to this Grafana instance's org. Each entry is reconciled into Grafana org membership + role by a chart-owned post-install/post-upgrade Job. Works for both `System` and `CustomConfig` modes; ignored when `mode: None`. Users not listed here get nothing (no default org role from group mapping).
 
-## @param {OIDC} oidc - OIDC authentication for the Grafana instance. See docs/oidc-grafana.md for the operator guide.
+## @param {OIDC} oidc - OIDC authentication for the Grafana instance. See https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/ for the operator guide.
 oidc:
   mode: "None"
   customConfig:

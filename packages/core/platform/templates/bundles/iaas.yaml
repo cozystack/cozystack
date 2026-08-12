@@ -19,7 +19,7 @@
   into the KubeVirt CR: the HostDevices feature gate plus a starter
   permittedHostDevices block. Without this the admission webhook rejects
   any VM that references a host-device GPU by resourceName. See
-  docs/gpu-vgpu.md for the user-facing knobs.
+  https://cozystack.io/docs/v1.6/virtualization/vgpu/ for the user-facing knobs.
 */ -}}
 {{- /*
   Mirror the cozystack.platform.package.optional helper's enable/disable

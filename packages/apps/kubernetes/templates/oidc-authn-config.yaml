@@ -57,7 +57,7 @@ of the four tenant-scoped groups
 (`<namespace>-{view,use,admin,super-admin}`, provisioned by the tenant
 chart) to be present in the token's `groups` claim. Symmetric with the
 Grafana-side `allowed_groups` gate in the Monitoring chart — see
-docs/oidc-tenant.md and docs/oidc-grafana.md.
+https://cozystack.io/docs/v1.6/kubernetes/oidc-authentication/ and https://cozystack.io/docs/v1.6/operations/services/monitoring/oidc-authentication/.
 */ -}}
 {{-   $authnConfig := printf "apiVersion: apiserver.config.k8s.io/v1beta1\nkind: AuthenticationConfiguration\njwt:\n- issuer:\n    url: %s\n    audiences:\n    - %s\n  claimValidationRules:\n  - expression: '%s'\n    message: \"user is not a member of any %s-{view,use,admin,super-admin} group in the cozy realm — this tenant's apiserver only trusts identities the tenant chart has admitted\"\n  claimMappings:\n    username:\n      claim: email\n      prefix: \"\"\n    groups:\n      claim: groups\n      prefix: \"\"\n" $issuer $audience $groupsExpr .Release.Namespace }}
 ---
