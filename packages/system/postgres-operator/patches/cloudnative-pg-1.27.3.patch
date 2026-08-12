@@ -1,0 +1,369 @@
+--- a/packages/system/postgres-operator/charts/cloudnative-pg/Chart.yaml
++++ b/packages/system/postgres-operator/charts/cloudnative-pg/Chart.yaml
+@@ -1,5 +1,5 @@
+ apiVersion: v2
+-appVersion: 1.27.1
++appVersion: 1.27.3
+ dependencies:
+ - alias: monitoring
+   condition: monitoring.grafanaDashboard.create
+--- a/packages/system/postgres-operator/charts/cloudnative-pg/templates/crds/crds.yaml
++++ b/packages/system/postgres-operator/charts/cloudnative-pg/templates/crds/crds.yaml
+@@ -3,7 +3,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: backups.postgresql.cnpg.io
+ spec:
+@@ -215,6 +215,11 @@
+                     - key
+                     - name
+                     type: object
++                  useDefaultAzureCredentials:
++                    description: |-
++                      Use the default Azure authentication flow, which includes DefaultAzureCredential.
++                      This allows authentication using environment variables and managed identities.
++                    type: boolean
+                 type: object
+               backupId:
+                 description: The ID of the Barman backup
+@@ -312,6 +317,13 @@
+                   podName:
+                     description: The pod name
+                     type: string
++                  sessionID:
++                    description: |-
++                      The instance manager session ID. This is a unique identifier generated at instance manager
++                      startup and changes on every restart (including container reboots). Used to detect if
++                      the instance manager was restarted during long-running operations like backups, which
++                      would terminate any running backup process.
++                    type: string
+                 type: object
+               majorVersion:
+                 description: |-
+@@ -454,7 +466,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: clusterimagecatalogs.postgresql.cnpg.io
+ spec:
+@@ -536,7 +548,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: clusters.postgresql.cnpg.io
+ spec:
+@@ -1554,9 +1566,10 @@
+                         operator:
+                           description: |-
+                             Operator represents a key's relationship to the value.
+-                            Valid operators are Exists and Equal. Defaults to Equal.
++                            Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                             Exists is equivalent to wildcard for value, so that a pod can
+                             tolerate all taints of a particular category.
++                            Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                           type: string
+                         tolerationSeconds:
+                           description: |-
+@@ -1649,6 +1662,11 @@
+                             - key
+                             - name
+                             type: object
++                          useDefaultAzureCredentials:
++                            description: |-
++                              Use the default Azure authentication flow, which includes DefaultAzureCredential.
++                              This allows authentication using environment variables and managed identities.
++                            type: boolean
+                         type: object
+                       data:
+                         description: |-
+@@ -2146,6 +2164,7 @@
+                       options:
+                         description: |-
+                           The list of options that must be passed to initdb when creating the cluster.
++
+                           Deprecated: This could lead to inconsistent configurations,
+                           please use the explicit provided parameters instead.
+                           If defined, explicit values will be ignored.
+@@ -2470,8 +2489,9 @@
+                               integer)
+                             type: string
+                           targetTime:
+-                            description: The target time as a timestamp in the RFC3339
+-                              standard
++                            description: |-
++                              The target time as a timestamp in RFC3339 format or PostgreSQL timestamp format.
++                              Timestamps without an explicit timezone are interpreted as UTC.
+                             type: string
+                           targetXID:
+                             description: The target transaction ID
+@@ -2990,7 +3010,7 @@
+                           resources:
+                             description: |-
+                               resources represents the minimum resources the volume should have.
+-                              If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
++                              Users are allowed to specify resource requirements
+                               that are lower than previous value but must still be higher than capacity recorded in the
+                               status field of the claim.
+                               More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+@@ -3194,6 +3214,11 @@
+                               - key
+                               - name
+                               type: object
++                            useDefaultAzureCredentials:
++                              description: |-
++                                Use the default Azure authentication flow, which includes DefaultAzureCredential.
++                                This allows authentication using environment variables and managed identities.
++                              type: boolean
+                           type: object
+                         data:
+                           description: |-
+@@ -4651,7 +4676,7 @@
+                         name:
+                           description: The name of the extension, required
+                           minLength: 1
+-                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
++                          pattern: ^[a-z0-9]([-a-z0-9_]*[a-z0-9])?$
+                           type: string
+                       required:
+                       - image
+@@ -5430,6 +5455,24 @@
+                               description: Kubelet's generated CSRs will be addressed
+                                 to this signer.
+                               type: string
++                            userAnnotations:
++                              additionalProperties:
++                                type: string
++                              description: |-
++                                userAnnotations allow pod authors to pass additional information to
++                                the signer implementation.  Kubernetes does not restrict or validate this
++                                metadata in any way.
++
++                                These values are copied verbatim into the `spec.unverifiedUserAnnotations` field of
++                                the PodCertificateRequest objects that Kubelet creates.
++
++                                Entries are subject to the same validation as object metadata annotations,
++                                with the addition that all keys must be domain-prefixed. No restrictions
++                                are placed on values, except an overall size limitation on the entire field.
++
++                                Signers should document the keys and values they support. Signers should
++                                deny requests that contain keys they do not recognize.
++                              type: object
+                           required:
+                           - keyType
+                           - signerName
+@@ -5878,7 +5921,7 @@
+                       resources:
+                         description: |-
+                           resources represents the minimum resources the volume should have.
+-                          If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
++                          Users are allowed to specify resource requirements
+                           that are lower than previous value but must still be higher than capacity recorded in the
+                           status field of the claim.
+                           More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+@@ -6134,7 +6177,7 @@
+                             resources:
+                               description: |-
+                                 resources represents the minimum resources the volume should have.
+-                                If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
++                                Users are allowed to specify resource requirements
+                                 that are lower than previous value but must still be higher than capacity recorded in the
+                                 status field of the claim.
+                                 More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+@@ -6542,7 +6585,7 @@
+                       resources:
+                         description: |-
+                           resources represents the minimum resources the volume should have.
+-                          If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
++                          Users are allowed to specify resource requirements
+                           that are lower than previous value but must still be higher than capacity recorded in the
+                           status field of the claim.
+                           More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+@@ -7258,7 +7301,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: databases.postgresql.cnpg.io
+ spec:
+@@ -7631,7 +7674,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: failoverquorums.postgresql.cnpg.io
+ spec:
+@@ -7709,7 +7752,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: imagecatalogs.postgresql.cnpg.io
+ spec:
+@@ -7790,7 +7833,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: poolers.postgresql.cnpg.io
+ spec:
+@@ -10375,7 +10418,9 @@
+                                   type: integer
+                               type: object
+                             resizePolicy:
+-                              description: Resources resize policy for the container.
++                              description: |-
++                                Resources resize policy for the container.
++                                This field cannot be set on ephemeral containers.
+                               items:
+                                 description: ContainerResizePolicy represents resource
+                                   resize policy for the container.
+@@ -13598,7 +13643,9 @@
+                                   type: integer
+                               type: object
+                             resizePolicy:
+-                              description: Resources resize policy for the container.
++                              description: |-
++                                Resources resize policy for the container.
++                                This field cannot be set on ephemeral containers.
+                               items:
+                                 description: ContainerResizePolicy represents resource
+                                   resize policy for the container.
+@@ -14388,2 +14435,2 @@
+-                          This is an alpha field and requires enabling the
+-                          DynamicResourceAllocation feature gate.
++                          This is a stable field but requires that the
++                          DynamicResourceAllocation feature gate is enabled.
+@@ -14845,9 +14892,10 @@
+                             operator:
+                               description: |-
+                                 Operator represents a key's relationship to the value.
+-                                Valid operators are Exists and Equal. Defaults to Equal.
++                                Valid operators are Exists, Equal, Lt, and Gt. Defaults to Equal.
+                                 Exists is equivalent to wildcard for value, so that a pod can
+                                 tolerate all taints of a particular category.
++                                Lt and Gt perform numeric comparisons (requires feature gate TaintTolerationComparisonOperators).
+                               type: string
+                             tolerationSeconds:
+                               description: |-
+@@ -15641,7 +15689,7 @@
+                                         resources:
+                                           description: |-
+                                             resources represents the minimum resources the volume should have.
+-                                            If RecoverVolumeExpansionFailure feature is enabled users are allowed to specify resource requirements
++                                            Users are allowed to specify resource requirements
+                                             that are lower than previous value but must still be higher than capacity recorded in the
+                                             status field of the claim.
+                                             More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#resources
+@@ -16527,6 +16575,24 @@
+                                             description: Kubelet's generated CSRs
+                                               will be addressed to this signer.
+                                             type: string
++                                          userAnnotations:
++                                            additionalProperties:
++                                              type: string
++                                            description: |-
++                                              userAnnotations allow pod authors to pass additional information to
++                                              the signer implementation.  Kubernetes does not restrict or validate this
++                                              metadata in any way.
++
++                                              These values are copied verbatim into the `spec.unverifiedUserAnnotations` field of
++                                              the PodCertificateRequest objects that Kubelet creates.
++
++                                              Entries are subject to the same validation as object metadata annotations,
++                                              with the addition that all keys must be domain-prefixed. No restrictions
++                                              are placed on values, except an overall size limitation on the entire field.
++
++                                              Signers should document the keys and values they support. Signers should
++                                              deny requests that contain keys they do not recognize.
++                                            type: object
+                                         required:
+                                         - keyType
+                                         - signerName
+@@ -16952,6 +17018,42 @@
+                         x-kubernetes-list-map-keys:
+                         - name
+                         x-kubernetes-list-type: map
++                      workloadRef:
++                        description: |-
++                          WorkloadRef provides a reference to the Workload object that this Pod belongs to.
++                          This field is used by the scheduler to identify the PodGroup and apply the
++                          correct group scheduling policies. The Workload object referenced
++                          by this field may not exist at the time the Pod is created.
++                          This field is immutable, but a Workload object with the same name
++                          may be recreated with different policies. Doing this during pod scheduling
++                          may result in the placement not conforming to the expected policies.
++                        properties:
++                          name:
++                            description: |-
++                              Name defines the name of the Workload object this Pod belongs to.
++                              Workload must be in the same namespace as the Pod.
++                              If it doesn't match any existing Workload, the Pod will remain unschedulable
++                              until a Workload object is created and observed by the kube-scheduler.
++                              It must be a DNS subdomain.
++                            type: string
++                          podGroup:
++                            description: |-
++                              PodGroup is the name of the PodGroup within the Workload that this Pod
++                              belongs to. If it doesn't match any existing PodGroup within the Workload,
++                              the Pod will remain unschedulable until the Workload object is recreated
++                              and observed by the kube-scheduler. It must be a DNS label.
++                            type: string
++                          podGroupReplicaKey:
++                            description: |-
++                              PodGroupReplicaKey specifies the replica key of the PodGroup to which this
++                              Pod belongs. It is used to distinguish pods belonging to different replicas
++                              of the same pod group. The pod group policy is applied separately to each replica.
++                              When set, it must be a DNS label.
++                            type: string
++                        required:
++                        - name
++                        - podGroup
++                        type: object
+                     required:
+                     - containers
+                     type: object
+@@ -17043,7 +17145,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: publications.postgresql.cnpg.io
+ spec:
+@@ -17239,7 +17341,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: scheduledbackups.postgresql.cnpg.io
+ spec:
+@@ -17431,7 +17533,7 @@
+ kind: CustomResourceDefinition
+ metadata:
+   annotations:
+-    controller-gen.kubebuilder.io/version: v0.19.0
++    controller-gen.kubebuilder.io/version: v0.20.0
+     helm.sh/resource-policy: keep
+   name: subscriptions.postgresql.cnpg.io
+ spec:
