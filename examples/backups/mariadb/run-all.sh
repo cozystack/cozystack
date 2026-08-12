@@ -132,7 +132,49 @@ materialise_backup_secrets "$MARIADB_SRC_NAME"
 
 print_header "Step 05b: Deploy source MariaDB '${MARIADB_SRC_NAME}' and wait for it to be healthy"
 subst 05-mariadb-src.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 300
+# 660s, stated explicitly rather than left to the helper's own 300s default,
+# which is under the floor derived below. helm-controller leaves
+# spec.waitStrategy unset here and defaults it to `poller`, so the install
+# action waits through kstatus, and kstatus maps the operator CR's Ready=False
+# (reason StatefulSetNotReady) onto InProgress. HelmRelease readiness may
+# therefore span a first boot -- may, because a poll landing before the
+# operator's first status write reads a condition-less CR as Current and ends
+# the wait early -- whose startup probe alone may spend 310s (see
+# packages/apps/mariadb/templates/mariadb.yaml), with the operator reconcile,
+# the PVC bind and the image pull ahead of it and the readiness probe behind it.
+# One window, not one per replica: mariadb-operator sets
+# PodManagementPolicy: Parallel, so the replicas boot concurrently. Anything at
+# or below 310s fails runs the probe was still willing to wait for.
+# hack/mariadb-first-boot-waits.bats holds this wait above the LARGER of that
+# budget and the release's own install timeout, which today is the install
+# timeout at 600s -- so the number it enforces is not the 310s above.
+#
+# 660 and not 600, because 600 is exactly the release's own install timeout. At
+# equal budgets this wait is the one that gives up -- the two clocks start at
+# different moments, as the paragraph below sets out -- and it gives up before
+# the release has recorded anything about it; the extra minute lets the install
+# fail first, and wait_hr_ready's timeout branch then dumps every condition and
+# the release history rather than the one Ready message a retry may already
+# have overwritten.
+#
+# That extra minute is headroom, not a guarantee: the two clocks do not start
+# together. This wait starts at kubectl apply, while the install's 600s starts
+# when helm-controller begins installing, after the Application is reconciled
+# into a HelmRelease and the chart artifact is fetched. A cold artifact cache
+# can spend the whole margin on that prologue, and the wait then expires
+# mid-install as before -- degrading to the old behaviour rather than to
+# something worse, with the dump reporting whatever the release has either
+# way.
+#
+# Raising THIS number costs the Chainsaw op that runs the script the same
+# amount: its timeout in hack/e2e-chainsaw/mariadb/chainsaw-test.yaml was
+# raised by exactly what these two waits gained. That relationship is checked
+# -- raise this wait without raising the op and
+# hack/mariadb-first-boot-waits.bats goes red on the op's remaining margin,
+# which is zero today. The target wait below is checked too, but against a
+# different quantity: the sum here stops at this wait, so that one is held by
+# the op minus BOTH waits instead. Its comment says which.
+wait_hr_ready "mariadb-${MARIADB_SRC_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_SRC_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 wait_app_grant_ready "$MARIADB_SRC_CR"
@@ -167,7 +209,14 @@ print_header "Step 30/40: Restore to a copy '${MARIADB_TARGET_NAME}' and wait fo
 # during a restore, so the target needs its own Secret pair (same S3 coords).
 materialise_backup_secrets "$MARIADB_TARGET_NAME"
 subst 30-mariadb-target.yaml | kubectl -n "$NAMESPACE" apply -f -
-wait_hr_ready "mariadb-${MARIADB_TARGET_NAME}" 300
+# Same first-boot budget as the source above, for the same reasons. It is
+# checked against the Chainsaw op by a different quantity than the source is:
+# the prefix sum in hack/mariadb-first-boot-waits.bats stops at the source wait,
+# because past it lie ceilings the script reaches only on the happy path, so
+# this budget is held instead by the op minus BOTH mariadb waits. That sits at
+# exactly its constant, so raising this number alone goes red -- raise the op in
+# hack/e2e-chainsaw/mariadb/chainsaw-test.yaml in the same change.
+wait_hr_ready "mariadb-${MARIADB_TARGET_NAME}" 660
 wait_for_field mariadbs.k8s.mariadb.com "$MARIADB_TARGET_CR" \
     '{.status.conditions[?(@.type=="Ready")].status}' True "$NAMESPACE" 600
 kubectl -n "$NAMESPACE" apply -f "$SCRIPT_DIR/40-restorejob-to-copy.yaml"
