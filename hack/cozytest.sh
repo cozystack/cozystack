@@ -120,13 +120,18 @@ COZY_REPORT_DIR="${COZY_REPORT_DIR:-_out/cozyreport}"
 # suite is precisely one `make unit-tests` refuses to run and
 # packages/core/testing/Makefile runs against a live cluster instead.
 #
-# That wildcard is not recursive, so it says nothing about subdirectories, and
-# hack/e2e-apps/ holds live-cluster suites whose own filenames carry no prefix.
-# Matching the directory too keeps them armed; matching only the basename would
-# take the captures away from suites that need them, which is the opposite of
-# the fix. Neither test is a claim that every future live-cluster suite will be
-# named this way -- it is the only signal the runner has, and a suite placed
-# outside both shapes gets no captures.
+# That wildcard is not recursive, so it says nothing about subdirectories, and a
+# live-cluster suite grouped into an e2e-* subdirectory carries no prefix on its
+# own filename. Matching the directory too keeps such a suite armed; matching
+# only the basename would take the captures away from a suite that needs them,
+# which is the opposite of the fix. Neither test is a claim that every future
+# live-cluster suite will be named this way -- it is the only signal the runner
+# has, and a suite placed outside both shapes gets no captures.
+#
+# Nor is either test a claim that a runner exists. The prefix arms the captures;
+# hack/bats-runner-coverage.bats is what fails when a suite is run by nothing.
+# Conflating the two is how two suites once sat unexecuted in hack/e2e-apps/ for
+# three weeks.
 #
 # Deliberately not a reachability probe. Gating on "can I talk to an apiserver"
 # would disarm the captures in the case they exist for: a failing e2e run is
