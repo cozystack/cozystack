@@ -54,6 +54,14 @@
   comparable against the tenant apex at all — CEL has no cross-object
   lookup, so a VAP cannot resolve the parent Gateway to learn what would
   otherwise be inherited.
+
+  For two of the three kinds nothing else enforces presence: the
+  httproutes and grpcroutes schemas leave spec.hostnames optional at
+  every version the vendored bundle serves, so this policy is the only
+  rejection a hostname-less route of those kinds meets. tlsroutes is
+  mixed — v1 and v1alpha3 mark the field required with minItems: 1,
+  v1alpha2 marks neither — so there too the policy is what closes the
+  gap while v1alpha2 is served.
 */}}
 {{- /*
   Both operands of the hostname comparison are normalized with
