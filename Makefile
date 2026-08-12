@@ -150,8 +150,14 @@ test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
 # Discover every hack/*.bats file that is NOT an e2e test and run it
-# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
-# up automatically on the next `make unit-tests` run.
+# through cozytest.sh. The glob is ONE level deep and skips hack/e2e-*,
+# so it picks up a new top-level unit suite automatically and nothing
+# else: hack/e2e-*.bats and any suite in a hack/ subdirectory are run by
+# packages/core/testing/Makefile, which names its suites literally.
+# hack/bats-runner-coverage.bats fails if a .bats file is run by neither
+# — two suites once sat unexecuted in hack/e2e-apps/ because this comment
+# claimed more than the glob delivers. Park a suite as *.bats.disabled to
+# take it out of scope on purpose.
 #
 # Caveat: $(wildcard ...) returns space-separated names, so a filename
 # containing a literal space would split into multiple tokens here. All
