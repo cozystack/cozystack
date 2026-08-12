@@ -37,6 +37,64 @@ detection_block() {
   sed -n '/\$renamedVol := include/,/\$systemGen := or/p' "$1"
 }
 
+# template_code <file> -- the file with its {{/* ... */}} spans removed.
+#
+# A discriminator is forbidden as template LOGIC, and both charts carry long
+# comment blocks arguing why these particular signals were rejected. Grepping the
+# raw file cannot tell the argument from the thing argued against, so it reports
+# a chart for documenting the rule it obeys.
+#
+# The span and not the line. Dropping every line that opens a comment is one
+# character shorter and silently loses `{{- $x := .creationTimestamp }} {{/* why
+# */}}`: the discriminator leaves with the comment, the checks below find
+# nothing, and the balance count stays even because that line opens and closes.
+# Neither the balance nor the canary sees it -- the only symptom is a chart that
+# classifies on a forbidden signal and a test that says it does not.
+template_code() {
+  awk '
+    {
+      line = $0; out = ""
+      while (1) {
+        if (!inc) {
+          if (match(line, /\{\{-? *\/\*/)) {
+            out = out substr(line, 1, RSTART - 1)
+            line = substr(line, RSTART + RLENGTH); inc = 1
+          } else { out = out line; break }
+        } else {
+          if (match(line, /\*\/ *-?\}\}/)) { line = substr(line, RSTART + RLENGTH); inc = 0 }
+          else break
+        }
+      }
+      if (out ~ /[^[:space:]]/) print out
+    }
+  ' "$1"
+}
+
+@test "the comment strip removes the span, not the line that opens it" {
+  # Pins the difference between the two spellings, because on today's charts
+  # they agree: no line carries both a discriminator and a comment opener, so
+  # the weaker version passes every check below. It is the shape that would go
+  # wrong silently -- a chart classifying on a forbidden signal and this suite
+  # reporting that it does not -- so it gets a fixture rather than trust.
+  tmp="$(mktemp)"
+  printf '%s\n' \
+    '{{- $renamedVol := include "x" . }}' \
+    '{{- $bad := .metadata.creationTimestamp }} {{/* why this is fine */}}' \
+    '{{- /* a whole-line block' \
+    '   mentioning readyReplicas */}}' > "$tmp"
+
+  code="$(template_code "$tmp")"
+  # A comment-only block still goes.
+  if printf '%s\n' "$code" | grep -q 'readyReplicas'; then
+    echo "FAIL: a comment-only block survived the strip"
+    false
+  fi
+  # The code sharing a line with an opener does not.
+  printf '%s\n' "$code" | grep -q 'creationTimestamp'
+  printf '%s\n' "$code" | grep -q 'renamedVol'
+  rm -f "$tmp"
+}
+
 @test "both charts detect naming generations with byte-identical logic" {
   a=$(mktemp); b=$(mktemp)
   detection_block "$SYS"   > "$a"
@@ -104,10 +162,38 @@ detection_block() {
   # readyReplicas is likewise only a snapshot, not proof a duplicate never
   # served. Neither may come back as a discriminator.
   for f in "$SYS" "$EXTRA"; do
-    ! grep -qF -- 'creationTimestamp' "$f"
-    ! grep -qF -- 'readyReplicas' "$f"
-    ! grep -qF -- '$systemOldest' "$f"
-    ! grep -qF -- '$legacyOldest' "$f"
+    # The strip trusts every `{{/*` to be an opener. One inside a quoted string
+    # -- these charts carry long `fail (printf ...)` messages -- would swallow
+    # the rest of the file and leave the checks below reading nothing. Balance
+    # is the precondition, so assert it rather than the output: a canary token
+    # can only prove that whatever precedes IT survived, and the block most
+    # likely to do the swallowing is the last one in the file.
+    # `grep -o | wc -l` and not `grep -c`: grep -c counts matching LINES, so a
+    # line carrying two openers and one closer reads as balanced while the
+    # strip is left mid-comment, swallowing the rest of the file. Counting
+    # occurrences is what the comparison below actually means. Unreachable in
+    # either chart today -- no line holds more than one delimiter -- so nothing
+    # here pins it; it is a correction to what the count means, not a fix for
+    # an observed failure.
+    #
+    # No `|| true` is needed. `wc -l` closes the pipeline and always exits 0,
+    # so a chart with no comment blocks at all reports 0 = 0 and reaches the
+    # comparison rather than dying on the assignment. `grep`'s own exit 1 would
+    # only reach the status under `pipefail`, which neither runner sets.
+    opens=$(grep -o '{{-\? *\/\*' "$f" | wc -l)
+    closes=$(grep -o '\*\/ *-\?}}' "$f" | wc -l)
+    if [ "$opens" -ne "$closes" ]; then
+      echo "FAIL: $f has $opens comment openers and $closes closers, so the strip below cannot be trusted"
+      false
+    fi
+    code=$(template_code "$f")
+    printf '%s\n' "$code" | grep -qF -- '$renamedVol'
+    for signal in 'creationTimestamp' 'readyReplicas' '$systemOldest' '$legacyOldest'; do
+      if printf '%s\n' "$code" | grep -qF -- "$signal"; then
+        echo "FAIL: $f classifies on $signal, which cannot establish which generation holds the data"
+        false
+      fi
+    done
   done
 }
 
