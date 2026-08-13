@@ -63,3 +63,12 @@ tests:
             apiGroups: ["sdn.cozystack.io"]
             resources: ["securitygroups"]
             verbs: ["create", "update", "patch", "delete"]
+
+  - it: cozy:tenant:admin:base can manage SiteRouter instances
+    documentSelector:
+      path: metadata.name
+      value: cozy:tenant:admin:base
+    asserts:
+      - contains:
+          path: rules[2].resources
+          content: siterouters

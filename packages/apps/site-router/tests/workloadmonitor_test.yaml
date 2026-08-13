@@ -1,0 +1,52 @@
+suite: site-router gateway WorkloadMonitor
+
+# T10 — the gateway WorkloadMonitor feeds the app instance's WorkloadsReady
+# condition (D9): convertHelmReleaseToApplication derives WorkloadsReady from the
+# matching WorkloadMonitor, so this is how gateway liveness reaches the tenant.
+# The selector targets the gateway virt-launcher pod via the KubeVirt-managed
+# vm.kubevirt.io/name label — the same label the tunnel Service selects on, so the
+# monitor and the Service track the same pod.
+
+templates:
+  - templates/workloadmonitor.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+tests:
+  - it: renders a cozystack.io WorkloadMonitor for the instance
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: WorkloadMonitor
+      - isAPIVersion:
+          of: cozystack.io/v1alpha1
+      - equal:
+          path: metadata.name
+          value: site-router-test
+      - equal:
+          path: metadata.namespace
+          value: tenant-test
+
+  - it: selector targets the gateway virt-launcher pod
+    asserts:
+      - equal:
+          path: spec.selector["vm.kubevirt.io/name"]
+          value: site-router-test
+
+  - it: expects a single gateway replica
+    asserts:
+      - equal:
+          path: spec.replicas
+          value: 1
+      - equal:
+          path: spec.minReplicas
+          value: 1
+      - equal:
+          path: spec.kind
+          value: site-router
+      - equal:
+          path: spec.type
+          value: site-router

@@ -1,0 +1,157 @@
+suite: site-router-controller ClusterRole grants
+
+release:
+  name: site-router-controller
+  namespace: cozy-site-router
+
+# The controller runs cluster-wide because SiteRouter instances are Flux
+# HelmReleases spread across tenant namespaces, so every verb it holds is held
+# over every tenant. Two grants in templates/rbac.yaml carry a comment saying
+# why a broader verb is deliberately NOT taken; those are pinned by value here
+# so the reasoning cannot be undone by an edit that only looks additive.
+#
+# Verbs are pinned with `equal` on the rule index rather than `contains`, which
+# succeeds on a superset and would pass straight through a widening. The index
+# coupling is the price: adding a rule above one of these moves it and fails the
+# suite, which is the review this role should get.
+
+tests:
+  - it: reads Secrets with get only, never list or watch
+    templates:
+      - templates/rbac.yaml
+    # The exfiltration guard. Secrets are read one object at a time through the
+    # uncached APIReader, so list/watch would grant nothing the controller uses
+    # — and a cluster-wide Secret `list` returns object contents, which across
+    # every tenant namespace is a credential-exfiltration surface.
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets"]
+            verbs: ["get"]
+      - equal:
+          path: rules[3].resources
+          value: ["secrets"]
+      - equal:
+          path: rules[3].verbs
+          value: ["get"]
+
+  - it: keeps Services in a rule of their own so Secret list is never granted with it
+    templates:
+      - templates/rbac.yaml
+    # Services need `list` (tenant-local ClusterIPs for the guest source filter);
+    # Secrets must not. Folding the two resources into one rule would hand
+    # Secrets the Service verbs, so the split is the guard and is pinned as one.
+    asserts:
+      - equal:
+          path: rules[4].resources
+          value: ["services"]
+      - equal:
+          path: rules[4].verbs
+          value: ["get", "list"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["secrets", "services"]
+            verbs: ["get", "list"]
+
+  - it: reads Namespaces with get and patch only, never list or watch
+    templates:
+      - templates/rbac.yaml
+    # Cluster-wide `patch` is unavoidable — tenant namespaces are created
+    # dynamically and RBAC cannot scope a verb by label or name pattern — so the
+    # bound that remains is the verb set.
+    asserts:
+      - equal:
+          path: rules[2].resources
+          value: ["namespaces"]
+      - equal:
+          path: rules[2].verbs
+          value: ["get", "patch"]
+
+  - it: patches HelmReleases but never updates or deletes them
+    templates:
+      - templates/rbac.yaml
+    # The controller patches the instance's finalizer and status and must never
+    # rewrite the HelmRelease spec, which would fight Flux's helm-controller.
+    asserts:
+      - equal:
+          path: rules[0].resources
+          value: ["helmreleases"]
+      - equal:
+          path: rules[0].verbs
+          value: ["get", "list", "watch", "patch"]
+
+  - it: grants the ConfigMap read the deny-set validation depends on
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["get"]
+
+  - it: grants leader-election leases and events
+    templates:
+      - templates/rbac.yaml
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: ["coordination.k8s.io"]
+            resources: ["leases"]
+            verbs: ["get", "list", "watch", "create", "update", "patch"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["events"]
+            verbs: ["create", "patch"]
+
+  - it: takes no write verb on the gateway VirtualMachineInstance
+    templates:
+      - templates/rbac.yaml
+    # MAC discovery is a single best-effort read; the VM object itself is owned
+    # by the app chart and Flux.
+    asserts:
+      - equal:
+          path: rules[6].resources
+          value: ["virtualmachineinstances"]
+      - equal:
+          path: rules[6].verbs
+          value: ["get"]
+
+  - it: ships exactly the ten rules this role is pinned to
+    templates:
+      - templates/rbac.yaml
+    # templates/rbac.yaml carries no template directives, so the count is a
+    # static property: anything appended makes rules[10] exist and anything
+    # dropped takes rules[9] away. The verb pins above are index-coupled, so a
+    # rule inserted mid-list has to be reviewed against them rather than only
+    # counted.
+    asserts:
+      - exists:
+          path: rules[9]
+      - notExists:
+          path: rules[10]
+
+  - it: binds the ClusterRole to the controller service account in the release namespace
+    templates:
+      - templates/rbac-bind.yaml
+    asserts:
+      - equal:
+          path: roleRef.name
+          value: apps.cozystack.io:site-router-controller
+      - equal:
+          path: subjects[0].kind
+          value: ServiceAccount
+      - equal:
+          path: subjects[0].name
+          value: site-router-controller
+      - equal:
+          path: subjects[0].namespace
+          value: cozy-site-router

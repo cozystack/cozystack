@@ -1,0 +1,18 @@
+<svg width="144" height="144" viewBox="0 0 144 144" fill="none" xmlns="http://www.w3.org/2000/svg">
+<rect width="144" height="144" rx="24" fill="url(#paint0_linear_site_router)"/>
+<ellipse cx="72" cy="94" rx="48" ry="19" fill="#8FBEDD"/>
+<rect x="24" y="62" width="96" height="32" fill="#8FBEDD"/>
+<ellipse cx="72" cy="62" rx="48" ry="19" fill="white"/>
+<g stroke="#0A2E4A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
+<path d="M50 54H92"/>
+<path d="M85 48L92 54L85 60"/>
+<path d="M94 70H52"/>
+<path d="M59 64L52 70L59 76"/>
+</g>
+<defs>
+<linearGradient id="paint0_linear_site_router" x1="142.5" y1="143" x2="3.99999" y2="9.49999" gradientUnits="userSpaceOnUse">
+<stop stop-color="#062A45"/>
+<stop offset="1" stop-color="#2E77B5"/>
+</linearGradient>
+</defs>
+</svg>

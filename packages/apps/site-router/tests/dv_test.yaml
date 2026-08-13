@@ -1,0 +1,88 @@
+suite: site-router boot DataVolume
+
+# T04/T11 — the boot disk is a CDI DataVolume. By default it imports the
+# digest-pinned VyOS appliance containerDisk built by
+# packages/system/vyos-router-image, whose reference this chart carries in
+# images/vyos-router-disk.tag. The source is not tenant-overridable because the
+# guest firewall is the sole compensating control for the relaxed OVN port.
+# storageClass is pinned to `replicated` (DRBD/LINSTOR) so the boot disk is
+# live-migratable.
+#
+# Importing per instance rather than cloning a shared golden in cozy-public is
+# deliberate: a shared golden is populated only at creation, so advancing the
+# appliance could not replace it and later gateways would boot the previous image
+# while their cloud-init contract had moved on.
+
+templates:
+  - templates/dv.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster: {}
+
+tests:
+  - it: renders a DataVolume named <release>-boot
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: metadata.name
+          value: site-router-test-boot
+      - equal:
+          path: spec.contentType
+          value: kubevirt
+
+  # The reference comes from images/vyos-router-disk.tag, stamped by the image
+  # build. Assert the scheme and the repository rather than a literal digest, so a
+  # build restamping the .tag does not break the suite.
+  #
+  # The digest is OPTIONAL here on purpose, and only until the first release build.
+  # A first-party image that has never been built has no digest to commit: the
+  # build stamps `:$(IMAGE_TAG)@sha256:…` into the .tag, and nothing in the PR lane
+  # commits that back to the branch (build-vyos uploads it as a patch fragment for
+  # e2e; only the release tag's "Prepare release" commit lands one). So the
+  # committed ref starts digest-less, exactly as site-router-controller and
+  # securitygroup-controller both did — see docs/image-lifecycle.md.
+  #
+  # TODO: once the first release build has stamped a real digest, re-tighten this
+  # to `@sha256:[0-9a-f]{64}` (mandatory) so a later edit cannot silently drop the
+  # pin. Both forms are accepted below rather than the digest being ignored, so
+  # the tightening is a one-line change here.
+  - it: default source imports the appliance containerDisk
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - matchRegex:
+          path: spec.source.registry.url
+          pattern: ^docker://.+/vyos-router-disk:[^@]+(@sha256:[0-9a-f]{64})?$
+      - notExists:
+          path: spec.source.http
+      - notExists:
+          path: spec.source.pvc
+
+  - it: storageClass is pinned to replicated
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.storage.storageClassName
+          value: replicated
+
+  # R1 — the request is 12Gi, not the 10Gi virtual size of the VyOS qcow2: CDI's
+  # filesystem-import scratch (decompressed image + ~5.5% fs overhead) overflows a
+  # request equal to the virtual size ("virtual image size larger than reported
+  # available storage"), which fails the boot-disk import live on VyOS 1.5-rolling.
+  - it: requests 12Gi to fit the CDI filesystem-import scratch over the 10Gi image
+    documentSelector:
+      path: kind
+      value: DataVolume
+    asserts:
+      - equal:
+          path: spec.storage.resources.requests.storage
+          value: 12Gi

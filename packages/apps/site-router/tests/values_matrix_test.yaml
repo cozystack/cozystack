@@ -1,0 +1,85 @@
+suite: site-router values matrix (render surface)
+
+# T11 — the Phase-1 materialization the chart owns (VM + boot DV + LB + secrets)
+# is the same regardless of the routing knobs, because BGP / static routes /
+# remoteCIDRs are pushed day-2 over the VyOS HTTPS API by the controller (T05),
+# not rendered by the chart. These cases guard that the chart renders cleanly
+# across the whole values surface — bgp on/off, empty remoteCIDRs, the default
+# tunnel.type — so a template never references a missing value and errors.
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    load-balancer-class: metallb.io/metallb
+  peer:
+    address: 203.0.113.10
+    auth:
+      psk: some-psk
+
+tests:
+  - it: renders the gateway VM with bgp disabled (default)
+    templates:
+      - templates/vm.yaml
+    set:
+      bgp:
+        enabled: false
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: VirtualMachine
+
+  - it: renders the gateway VM with bgp enabled (chart render is unchanged; BGP is day-2)
+    templates:
+      - templates/vm.yaml
+    set:
+      bgp:
+        enabled: true
+        localASN: 65001
+        neighbors:
+          - address: 10.10.0.1
+            remoteASN: 65010
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: kind
+          value: VirtualMachine
+
+  - it: renders with empty remoteCIDRs (routes are programmed day-2)
+    templates:
+      - templates/vm.yaml
+    set:
+      remoteCIDRs: []
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders with populated remoteCIDRs
+    templates:
+      - templates/vm.yaml
+    set:
+      remoteCIDRs:
+        - 192.168.50.0/24
+        - 192.168.51.0/24
+    asserts:
+      - hasDocuments:
+          count: 1
+
+  - it: renders the tunnel Service for the default tunnel.type ipsec
+    templates:
+      - templates/service.yaml
+    set:
+      tunnel:
+        type: ipsec
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
