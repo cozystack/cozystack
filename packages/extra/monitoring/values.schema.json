@@ -333,6 +333,58 @@
           "type": "object",
           "default": {},
           "properties": {
+            "email": {
+              "description": "Configuration for email alerts.",
+              "type": "object",
+              "default": {},
+              "required": [
+                "from",
+                "smarthost",
+                "to"
+              ],
+              "properties": {
+                "authUsername": {
+                  "description": "Username for SMTP LOGIN/PLAIN authentication.",
+                  "type": "string",
+                  "default": ""
+                },
+                "bodyHtml": {
+                  "description": "Custom HTML body as an Alertmanager notification template. Empty uses the built-in default.",
+                  "type": "string",
+                  "default": ""
+                },
+                "from": {
+                  "description": "Sender address.",
+                  "type": "string",
+                  "default": ""
+                },
+                "repeatInterval": {
+                  "description": "Minimum time before a still-firing alert is emailed again.",
+                  "type": "string",
+                  "default": "12h"
+                },
+                "secretName": {
+                  "description": "Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set.",
+                  "type": "string",
+                  "default": ""
+                },
+                "smarthost": {
+                  "description": "SMTP server address with port (e.g. \"smtp.example.com:465\"). Port 465 uses implicit TLS, other ports use STARTTLS.",
+                  "type": "string",
+                  "default": ""
+                },
+                "subject": {
+                  "description": "Custom Subject header as an Alertmanager notification template. Empty uses the built-in default.",
+                  "type": "string",
+                  "default": ""
+                },
+                "to": {
+                  "description": "Recipient address(es), separated by commas.",
+                  "type": "string",
+                  "default": ""
+                }
+              }
+            },
             "slack": {
               "description": "Configuration for Slack alerts.",
               "type": "object",
