@@ -105,9 +105,20 @@ logsStorages:
 ## @field {string} url - Configuration uri for Slack alerts.
 ## @field {[]string} [disabledSeverity] - List of severities without alerts (e.g. ["informational","warning"]).
 
+## @typedef {struct} EmailAlerts - Email alert configuration. When enabled, alerts with severity `critical` or `major` carrying the label `notify_email="true"` are sent by email in addition to Alerta.
+## @field {string} to - Recipient address(es), separated by commas.
+## @field {string} from - Sender address.
+## @field {string} smarthost - SMTP server address with port (e.g. "smtp.example.com:465"). Port 465 uses implicit TLS, other ports use STARTTLS.
+## @field {string} [authUsername] - Username for SMTP LOGIN/PLAIN authentication.
+## @field {string} [secretName] - Name of an existing Secret in the release namespace holding the SMTP password under the `password` key. Required when authUsername is set.
+## @field {string} [repeatInterval] - Minimum time before a still-firing alert is emailed again.
+## @field {string} [subject] - Custom Subject header as an Alertmanager notification template. Empty uses the built-in default.
+## @field {string} [bodyHtml] - Custom HTML body as an Alertmanager notification template. Empty uses the built-in default.
+
 ## @typedef {struct} Alerts - Alert routing configuration.
 ## @field {TelegramAlerts} [telegram] - Configuration for Telegram alerts.
 ## @field {SlackAlerts} [slack] - Configuration for Slack alerts.
+## @field {EmailAlerts} [email] - Configuration for email alerts.
 
 ## @typedef {struct} Alerta - Configuration for the Alerta service.
 ## @field {string} [storage] - Persistent volume size for the database.
@@ -134,6 +145,15 @@ alerta:
     slack:
       url: ""
       disabledSeverity: []
+    email:
+      to: ""
+      from: ""
+      smarthost: ""
+      authUsername: ""
+      secretName: ""
+      repeatInterval: 12h
+      subject: ""
+      bodyHtml: ""
 ##
 ## @section Grafana configuration
 ##

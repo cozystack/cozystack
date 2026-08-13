@@ -65,6 +65,15 @@ alerta:
       disabledSeverity: []
       dashboardUrl: ""
       summaryFmt: ""
+    email:
+      to: ""
+      from: ""
+      smarthost: ""
+      authUsername: ""
+      secretName: ""
+      repeatInterval: 12h
+      subject: ""
+      bodyHtml: ""
 grafana:
   # Upstream Grafana image, pinned by digest and routed through
   # cozy-lib.image (so mirrored-registry installs work). Plugins (VictoriaLogs
