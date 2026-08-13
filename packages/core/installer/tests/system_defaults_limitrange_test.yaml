@@ -1,0 +1,71 @@
+suite: cozystack-operator system namespace memory defaults
+
+# The operator maintains a LimitRange in every system namespace so that system
+# components carry a memory limit. Only a limit sets memory.max on the pod cgroup,
+# and the Talos userspace OOM handler (v1.12+) drops cgroups with memory.max from
+# its victim set — without it, system components are killed on behalf of tenant
+# workloads that caused the pressure but do have limits.
+#
+# Both knobs default to "" so the operator's own defaults (4Gi / 32Mi) apply, and
+# "0" must reach the operator rather than being swallowed as empty: it is how an
+# operator disables the LimitRange.
+
+templates:
+  - templates/cozystack-operator.yaml
+
+# cozystack-operator.yaml renders a ServiceAccount, a ClusterRoleBinding and the
+# operator Deployment; every assert is pinned to the Deployment.
+tests:
+  - it: unset knobs render no flags, leaving the operator defaults in force
+    set:
+      cozystackOperator.variant: talos
+    asserts:
+      # Asserted as the empty-valued flag forms rather than as the whole args
+      # list. Dropping the `ne … ""` guard renders exactly these, since both
+      # values default to "", so this still catches the regression it is here
+      # for. Pinning the whole list instead would embed the platform source
+      # digest, which breaks the test on every unrelated digest bump and trips
+      # the first-party image-ref guard in promote-rewrite-tags_test.bats.
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --system-namespace-memory-limit=
+        documentSelector:
+          path: kind
+          value: Deployment
+      - notContains:
+          path: spec.template.spec.containers[0].args
+          content: --system-namespace-memory-request=
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: both knobs are passed through when set
+    set:
+      cozystackOperator.variant: talos
+      cozystackOperator.systemNamespaceMemoryLimit: 8Gi
+      cozystackOperator.systemNamespaceMemoryRequest: 64Mi
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --system-namespace-memory-limit=8Gi
+        documentSelector:
+          path: kind
+          value: Deployment
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --system-namespace-memory-request=64Mi
+        documentSelector:
+          path: kind
+          value: Deployment
+
+  - it: a zero limit reaches the operator, which is how the LimitRange is disabled
+    set:
+      cozystackOperator.variant: talos
+      cozystackOperator.systemNamespaceMemoryLimit: 0
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].args
+          content: --system-namespace-memory-limit=0
+        documentSelector:
+          path: kind
+          value: Deployment

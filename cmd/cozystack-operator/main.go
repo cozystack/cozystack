@@ -35,6 +35,7 @@ import (
 	sourcewatcherv1beta1 "github.com/fluxcd/source-watcher/api/v2/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
@@ -97,6 +98,8 @@ func main() {
 	var platformSourceName string
 	var platformSourceRef string
 	var platformSourceSecret string
+	var systemNamespaceMemoryLimit string
+	var systemNamespaceMemoryRequest string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -144,6 +147,17 @@ func main() {
 	flag.StringVar(&cozyValuesSecretName, "cozy-values-secret-name", "cozystack-values", "The name of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesSecretNamespace, "cozy-values-secret-namespace", "cozy-system", "The namespace of the secret containing cluster-wide configuration values.")
 	flag.StringVar(&cozyValuesNamespaceSelector, "cozy-values-namespace-selector", "cozystack.io/system=true", "The label selector for namespaces where the cluster-wide configuration values must be replicated.")
+	flag.StringVar(&systemNamespaceMemoryLimit, "system-namespace-memory-limit", "4Gi",
+		"Default container memory limit applied through a LimitRange in every system namespace. "+
+			"Keeps system components out of the Talos userspace OOM handler's victim set, which only "+
+			"considers cgroups with no memory.max. Should stay above the largest memory request in any "+
+			"system namespace, since a defaulted limit below a container's own request fails admission; "+
+			"a namespace holding such a container is skipped and logged rather than broken. "+
+			"Empty or 0 disables the LimitRange and removes any previously created one.")
+	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", "32Mi",
+		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
+			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
+			"limit for every system container at schedule time.")
 
 	opts := zap.Options{
 		Development: true,
@@ -167,6 +181,31 @@ func main() {
 	hrUpgradeTimeoutDuration := parseFlag("--helmrelease-upgrade-timeout", helmReleaseUpgradeTimeout)
 	if helmReleaseMaxHistory < 0 {
 		setupLog.Error(fmt.Errorf("--helmrelease-max-history must be >= 0"), "invalid value", "value", helmReleaseMaxHistory)
+		os.Exit(1)
+	}
+
+	parseQuantity := func(flagName, raw string) resource.Quantity {
+		if raw == "" {
+			return resource.Quantity{}
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			setupLog.Error(err, "invalid quantity flag", "flag", flagName, "value", raw)
+			os.Exit(1)
+		}
+		if q.Sign() < 0 {
+			setupLog.Error(fmt.Errorf("%s must not be negative", flagName), "invalid value", "value", raw)
+			os.Exit(1)
+		}
+		return q
+	}
+	systemNSMemoryLimit := parseQuantity("--system-namespace-memory-limit", systemNamespaceMemoryLimit)
+	systemNSMemoryRequest := parseQuantity("--system-namespace-memory-request", systemNamespaceMemoryRequest)
+	// A LimitRange whose defaultRequest exceeds its default is rejected by the API server,
+	// which would wedge namespace reconciliation for every system package.
+	if !systemNSMemoryLimit.IsZero() && systemNSMemoryRequest.Cmp(systemNSMemoryLimit) > 0 {
+		setupLog.Error(fmt.Errorf("--system-namespace-memory-request must not exceed --system-namespace-memory-limit"),
+			"invalid value", "request", systemNamespaceMemoryRequest, "limit", systemNamespaceMemoryLimit)
 		os.Exit(1)
 	}
 
@@ -306,13 +345,20 @@ func main() {
 
 	// Setup Package reconciler
 	if err := (&operator.PackageReconciler{
-		Client:                    mgr.GetClient(),
+		Client: mgr.GetClient(),
+		// Non-cached, so the per-namespace Pod scan guarding the system defaults
+		// LimitRange does not start a cluster-wide Pod informer in an operator
+		// whose whole purpose here is to bound memory.
+		APIReader:                 mgr.GetAPIReader(),
 		Scheme:                    mgr.GetScheme(),
 		HelmReleaseInterval:       hrIntervalDuration,
 		HelmReleaseRetryInterval:  hrRetryIntervalDuration,
 		HelmReleaseInstallTimeout: hrInstallTimeoutDuration,
 		HelmReleaseUpgradeTimeout: hrUpgradeTimeoutDuration,
 		HelmReleaseMaxHistory:     helmReleaseMaxHistory,
+
+		SystemNamespaceMemoryLimit:   systemNSMemoryLimit,
+		SystemNamespaceMemoryRequest: systemNSMemoryRequest,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Package")
 		os.Exit(1)
