@@ -1,0 +1,48 @@
+{{- /*
+  CDI DataVolume for the router boot disk.
+
+  Default: import the digest-pinned VyOS appliance containerDisk built in-repo by
+  packages/system/vyos-router-image, whose `image` target stamps the reference
+  into this chart's images/vyos-router-disk.tag. The artifact ships as a registry
+  image rather than an HTTP qcow2 precisely so the boot disk is pinned by digest —
+  CDI's http importer cannot verify a sha256.
+
+  Each instance imports its own boot disk rather than cloning a shared golden in
+  cozy-public. A shared golden is the cheaper import, but it needs a name both
+  this chart and the golden's chart agree on, and CDI populates a DataVolume only
+  at creation — so advancing the appliance could not replace an existing golden's
+  contents, and every later gateway would silently boot the previous appliance
+  while its cloud-init contract had moved on (the two advance atomically, see
+  docs/image-lifecycle.md). Importing per instance keeps the disk and the digest
+  that produced it in lockstep: change the digest and the next gateway gets the
+  new appliance, with nothing shared to go stale and nothing to keep in sync.
+
+  storageClass is pinned to `replicated` (DRBD/LINSTOR) so the boot disk stays
+  live-migratable.
+*/ -}}
+apiVersion: cdi.kubevirt.io/v1beta1
+kind: DataVolume
+metadata:
+  name: {{ .Release.Name }}-boot
+  labels:
+    {{- include "site-router.labels" . | nindent 4 }}
+spec:
+  contentType: kubevirt
+  source:
+    {{- /*
+      `required` on the trimmed contents: an unstamped or empty .tag fails the
+      render with a legible message instead of importing a reference that cannot
+      resolve and leaving the gateway on a Pending PVC forever.
+    */}}
+    registry:
+      url: {{ printf "docker://%s" (required "empty images/vyos-router-disk.tag: the VyOS appliance containerDisk has not been stamped by a build — install a Cozystack build whose CI stamped it" (.Files.Get "images/vyos-router-disk.tag" | trim)) | quote }}
+  storage:
+    resources:
+      requests:
+        # 12Gi, not the 10Gi virtual size of the VyOS qcow2: CDI's
+        # filesystem-import scratch needs the decompressed image plus ~5.5%
+        # filesystem overhead, so a request equal to the virtual size fails the
+        # import with "virtual image size larger than reported available
+        # storage" (validated live on VyOS 1.5-rolling). The headroom absorbs it.
+        storage: 12Gi
+    storageClassName: replicated

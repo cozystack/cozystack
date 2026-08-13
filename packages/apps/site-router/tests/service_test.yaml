@@ -1,0 +1,88 @@
+suite: site-router tunnel LoadBalancer Service
+
+# T04/T11 — the tunnel endpoint is a native Service type: LoadBalancer with
+# spec.loadBalancerClass driven by the engine-injected _cluster."load-balancer-class"
+# (post PR #3218 native model; see packages/extra/ingress/templates/nginx-ingress.yaml).
+# This is the IPsec responder entry point: the remote peer dials in on IKE (UDP 500)
+# and NAT-T (UDP 4500). The selector targets the gateway virt-launcher pod via the
+# KubeVirt-managed vm.kubevirt.io/name label.
+
+templates:
+  - templates/service.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    load-balancer-class: metallb.io/metallb
+
+tests:
+  - it: renders a LoadBalancer Service named <release>-tunnel
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: metadata.name
+          value: site-router-test-tunnel
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+  - it: takes loadBalancerClass from _cluster."load-balancer-class"
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.loadBalancerClass
+          value: metallb.io/metallb
+
+  - it: omits loadBalancerClass when the platform sets no class (default LB handles it)
+    set:
+      _cluster:
+        load-balancer-class: ""
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+      - notExists:
+          path: spec.loadBalancerClass
+
+  - it: exposes the IPsec UDP tunnel ports (IKE 500, NAT-T 4500)
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.ports[0].port
+          value: 500
+      - equal:
+          path: spec.ports[0].protocol
+          value: UDP
+      - equal:
+          path: spec.ports[0].targetPort
+          value: 500
+      - equal:
+          path: spec.ports[1].port
+          value: 4500
+      - equal:
+          path: spec.ports[1].protocol
+          value: UDP
+      - equal:
+          path: spec.ports[1].targetPort
+          value: 4500
+
+  - it: selector targets the gateway virt-launcher pod
+    documentSelector:
+      path: kind
+      value: Service
+    asserts:
+      - equal:
+          path: spec.selector["vm.kubevirt.io/name"]
+          value: site-router-test

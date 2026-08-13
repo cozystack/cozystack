@@ -1,0 +1,160 @@
+suite: site-router Cilium security policies (T08)
+
+# T08 platform-owned Cilium policies, written FIRST (Phase A). The template
+# templates/networkpolicy.yaml lands in Phase B, so until then this suite fails
+# on the missing document. Split out of the M1 policy_workloadmonitor_todo stub
+# so T10 keeps ownership of the WorkloadMonitor assertions.
+#
+# TWO NET-NEW POLICIES (all existing cozystack policies are additive allow-only;
+# there is NO default-deny and egressDeny is unused today):
+#
+#   1. egressDeny (§2) — the FIRST egressDeny in the repo. Cilium deny rules
+#      take precedence over allow rules regardless of policy scope (CNP vs
+#      CCNP), so a namespaced CiliumNetworkPolicy egressDeny composes correctly
+#      with the tenant's allow-only baseline (`allow-external-communication`'s
+#      egress toEntities world) — deny WINS. The policy is scoped to the gateway
+#      endpoint (vm.kubevirt.io/name = <release>, matching service.yaml's
+#      selector), NOT endpointSelector {} (which would hit every tenant pod), so
+#      it never denies unrelated tenant workloads their metadata/mgmt egress.
+#      It denies 169.254.0.0/16 (incl. metadata 169.254.169.254) plus operator-
+#      supplied management/node ranges (security.egressDenyCIDRs) that do not
+#      overlap tenant workloads. Cilium's identity model already blocks direct
+#      access to unrelated tenants / nodes / the API; this adds the explicit
+#      link-local + management deny that identity does not cover.
+#
+#   2. gateway ingress (§4 Boundary B) — admits ONLY the public tunnel responder
+#      ports (UDP 500 / 4500) from the world, and the controller's identity
+#      (namespace cozy-site-router, app site-router-controller) on the HTTPS API
+#      port (443). The API port is NEVER world-open. Selecting the gateway
+#      endpoint makes it ingress-default-deny-except-these in Cilium.
+#      NOTE (raised at the gate): fully realising Boundary B ALSO requires the
+#      tenant baseline to EXCLUDE the gateway endpoint from its broad
+#      allow-external/internal-communication ingress (a packages/apps/tenant
+#      change), because Cilium allow rules are additive — otherwise the broad
+#      tenant ingress adds world/cluster access back onto the gateway. That
+#      cross-chart edit is pending approval and is NOT asserted here.
+
+templates:
+  - templates/networkpolicy.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+set:
+  _cluster:
+    load-balancer-class: metallb.io/metallb
+  managementCIDR: 10.244.0.0/16
+  peer:
+    address: 203.0.113.10
+
+tests:
+  # --- §2 Cilium egressDeny (link-local + management) ---------------------
+  - it: renders a gateway-scoped CiliumNetworkPolicy that denies link-local egress
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-gateway-egress-deny
+    asserts:
+      - isKind:
+          of: CiliumNetworkPolicy
+      - equal:
+          path: apiVersion
+          value: cilium.io/v2
+      # Scoped to the gateway endpoint, not all tenant pods.
+      - isNotEmpty:
+          path: spec.endpointSelector.matchLabels
+      - equal:
+          path: spec.endpointSelector.matchLabels['vm.kubevirt.io/name']
+          value: site-router-test
+      # egressDeny is the net-new primitive; link-local incl. metadata is denied.
+      - contains:
+          path: spec.egressDeny[0].toCIDR
+          content: 169.254.0.0/16
+
+  - it: does NOT scope the egressDeny to every tenant pod (endpointSelector is not empty)
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-gateway-egress-deny
+    asserts:
+      - notEqual:
+          path: spec.endpointSelector
+          value: {}
+
+  - it: adds operator-supplied management/node ranges to the egressDeny
+    set:
+      security:
+        egressDenyCIDRs:
+          - 10.96.0.0/16
+          - 192.0.2.0/24
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-gateway-egress-deny
+    asserts:
+      - contains:
+          path: spec.egressDeny[0].toCIDR
+          content: 169.254.0.0/16
+      - contains:
+          path: spec.egressDeny[0].toCIDR
+          content: 10.96.0.0/16
+      - contains:
+          path: spec.egressDeny[0].toCIDR
+          content: 192.0.2.0/24
+
+  # --- §4 Boundary B gateway ingress policy -------------------------------
+  - it: admits only the public tunnel responder ports (UDP 500/4500) from the world
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-gateway-ingress
+    asserts:
+      - isKind:
+          of: CiliumNetworkPolicy
+      - equal:
+          path: spec.endpointSelector.matchLabels['vm.kubevirt.io/name']
+          value: site-router-test
+      - contains:
+          path: spec.ingress[0].fromEntities
+          content: world
+      - contains:
+          path: spec.ingress[0].toPorts[0].ports
+          content:
+            port: "500"
+            protocol: UDP
+      - contains:
+          path: spec.ingress[0].toPorts[0].ports
+          content:
+            port: "4500"
+            protocol: UDP
+
+  - it: admits the controller identity on the HTTPS API port (443) only
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-gateway-ingress
+    asserts:
+      - equal:
+          path: spec.ingress[1].fromEndpoints[0].matchLabels['k8s:io.kubernetes.pod.namespace']
+          value: cozy-site-router
+      - equal:
+          path: spec.ingress[1].fromEndpoints[0].matchLabels['k8s:app']
+          value: site-router-controller
+      - contains:
+          path: spec.ingress[1].toPorts[0].ports
+          content:
+            port: "443"
+            protocol: TCP
+
+  - it: never opens the API port (443) to the world
+    documentSelector:
+      path: metadata.name
+      value: site-router-test-gateway-ingress
+    asserts:
+      # The world-sourced ingress rule carries only the tunnel ports, not 443.
+      - notContains:
+          path: spec.ingress[0].toPorts[0].ports
+          content:
+            port: "443"
+            protocol: TCP
+      # The 443 rule is sourced from the controller endpoint (fromEndpoints),
+      # not from the world — combined with the above, the API is never
+      # world-open.
+      - isNotEmpty:
+          path: spec.ingress[1].fromEndpoints
