@@ -36,6 +36,38 @@ cozystackOperator:
   # (operator default: 5). Number of release revisions Helm keeps per HR.
   # Use 0 for unlimited; lower values reduce Secret accumulation in test clusters.
   helmReleaseMaxHistory: ""
+  # When non-empty, overrides the operator's --system-namespace-memory-limit flag
+  # (operator default: 4Gi). The operator maintains a LimitRange in every system
+  # namespace defaulting container memory for anything that declares none.
+  #
+  # This exists for the Talos userspace OOM handler (v1.12+), which ranks cgroups
+  # with `memory_max.hasValue() ? 0.0 : {Besteffort: 1.0, ...}[class] *
+  # memory_current` and discards everything scoring zero. Only a memory *limit*
+  # sets memory.max and buys immunity — a request merely demotes BestEffort to
+  # Burstable, which under strictCgroupClassOrdering still means "killed second".
+  # Without this, system components are the victims whenever a tenant workload
+  # drives node memory PSI, because the tenant workload has limits and they do not:
+  # packages/apps/tenant ships tenant-range-limits, which defaults container memory
+  # in tenant namespaces that declare resourceQuotas. Tenant namespaces are left to
+  # that chart; this closes the same gap for system namespaces.
+  #
+  # A ceiling, not a reservation: pick it well above real usage. It should stay above
+  # the largest memory request in any system namespace, because a defaulted limit
+  # below a container's own request is rejected at admission. Setting it too low
+  # costs protection rather than availability: before applying, the operator scans
+  # the namespace for a container that requests more than this and declares no limit
+  # of its own, and where it finds one it skips that namespace — retracting any
+  # LimitRange it applied earlier — and logs the pod, container, request and limit.
+  # Watch for this on clusters running VPA, which can raise a request on its own.
+  #
+  # Set to 0 to disable, which also removes the LimitRanges the operator previously
+  # created.
+  systemNamespaceMemoryLimit: ""
+  # When non-empty, overrides the operator's --system-namespace-memory-request flag
+  # (operator default: 32Mi). Deliberately small and always set: Kubernetes defaults
+  # an unset request to the limit, which would have every system container reserve
+  # the full limit at schedule time.
+  systemNamespaceMemoryRequest: ""
   # Name of the Secret in cozy-system namespace containing credentials for the
   # platform source. When non-empty, sets spec.secretRef on the generated
   # OCIRepository or GitRepository resource. Secret type depends on source kind:
