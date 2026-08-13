@@ -1,0 +1,40 @@
+# Probe-driver — the in-cluster exec host for the reachability / MSS /
+# negative-security scripts. The _probe-lib.sh helpers do NOT probe from the
+# Chainsaw runner (which is on the pod network and cannot source from B's
+# 192.0.2.x / 198.51.100.x dummies); they `kubectl exec probe-driver -- ...` to:
+#   - SSH into B's guest (vyos / ${REMOTE_B_PASS:-e2edrive}) and run curl/nc/ping
+#     sourced from B's dummy interfaces INTO the tunnel toward A;
+#   - curl A's VyOS HTTPS management API to read firewall drop counters.
+# Making it a suite-applied Pod (rather than a hand-created one) is what lets a
+# fresh run reproduce the proof self-contained.
+#
+# netshoot ships ssh/curl/nc/python3 but NOT sshpass, so the container adds it at
+# start; the readinessProbe gates "Ready" on sshpass+curl+python3 being present,
+# so the create-probe-driver step's readiness assert guarantees the tools are
+# there before the first probe. sshpass is fetched from the Alpine repo at start
+# — the empirical validation runs on an internet-connected sandbox; an air-gapped
+# run would need the tool baked into a pinned image instead.
+# TODO(T13): pin the image by digest and add it to hack/e2e-prepull-images.sh so
+# the pod does not race an image pull (mirrors backend.yaml's agnhost TODO).
+apiVersion: v1
+kind: Pod
+metadata:
+  name: probe-driver
+  labels:
+    app: site-router-probe-driver
+spec:
+  containers:
+    - name: driver
+      image: nicolaka/netshoot
+      command:
+        - sh
+        - -c
+        - "apk add --no-cache sshpass >/dev/null 2>&1 || true; exec sleep infinity"
+      readinessProbe:
+        exec:
+          command:
+            - sh
+            - -c
+            - "command -v sshpass && command -v curl && command -v python3"
+        periodSeconds: 3
+        failureThreshold: 60

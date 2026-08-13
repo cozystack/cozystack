@@ -3,9 +3,20 @@ apiVersion: rbac.authorization.k8s.io/v1
 metadata:
   name: cozystack-api
 rules:
+# Services are also a SiteRouter admission input: allocated external addresses
+# are protected by the deny-set's live cluster discovery.
 - apiGroups: [""]
   resources: ["namespaces", "secrets", "services"]
   verbs: ["get", "watch", "list"]
+# The SiteRouter deny-set admission reads the cluster-wide cozystack ConfigMap to
+# resolve the cluster networks a tenant's remoteCIDRs are validated against (see
+# pkg/registry/apps/application/rest_siterouter.go). Without this grant every
+# SiteRouter declaring remoteCIDRs is rejected with Forbidden. Scoped by name to
+# the single ConfigMap the admission reads (a plain get, no list/watch).
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get"]
+  resourceNames: ["cozystack"]
 # Hierarchical tenant quota admission reads the rendered ResourceQuota usage of
 # a parent tenant's pool to carve a child's allocation out of what is actually
 # left (see pkg/registry/apps/application/quota.go).
@@ -30,7 +41,9 @@ rules:
 - apiGroups: ["helm.toolkit.fluxcd.io"]
   resources: ["*"]
   verbs: ["*"]
-# Read-only sources for the Option (dropdown) resource providers.
+# Read-only sources for the Option (dropdown) resource providers. Nodes are also
+# a SiteRouter admission input: every live InternalIP/ExternalIP is protected by
+# the deny-set.
 - apiGroups: [""]
   resources: ["nodes", "persistentvolumeclaims"]
   verbs: ["get", "watch", "list"]

@@ -1,4 +1,4 @@
-suite: cozystack-api ClusterRole grants Option provider sources
+suite: cozystack-api ClusterRole read sources
 templates:
   - templates/rbac.yaml
 
@@ -15,9 +15,9 @@ release:
 # the API group string exactly.
 #
 # The last two tests bound the role from two directions, and neither covers the
-# other. The count bound pins the list at exactly sixteen: templates/rbac.yaml
-# carries no template directives, so anything appended makes rules[16] exist and
-# anything dropped takes rules[15] away, whatever the rule is called. It says
+# other. The count bound pins the list at exactly seventeen: templates/rbac.yaml
+# carries no template directives, so anything appended makes rules[17] exist and
+# anything dropped takes rules[16] away, whatever the rule is called. It says
 # nothing about a grant swapped in for an existing one, because the count does
 # not move under a swap. The spelling assert catches that case for the one rule
 # it names, and misses every other wording of it, because helm-unittest compares
@@ -26,6 +26,42 @@ release:
 # indices below, which is the review this role should get.
 
 tests:
+  - it: grants SiteRouter admission read access to Services and Nodes
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["namespaces", "secrets", "services"]
+            verbs: ["get", "watch", "list"]
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["nodes", "persistentvolumeclaims"]
+            verbs: ["get", "watch", "list"]
+
+  - it: grants SiteRouter deny-set admission a name-scoped read of the cozystack ConfigMap
+    # The deny-set resolves the cluster networks a tenant's remoteCIDRs are
+    # validated against from this one ConfigMap; without the grant every
+    # SiteRouter declaring remoteCIDRs is rejected with Forbidden. Pinned with
+    # resourceNames and verbs spelled out so widening it to every ConfigMap, or
+    # to list/watch, has to move this assert rather than passing under it.
+    asserts:
+      - contains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["get"]
+            resourceNames: ["cozystack"]
+      - notContains:
+          path: rules
+          content:
+            apiGroups: [""]
+            resources: ["configmaps"]
+            verbs: ["get", "watch", "list"]
+
   - it: grants read on backups.cozystack.io plans and backups for the plan/backup providers
     asserts:
       - contains:
@@ -53,11 +89,11 @@ tests:
             resources: ["bucketclasses"]
             verbs: ["get", "watch", "list"]
 
-  - it: ships exactly the sixteen rules this role is pinned to
+  - it: ships exactly the seventeen rules this role is pinned to
     asserts:
       # Both directions. A dropped grant is the failure this suite is about:
       # the apiserver returns forbidden and List silently drops the dropdown.
       - exists:
-          path: rules[15]
-      - notExists:
           path: rules[16]
+      - notExists:
+          path: rules[17]

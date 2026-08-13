@@ -1,0 +1,39 @@
+suite: site-router schema validation
+
+templates:
+  - templates/dv.yaml
+
+release:
+  name: site-router-test
+  namespace: tenant-test
+
+tests:
+  - it: rejects a malformed static-route destination before the controller push
+    set:
+      staticRoutes:
+        - destination: '10.0.0.0/24" injected'
+          nextHop: 10.0.0.1
+    asserts:
+      - failedTemplate:
+          errorPattern: "staticRoutes.0.destination.*does not match pattern"
+
+  - it: rejects a malformed static-route next hop before the controller push
+    set:
+      staticRoutes:
+        - destination: 10.0.0.0/24
+          nextHop: '10.0.0.1 bad'
+    asserts:
+      - failedTemplate:
+          errorPattern: "staticRoutes.0.nextHop.*does not match pattern"
+
+  - it: rejects a malformed BGP neighbor before the controller push
+    set:
+      bgp:
+        enabled: true
+        localASN: 65001
+        neighbors:
+          - address: '203.0.113.1 bad'
+            remoteASN: 65000
+    asserts:
+      - failedTemplate:
+          errorPattern: "bgp.neighbors.0.address.*does not match pattern"
