@@ -6,6 +6,17 @@
 {{- $gatewayEnabled := (index .Values._cluster "gateway-enabled") | default "false" }}
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
+{{- $email := ((.Values.alerta.alerts).email) | default dict }}
+{{- $emailEnabled := or $email.to $email.smarthost $email.from }}
+{{- if $emailEnabled }}
+{{- if not (and $email.to $email.smarthost $email.from) }}
+{{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
+{{- end }}
+{{- if and $email.authUsername (not $email.secretName) }}
+{{- fail "alerta.alerts.email.secretName is required when authUsername is set" }}
+{{- end }}
+{{- end }}
+
 {{- $apiKey := randAlphaNum 32 }}
 {{- $existingSecret := lookup "v1" "Secret" .Release.Namespace "alerta" }}
 {{- if $existingSecret }}
@@ -261,6 +272,19 @@ stringData:
       - receiver: blackhole
         matchers:
         - 'alertname=~"CDIDefaultStorageClassDegraded|CDINoDefaultStorageClass"'
+      {{- if $emailEnabled }}
+      - receiver: alerta
+        continue: true
+        matchers:
+        - 'severity=~"critical|major"'
+        - 'notify_email="true"'
+      - receiver: email
+        group_by: [alertname, cluster]
+        repeat_interval: {{ $email.repeatInterval | default "12h" }}
+        matchers:
+        - 'severity=~"critical|major"'
+        - 'notify_email="true"'
+      {{- end }}
     receivers:
     - name: blackhole
     - name: "alerta"
@@ -271,6 +295,25 @@ stringData:
       webhook_configs:
       - url: 'http://alerta/api/webhooks/prometheus?api-key={{ $apiKey }}'
         send_resolved: false
+    {{- if $emailEnabled }}
+    - name: email
+      email_configs:
+      - to: {{ $email.to | quote }}
+        from: {{ $email.from | quote }}
+        smarthost: {{ $email.smarthost | quote }}
+        {{- if $email.authUsername }}
+        auth_username: {{ $email.authUsername | quote }}
+        auth_password_file: /etc/vm/secrets/{{ $email.secretName }}/password
+        {{- end }}
+        {{- if $email.subject }}
+        headers:
+          Subject: {{ $email.subject | quote }}
+        {{- end }}
+        {{- if $email.bodyHtml }}
+        html: {{ $email.bodyHtml | quote }}
+        {{- end }}
+        send_resolved: true
+    {{- end }}
 ---
 apiVersion: operator.victoriametrics.com/v1beta1
 kind: VMAlertmanager
@@ -284,6 +327,10 @@ spec:
       apps.cozystack.io/application.name: {{ $.Release.Name }}
   replicaCount: 3
   configSecret: alertmanager
+  {{- if and $emailEnabled $email.secretName }}
+  secrets:
+  - {{ $email.secretName }}
+  {{- end }}
   podMetadata:
     labels:
       policy.cozystack.io/allow-to-apiserver: "true"
