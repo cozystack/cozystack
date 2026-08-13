@@ -1,0 +1,34 @@
+{{- /*
+CA bundle CDI verifies the Talos Image Factory against while importing a
+worker's OS disk image.
+
+Why this object exists: workers boot from a raw disk image CDI streams over
+HTTP(S) from .Values.talos.imageFactoryURL. That value is documented for
+self-hosted factories and mirrors in air-gapped or flaky-egress environments,
+but such an endpoint is typically served with a certificate from an internal
+CA — and the importer, trusting only its system store, refuses it with
+"x509: certificate signed by unknown authority". The DataVolume API has carried
+source.http.certConfigMap for exactly this since the beginning; this chart just
+had no way to fill it in.
+
+Rendered only when the value is set, so an untouched release is unchanged and
+the public factory keeps working with no ConfigMap at all.
+
+Namespace is the release namespace by omission, which is what CDI requires:
+"secretRef and certConfigMap must be in the same namespace as the DataVolume".
+
+The key name is arbitrary — CDI mounts the whole ConfigMap into the importer's
+cert directory and reads every file in it — so ca.pem follows the upstream
+example in kubevirt/containerized-data-importer manifests/example/cert-configmap.yaml.
+*/}}
+{{- with (include "kubernetes.talosImageFactoryCA" $) }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubernetes.talosImageFactoryCAConfigMapName" $ }}
+  labels:
+    {{- include "kubernetes.labels" $ | nindent 4 }}
+data:
+  ca.pem: |
+    {{- . | nindent 4 }}
+{{- end }}

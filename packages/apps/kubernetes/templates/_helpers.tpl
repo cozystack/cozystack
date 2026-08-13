@@ -154,6 +154,54 @@ md0:
 {{- end }}
 
 {{/*
+Name of the ConfigMap carrying the CA bundle CDI verifies the Talos Image
+Factory against. Shared by the ConfigMap itself (templates/talos/
+image-factory-ca.yaml) and the DataVolume that references it through
+source.http.certConfigMap (templates/cluster.yaml), so the two cannot drift.
+
+Deliberately free of a content hash: CDI resolves certConfigMap by name at
+import time, so a stable name lets a CA rotation land by updating the object
+in place. A hashed name would instead require the DataVolume — and therefore
+the whole KubevirtMachineTemplate, which is immutable — to be rebuilt.
+*/}}
+{{- define "kubernetes.talosImageFactoryCAConfigMapName" -}}
+{{- printf "%s-talos-factory-ca" .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{/*
+Validated .Values.talos.imageFactoryCA: renders the trimmed PEM when the value
+is set, and nothing at all when it is empty. Callers therefore gate on it with
+`with`, and an unset value leaves the render byte-for-byte as before.
+
+The guards mirror those in cozy-lib.tls.caCertSecret (packages/library/cozy-lib/
+templates/_tls.tpl) — the value is emitted verbatim into an object, so it must be
+complete certificate blocks and nothing else, and must never carry a private key.
+The messages name this chart's field rather than that helper's parameter, which
+is why the rules are restated here instead of being shared; a common cozy-lib
+guard would be an easy follow-up if maintainers prefer one.
+
+Note what this does NOT do: a Helm template has no x509 parser, so a body spelled
+in base64 characters passes however meaningless. CDI reports such a bundle at
+import time — AppendCertsFromPEM simply adds nothing and verification still fails.
+*/}}
+{{- define "kubernetes.talosImageFactoryCA" -}}
+{{- /* Coerce first: an unquoted numeric scalar parses to float64, and trim on it
+       would die with a raw Go type error instead of the message below. In a
+       normal render values.schema.json rejects a non-string before this runs;
+       the coercion covers the paths where no schema is applied. */ -}}
+{{- $ca := printf "%v" (default "" .Values.talos.imageFactoryCA) -}}
+{{- if ne (trim $ca) "" -}}
+{{-   if regexMatch "(?i)-----BEGIN [A-Z0-9 ]*PRIVATE KEY" $ca -}}
+{{-     fail "talos.imageFactoryCA must not contain private key material: it holds the CA the image factory is verified against, and the rendered ConfigMap is readable by everything that can read the namespace" -}}
+{{-   end -}}
+{{-   if not (regexMatch "(?i)\\A\\s*(-----BEGIN CERTIFICATE-----\\s+[A-Za-z0-9+/=][A-Za-z0-9+/=\\s]*-----END CERTIFICATE-----\\s*)+\\z" $ca) -}}
+{{-     fail "talos.imageFactoryCA must contain one or more complete PEM certificate blocks (BEGIN/END CERTIFICATE) and nothing else" -}}
+{{-   end -}}
+{{-   trim $ca -}}
+{{- end -}}
+{{- end }}
+
+{{/*
 OIDC clientId for the per-cluster Keycloak public client (mode: System).
 
 Namespaced by Release.Namespace so the identifier is globally unique within
