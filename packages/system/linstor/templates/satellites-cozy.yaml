@@ -27,10 +27,14 @@ spec:
         # starts this container with `startSatellite`, the distribution the
         # controller runs with `startController`. A memory.max is what a
         # container-aware JVM reads to size its heap, so a limit here shrinks the
-        # heap rather than only capping RSS. The cost is that the pod cgroup gets
-        # no memory.max, so this pod stays in the OOM handler's victim set; closing
-        # that needs a peak measured on a high-resource-count cluster plus an
-        # explicit heap share, not a guessed ceiling.
+        # heap rather than only capping RSS. This moves the ceiling rather than
+        # removing it: with the LimitRange the operator maintains in every system
+        # namespace (#3494, which must merge with or before this) admission
+        # defaults this container to --system-namespace-memory-limit, 4Gi, so the
+        # pod does get memory.max and the heap is derived from one operator-facing
+        # knob instead of a per-chart guess. Without that LimitRange the container
+        # really is limit-free and the pod stays in the victim set.
+        # Full account, and what would settle the sizing: tests/satellites_test.yaml.
         # 14d peak 368Mi on a 3-node dev cluster; grows with resource count.
         resources:
           requests:
