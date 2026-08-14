@@ -102,6 +102,14 @@ spec:
           source:
             http:
               url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
+              {{- /* Only when talos.imageFactoryCA is set: a self-hosted factory
+                    served with a certificate from an internal CA. CDI appends the
+                    bundle to the system pool instead of replacing it, so a
+                    publicly-trusted endpoint verifies either way. The ConfigMap
+                    is rendered by templates/talos/image-factory-ca.yaml. */}}
+              {{- if (include "kubernetes.talosImageFactoryCA" $) }}
+              certConfigMap: {{ include "kubernetes.talosImageFactoryCAConfigMapName" $ }}
+              {{- end }}
           {{- if hasKey .group "ephemeralStorage" }}
           {{- fail (printf "nodeGroup %q: ephemeralStorage is no longer supported and should have been automatically migrated to diskSize by platform migration 41. If you see this error after upgrading, the migration did not run — check the cozystack-migration-hook Job logs in cozy-system." .groupName) }}
           {{- end }}

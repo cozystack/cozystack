@@ -363,6 +363,9 @@ type Scheduler struct {
 }
 
 type Talos struct {
+	// Complete PEM certificate block(s) CDI must trust when importing the worker OS disk image over HTTPS. Empty by default, so the importer uses only its system trust store, which is what the public factory needs. Set this when `imageFactoryURL` points at a self-hosted factory or mirror served by an internal CA, which the importer otherwise rejects with `x509: certificate signed by unknown authority`. The chart renders it into a ConfigMap and references that from the DataVolume's `source.http.certConfigMap`; CDI appends it to the system pool rather than replacing it.
+	// +kubebuilder:default:=""
+	ImageFactoryCA string `json:"imageFactoryCA,omitempty"`
 	// Base URL of the Talos Image Factory that serves the worker OS disk image (the `openstack-amd64.raw.xz` raw artifact streamed in by CDI over HTTP). Defaults to the public factory. Point at a self-hosted Image Factory, a caching mirror, or an internal HTTP file server for air-gapped, rate-limited, or flaky-egress environments. No trailing slash.
 	// +kubebuilder:default:="https://factory.talos.dev"
 	ImageFactoryURL string `json:"imageFactoryURL"`

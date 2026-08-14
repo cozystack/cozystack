@@ -1,0 +1,259 @@
+suite: talos.imageFactoryCA — trusting a self-hosted image factory
+
+# Covers the opt-in CA bundle CDI verifies the Talos Image Factory against.
+#
+# Two properties matter and are pinned separately below:
+#
+#  1. UNSET IS UNCHANGED. The overwhelming majority of releases point at the
+#     public factory and must render exactly as before — no ConfigMap, and no
+#     certConfigMap key on the DataVolume. An importer given an empty
+#     certConfigMap would mount nothing and fall back to the system pool anyway,
+#     but the object diff would still churn every existing release.
+#
+#  2. THE TWO SIDES AGREE. The ConfigMap's name and the DataVolume's
+#     certConfigMap both come from kubernetes.talosImageFactoryCAConfigMapName,
+#     so they cannot drift; the assertions compare them against the same literal
+#     to catch a helper edit that changes only one call site.
+#
+# The remaining cases pin the fail-closed guards. They exist because the value is
+# emitted verbatim into a ConfigMap that anything able to read the namespace can
+# read: a pasted keypair must be refused outright, not published.
+#
+# Document indices for templates/cluster.yaml follow cluster_test.yaml:
+#   0 Cluster, 1 KamajiControlPlane, 2 WorkloadMonitor, 3 KubevirtCluster,
+#   4 KubevirtMachineTemplate-md0, 5 MachineDeployment-md0.
+# The DataVolume lives inside document 4 under
+# spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].
+#
+# The certificate below is a throwaway self-signed CA generated for this suite;
+# it certifies nothing and expires far out so the fixture never rots.
+
+values:
+  - values/common.yaml
+
+release:
+  name: test-k8s
+  namespace: tenant-test
+
+tests:
+  ###############################################
+  # Unset: byte-for-byte the previous render    #
+  ###############################################
+  - it: renders no ConfigMap when the field is unset
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: leaves certConfigMap off the DataVolume when the field is unset
+    templates:
+      - templates/cluster.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.certConfigMap
+        documentIndex: 4
+
+  - it: treats a whitespace-only value as unset rather than rendering an empty bundle
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      # A trailing newline left by an editor must not produce a ConfigMap whose
+      # only content is whitespace — CDI would mount it, read no certificate,
+      # and fail verification with a far less obvious message.
+      talos.imageFactoryCA: "  \n  "
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  ###############################################
+  # Set: ConfigMap + reference, names agreeing  #
+  ###############################################
+  - it: renders the CA ConfigMap when the field is set
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: test-k8s-talos-factory-ca
+      # The key name is free — CDI reads every file in the mounted directory —
+      # but it must exist and carry the certificate, not an empty string.
+      - matchRegex:
+          path: data["ca.pem"]
+          pattern: "^-----BEGIN CERTIFICATE-----"
+      - matchRegex:
+          path: data["ca.pem"]
+          pattern: "-----END CERTIFICATE-----\\s*$"
+
+  - it: points the DataVolume at that ConfigMap by the same name
+    templates:
+      - templates/cluster.yaml
+    set:
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - equal:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.certConfigMap
+          value: test-k8s-talos-factory-ca
+        documentIndex: 4
+      # The URL is untouched by the CA plumbing: trusting a factory and choosing
+      # one are separate decisions, and a release may set either alone.
+      - matchRegex:
+          path: spec.template.spec.virtualMachineTemplate.spec.dataVolumeTemplates[0].spec.source.http.url
+          pattern: "openstack-amd64\\.raw\\.xz$"
+        documentIndex: 4
+
+  - it: accepts a chain of more than one certificate
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      # An internal PKI usually presents intermediate + root, so a multi-block
+      # bundle is the common case rather than an edge one.
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - hasDocuments:
+          count: 1
+      - isKind:
+          of: ConfigMap
+
+  ###############################################
+  # Fail-closed guards                          #
+  ###############################################
+  - it: refuses a private key
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      talos.imageFactoryCA: |
+        -----BEGIN EC PRIVATE KEY-----
+        MHcCAQEEexampleprivatekeymaterialthatmustnotreachaconfigmap000000
+        -----END EC PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "talos.imageFactoryCA must not contain private key material: it holds the CA the image factory is verified against, and the rendered ConfigMap is readable by everything that can read the namespace"
+
+  - it: refuses a certificate bundle that also carries a private key
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      # The realistic accident: `cat ca.pem key.pem` into the field. A valid
+      # leading certificate must not let the trailing key through.
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+        -----BEGIN PRIVATE KEY-----
+        MIIExamplePrivateKeyThatMustNotBePublishedIntoAConfigMap00000000
+        -----END PRIVATE KEY-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "talos.imageFactoryCA must not contain private key material: it holds the CA the image factory is verified against, and the rendered ConfigMap is readable by everything that can read the namespace"
+
+  - it: refuses input that is not a certificate
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      talos.imageFactoryCA: "this is not a certificate at all"
+    asserts:
+      - failedTemplate:
+          errorMessage: "talos.imageFactoryCA must contain one or more complete PEM certificate blocks (BEGIN/END CERTIFICATE) and nothing else"
+
+  - it: refuses certificate armour with no closing line
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      # A truncated paste carries the BEGIN line, so a header-only check would
+      # admit it and mount a bundle CDI can make no use of.
+      talos.imageFactoryCA: |
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+    asserts:
+      - failedTemplate:
+          errorMessage: "talos.imageFactoryCA must contain one or more complete PEM certificate blocks (BEGIN/END CERTIFICATE) and nothing else"
+
+  - it: refuses a certificate wrapped in openssl's human-readable preamble
+    templates:
+      - templates/talos/image-factory-ca.yaml
+    set:
+      # What `openssl x509 -text` prints above the block. The value is emitted
+      # verbatim, so leading bytes would ride into the ConfigMap.
+      talos.imageFactoryCA: |
+        Certificate:
+            Data:
+                Version: 3 (0x2)
+        -----BEGIN CERTIFICATE-----
+        MIIBkDCCATWgAwIBAgIUYQvjA+rtcpuJZ414ETcZjPLYYHEwCgYIKoZIzj0EAwIw
+        HDEaMBgGA1UEAwwRY296eXN0YWNrLXRlc3QtY2EwIBcNMjYwODEzMTQzNTM4WhgP
+        MjEyNjA3MjAxNDM1MzhaMBwxGjAYBgNVBAMMEWNvenlzdGFjay10ZXN0LWNhMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEkYVY3hFc1GJaDFRqOkUoZV6IqFW6GsbI
+        qoQgvEq3KYAZcmrb2ZbP2LsCyCojMOEzoF5d1RJc41lQeXv9eS4ERKNTMFEwHQYD
+        VR0OBBYEFKbTnhLk/2Bb2jRjDyZic0F1ZYSPMB8GA1UdIwQYMBaAFKbTnhLk/2Bb
+        2jRjDyZic0F1ZYSPMA8GA1UdEwEB/wQFMAMBAf8wCgYIKoZIzj0EAwIDSQAwRgIh
+        ANa5qSwy8bEa4lCFsYEgmtNm4EJ3wWlwzqLrotemRkILAiEAjH8pB4pNvmyRTkI0
+        uDdynL2YtgHPfcQVfBb98CKq7yI=
+        -----END CERTIFICATE-----
+    asserts:
+      - failedTemplate:
+          errorMessage: "talos.imageFactoryCA must contain one or more complete PEM certificate blocks (BEGIN/END CERTIFICATE) and nothing else"
+
+  # Not covered here, because it cannot reach the template: a non-string value
+  # (an unquoted numeric scalar, say) is rejected by values.schema.json before
+  # rendering starts — "at '/talos/imageFactoryCA': got number, want string".
+  # The helper still coerces to string so it fails with its own message in any
+  # context where the schema is not applied.
