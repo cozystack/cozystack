@@ -8,10 +8,14 @@ suite: satellite pod resource limits
 #
 # The satellite is the exception and this suite pins it as one: it is the same JVM
 # as linstor-controller, which cluster_test.yaml pins as deliberately limit-free,
-# so it carries a request and no limit. A memory.max is what a container-aware JVM
-# reads to size its heap, so a limit shrinks the heap rather than only capping RSS,
-# and the 368Mi peak behind the request grows with DRBD resource count and was
-# measured on three nodes.
+# so it carries a request and no limit. That it is the same JVM is not an inference
+# — images/piraeus-server/Dockerfile installs default-jre-headless and starts this
+# container with `startSatellite`, the same distribution the controller runs with
+# `startController` — and it matters because the sizing this replaced was chosen on
+# the premise that the satellite is a Go binary with a bounded working set. A
+# memory.max is what a container-aware JVM reads to size its heap, so a limit
+# shrinks the heap rather than only capping RSS, and the 368Mi peak behind the
+# request grows with DRBD resource count and was measured on three nodes.
 #
 # The exemption moves the ceiling, it does not remove it, and the distinction is
 # what makes it safe. With the LimitRange the operator maintains in every system

@@ -14,27 +14,9 @@ spec:
       containers:
       - name: linstor-satellite
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
-        # The satellite DaemonSet ran BestEffort on every storage node, which
-        # made it a standing victim for the Talos userspace OOM handler
-        # (v1.12+): that handler only ever kills cgroups with no memory.max, and
-        # picks by QoS class rather than by what caused the pressure. A tenant
-        # workload thrashing against its own limit would get the satellite
-        # killed, taking DRBD connections down with it.
-        #
-        # Requests only, no limit: the same call linstor-controller makes in
-        # values.yaml, and for the same reason, because this is the same JVM.
-        # images/piraeus-server/Dockerfile installs default-jre-headless and
-        # starts this container with `startSatellite`, the distribution the
-        # controller runs with `startController`. A memory.max is what a
-        # container-aware JVM reads to size its heap, so a limit here shrinks the
-        # heap rather than only capping RSS. This moves the ceiling rather than
-        # removing it: with the LimitRange the operator maintains in every system
-        # namespace (#3494, which must merge with or before this) admission
-        # defaults this container to --system-namespace-memory-limit, 4Gi, so the
-        # pod does get memory.max and the heap is derived from one operator-facing
-        # knob instead of a per-chart guess. Without that LimitRange the container
-        # really is limit-free and the pod stays in the victim set.
-        # Full account, and what would settle the sizing: tests/satellites_test.yaml.
+        # Deliberately no memory limit: this is the same JVM as linstor-controller,
+        # which values.yaml exempts for the same reason. Full account, and what
+        # would settle the sizing: packages/system/linstor/tests/satellites_test.yaml.
         # 14d peak 368Mi on a 3-node dev cluster; grows with resource count.
         resources:
           requests:
