@@ -157,7 +157,12 @@ func main() {
 	flag.StringVar(&systemNamespaceMemoryRequest, "system-namespace-memory-request", "32Mi",
 		"Default container memory request paired with --system-namespace-memory-limit. Set small and "+
 			"explicitly: Kubernetes defaults an unset request to the limit, which would reserve the full "+
-			"limit for every system container at schedule time.")
+			"limit for every system container at schedule time. 0 is supported and means the opposite "+
+			"trade rather than a broken value: the API server accepts a LimitRange with defaultRequest 0, "+
+			"and a container with no memory request of its own is then admitted with an explicit request "+
+			"of 0 and the default limit, so it still gets the memory.max this feature exists to give it, "+
+			"while the scheduler reserves nothing for it - the same scheduling signal system components "+
+			"had before this feature, no worse and no better.")
 
 	opts := zap.Options{
 		Development: true,
@@ -202,7 +207,8 @@ func main() {
 	systemNSMemoryLimit := parseQuantity("--system-namespace-memory-limit", systemNamespaceMemoryLimit)
 	systemNSMemoryRequest := parseQuantity("--system-namespace-memory-request", systemNamespaceMemoryRequest)
 	// A LimitRange whose defaultRequest exceeds its default is rejected by the API server,
-	// which would wedge namespace reconciliation for every system package.
+	// which would wedge namespace reconciliation for every system package. A request of 0
+	// passes this check deliberately; see the flag's help text for what it trades away.
 	if !systemNSMemoryLimit.IsZero() && systemNSMemoryRequest.Cmp(systemNSMemoryLimit) > 0 {
 		setupLog.Error(fmt.Errorf("--system-namespace-memory-request must not exceed --system-namespace-memory-limit"),
 			"invalid value", "request", systemNamespaceMemoryRequest, "limit", systemNamespaceMemoryLimit)
