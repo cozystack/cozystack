@@ -909,7 +909,7 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return r.deleteSystemDefaultsLimitRange(ctx, nsName)
 	}
 
-	desired := r.systemDefaultsLimitRange(nsName)
+	desired := r.systemDefaultsLimitRange(nsName, r.SystemNamespaceMemoryLimit)
 
 	// Steady state, and the only path that costs nothing. This runs for every system
 	// namespace on every Package reconcile, and Package reconciles are driven by
@@ -937,23 +937,40 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 
 	blocker, err := r.findRequestAboveDefaultLimit(ctx, nsName)
 	if err != nil {
-		// Without the scan there is no way to tell whether applying is safe, and
-		// guessing either way risks the wedge the scan exists to prevent. Leave the
-		// namespace exactly as it is and try again on the next reconcile.
+		// Without the scan there is no way to tell whether the configured default is
+		// safe here, and guessing risks the admission failure the scan exists to
+		// prevent. Leave the namespace exactly as it is and try again next reconcile.
 		logger.Error(err, "skipping the system defaults LimitRange: could not read the namespace's pods and workloads", "namespace", nsName)
 		return nil
 	}
 	if blocker != nil {
-		logger.Error(fmt.Errorf("memory request above the configured default limit"),
-			"not defaulting container memory in this namespace: the LimitRange would stop these pods being admitted; raise --system-namespace-memory-limit above the request below, or set it to 0 to turn the feature off",
+		// Raise this namespace's ceiling to clear the request instead of withholding
+		// the LimitRange. A looser ceiling still puts memory.max on the pod cgroup,
+		// which is the whole point: the Talos OOM handler discards any cgroup that has
+		// one, so 8Gi protects the pod exactly as well as 4Gi would. Withholding gives
+		// the namespace no memory.max at all, which is the failure this feature exists
+		// to remove — and it would fall on cozy-monitoring in particular, whose VPAs
+		// hold requests above any sane default on precisely the busy clusters this was
+		// written for.
+		//
+		// It needs no knowledge of what raised the request, and it undoes itself: once
+		// the oversized pod or template is gone the scan finds nothing, desired drops
+		// back to the configured limit, and the next reconcile applies it.
+		//
+		// A raised namespace no longer matches the base spec above, so it scans on
+		// every reconcile. That is deliberate, not an oversight: the raise has to track
+		// the current largest request to be able to drop back, the set of raised
+		// namespaces is small, and caching the blocker would freeze a ceiling nothing
+		// would ever lower again.
+		desired = r.systemDefaultsLimitRange(nsName, blocker.request)
+		logger.Info("raising the default container memory limit for this namespace to clear an existing request; "+
+			"the namespace keeps a memory.max ceiling instead of none, and drops back to the configured limit once the request is gone",
 			"namespace", nsName,
 			"workload", blocker.workload,
 			"container", blocker.container,
 			"request", blocker.request.String(),
-			"limit", r.SystemNamespaceMemoryLimit.String())
-		// Also retract one applied earlier, when the request was still below the
-		// limit. Leaving it would arm exactly the trap this branch exists to avoid.
-		return r.deleteSystemDefaultsLimitRange(ctx, nsName)
+			"raisedLimit", blocker.request.String(),
+			"configuredLimit", r.SystemNamespaceMemoryLimit.String())
 	}
 
 	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("LimitRange"))
@@ -1156,7 +1173,11 @@ func jobFinished(job *batchv1.Job) bool {
 }
 
 // systemDefaultsLimitRange builds the LimitRange applied to a system namespace.
-func (r *PackageReconciler) systemDefaultsLimitRange(nsName string) *corev1.LimitRange {
+//
+// defaultLimit is a parameter rather than read straight off the reconciler because a
+// namespace holding a memory request above the configured limit gets its ceiling raised to
+// clear that request; see reconcileSystemDefaultsLimitRange.
+func (r *PackageReconciler) systemDefaultsLimitRange(nsName string, defaultLimit resource.Quantity) *corev1.LimitRange {
 	return &corev1.LimitRange{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      SystemDefaultsLimitRangeName,
@@ -1165,7 +1186,7 @@ func (r *PackageReconciler) systemDefaultsLimitRange(nsName string) *corev1.Limi
 		Spec: corev1.LimitRangeSpec{
 			Limits: []corev1.LimitRangeItem{{
 				Type:           corev1.LimitTypeContainer,
-				Default:        corev1.ResourceList{corev1.ResourceMemory: r.SystemNamespaceMemoryLimit},
+				Default:        corev1.ResourceList{corev1.ResourceMemory: defaultLimit},
 				DefaultRequest: corev1.ResourceList{corev1.ResourceMemory: r.SystemNamespaceMemoryRequest},
 			}},
 		},
