@@ -998,6 +998,12 @@ type memoryRequestBlocker struct {
 // loudly why. A List that fails is treated the same way by the caller, which skips the
 // namespace rather than applying blind: the scan not running is not evidence that applying
 // is safe.
+//
+// One gap survives all of this, narrower than the pod-only scan's. A container whose
+// template requests less than the limit, whose pod would have a larger request injected at
+// admission, and whose very first pod is rejected outright, appears nowhere: there is no
+// pod to scan and no template that admits to the request. Only the rejection event records
+// it.
 func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, nsName string) (*memoryRequestBlocker, error) {
 	reader := r.APIReader
 	if reader == nil {
