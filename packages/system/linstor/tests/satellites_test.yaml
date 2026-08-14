@@ -13,10 +13,23 @@ suite: satellite pod resource limits
 # and the 368Mi peak behind the request grows with DRBD resource count and was
 # measured on three nodes.
 #
-# The consequence is pinned rather than left implicit: with the satellite container
-# limit-free the pod cgroup gets no memory.max, so the plunger limits below bound a
-# runaway sidecar and nothing more. Reverting the exemption means measuring on a
-# high-resource-count cluster first.
+# The exemption moves the ceiling, it does not remove it, and the distinction is
+# what makes it safe. With the LimitRange the operator maintains in every system
+# namespace (#3494, which must merge with or before this) admission defaults this
+# container to --system-namespace-memory-limit, 4Gi by default, so the pod does get
+# memory.max and the JVM derives its heap from one operator-facing knob instead of a
+# 2Gi per-chart guess. Without that LimitRange, or with the knob cleared, the
+# container really is limit-free and the pod stays in the OOM handler's victim set —
+# which is what it does today, so this is not a regression, just not yet the fix.
+#
+# 4Gi still derives a capped heap, so this mitigates the heap-shrinking concern
+# rather than settling it. Settling it needs a peak measured on a high-resource-count
+# cluster plus an explicit heap share, and that is also what reverting the exemption
+# to a fitted per-chart limit would need first.
+#
+# The plunger limits below therefore do real work, but not the work of taking the pod
+# out of the victim set: they bound a runaway sidecar at 128Mi rather than at whatever
+# the pod's defaulted ceiling is.
 
 templates:
   - templates/satellites-cozy.yaml
