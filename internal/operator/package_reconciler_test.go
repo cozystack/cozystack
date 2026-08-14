@@ -22,12 +22,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
 	"github.com/fluxcd/pkg/apis/kustomize"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -365,34 +368,121 @@ func TestReconcileSystemDefaultsLimitRangeDisabledRemovesStale(t *testing.T) {
 	}
 }
 
-// limitRangeScheme builds the scheme the LimitRange reconcile tests share.
+// limitRangeScheme builds the scheme the LimitRange reconcile tests share. The scan reads
+// workload pod templates as well as pods, so apps/v1 and batch/v1 have to be registered —
+// the operator gets them from clientgoscheme.AddToScheme in main.go.
 func limitRangeScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("add corev1 to scheme: %v", err)
 	}
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add appsv1 to scheme: %v", err)
+	}
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add batchv1 to scheme: %v", err)
+	}
 	return scheme
 }
 
-// systemPod builds a pod with a single container carrying the given memory request and,
-// when limit is non-empty, its own memory limit.
-func systemPod(name, request, limit string) *corev1.Pod {
+// systemPodSpec builds the pod spec every fixture in these tests shares: one container
+// carrying the given memory request and, when limit is non-empty, its own memory limit.
+//
+// The container is named after the object that carries it, so a test asserting which
+// container was reported cannot pass by accident when every fixture carries an
+// identically named container.
+func systemPodSpec(name, request, limit string) corev1.PodSpec {
 	requirements := corev1.ResourceRequirements{
 		Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(request)},
 	}
 	if limit != "" {
 		requirements.Limits = corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(limit)}
 	}
+	return corev1.PodSpec{
+		Containers: []corev1.Container{{Name: name + "-app", Resources: requirements}},
+	}
+}
+
+// systemPod builds a running pod with a single container carrying the given memory request
+// and, when limit is non-empty, its own memory limit.
+func systemPod(name, request, limit string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
-		Spec: corev1.PodSpec{
-			// Named after the pod, so a test that asserts which container was
-			// reported cannot pass by accident when every fixture pod carries
-			// an identically named container.
-			Containers: []corev1.Container{{Name: name + "-app", Resources: requirements}},
+		Spec:       systemPodSpec(name, request, limit),
+		Status:     corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// systemDeployment builds a Deployment whose pod template carries the given request.
+// replicas is set for real rather than left nil, so a case named for a scaled-to-zero
+// workload is actually scaled to zero.
+func systemDeployment(name string, replicas int32, request, limit string) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec:       systemPodSpec(name, request, limit),
+			},
 		},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}
+}
+
+// systemStatefulSet builds a StatefulSet whose pod template carries the given request.
+func systemStatefulSet(name string, replicas int32, request, limit string) *appsv1.StatefulSet {
+	return &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
+		Spec: appsv1.StatefulSetSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec:       systemPodSpec(name, request, limit),
+			},
+		},
+	}
+}
+
+// systemDaemonSet builds a DaemonSet whose pod template carries the given request.
+func systemDaemonSet(name, request, limit string) *appsv1.DaemonSet {
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": name}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": name}},
+				Spec:       systemPodSpec(name, request, limit),
+			},
+		},
+	}
+}
+
+// systemCronJob builds a CronJob whose job template carries the given request. A CronJob
+// between runs has no pods at all, which is the state the pod scan cannot see.
+func systemCronJob(name, request, limit string) *batchv1.CronJob {
+	return &batchv1.CronJob{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
+		Spec: batchv1.CronJobSpec{
+			Schedule: "0 * * * *",
+			JobTemplate: batchv1.JobTemplateSpec{
+				Spec: batchv1.JobSpec{
+					Template: corev1.PodTemplateSpec{Spec: systemPodSpec(name, request, limit)},
+				},
+			},
+		},
+	}
+}
+
+// systemJob builds a Job whose pod template carries the given request.
+func systemJob(name, request, limit string) *batchv1.Job {
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
+		Spec: batchv1.JobSpec{
+			Template: corev1.PodTemplateSpec{Spec: systemPodSpec(name, request, limit)},
+		},
 	}
 }
 
@@ -481,7 +571,89 @@ func TestReconcileSystemDefaultsLimitRangeAppliesWhenLargeRequestCarriesItsOwnLi
 // retracting is a decision the operator is entitled to make, so it must do neither —
 // and it must not report failure either, or a transient API error would fail the whole
 // Package reconcile.
-func TestReconcileSystemDefaultsLimitRangeSkipsWhenPodsCannotBeRead(t *testing.T) {
+// A read the scan needs and cannot get is not evidence that applying is safe: every list
+// the scan makes has to fail closed, or the guard becomes a coin toss the first time one
+// kind is unreadable. Each kind gets its own case, because a single unreadable kind is the
+// realistic failure — an RBAC rule that was never extended, a CRD-less API surface, one
+// request that times out — and a scan that swallowed the error for that one kind would
+// still look green on every other.
+func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	unreadable := []struct {
+		name string
+		list client.ObjectList
+	}{
+		{name: "pods", list: &corev1.PodList{}},
+		{name: "deployments", list: &appsv1.DeploymentList{}},
+		{name: "statefulsets", list: &appsv1.StatefulSetList{}},
+		{name: "daemonsets", list: &appsv1.DaemonSetList{}},
+		{name: "cronjobs", list: &batchv1.CronJobList{}},
+		{name: "jobs", list: &batchv1.JobList{}},
+	}
+
+	// A sentinel the operator's own apply would overwrite. Asserting the LimitRange still
+	// exists is not enough on its own: a scan that swallowed the read error would find no
+	// offender, apply the LimitRange, and leave an object that exists just the same. The
+	// sentinel is what separates "left alone" from "applied blind".
+	sentinel := resource.MustParse("1Mi")
+
+	for _, tt := range unreadable {
+		t.Run(tt.name, func(t *testing.T) {
+			existing := &corev1.LimitRange{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SystemDefaultsLimitRangeName,
+					Namespace: "cozy-monitoring",
+				},
+				Spec: corev1.LimitRangeSpec{
+					Limits: []corev1.LimitRangeItem{{
+						Type:    corev1.LimitTypeContainer,
+						Default: corev1.ResourceList{corev1.ResourceMemory: sentinel},
+					}},
+				},
+			}
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).
+				WithInterceptorFuncs(interceptor.Funcs{
+					List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
+						if reflect.TypeOf(list) == reflect.TypeOf(tt.list) {
+							return apierrors.NewServiceUnavailable("etcd leader changed")
+						}
+						return nil
+					},
+				}).Build()
+
+			r := &PackageReconciler{
+				Client:                       cl,
+				APIReader:                    cl,
+				Scheme:                       scheme,
+				SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+				SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+			}
+
+			if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+				t.Fatalf("an unreadable %s list must not fail the reconcile: %v", tt.name, err)
+			}
+
+			got := &corev1.LimitRange{}
+			if err := cl.Get(t.Context(), types.NamespacedName{
+				Name:      SystemDefaultsLimitRangeName,
+				Namespace: "cozy-monitoring",
+			}, got); err != nil {
+				t.Fatalf("existing LimitRange retracted on the strength of a failed %s read: %v", tt.name, err)
+			}
+			if len(got.Spec.Limits) != 1 || got.Spec.Limits[0].Default.Memory().Cmp(sentinel) != 0 {
+				t.Errorf("LimitRange applied on the strength of a failed %s read: spec = %+v, want the untouched sentinel %s",
+					tt.name, got.Spec.Limits, sentinel.String())
+			}
+		})
+	}
+}
+
+// The failure a pod-only scan cannot see. A workload at replicas: 0 has no pods, so
+// nothing in the namespace shows the request; applying the LimitRange there arms the trap
+// and it springs at the next scale-up, when the pod is rejected with "must be less than or
+// equal to memory limit" and the workload cannot come back at all.
+func TestReconcileSystemDefaultsLimitRangeRetractsForWorkloadWithNoPods(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	existing := &corev1.LimitRange{
@@ -490,15 +662,8 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenPodsCannotBeRead(t *testing.T
 			Namespace: "cozy-monitoring",
 		},
 	}
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(existing).
-		WithInterceptorFuncs(interceptor.Funcs{
-			List: func(_ context.Context, _ client.WithWatch, list client.ObjectList, _ ...client.ListOption) error {
-				if _, ok := list.(*corev1.PodList); ok {
-					return apierrors.NewServiceUnavailable("etcd leader changed")
-				}
-				return nil
-			},
-		}).Build()
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(existing, systemDeployment("vmalert", 0, "8Gi", "")).Build()
 
 	r := &PackageReconciler{
 		Client:                       cl,
@@ -509,10 +674,12 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenPodsCannotBeRead(t *testing.T
 	}
 
 	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
-		t.Fatalf("an unreadable pod list must not fail the reconcile: %v", err)
+		t.Fatalf("reconcile: %v", err)
 	}
-	if !limitRangeExists(t, cl, "cozy-monitoring") {
-		t.Fatal("existing LimitRange retracted on the strength of a failed read")
+
+	if limitRangeExists(t, cl, "cozy-monitoring") {
+		t.Fatal("LimitRange left in place beside a scaled-to-zero workload requesting 8Gi " +
+			"under a 4Gi default; the workload could never be scaled back up")
 	}
 }
 
@@ -582,32 +749,42 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		},
 	}}
 
+	finishedJob := systemJob("migrated-once", "8Gi", "")
+	finishedJob.Status.Conditions = []batchv1.JobCondition{{
+		Type:   batchv1.JobComplete,
+		Status: corev1.ConditionTrue,
+	}}
+
+	suspended := true
+	suspendedCronJob := systemCronJob("suspended-backup", "7Gi", "")
+	suspendedCronJob.Spec.Suspend = &suspended
+
 	tests := []struct {
-		name string
-		pods []client.Object
-		want *memoryRequestBlocker
+		name    string
+		objects []client.Object
+		want    *memoryRequestBlocker
 	}{
 		{
-			name: "no request above the limit",
-			pods: []client.Object{systemPod("metallb-speaker", "512Mi", "")},
+			name:    "no request above the limit",
+			objects: []client.Object{systemPod("metallb-speaker", "512Mi", "")},
 		},
 		{
-			name: "a request equal to the limit is admissible",
-			pods: []client.Object{systemPod("exactly-at", "4Gi", "")},
+			name:    "a request equal to the limit is admissible",
+			objects: []client.Object{systemPod("exactly-at", "4Gi", "")},
 		},
 		{
 			// A finished pod is never recreated from this spec, so it cannot
 			// block admission of anything.
-			name: "a terminated pod does not count",
-			pods: []client.Object{terminated},
+			name:    "a terminated pod does not count",
+			objects: []client.Object{terminated},
 		},
 		{
 			// LimitRanger defaults init containers on the same terms as
 			// regular ones, so the scan has to look at both.
-			name: "an init container counts",
-			pods: []client.Object{initHeavy},
+			name:    "an init container counts",
+			objects: []client.Object{initHeavy},
 			want: &memoryRequestBlocker{
-				pod:       "with-init",
+				workload:  "Pod/with-init",
 				container: "prepare",
 				request:   resource.MustParse("6Gi"),
 			},
@@ -620,22 +797,145 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			// first, the last or the smallest offender instead of the largest
 			// each names a different pod and quantity here.
 			name: "the largest offender is reported",
-			pods: []client.Object{
+			objects: []client.Object{
 				systemPod("vmagent-0", "5Gi", ""),
 				systemPod("vmselect-0", "9Gi", ""),
 				systemPod("vmstorage-0", "6Gi", ""),
 			},
 			want: &memoryRequestBlocker{
-				pod:       "vmselect-0",
+				workload:  "Pod/vmselect-0",
 				container: "vmselect-0-app",
 				request:   resource.MustParse("9Gi"),
 			},
+		},
+		{
+			// The gap a pod-only scan leaves: at replicas: 0 there is no pod to
+			// find, so the namespace looks safe, and the request reappears at the
+			// moment somebody scales the workload up and its pod is rejected.
+			name:    "a scaled-to-zero deployment counts",
+			objects: []client.Object{systemDeployment("vmalert", 0, "8Gi", "")},
+			want: &memoryRequestBlocker{
+				workload:  "Deployment/vmalert",
+				container: "vmalert-app",
+				request:   resource.MustParse("8Gi"),
+			},
+		},
+		{
+			name:    "a scaled-to-zero statefulset counts",
+			objects: []client.Object{systemStatefulSet("vmstorage", 0, "8Gi", "")},
+			want: &memoryRequestBlocker{
+				workload:  "StatefulSet/vmstorage",
+				container: "vmstorage-app",
+				request:   resource.MustParse("8Gi"),
+			},
+		},
+		{
+			// A DaemonSet has no replica count to zero out, but it has no pods
+			// either while no node matches it, and its template is still what the
+			// next matching node instantiates.
+			name:    "a daemonset template counts",
+			objects: []client.Object{systemDaemonSet("node-exporter", "6Gi", "")},
+			want: &memoryRequestBlocker{
+				workload:  "DaemonSet/node-exporter",
+				container: "node-exporter-app",
+				request:   resource.MustParse("6Gi"),
+			},
+		},
+		{
+			// A CronJob between runs has no pods at all, and the next schedule
+			// creates one from this template.
+			name:    "a cronjob between runs counts",
+			objects: []client.Object{systemCronJob("backup", "7Gi", "")},
+			want: &memoryRequestBlocker{
+				workload:  "CronJob/backup",
+				container: "backup-app",
+				request:   resource.MustParse("7Gi"),
+			},
+		},
+		{
+			// suspend is the same dormancy as replicas: 0 and is undone the same
+			// way, so it does not earn an exemption the Deployment case does not get.
+			name:    "a suspended cronjob counts",
+			objects: []client.Object{suspendedCronJob},
+			want: &memoryRequestBlocker{
+				workload:  "CronJob/suspended-backup",
+				container: "suspended-backup-app",
+				request:   resource.MustParse("7Gi"),
+			},
+		},
+		{
+			// A Job created standalone — a Helm hook, a migration — has no owner
+			// whose template would cover it, and one with spec.suspend has no pods
+			// yet either.
+			name:    "a job that has not run counts",
+			objects: []client.Object{systemJob("migrate", "5Gi", "")},
+			want: &memoryRequestBlocker{
+				workload:  "Job/migrate",
+				container: "migrate-app",
+				request:   resource.MustParse("5Gi"),
+			},
+		},
+		{
+			// A completed Job never creates another pod, for the same reason a
+			// terminated pod is skipped.
+			name:    "a finished job does not count",
+			objects: []client.Object{finishedJob},
+		},
+		{
+			// A running workload appears twice, as a template and as pods. One
+			// blocker comes back, and it names the workload: that is the object an
+			// operator has to edit, and it outlives the pod names.
+			name: "a workload and its own pods are reported once, as the workload",
+			objects: []client.Object{
+				systemDeployment("vmselect", 2, "8Gi", ""),
+				systemPod("vmselect-6d4b", "8Gi", ""),
+			},
+			want: &memoryRequestBlocker{
+				workload:  "Deployment/vmselect",
+				container: "vmselect-app",
+				request:   resource.MustParse("8Gi"),
+			},
+		},
+		{
+			// The mirror case, and why live pods are still scanned: the VPA
+			// admission webhook writes a recommendation into the pod's requests
+			// after the template has been rendered, so the pod can ask for more
+			// than any template in the namespace admits to.
+			name: "a request raised on the live pod outranks its template",
+			objects: []client.Object{
+				systemDeployment("vmselect", 2, "5Gi", ""),
+				systemPod("vmselect-6d4b", "9Gi", ""),
+			},
+			want: &memoryRequestBlocker{
+				workload:  "Pod/vmselect-6d4b",
+				container: "vmselect-6d4b-app",
+				request:   resource.MustParse("9Gi"),
+			},
+		},
+		{
+			// Every kind the scan reads, all of them under the limit: the
+			// LimitRange has to stay applicable in the ordinary case.
+			name: "workloads below the limit do not block",
+			objects: []client.Object{
+				systemDeployment("grafana", 1, "512Mi", ""),
+				systemStatefulSet("vlogs", 1, "1Gi", ""),
+				systemDaemonSet("node-exporter", "64Mi", ""),
+				systemCronJob("backup", "256Mi", ""),
+				systemJob("migrate", "128Mi", ""),
+				systemPod("grafana-6d4b", "512Mi", ""),
+			},
+		},
+		{
+			// LimitRanger never defaults a container that declares its own memory
+			// limit, in a template exactly as in a pod.
+			name:    "a template request that carries its own limit does not count",
+			objects: []client.Object{systemDeployment("vmstorage", 1, "8Gi", "8Gi")},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tt.pods...).Build()
+			cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tt.objects...).Build()
 			r := &PackageReconciler{
 				Client:                     cl,
 				APIReader:                  cl,
@@ -650,19 +950,19 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 
 			if tt.want == nil {
 				if got != nil {
-					t.Fatalf("reported %s/%s (%s) as blocking; nothing should block here",
-						got.pod, got.container, got.request.String())
+					t.Fatalf("reported %s container %s (%s) as blocking; nothing should block here",
+						got.workload, got.container, got.request.String())
 				}
 				return
 			}
 			if got == nil {
-				t.Fatal("no blocker reported; a pod that cannot be admitted under the default was missed")
+				t.Fatal("no blocker reported; a container that cannot be admitted under the default was missed")
 			}
-			if got.pod != tt.want.pod || got.container != tt.want.container ||
+			if got.workload != tt.want.workload || got.container != tt.want.container ||
 				got.request.Cmp(tt.want.request) != 0 {
-				t.Errorf("blocker = %s/%s (%s), want %s/%s (%s)",
-					got.pod, got.container, got.request.String(),
-					tt.want.pod, tt.want.container, tt.want.request.String())
+				t.Errorf("blocker = %s container %s (%s), want %s container %s (%s)",
+					got.workload, got.container, got.request.String(),
+					tt.want.workload, tt.want.container, tt.want.request.String())
 			}
 		})
 	}
