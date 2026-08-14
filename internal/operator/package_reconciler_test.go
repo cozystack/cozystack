@@ -502,6 +502,23 @@ func limitRangeExists(t *testing.T, cl client.Client, ns string) bool {
 	return false
 }
 
+// limitRangeDefaultMemory returns the default container memory limit the operator has
+// applied in ns.
+func limitRangeDefaultMemory(t *testing.T, cl client.Client, ns string) resource.Quantity {
+	t.Helper()
+	lr := &corev1.LimitRange{}
+	if err := cl.Get(t.Context(), types.NamespacedName{
+		Name:      SystemDefaultsLimitRangeName,
+		Namespace: ns,
+	}, lr); err != nil {
+		t.Fatalf("get LimitRange in %s: %v", ns, err)
+	}
+	if len(lr.Spec.Limits) != 1 {
+		t.Fatalf("len(limits) = %d, want 1", len(lr.Spec.Limits))
+	}
+	return lr.Spec.Limits[0].Default[corev1.ResourceMemory]
+}
+
 // A container requesting more memory than the default limit, with no limit of its own,
 // is precisely what LimitRanger would default into an unadmittable pod: the API server
 // rejects a request above its limit. The LimitRange must not be applied there, and one
@@ -680,6 +697,105 @@ func TestReconcileSystemDefaultsLimitRangeRetractsForWorkloadWithNoPods(t *testi
 	if limitRangeExists(t, cl, "cozy-monitoring") {
 		t.Fatal("LimitRange left in place beside a scaled-to-zero workload requesting 8Gi " +
 			"under a 4Gi default; the workload could never be scaled back up")
+	}
+}
+
+// countingListClient builds a fake client that counts every List call, so a test can prove
+// a scan did not happen at all rather than merely that it reached the same answer.
+func countingListClient(scheme *runtime.Scheme, lists *int, objects ...client.Object) client.WithWatch {
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).
+		WithInterceptorFuncs(interceptor.Funcs{
+			List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+				*lists++
+				return c.List(ctx, list, opts...)
+			},
+		}).Build()
+}
+
+// The steady-state path. This runs for every system namespace on every Package reconcile,
+// and Package reconciles follow HelmRelease status churn, so once the LimitRange matches it
+// has to cost one cached read and nothing else.
+//
+// The fixture makes "did not scan" observable two independent ways, because a test that
+// only checked the resulting LimitRange could not tell a skipped scan from a repeated one
+// that reached the same answer. Every List is counted; and the namespace holds an 8Gi pod,
+// so a scan that ran would act on it and change the object.
+func TestReconcileSystemDefaultsLimitRangeSkipsTheScanWhenUnchanged(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	settled := (&PackageReconciler{
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}).systemDefaultsLimitRange("cozy-monitoring")
+
+	var lists int
+	cl := countingListClient(scheme, &lists, settled, systemPod("vmstorage-0", "8Gi", ""))
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if lists != 0 {
+		t.Errorf("%d list calls in a namespace whose LimitRange already matches; the scan must not run at all", lists)
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Errorf("default memory = %s, want the settled 4Gi left alone", got.String())
+	}
+}
+
+// The comparison behind that early return has to be semantic rather than structural, or a
+// LimitRange written in a different but equivalent notation would scan and re-apply on
+// every reconcile — exactly the cost the early return removes, and invisible in a test that
+// only looked at the resulting object.
+//
+// The fixture writes the same two quantities in plain bytes: 4294967296 is 4Gi and 33554432
+// is 32Mi, but they parse as DecimalSI where the configured values are BinarySI, so the
+// quantities differ in both format and cached string while comparing equal. Suffixed
+// notation would not do: an API round trip canonicalises 4096Mi to 4Gi, which is
+// structurally identical to the configured value and would pin nothing.
+func TestReconcileSystemDefaultsLimitRangeSkipsTheScanForEquivalentQuantities(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	settled := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SystemDefaultsLimitRangeName,
+			Namespace: "cozy-monitoring",
+		},
+		Spec: corev1.LimitRangeSpec{
+			Limits: []corev1.LimitRangeItem{{
+				Type:           corev1.LimitTypeContainer,
+				Default:        corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4294967296")},
+				DefaultRequest: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("33554432")},
+			}},
+		},
+	}
+
+	var lists int
+	cl := countingListClient(scheme, &lists, settled)
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if lists != 0 {
+		t.Errorf("%d list calls against 4294967296/33554432, which is the configured 4Gi/32Mi in plain bytes; "+
+			"the spec comparison must be semantic, not structural", lists)
 	}
 }
 

@@ -28,6 +28,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -908,6 +909,32 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return r.deleteSystemDefaultsLimitRange(ctx, nsName)
 	}
 
+	desired := r.systemDefaultsLimitRange(nsName)
+
+	// Steady state, and the only path that costs nothing. This runs for every system
+	// namespace on every Package reconcile, and Package reconciles are driven by
+	// HelmRelease status churn through Owns, so on a platform with dozens of system
+	// namespaces the scan below is by far the most expensive thing in this function.
+	//
+	// Reading the LimitRange from the informer cache and stopping when it already matches
+	// is safe precisely because the LimitRange is applied: from that moment LimitRanger
+	// rejects any new pod whose memory request exceeds this default, so the only requests
+	// a scan could still find are the ones that predate the LimitRange, on pods that are
+	// already running and that the scan would not change anything about. Nothing the scan
+	// could discover in a matching namespace is actionable, so not scanning loses nothing.
+	//
+	// The Get is cached where the scan below deliberately is not. A LimitRange informer
+	// holds one small object per system namespace; the cluster-wide Pod informer that
+	// caching the scan would need is what the APIReader in the scan exists to avoid.
+	existing := &corev1.LimitRange{}
+	err := r.Get(ctx, types.NamespacedName{Name: SystemDefaultsLimitRangeName, Namespace: nsName}, existing)
+	switch {
+	case err != nil && !apierrors.IsNotFound(err):
+		return fmt.Errorf("failed to read the system defaults LimitRange in namespace %s: %w", nsName, err)
+	case err == nil && apiequality.Semantic.DeepEqual(existing.Spec, desired.Spec):
+		return nil
+	}
+
 	blocker, err := r.findRequestAboveDefaultLimit(ctx, nsName)
 	if err != nil {
 		// Without the scan there is no way to tell whether applying is safe, and
@@ -929,10 +956,9 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		return r.deleteSystemDefaultsLimitRange(ctx, nsName)
 	}
 
-	limitRange := r.systemDefaultsLimitRange(nsName)
-	limitRange.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("LimitRange"))
+	desired.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("LimitRange"))
 
-	return r.Patch(ctx, limitRange, client.Apply, client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
+	return r.Patch(ctx, desired, client.Apply, client.FieldOwner(packageControllerFieldOwner), client.ForceOwnership)
 }
 
 // deleteSystemDefaultsLimitRange removes the LimitRange this reconciler maintains,
