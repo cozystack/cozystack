@@ -105,7 +105,8 @@ git commit --signoff -m "docs(contributing): add installation guide"
 
 **Special handling:**
 
-- `[Backport release-1.x]` prefix is stripped before parsing; `area/release` and `backport` labels are added.
+- `[Backport release-1.x]` prefix is stripped before parsing; `area/release` is added. `backport` is deliberately NOT — auto-applying it to a backport PR is what caused recursive backports (see [`release.md`](../release.md)).
+- `fix` → `backport` by default, applied only when the PR is opened so that removing it during review sticks. Not applied to a backport PR, to a breaking change, or to the scopes `ci`, `e2e`, `tests`, `build`, `deps`, `agents`, `release`, `backport`, `migrations`; one excluded part of a composite scope suppresses it.
 - Composite scope (`feat(platform, system, apps): ...`) — each comma-separated part is mapped independently.
 - `!` after type or `BREAKING CHANGE:` footer in the body → `kind/breaking-change`.
 - Unmapped scope or non-conventional title → `area/uncategorized` (signals the PR needs manual area selection).
