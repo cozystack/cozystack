@@ -12,14 +12,10 @@ spec:
       containers:
       - name: plunger
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
-        # Sidecars in the satellite pod. These limits bound a runaway sidecar at
-        # 128Mi rather than at the far looser ceiling it would otherwise take;
-        # what completes the set for the pod cgroup is not them. The satellite
-        # container beside them carries no chart-level limit because it is a JVM,
-        # so the pod's memory.max arrives from the system-namespace LimitRange
-        # default (#3494) — and without that LimitRange the pod has none whatever
-        # these sidecars declare, and stays in the Talos userspace OOM handler's
-        # victim set. See satellites-cozy.yaml.
+        # Sidecars in the satellite pod. These limits bound a runaway sidecar;
+        # they are not what puts memory.max on the pod cgroup, because the
+        # satellite container beside them is deliberately limit-free.
+        # See satellites-cozy.yaml and tests/satellites_test.yaml.
         # 14d peaks on a 3-node dev cluster: plunger 18Mi, drbd-logger 5Mi.
         resources:
           requests:
