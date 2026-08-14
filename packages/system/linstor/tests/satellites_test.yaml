@@ -6,27 +6,34 @@ suite: satellite pod resource limits
 # pressure. A tenant workload thrashing against its own limit would get the
 # satellite killed, taking DRBD connections on that node down with it.
 #
-# Every container in the pod needs a limit for the pod cgroup to get memory.max,
-# so the plunger sidecars are pinned alongside the satellite itself — one
-# limit-free sidecar is enough to put the whole pod back in the victim set.
+# The satellite is the exception and this suite pins it as one: it is the same JVM
+# as linstor-controller, which cluster_test.yaml pins as deliberately limit-free,
+# so it carries a request and no limit. A memory.max is what a container-aware JVM
+# reads to size its heap, so a limit shrinks the heap rather than only capping RSS,
+# and the 368Mi peak behind the request grows with DRBD resource count and was
+# measured on three nodes.
 #
-# Note this is the opposite call from linstor-controller, which cluster_test.yaml
-# pins as deliberately limit-free (a JVM that must not be OOM-killed mid-operation).
+# The consequence is pinned rather than left implicit: with the satellite container
+# limit-free the pod cgroup gets no memory.max, so the plunger limits below bound a
+# runaway sidecar and nothing more. Reverting the exemption means measuring on a
+# high-resource-count cluster first.
 
 templates:
   - templates/satellites-cozy.yaml
   - templates/satellites-plunger.yaml
 
 tests:
-  - it: satellite declares a memory limit and request
+  - it: satellite declares a memory request and deliberately no limit
     template: templates/satellites-cozy.yaml
     asserts:
       - equal:
-          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.limits.memory
-          value: 2Gi
-      - equal:
           path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.requests.memory
           value: 128Mi
+      - equal:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.requests.cpu
+          value: 100m
+      - notExists:
+          path: spec.podTemplate.spec.containers[?(@.name=="linstor-satellite")].resources.limits
 
   - it: plunger sidecars declare memory limits
     template: templates/satellites-plunger.yaml

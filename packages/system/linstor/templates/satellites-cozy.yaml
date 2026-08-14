@@ -21,17 +21,21 @@ spec:
         # workload thrashing against its own limit would get the satellite
         # killed, taking DRBD connections down with it.
         #
-        # Note this is the opposite call from linstor-controller, which is
-        # deliberately left limit-free in values.yaml (a JVM that must not be
-        # OOM-killed mid-operation). The satellite is a Go binary with a bounded
-        # working set, so a generous limit costs nothing and buys immunity.
+        # Requests only, no limit: the same call linstor-controller makes in
+        # values.yaml, and for the same reason, because this is the same JVM.
+        # images/piraeus-server/Dockerfile installs default-jre-headless and
+        # starts this container with `startSatellite`, the distribution the
+        # controller runs with `startController`. A memory.max is what a
+        # container-aware JVM reads to size its heap, so a limit here shrinks the
+        # heap rather than only capping RSS. The cost is that the pod cgroup gets
+        # no memory.max, so this pod stays in the OOM handler's victim set; closing
+        # that needs a peak measured on a high-resource-count cluster plus an
+        # explicit heap share, not a guessed ceiling.
         # 14d peak 368Mi on a 3-node dev cluster; grows with resource count.
         resources:
           requests:
             cpu: 100m
             memory: 128Mi
-          limits:
-            memory: 2Gi
         startupProbe:
           tcpSocket:
             port: linstor
