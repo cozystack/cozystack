@@ -953,6 +953,15 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		// hold requests above any sane default on precisely the busy clusters this was
 		// written for.
 		//
+		// Withholding was also self-perpetuating there, which is the sharper reason it
+		// had to go. With no LimitRange in the namespace nothing defaults a memory
+		// limit, so the next VPA-sized pod is admitted with a large request and no
+		// limit, the scan finds it again, and the namespace is withheld again: the
+		// feature could never get its foot in the door. Applying at the raised ceiling
+		// breaks that loop, because from then on every new pod is defaulted a limit,
+		// the scan stops finding limitless requests, and the ceiling drops back on its
+		// own.
+		//
 		// It needs no knowledge of what raised the request, and it undoes itself: once
 		// the oversized pod or template is gone the scan finds nothing, desired drops
 		// back to the configured limit, and the next reconcile applies it.
@@ -1017,36 +1026,47 @@ type memoryRequestBlocker struct {
 // and those are exactly what this scan looks for. A container that sets both is left out,
 // because LimitRanger never touches it.
 //
-// This is not hypothetical in this repository. packages/system/monitoring and
-// packages/system/monitoring-agents ship VerticalPodAutoscalers for cozy-monitoring with
-// maxAllowed.memory of 8Gi (vmselect, vmstorage, vlselect, vlstorage) and 6G (vmagent),
-// both above the 4Gi default this operator ships. They run with updateMode: Initial, so
-// the VPA admission webhook writes the recommendation into the pod's requests at creation
-// time, and it can do so on a busy cluster without any chart in the tree declaring a
-// request that large.
+// A VerticalPodAutoscaler is not how that happens, though an earlier version of this
+// comment said it was. LimitRanger is position 6 of AllOrderedPlugins and
+// MutatingAdmissionWebhook is 35, so the LimitRange has already defaulted the container's
+// memory limit before VPA's webhook is called; VPA then rescales the limit in proportion to
+// the request it writes (GetProportionalLimit, under the default controlledValues:
+// RequestsAndLimits), so request and limit stay consistent and the pod is admitted. The
+// monitoring VPAs cap at maxAllowed anyway — 8Gi for vmselect and vmstorage, 6G for
+// vmagent — and VPA never recommends above that cap.
 //
-// The scan therefore has to read live pods and workload pod templates, and neither alone
-// is enough. A live pod is the only place a request raised by a mutating webhook after
-// admission appears, and no rendered template can see it. A pod template is the only place
-// a workload with no pods appears at all: a Deployment or StatefulSet at replicas: 0 and a
-// CronJob between runs are ordinary steady states, and scanning pods alone declares such a
-// namespace safe, applies the LimitRange, and turns the next scale-up or the next schedule
-// into "must be less than or equal to memory limit" — a workload that cannot come back,
-// discovered at the moment somebody needs it.
+// What does happen is a request that is already in the spec when it reaches admission, with
+// no limit beside it. Most realistically that is an operator lowering
+// --system-namespace-memory-limit below a request some chart declares statically. The
+// largest static memory request in the system packages today is 2Gi
+// (packages/system/rabbitmq-operator), so the 4Gi default clears every one of them and
+// lowering the knob is what would put one over. The node DaemonSets have since been given
+// requests and limits of their own, which shrinks the set of containers the default reaches
+// at all: a container that declares its own memory limit is never touched here.
 //
-// The remedy is deliberately non-fatal. Applying the LimitRange would stop the affected
-// workload from ever rolling, and returning an error would fail the whole Package
-// reconcile and wedge the platform — both worse than the unbounded-memory problem this
-// feature mitigates. The namespace keeps its pre-feature behaviour and the operator says
-// loudly why. A List that fails is treated the same way by the caller, which skips the
-// namespace rather than applying blind: the scan not running is not evidence that applying
-// is safe.
+// Two narrower shapes are real as well. A pod that predates the LimitRange keeps whatever
+// request it was admitted with, and if that is above a newly configured default the pod is
+// the only place it is visible — its own controller may build it from a custom resource this
+// scan cannot read, rather than from any of the workload kinds below. And a VPA configured
+// with controlledValues: RequestsOnly would reintroduce the rejection outright, because then
+// nothing rescales the limit the LimitRange defaulted; nothing in this tree sets it, but
+// nothing stops a user from setting it either. That last one is also the residual gap: with
+// RequestsOnly the very first pod of a workload can be rejected before it exists, so neither
+// a template nor a live pod shows the request and only the rejection event records it.
 //
-// One gap survives all of this, narrower than the pod-only scan's. A container whose
-// template requests less than the limit, whose pod would have a larger request injected at
-// admission, and whose very first pod is rejected outright, appears nowhere: there is no
-// pod to scan and no template that admits to the request. Only the rejection event records
-// it.
+// So the scan reads live pods and workload pod templates, and neither alone is enough. A
+// pod template is the only place a workload with no pods appears: a Deployment or
+// StatefulSet at replicas: 0 and a CronJob between runs are ordinary steady states, and
+// scanning pods alone declares such a namespace clear, applies the configured default, and
+// turns the next scale-up or the next schedule into "must be less than or equal to memory
+// limit" — a workload that cannot come back, discovered at the moment somebody needs it. A
+// live pod is the only place the pre-existing request above covers.
+//
+// Nothing here is fatal, by design. A request above the default raises that namespace's
+// ceiling rather than withholding the LimitRange, because a loose memory.max still takes the
+// pod out of the OOM handler's victim set and no memory.max does not; see
+// reconcileSystemDefaultsLimitRange. A List that fails skips the namespace instead: the scan
+// not running is not evidence about what is in it.
 func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, nsName string) (*memoryRequestBlocker, error) {
 	reader := r.APIReader
 	if reader == nil {
