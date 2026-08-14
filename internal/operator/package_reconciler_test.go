@@ -844,6 +844,62 @@ func TestReconcileSystemDefaultsLimitRangeSkipsTheScanForEquivalentQuantities(t 
 	}
 }
 
+// The tenant boundary. It is one strings.HasPrefix, and everything downstream of it depends
+// on it holding: packages/apps/tenant ships tenant-range-limits, which defaults container
+// memory to 128Mi in every tenant namespace with resourceQuotas. A system LimitRange landing
+// beside it would leave two LimitRanges defaulting the same containers, and which one wins
+// is decided by the order LimitRanger happens to iterate them — neither chart controls that,
+// so a tenant container's default memory limit would move between 128Mi and 4Gi with nothing
+// in the tree changing.
+//
+// The system namespace in the same run is the positive control: without it the test would
+// still pass if LimitRanges stopped being written anywhere at all.
+func TestReconcileNamespacesLeavesTenantNamespacesAlone(t *testing.T) {
+	scheme := limitRangeScheme(t)
+	if err := cozyv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add cozyv1alpha1 to scheme: %v", err)
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	pkg := &cozyv1alpha1.Package{ObjectMeta: metav1.ObjectMeta{Name: "platform"}}
+	variant := &cozyv1alpha1.Variant{
+		Name: "default",
+		Components: []cozyv1alpha1.Component{
+			{Name: "metallb", Install: &cozyv1alpha1.ComponentInstall{Namespace: "cozy-metallb"}},
+			{Name: "tenant", Install: &cozyv1alpha1.ComponentInstall{Namespace: "tenant-root"}},
+		},
+	}
+
+	if err := r.reconcileNamespaces(t.Context(), pkg, variant); err != nil {
+		t.Fatalf("reconcileNamespaces: %v", err)
+	}
+
+	if limitRangeExists(t, cl, "tenant-root") {
+		t.Error("system defaults LimitRange written into a tenant namespace; it would compete with " +
+			"the tenant chart's tenant-range-limits for the same containers")
+	}
+	if !limitRangeExists(t, cl, "cozy-metallb") {
+		t.Fatal("no LimitRange in the system namespace either, so the tenant assertion above proves nothing")
+	}
+
+	tenantNS := &corev1.Namespace{}
+	if err := cl.Get(t.Context(), types.NamespacedName{Name: "tenant-root"}, tenantNS); err != nil {
+		t.Fatalf("tenant namespace was not created: %v", err)
+	}
+	if got, ok := tenantNS.Labels["cozystack.io/system"]; ok {
+		t.Errorf("tenant namespace carries cozystack.io/system = %q; the same boundary gates both", got)
+	}
+}
+
 // The load-bearing containment property: this feature is opportunistic hardening, so no
 // failure inside it may stop a system namespace being reconciled. A namespace that never
 // appears leaves its components uninstalled, which is worse than the unbounded memory the
