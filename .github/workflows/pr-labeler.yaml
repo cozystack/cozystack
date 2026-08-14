@@ -216,7 +216,90 @@ jobs:
               toAdd.add('area/uncategorized');
             }
 
-            // 9. Additive only — never remove existing labels.
+            // 9. `backport` on a fix — seeded ONCE, on `opened`, and never again.
+            //
+            // Every label above is a DERIVATION from the title: it re-applies on
+            // every run, and that is correct, because a human removing kind/bug
+            // from a `fix(...)` PR is removing a fact. `backport` is a different
+            // kind of label — a human DECISION with a default. Forgetting it costs
+            // a release-branch fix, so the default is "yes"; removing it during
+            // review is cheap, so the escape hatch is removal.
+            //
+            // That only works if removal sticks, which is why the action is part
+            // of the condition. This workflow runs on `opened`, `reopened` and
+            // `synchronize`, so re-applying `backport` on the derivation path would
+            // bring it back with the next push and make removal fiction — worse
+            // than no default at all, because it would look like it works.
+            // `opened` fires exactly once per PR and is the one moment when nobody
+            // has had the chance to decide yet.
+            //
+            // `reopened` is excluded on purpose: a reopen follows a close, by which
+            // point the label has usually already been considered, and a decision
+            // must survive close/reopen.
+            //
+            // Seeding once has a price, and it is one-sided: a PR that becomes a
+            // `fix` only AFTER it is opened never gets the default. Retitled from
+            // `feat` to `fix`, rescoped out of an excluded scope, opened before this
+            // workflow existed, or opened while its own run failed — each of those
+            // gets the derivations re-applied on the next push and no `backport`.
+            // A maintainer adds the label by hand, exactly as today. Every one of
+            // those is a missing default, never a resurrected label, which is the
+            // direction this has to fail in.
+            //
+            // So do NOT "fix the inconsistency" by moving this in with kind/* and
+            // area/* above. The asymmetry is the feature.
+            const NO_BACKPORT_SCOPES = new Set([
+              // Main-only or meta: CI, test suites, build plumbing, dependency
+              // bumps (`deps` is what Renovate emits, see .github/renovate.json),
+              // agent instructions, and release/backport tooling. A release branch
+              // does not run this code, and a cherry-pick of it is noise at best.
+              'ci', 'e2e', 'tests', 'build', 'deps', 'agents', 'release', 'backport',
+              // Preventive, not observed: `migrations` appears in no recent PR
+              // title and has no area/* mapping. It is listed because a migration
+              // backported without diffing the version slot across branches makes
+              // the NEWER branch silently skip its own migration at that slot — see
+              // "Backporting code that touches monotonic counters" in
+              // docs/release.md. That needs a human who has read the slot state on
+              // both branches, never a default.
+              'migrations',
+            ]);
+            // ANY excluded scope suppresses, rather than requiring all of them to
+            // be excluded. `fix(platform,ci): ...` is precisely the shape that
+            // drags main-only content into a release branch, and a composite scope
+            // is the labeler's weakest signal about what the diff really touches.
+            // Suppressing costs a maintainer one click to add the label back;
+            // defaulting costs a wrong backport that reads as reviewed.
+            const excludedScope = scopes.some(s => NO_BACKPORT_SCOPES.has(s));
+            if (
+              context.payload.action === 'opened' &&
+              type === 'fix' &&
+              // Not on a backport PR itself — reusing the detector from step 1
+              // rather than adding a second one. Auto-labeling these is what
+              // caused recursive backports (see docs/release.md).
+              !backportMatch &&
+              // A breaking fix must never default into a patch release line.
+              !breaking &&
+              !excludedScope
+            ) {
+              toAdd.add('backport');
+            }
+            // What the default buys: a fix no longer misses a release branch
+            // because nobody remembered a label, and backport.yaml fires only on
+            // merge (`pull_request.merged == true`), so the whole review window is
+            // available to remove it.
+            //
+            // What it does not buy, and what a reviewer still owns: whether this
+            // change BELONGS on the release line, and whether the backport PR the
+            // merge produces contains only this change. backport.yaml's
+            // `conflict_resolution: draft_commit_conflicts` covers a conflict — it
+            // cannot cover a backport that applies CLEANLY and wrongly, because
+            // korthout/backport-action imports whole files the target branch lacks.
+            // A fix to code that does not exist on the release branch can land and
+            // drag unrelated content in with it; that is how the #3282 backport to
+            // release-1.5 pulled in a breaking change. The exclusion list narrows
+            // that window and does not close it.
+
+            // 10. Additive only — never remove existing labels.
             const newLabels = [...toAdd].filter(l => !existing.has(l));
             if (newLabels.length === 0) {
               core.info('No new labels to apply');
