@@ -290,7 +290,7 @@ func TestSystemDefaultsLimitRange(t *testing.T) {
 		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
 	}
 
-	lr := r.systemDefaultsLimitRange("cozy-metallb")
+	lr := r.systemDefaultsLimitRange("cozy-metallb", r.SystemNamespaceMemoryLimit)
 
 	if lr.Name != SystemDefaultsLimitRangeName {
 		t.Errorf("name = %q, want %q", lr.Name, SystemDefaultsLimitRangeName)
@@ -519,12 +519,13 @@ func limitRangeDefaultMemory(t *testing.T, cl client.Client, ns string) resource
 	return lr.Spec.Limits[0].Default[corev1.ResourceMemory]
 }
 
-// A container requesting more memory than the default limit, with no limit of its own,
-// is precisely what LimitRanger would default into an unadmittable pod: the API server
-// rejects a request above its limit. The LimitRange must not be applied there, and one
-// applied earlier — when the request was still small — must be retracted, or the
-// workload can never roll again.
-func TestReconcileSystemDefaultsLimitRangeRetractsWhenRequestExceedsDefault(t *testing.T) {
+// A container requesting more memory than the configured default, with no limit of its
+// own, would be defaulted by LimitRanger into a pod the API server rejects. The namespace
+// gets a raised ceiling rather than no ceiling: a LimitRange defaulting 8Gi still puts
+// memory.max on the cgroup, which is the only thing that takes the pod out of the Talos OOM
+// handler's victim set, while withholding the LimitRange leaves it in that set — the exact
+// failure this feature exists to remove.
+func TestReconcileSystemDefaultsLimitRangeRaisesCeilingWhenRequestExceedsDefault(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	existing := &corev1.LimitRange{
@@ -534,8 +535,9 @@ func TestReconcileSystemDefaultsLimitRangeRetractsWhenRequestExceedsDefault(t *t
 		},
 	}
 	// 8Gi is not an arbitrary number: it is the maxAllowed.memory that
-	// packages/system/monitoring ships for vmselect/vmstorage, which the VPA
-	// admission webhook can write into requests under updateMode: Initial.
+	// packages/system/monitoring ships for vmselect/vmstorage, and VPA caps a
+	// recommendation at maxAllowed, so it is also the largest request VPA can hold
+	// there under updateMode: Initial.
 	cl := fake.NewClientBuilder().WithScheme(scheme).
 		WithObjects(existing, systemPod("vmstorage-0", "8Gi", "")).Build()
 
@@ -551,9 +553,52 @@ func TestReconcileSystemDefaultsLimitRangeRetractsWhenRequestExceedsDefault(t *t
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if limitRangeExists(t, cl, "cozy-monitoring") {
-		t.Fatal("LimitRange left in place beside an 8Gi request under a 4Gi default; " +
-			"every new pod of that workload would be rejected at admission")
+	if !limitRangeExists(t, cl, "cozy-monitoring") {
+		t.Fatal("LimitRange withheld from a namespace holding an 8Gi request; the pod is left " +
+			"with no memory.max at all, which is worse than a ceiling above the configured one")
+	}
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want 8Gi raised to clear the request", got.String())
+	}
+}
+
+// The ceiling is raised only for as long as the request is there. Nothing else lowers it,
+// so if this regressed a namespace would keep an 8Gi default forever after one oversized
+// pod, and the configured limit would silently stop meaning anything.
+func TestReconcileSystemDefaultsLimitRangeDropsBackWhenRequestIsGone(t *testing.T) {
+	scheme := limitRangeScheme(t)
+
+	raised := &corev1.LimitRange{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SystemDefaultsLimitRangeName,
+			Namespace: "cozy-monitoring",
+		},
+		Spec: corev1.LimitRangeSpec{
+			Limits: []corev1.LimitRangeItem{{
+				Type:           corev1.LimitTypeContainer,
+				Default:        corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("8Gi")},
+				DefaultRequest: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("32Mi")},
+			}},
+		},
+	}
+	// The 8Gi pod that caused the raise is gone; only a small one is left.
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(raised, systemPod("vmstorage-0", "512Mi", "")).Build()
+
+	r := &PackageReconciler{
+		Client:                       cl,
+		APIReader:                    cl,
+		Scheme:                       scheme,
+		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
+		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
+	}
+
+	if err := r.reconcileSystemDefaultsLimitRange(t.Context(), "cozy-monitoring"); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("4Gi")) != 0 {
+		t.Errorf("default memory = %s, want the configured 4Gi back", got.String())
 	}
 }
 
@@ -667,10 +712,11 @@ func TestReconcileSystemDefaultsLimitRangeSkipsWhenTheScanCannotRead(t *testing.
 }
 
 // The failure a pod-only scan cannot see. A workload at replicas: 0 has no pods, so
-// nothing in the namespace shows the request; applying the LimitRange there arms the trap
-// and it springs at the next scale-up, when the pod is rejected with "must be less than or
-// equal to memory limit" and the workload cannot come back at all.
-func TestReconcileSystemDefaultsLimitRangeRetractsForWorkloadWithNoPods(t *testing.T) {
+// nothing running in the namespace shows the request; defaulting the configured ceiling
+// there arms the trap and it springs at the next scale-up, when the pod is rejected with
+// "must be less than or equal to memory limit" and the workload cannot come back at all.
+// The raised ceiling clears the request, so the scale-up is admitted with memory.max set.
+func TestReconcileSystemDefaultsLimitRangeRaisesCeilingForWorkloadWithNoPods(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	existing := &corev1.LimitRange{
@@ -694,9 +740,9 @@ func TestReconcileSystemDefaultsLimitRangeRetractsForWorkloadWithNoPods(t *testi
 		t.Fatalf("reconcile: %v", err)
 	}
 
-	if limitRangeExists(t, cl, "cozy-monitoring") {
-		t.Fatal("LimitRange left in place beside a scaled-to-zero workload requesting 8Gi " +
-			"under a 4Gi default; the workload could never be scaled back up")
+	if got := limitRangeDefaultMemory(t, cl, "cozy-monitoring"); got.Cmp(resource.MustParse("8Gi")) != 0 {
+		t.Errorf("default memory = %s, want 8Gi raised to clear the scaled-to-zero workload's request; "+
+			"at 4Gi the workload could never be scaled back up", got.String())
 	}
 }
 
@@ -719,14 +765,13 @@ func countingListClient(scheme *runtime.Scheme, lists *int, objects ...client.Ob
 // The fixture makes "did not scan" observable two independent ways, because a test that
 // only checked the resulting LimitRange could not tell a skipped scan from a repeated one
 // that reached the same answer. Every List is counted; and the namespace holds an 8Gi pod,
-// so a scan that ran would act on it and change the object.
+// so a scan that ran would raise the ceiling and change the object.
 func TestReconcileSystemDefaultsLimitRangeSkipsTheScanWhenUnchanged(t *testing.T) {
 	scheme := limitRangeScheme(t)
 
 	settled := (&PackageReconciler{
-		SystemNamespaceMemoryLimit:   resource.MustParse("4Gi"),
 		SystemNamespaceMemoryRequest: resource.MustParse("32Mi"),
-	}).systemDefaultsLimitRange("cozy-monitoring")
+	}).systemDefaultsLimitRange("cozy-monitoring", resource.MustParse("4Gi"))
 
 	var lists int
 	cl := countingListClient(scheme, &lists, settled, systemPod("vmstorage-0", "8Gi", ""))
