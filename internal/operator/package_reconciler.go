@@ -25,6 +25,8 @@ import (
 	cozyv1alpha1 "github.com/cozystack/cozystack/api/v1alpha1"
 	"github.com/cozystack/cozystack/pkg/config"
 	helmv2 "github.com/fluxcd/helm-controller/api/v2"
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -135,6 +137,8 @@ func (r *PackageReconciler) buildHelmReleaseSpec(componentInstall *cozyv1alpha1.
 // +kubebuilder:rbac:groups=core,resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=core,resources=limitranges,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments;statefulsets;daemonsets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=cronjobs;jobs,verbs=get;list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *PackageReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -909,14 +913,14 @@ func (r *PackageReconciler) reconcileSystemDefaultsLimitRange(ctx context.Contex
 		// Without the scan there is no way to tell whether applying is safe, and
 		// guessing either way risks the wedge the scan exists to prevent. Leave the
 		// namespace exactly as it is and try again on the next reconcile.
-		logger.Error(err, "skipping the system defaults LimitRange: could not read the namespace's pods", "namespace", nsName)
+		logger.Error(err, "skipping the system defaults LimitRange: could not read the namespace's pods and workloads", "namespace", nsName)
 		return nil
 	}
 	if blocker != nil {
 		logger.Error(fmt.Errorf("memory request above the configured default limit"),
 			"not defaulting container memory in this namespace: the LimitRange would stop these pods being admitted; raise --system-namespace-memory-limit above the request below, or set it to 0 to turn the feature off",
 			"namespace", nsName,
-			"pod", blocker.pod,
+			"workload", blocker.workload,
 			"container", blocker.container,
 			"request", blocker.request.String(),
 			"limit", r.SystemNamespaceMemoryLimit.String())
@@ -949,7 +953,13 @@ func (r *PackageReconciler) deleteSystemDefaultsLimitRange(ctx context.Context, 
 // memoryRequestBlocker names the container that makes the configured default limit
 // unsafe to apply in a namespace.
 type memoryRequestBlocker struct {
-	pod       string
+	// workload is the object the request was read from, written as Kind/name:
+	// "Pod/vmselect-0" for a live pod, "Deployment/vmselect" for a pod template. The
+	// kind is part of the value rather than implied, because it tells an operator
+	// reading the log which object to go and change — a pod whose request a mutating
+	// webhook raised after admission is a different problem from a template that
+	// declares the request outright.
+	workload  string
 	container string
 	request   resource.Quantity
 }
@@ -970,38 +980,37 @@ type memoryRequestBlocker struct {
 // both above the 4Gi default this operator ships. They run with updateMode: Initial, so
 // the VPA admission webhook writes the recommendation into the pod's requests at creation
 // time, and it can do so on a busy cluster without any chart in the tree declaring a
-// request that large. That is why the guard lives here, at reconcile time against live
-// pods, rather than as a chart-render assertion: a rendered template cannot see a request
-// a mutating webhook has not injected yet.
+// request that large.
+//
+// The scan therefore has to read live pods and workload pod templates, and neither alone
+// is enough. A live pod is the only place a request raised by a mutating webhook after
+// admission appears, and no rendered template can see it. A pod template is the only place
+// a workload with no pods appears at all: a Deployment or StatefulSet at replicas: 0 and a
+// CronJob between runs are ordinary steady states, and scanning pods alone declares such a
+// namespace safe, applies the LimitRange, and turns the next scale-up or the next schedule
+// into "must be less than or equal to memory limit" — a workload that cannot come back,
+// discovered at the moment somebody needs it.
 //
 // The remedy is deliberately non-fatal. Applying the LimitRange would stop the affected
 // workload from ever rolling, and returning an error would fail the whole Package
 // reconcile and wedge the platform — both worse than the unbounded-memory problem this
 // feature mitigates. The namespace keeps its pre-feature behaviour and the operator says
-// loudly why. The residual gap is the first pod of a workload whose request only ever
-// exists post-admission: if it is rejected outright there is no pod to scan, and only the
-// rejection event records it.
+// loudly why. A List that fails is treated the same way by the caller, which skips the
+// namespace rather than applying blind: the scan not running is not evidence that applying
+// is safe.
 func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, nsName string) (*memoryRequestBlocker, error) {
 	reader := r.APIReader
 	if reader == nil {
 		reader = r.Client
 	}
 
-	pods := &corev1.PodList{}
-	if err := reader.List(ctx, pods, client.InNamespace(nsName)); err != nil {
-		return nil, fmt.Errorf("failed to list pods in namespace %s: %w", nsName, err)
-	}
-
 	var worst *memoryRequestBlocker
-	for i := range pods.Items {
-		pod := &pods.Items[i]
-		// A finished pod is never recreated from this spec, so its request cannot
-		// block anything.
-		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
-			continue
-		}
+	// consider folds one pod spec into the running maximum. Sources below are scanned in
+	// a fixed order and the comparison is strict, so equal requests keep the first source
+	// scanned and which object gets named is deterministic rather than list-order luck.
+	consider := func(spec *corev1.PodSpec, workload string) {
 		// Init containers are defaulted by LimitRanger on the same terms.
-		for _, containers := range [][]corev1.Container{pod.Spec.InitContainers, pod.Spec.Containers} {
+		for _, containers := range [][]corev1.Container{spec.InitContainers, spec.Containers} {
 			for _, c := range containers {
 				if _, hasLimit := c.Resources.Limits[corev1.ResourceMemory]; hasLimit {
 					continue
@@ -1011,13 +1020,107 @@ func (r *PackageReconciler) findRequestAboveDefaultLimit(ctx context.Context, ns
 					continue
 				}
 				if worst == nil || request.Cmp(worst.request) > 0 {
-					worst = &memoryRequestBlocker{pod: pod.Name, container: c.Name, request: request}
+					worst = &memoryRequestBlocker{workload: workload, container: c.Name, request: request}
 				}
 			}
 		}
 	}
 
+	// Templates first, so that a workload and its own running pods — which declare the
+	// same request — are reported as the workload. That is the object an operator has to
+	// edit, and unlike a pod name it survives the next roll. A live pod outranks its own
+	// template only when its request is strictly larger, which is exactly the case the
+	// template cannot show: a webhook-injected request.
+	//
+	// ReplicaSets are deliberately absent. A live one is a copy of its Deployment's
+	// template, already covered above, while the older revisions a Deployment keeps carry
+	// superseded templates that no scale-up will ever instantiate — only an explicit
+	// rollout undo brings one back. Scanning them would withhold the LimitRange from a
+	// whole namespace over a request that was replaced releases ago.
+	deployments := &appsv1.DeploymentList{}
+	if err := reader.List(ctx, deployments, client.InNamespace(nsName)); err != nil {
+		return nil, fmt.Errorf("failed to list deployments in namespace %s: %w", nsName, err)
+	}
+	for i := range deployments.Items {
+		d := &deployments.Items[i]
+		consider(&d.Spec.Template.Spec, "Deployment/"+d.Name)
+	}
+
+	statefulSets := &appsv1.StatefulSetList{}
+	if err := reader.List(ctx, statefulSets, client.InNamespace(nsName)); err != nil {
+		return nil, fmt.Errorf("failed to list statefulsets in namespace %s: %w", nsName, err)
+	}
+	for i := range statefulSets.Items {
+		s := &statefulSets.Items[i]
+		consider(&s.Spec.Template.Spec, "StatefulSet/"+s.Name)
+	}
+
+	daemonSets := &appsv1.DaemonSetList{}
+	if err := reader.List(ctx, daemonSets, client.InNamespace(nsName)); err != nil {
+		return nil, fmt.Errorf("failed to list daemonsets in namespace %s: %w", nsName, err)
+	}
+	for i := range daemonSets.Items {
+		d := &daemonSets.Items[i]
+		consider(&d.Spec.Template.Spec, "DaemonSet/"+d.Name)
+	}
+
+	// A CronJob is scanned whether or not it is suspended: suspend is the same kind of
+	// dormancy as replicas: 0, undone by the same kind of human action, and exempting it
+	// would leave the gap this scan exists to close open for one kind.
+	cronJobs := &batchv1.CronJobList{}
+	if err := reader.List(ctx, cronJobs, client.InNamespace(nsName)); err != nil {
+		return nil, fmt.Errorf("failed to list cronjobs in namespace %s: %w", nsName, err)
+	}
+	for i := range cronJobs.Items {
+		cj := &cronJobs.Items[i]
+		consider(&cj.Spec.JobTemplate.Spec.Template.Spec, "CronJob/"+cj.Name)
+	}
+
+	// Jobs are named separately from their owners because not every Job has one: a Helm
+	// hook or a migration Job is created standalone, and a Job with spec.suspend has no
+	// pods to scan yet. A Job that has already completed or given up is skipped for the
+	// same reason a terminated pod is — it will never create another pod.
+	jobs := &batchv1.JobList{}
+	if err := reader.List(ctx, jobs, client.InNamespace(nsName)); err != nil {
+		return nil, fmt.Errorf("failed to list jobs in namespace %s: %w", nsName, err)
+	}
+	for i := range jobs.Items {
+		j := &jobs.Items[i]
+		if jobFinished(j) {
+			continue
+		}
+		consider(&j.Spec.Template.Spec, "Job/"+j.Name)
+	}
+
+	pods := &corev1.PodList{}
+	if err := reader.List(ctx, pods, client.InNamespace(nsName)); err != nil {
+		return nil, fmt.Errorf("failed to list pods in namespace %s: %w", nsName, err)
+	}
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		// A finished pod is never recreated from this spec, so its request cannot
+		// block anything.
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		consider(&pod.Spec, "Pod/"+pod.Name)
+	}
+
 	return worst, nil
+}
+
+// jobFinished reports whether a Job has run to completion or given up. Either way it will
+// never create another pod, so its template cannot block admission of anything.
+func jobFinished(job *batchv1.Job) bool {
+	for _, c := range job.Status.Conditions {
+		if c.Status != corev1.ConditionTrue {
+			continue
+		}
+		if c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed {
+			return true
+		}
+	}
+	return false
 }
 
 // systemDefaultsLimitRange builds the LimitRange applied to a system namespace.
