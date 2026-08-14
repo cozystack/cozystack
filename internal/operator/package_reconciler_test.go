@@ -741,6 +741,11 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 	terminated := systemPod("migrate-once", "8Gi", "")
 	terminated.Status.Phase = corev1.PodSucceeded
 
+	// The other terminal phase. Both halves of the skip need a fixture of their own,
+	// or either half can be deleted with the suite still green.
+	crashed := systemPod("crashed-once", "9Gi", "")
+	crashed.Status.Phase = corev1.PodFailed
+
 	initHeavy := systemPod("with-init", "16Mi", "")
 	initHeavy.Spec.InitContainers = []corev1.Container{{
 		Name: "prepare",
@@ -774,9 +779,9 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		},
 		{
 			// A finished pod is never recreated from this spec, so it cannot
-			// block admission of anything.
+			// block admission of anything — in either terminal phase.
 			name:    "a terminated pod does not count",
-			objects: []client.Object{terminated},
+			objects: []client.Object{terminated, crashed},
 		},
 		{
 			// LimitRanger defaults init containers on the same terms as
