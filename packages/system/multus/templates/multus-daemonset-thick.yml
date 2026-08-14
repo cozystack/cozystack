@@ -158,26 +158,7 @@ spec:
         - name: kube-multus
           image: ghcr.io/cozystack/cozystack/multus-cni:v1.6.0@sha256:0a92e861ead179dd6b46f475fd8878d44b3cfa40ce4d7a8ff92f790d54250d25
           command: [ "/usr/src/multus-cni/bin/multus-daemon" ]
-          # Upstream sets 50Mi for both the request and the limit. This patch
-          # already raised the request to 100Mi and DELETED the memory limit
-          # outright, leaving only the CPU one -- which left the pod cgroup with
-          # no memory.max, and the Talos userspace OOM handler (v1.12+) only
-          # ever kills cgroups that lack it. So dropping the limit to survive
-          # 50Mi is what made multus an eviction candidate on every node.
-          #
-          # Restore a limit, sized as a backstop rather than a ceiling: 14d peak
-          # is 230Mi on a 3-node dev cluster and this grows with pods per node,
-          # so upstream's 50Mi was never survivable and a fitted value would
-          # trade a rare pressure-driven kill for a deterministic one.
-          #
-          # 1Gi rather than a tighter multiple of that peak, because the peak is
-          # the part least worth trusting here: multus-daemon holds per-pod
-          # state and a 3-node dev cluster understates pods per node more than
-          # it understates anything else measured for this change. The scar this
-          # avoids is the vertical-pod-autoscaler updater, which OOM-looped at a
-          # 110Mi limit for the same reason -- it scaled with pods in the
-          # cluster -- and was given a limit 2.5x its measured request to stop
-          # it. A limit costs nothing until it is hit; only the request reserves.
+          # Memory sizing rationale: packages/system/multus/tests/multus_test.yaml
           resources:
             requests:
               cpu: "100m"
