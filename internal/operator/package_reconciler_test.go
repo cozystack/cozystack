@@ -387,7 +387,10 @@ func systemPod(name, request, limit string) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "cozy-monitoring"},
 		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{Name: "app", Resources: requirements}},
+			// Named after the pod, so a test that asserts which container was
+			// reported cannot pass by accident when every fixture pod carries
+			// an identically named container.
+			Containers: []corev1.Container{{Name: name + "-app", Resources: requirements}},
 		},
 		Status: corev1.PodStatus{Phase: corev1.PodRunning},
 	}
@@ -580,9 +583,9 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 	}}
 
 	tests := []struct {
-		name          string
-		pods          []client.Object
-		wantContainer string
+		name string
+		pods []client.Object
+		want *memoryRequestBlocker
 	}{
 		{
 			name: "no request above the limit",
@@ -601,14 +604,32 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 		{
 			// LimitRanger defaults init containers on the same terms as
 			// regular ones, so the scan has to look at both.
-			name:          "an init container counts",
-			pods:          []client.Object{initHeavy},
-			wantContainer: "prepare",
+			name: "an init container counts",
+			pods: []client.Object{initHeavy},
+			want: &memoryRequestBlocker{
+				pod:       "with-init",
+				container: "prepare",
+				request:   resource.MustParse("6Gi"),
+			},
 		},
 		{
-			name:          "the largest offender is reported",
-			pods:          []client.Object{systemPod("small", "5Gi", ""), systemPod("big", "9Gi", "")},
-			wantContainer: "app",
+			// Three offenders, and the largest is deliberately neither the first
+			// nor the last one the scan sees: pods are listed in name order, so
+			// vmselect-0 sits in the middle. Together with asserting all three
+			// reported fields, that is what pins the comparison — keeping the
+			// first, the last or the smallest offender instead of the largest
+			// each names a different pod and quantity here.
+			name: "the largest offender is reported",
+			pods: []client.Object{
+				systemPod("vmagent-0", "5Gi", ""),
+				systemPod("vmselect-0", "9Gi", ""),
+				systemPod("vmstorage-0", "6Gi", ""),
+			},
+			want: &memoryRequestBlocker{
+				pod:       "vmselect-0",
+				container: "vmselect-0-app",
+				request:   resource.MustParse("9Gi"),
+			},
 		},
 	}
 
@@ -627,7 +648,7 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 				t.Fatalf("findRequestAboveDefaultLimit: %v", err)
 			}
 
-			if tt.wantContainer == "" {
+			if tt.want == nil {
 				if got != nil {
 					t.Fatalf("reported %s/%s (%s) as blocking; nothing should block here",
 						got.pod, got.container, got.request.String())
@@ -637,8 +658,11 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			if got == nil {
 				t.Fatal("no blocker reported; a pod that cannot be admitted under the default was missed")
 			}
-			if got.container != tt.wantContainer {
-				t.Errorf("container = %q, want %q", got.container, tt.wantContainer)
+			if got.pod != tt.want.pod || got.container != tt.want.container ||
+				got.request.Cmp(tt.want.request) != 0 {
+				t.Errorf("blocker = %s/%s (%s), want %s/%s (%s)",
+					got.pod, got.container, got.request.String(),
+					tt.want.pod, tt.want.container, tt.want.request.String())
 			}
 		})
 	}
