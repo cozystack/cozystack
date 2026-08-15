@@ -1,12 +1,20 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 12 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # Behavioural tests for the multus install-cni-plugins init container script:
 # extracted from the rendered DaemonSet and run. The helm-unittest cases in
 # packages/system/multus/tests/multus_test.yaml match its source TEXT instead.
 #
 # Run via hack/cozytest.sh from the repo root (make bats-unit-tests); relative
 # paths resolve against that cwd. The runner has no setup/teardown, so each
-# @test builds its own fixture.
+# @test builds its own fixture and removes it on the last line of its body.
+#
+# That cleanup is deliberately not a `trap ... EXIT`. A handler installed inside
+# an @test body replaces the one the bats binary keeps its bookkeeping in, and a
+# test that then FAILS prints no TAP line at all — the run only reports having
+# executed fewer tests than it planned, which reads as a green suite. Both
+# runners set -e, so on failure the cleanup is unreachable and the fixture
+# survives for inspection. See hack/bats-no-exit-trap.bats and
+# docs/agents/e2e-testing.md. The EXIT traps the tests below talk about are the
+# ones inside the script UNDER TEST, which is a different shell entirely.
 
 CHART=packages/system/multus
 
@@ -75,7 +83,7 @@ STUB
 }
 
 @test "a render that produces no script fails instead of passing as a no-op" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   mkdir -p "$tmp/dst"
   # Guards the guard. Two tests below assert nothing landed in the destination,
   # so an unrendered script satisfies them. This also fails if the check is
@@ -87,10 +95,11 @@ STUB
     echo "FAIL: render_script reported success with no chart to render"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "installs every staged plugin into the host cni bin dir, executable" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   render_script "$tmp/s.sh" "$tmp/dst" "$tmp/src"
   sh "$tmp/s.sh"
@@ -106,10 +115,11 @@ STUB
     [ -x "$tmp/dst/$p" ]
     [ "$("$tmp/dst/$p")" = "$p-NEW" ]
   done
+  rm -rf "$tmp"
 }
 
 @test "installs a plugin executable even when the staged copy is not" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # cp reproduces the source mode, so the chmod is only load-bearing when a
   # staged plugin is not already 0755.
@@ -123,10 +133,11 @@ STUB
   # Measured in dash and bash -- the `-f` half of every such pair was dead.
   [ -f "$tmp/dst/bridge" ]
   [ -x "$tmp/dst/bridge" ]
+  rm -rf "$tmp"
 }
 
 @test "replaces a plugin by rename, not by writing onto the live path" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # Stand in for a plugin another CNI already installed and the kubelet may exec.
   printf '#!/bin/sh\necho portmap-OLD\n' > "$tmp/dst/portmap"
@@ -141,10 +152,11 @@ STUB
   # A rename swaps in a new inode, so an exec holding the old one keeps a
   # complete binary; a cp onto the live path truncates and rewrites in place.
   if [ "$before" = "$after" ]; then echo "FAIL: portmap replaced in place (inode $before unchanged) — copy was not atomic"; false; fi
+  rm -rf "$tmp"
 }
 
 @test "leaves no temp files behind, and clears ones stranded by an earlier kill" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # Named for a plugin this image does not stage, so no iteration renames it
   # away -- only the cleanup can remove it.
@@ -154,10 +166,11 @@ STUB
   sh "$tmp/s.sh"
 
   [ "$(ls -a1 "$tmp/dst" | grep -c '^\.tmp-cozystack-multus-' || true)" = "0" ]
+  rm -rf "$tmp"
 }
 
 @test "skips staging instead of failing when the image predates the plugins" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   mkdir -p "$tmp/dst"
   # No source dir at all: the release-prep digest re-pin lags a Dockerfile
   # change, so the pinned image can have no /cni-plugins.
@@ -174,10 +187,11 @@ STUB
     cat "$tmp/err"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "does not fail when the staged plugin directory is empty" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   mkdir -p "$tmp/src" "$tmp/dst"
   render_script "$tmp/s.sh" "$tmp/dst" "$tmp/src"
   # An unmatched glob stays literal in sh, so without the `[ -e ]` guard the loop
@@ -192,10 +206,11 @@ STUB
     cat "$tmp/err"
     false
   fi
+  rm -rf "$tmp"
 }
 
 @test "a leftover directory is cleared, and the plugin installs as a file" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # The temp path as an ordinary directory `rm -rf` can clear: a previous run
   # killed between the cp and the rename. Staging proceeds.
@@ -208,10 +223,11 @@ STUB
   [ -f "$tmp/dst/bridge" ]
   [ -x "$tmp/dst/bridge" ]
   [ "$("$tmp/dst/bridge")" = "bridge-NEW" ]
+  rm -rf "$tmp"
 }
 
 @test "a temp path that will not clear is refused, not published as a plugin" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # A temp path that is still a directory when the copy runs: cp writes INTO it,
   # chmod works on it, and mv publishes it as the plugin, because a rename onto
@@ -256,10 +272,11 @@ STUB
   [ -f "$tmp/dst/macvlan" ]
   [ -x "$tmp/dst/macvlan" ]
   [ "$("$tmp/dst/macvlan")" = "macvlan-NEW" ]
+  rm -rf "$tmp"
 }
 
 @test "refuses to nest a plugin inside a directory that already holds its name" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # mv moves its source INTO an existing directory, under the SOURCE's basename
   # -- the temp name, never <dst>/bridge/bridge. Assert the directory gained no
@@ -279,10 +296,11 @@ STUB
   # And a CAUSE: this is the one branch that records a failure no command
   # printed an error for, so without this line the summary is unexplained.
   grep -q 'is a directory, not a plugin binary' "$tmp/err"
+  rm -rf "$tmp"
 }
 
 @test "survives a leftover it cannot clean up" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # A leftover only the trap's glob reaches. Its `rm` is guarded because a
   # command failing inside an EXIT trap sets the status even after `exit 0`.
@@ -307,10 +325,11 @@ STUB
   [ -f "$tmp/dst/bridge" ]
   [ -x "$tmp/dst/bridge" ]
   [ "$("$tmp/dst/bridge")" = "bridge-NEW" ]
+  rm -rf "$tmp"
 }
 
 @test "reports a plugin it could not install, and still leaves the node usable" {
-  tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
+  tmp=$(mktemp -d)
   make_plugins "$tmp/src"; mkdir -p "$tmp/dst"
   # An entry cp cannot copy, sorted ahead of the good plugins so a later
   # iteration still runs.
@@ -358,4 +377,5 @@ STUB
   # stub_failing_rm refuses that path, which is what makes the cleanup fail.
   # Counting only regular files keeps the fixture from hiding a real leak.
   [ "$(find "$tmp/dst" -maxdepth 1 -type f -name '.tmp-cozystack-multus-*' | wc -l | tr -d ' ')" = "0" ]
+  rm -rf "$tmp"
 }
