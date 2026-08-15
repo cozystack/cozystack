@@ -110,7 +110,7 @@ describe("K8sClient onUnauthorized (401) handling", () => {
 })
 
 describe("K8sClient default unauthorized handler", () => {
-  it("redirects to /oauth2/start with the current location preserved as rd", async () => {
+  it("redirects to /oauth2/sign_in with the current location preserved as rd", async () => {
     // jsdom's location.assign is non-configurable, so swap the whole object.
     const original = window.location
     const assign = vi.fn()
@@ -128,10 +128,12 @@ describe("K8sClient default unauthorized handler", () => {
       )
 
       // Relative rd (no origin) preserves the destination without tripping
-      // oauth2-proxy's open-redirect rejection.
+      // oauth2-proxy's open-redirect rejection. The target must stay
+      // /oauth2/sign_in: token-proxy (oidc-enabled=false) serves no
+      // /oauth2/start, so that path falls through to its catch-all.
       expect(assign).toHaveBeenCalledTimes(1)
       expect(assign).toHaveBeenCalledWith(
-        `/oauth2/start?rd=${encodeURIComponent("/apps/postgres?tab=config#x")}`,
+        `/oauth2/sign_in?rd=${encodeURIComponent("/apps/postgres?tab=config#x")}`,
       )
     } finally {
       Object.defineProperty(window, "location", {
