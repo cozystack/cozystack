@@ -271,14 +271,15 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 	return fmt.Errorf("tlsPassthroughListeners: unsupported with certMode %q; that mode serves the tenant from one wildcard terminate listener covering every hostname under the apex, and the pinned Cilium routes both by SNI alone in one Envoy listener, so a connection on 443 would reach the passthrough backend", mode)
 }
 
-// passthroughHostnames returns every hostname a passthrough listener on
-// this Gateway claims: "<svc>.<apex>" for each TLSPassthroughServices
-// entry and the declared Hostname of each TLSPassthroughListeners entry.
-// Both render from the spec alone, with no route involved, so the set is
-// known before any claim is collected.
+// passthroughListener is one listener the spec renders on its own,
+// before a single route is collected: "<svc>.<apex>" for each
+// TLSPassthroughServices entry and the declared Hostname of each
+// TLSPassthroughListeners entry. Both come from the spec with no route
+// involved, so the set is known before any claim is collected.
 //
-// None of them may also get an HTTPS-terminate listener, and the reason
-// differs by field only in which layer refuses.
+// A hostname one of these answers is reserved: none of them may also
+// get an HTTPS-terminate listener, and the reason differs by field
+// only in which layer refuses.
 //
 // A TLSPassthroughServices entry shares port 443 with the terminate
 // listeners, so a hostname claimed by both produces two listeners on one
@@ -318,7 +319,7 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // instead, as Accepted=False with NoMatchingListenerHostname naming the
 // passthrough hostname that answers the claim.
 //
-// The caller matches a claimed hostname against this set by SNI overlap
+// The caller matches a claimed hostname against these by SNI overlap
 // rather than by equality, because a "*.db.<apex>" entry answers
 // "pg.db.<apex>" on the pinned Cilium exactly as an explicit entry would:
 // the filter chain match carries ServerNames and no port. Comparing by
@@ -326,13 +327,42 @@ func validatePassthroughListenerCertMode(listeners []gatewayv1alpha1.TLSPassthro
 // filter exists to avoid. Withdrawing the whole subtree is the intended
 // reading of a wildcard entry, which declares that everything under the
 // name bypasses termination.
-func passthroughHostnames(tgw *gatewayv1alpha1.TenantGateway) map[string]struct{} {
-	out := make(map[string]struct{}, len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners))
+type passthroughListener struct {
+	// section is the rendered Gateway listener name, which is also the
+	// sectionName a route pins itself to.
+	section string
+	// hostname is the SNI the listener answers.
+	hostname string
+	// tenantOnly reports whether the listener admits the publishing
+	// tenant's namespace alone. The native-port listeners do; the
+	// port-443 ones select on the gateway label, which every attached
+	// namespace carries.
+	tenantOnly bool
+}
+
+// passthroughListeners enumerates them: one per TLSPassthroughServices
+// entry on port 443, then one per TLSPassthroughListeners entry on its
+// native port, in the order renderGateway emits them.
+//
+// One walk of the two spec fields rather than one per question. The
+// reconciler needs the reserved hostnames, the section a route attaches
+// by, and the attach set, and deriving each by its own walk is how a
+// third passthrough source gets added to one and missed by the others,
+// with nothing to catch the divergence.
+func passthroughListeners(tgw *gatewayv1alpha1.TenantGateway) []passthroughListener {
+	out := make([]passthroughListener, 0, len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners))
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
-		out[svc+"."+tgw.Spec.Apex] = struct{}{}
+		out = append(out, passthroughListener{
+			section:  passthroughListenerPrefix + svc,
+			hostname: svc + "." + tgw.Spec.Apex,
+		})
 	}
 	for _, pl := range tgw.Spec.TLSPassthroughListeners {
-		out[pl.Hostname] = struct{}{}
+		out = append(out, passthroughListener{
+			section:    passthroughListenerPrefix + pl.Name,
+			hostname:   pl.Hostname,
+			tenantOnly: true,
+		})
 	}
 	return out
 }

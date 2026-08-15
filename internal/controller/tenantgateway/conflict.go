@@ -70,7 +70,7 @@ type routeRef struct {
 // sectionName pins the route to one listener, and then only that
 // listener's own hostname and attach set decide.
 //
-// reserved maps each rendered passthrough hostname to whether its
+// tenantOnly maps each rendered passthrough hostname to whether its
 // listener admits the publishing tenant alone, which the native-port
 // ones do. sections maps a rendered passthrough listener name to the
 // hostname it answers, and holds nothing else: a sectionName absent
@@ -88,7 +88,7 @@ type routeRef struct {
 // send an operator to different places and one of them can fire on a
 // route inside the tenant, where a namespace refusal would contradict
 // the object it is written on.
-func servableOn(ref routeRef, h, tenantNamespace string, reserved map[string]bool, sections map[string]string) (bool, withdrawalCause, string) {
+func servableOn(ref routeRef, h, tenantNamespace string, tenantOnly map[string]bool, sections map[string]string) (bool, withdrawalCause, string) {
 	pinned := ""
 	if ref.parentRef.SectionName != nil {
 		named, exists := sections[string(*ref.parentRef.SectionName)]
@@ -107,7 +107,7 @@ func servableOn(ref routeRef, h, tenantNamespace string, reserved map[string]boo
 	// could name two different refusers and rewrite the condition.
 	refusedBy := ""
 	sectionAnswers := false
-	for rh, tenantOnly := range reserved {
+	for rh, only := range tenantOnly {
 		if !hostnamesOverlap(rh, h) {
 			continue
 		}
@@ -115,7 +115,7 @@ func servableOn(ref routeRef, h, tenantNamespace string, reserved map[string]boo
 			continue
 		}
 		sectionAnswers = true
-		if tenantOnly && ref.namespace != tenantNamespace {
+		if only && ref.namespace != tenantNamespace {
 			if refusedBy == "" || rh < refusedBy {
 				refusedBy = rh
 			}

@@ -4684,11 +4684,13 @@ func TestValidateTLSPassthroughListenersReportsApexBeforeOverlap(t *testing.T) {
 // a value that is not wrong — so the apex is checked first and reported
 // on its own terms.
 //
-// It is judged here rather than by a schema pattern because a pattern
-// refuses the TenantGateway write itself: the gateway HelmRelease then
-// cannot apply and goes NotReady, where a status error costs the one
-// Gateway. An apex is only judged when the field is in use, so a tenant
-// that never declares a listener keeps the behaviour it had.
+// It is judged here rather than by a schema pattern because the apex is
+// an already-shipped field the tenant does not write directly, and a
+// pattern refuses the TenantGateway write itself: the gateway
+// HelmRelease then cannot apply and goes NotReady, where a status error
+// costs the one Gateway. An apex is only judged when the field is in
+// use, so a tenant that never declares a listener keeps the behaviour
+// it had.
 func TestValidateTLSPassthroughListenersNamesAnUnusableApex(t *testing.T) {
 	listeners := []gatewayv1alpha1.TLSPassthroughListener{
 		{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
@@ -4715,6 +4717,68 @@ func TestValidateTLSPassthroughListenersNamesAnUnusableApex(t *testing.T) {
 	// field.
 	if err := validateTLSPassthroughListeners(nil, []string{"api"}, "Foo.Example.com"); err != nil {
 		t.Errorf("apex judged with no listener declared: %v", err)
+	}
+}
+
+// TestPassthroughListenersMatchTheRenderedGateway pins that the
+// enumeration the reconciler reads its reserved hostnames, listener
+// sections and attach sets from lists exactly the passthrough listeners
+// renderGateway emits.
+//
+// Both are derived from the same two spec fields, and nothing but this
+// makes them derive the same set. A passthrough source the renderer
+// gains and the enumeration misses renders a listener no hostname is
+// reserved for, so the terminate listener stays and the two collide on
+// one SNI; missed the other way round, a hostname is withdrawn from
+// termination with no passthrough listener serving it. Neither surfaces
+// as a failure anywhere else.
+func TestPassthroughListenersMatchTheRenderedGateway(t *testing.T) {
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: []string{"api", "vm-exportproxy"},
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+				{Name: "kafka", Port: 9092, Hostname: "*.kafka.foo.example.com"},
+			},
+		},
+	}
+
+	r := &Reconciler{Scheme: newScheme(t)}
+	gw, err := r.renderGateway(tgw, []string{"app.foo.example.com"}, nil)
+	if err != nil {
+		t.Fatalf("renderGateway: %v", err)
+	}
+
+	// Compared as ordered slices, not as maps: the enumeration's doc
+	// says it lists the entries in the order renderGateway emits them,
+	// and an order-blind comparison would let that sentence rot.
+	type entry struct{ section, hostname string }
+	rendered := []entry{}
+	for _, l := range gw.Spec.Listeners {
+		if l.Protocol != gatewayv1.TLSProtocolType || l.TLS == nil || l.TLS.Mode == nil || *l.TLS.Mode != gatewayv1.TLSModePassthrough {
+			continue
+		}
+		if l.Hostname == nil {
+			t.Fatalf("passthrough listener %q renders no hostname", l.Name)
+		}
+		rendered = append(rendered, entry{string(l.Name), string(*l.Hostname)})
+	}
+	// Both spec fields must be represented, or the comparison below
+	// holds for a set that never exercised one of the two walks.
+	if len(rendered) != len(tgw.Spec.TLSPassthroughServices)+len(tgw.Spec.TLSPassthroughListeners) {
+		t.Fatalf("rendered %d passthrough listeners, want one per spec entry: %v", len(rendered), rendered)
+	}
+
+	enumerated := []entry{}
+	for _, l := range passthroughListeners(tgw) {
+		enumerated = append(enumerated, entry{l.section, l.hostname})
+	}
+	if !reflect.DeepEqual(enumerated, rendered) {
+		t.Errorf("enumeration and rendered Gateway disagree:\n enumerated %v\n rendered   %v", enumerated, rendered)
 	}
 }
 
@@ -4985,8 +5049,8 @@ func TestValidateTLSPassthroughListeners(t *testing.T) {
 // pinned Cilium the Gateway listener port does not survive translation
 // into the Envoy filter-chain match, so the intersection is not academic:
 // a connection on 443 for such a name reaches the passthrough backend.
-// http01 renders per-hostname listeners instead and passthroughHostnames
-// withdraws the one a passthrough listener holds.
+// http01 renders per-hostname listeners instead, and the one a
+// passthrough listener already answers is withdrawn.
 //
 // The empty CertMode is the Go zero value, not a mode: the CRD defaults
 // the field, so a stored object always carries one. Refusing only the two
