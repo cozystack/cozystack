@@ -1,5 +1,4 @@
 #!/usr/bin/env bats
-# EXIT-TRAP DEBT: 9 -- see hack/bats-no-exit-trap.bats; lower it as the traps go, delete it at zero.
 # EXECUTES the release-changelog logic instead of asserting about its YAML.
 #
 # Its companion, hack/release-changelog-contract.bats, greps the workflow files.
@@ -28,6 +27,19 @@
 #     surrounding shell is exercised.
 #   * That the sparse tooling checkout resolves on GitHub's runners. actions/
 #     checkout is not runnable here; the contract suite pins its presence.
+#
+# Each test removes its throwaway repositories on the last line of its body and
+# never from a `trap ... EXIT`. A handler installed inside an @test body replaces
+# the one the bats binary keeps its bookkeeping in, and a test that then FAILS
+# prints no TAP line at all — the run only reports having executed fewer tests
+# than it planned, which reads as a green suite. Both runners set -e, so on
+# failure the cleanup is unreachable and the fixture repositories survive for
+# inspection, which is what a failed test wants anyway. Where a body ends in an
+# explicit `return 0` the cleanup goes just above it: that `return` is what turns
+# the preceding `&&`/`||` list — which errexit does not abort on — into the
+# verdict, so cleanup below it would be dead and cleanup replacing it would
+# change what the test asserts. See hack/bats-no-exit-trap.bats and
+# docs/agents/e2e-testing.md.
 
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PRESERVE="$REPO_ROOT/hack/changelog-preserve.sh"
@@ -172,8 +184,6 @@ rc_branch=release-1.6.0-rc.2"
 
 @test "preserve: rescues a hand-written changelog from an existing staging branch" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   # A maintainer commits a changelog onto release-1.6.0 — the documented recovery
@@ -197,12 +207,11 @@ rc_branch=release-1.6.0-rc.2"
   [ -s "$out" ] || { echo "preserve exited 0 but wrote no file" >&2; exit 1; }
   grep -q 'HAND-WRITTEN MARKER' "$out" || {
     echo "preserved file is not the maintainer's version" >&2; exit 1; }
+  rm -rf "$tmp"
 }
 
 @test "preserve: survives promote's full force-push rebuild cycle" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   (
@@ -239,12 +248,11 @@ rc_branch=release-1.6.0-rc.2"
     echo "regression the preserve step exists to prevent." >&2
     exit 1
   }
+  rm -rf "$tmp"
 }
 
 @test "preserve: reports nothing to preserve for absent branch, absent file, empty file" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   # No such branch — the ordinary first-promotion case.
@@ -279,13 +287,12 @@ rc_branch=release-1.6.0-rc.2"
     exit 1
   }
   [ ! -f "$tmp/c.md" ] || { echo "preserve left an empty artefact behind" >&2; exit 1; }
+  rm -rf "$tmp"
   return 0
 }
 
 @test "pickup: changelog-preserve.sh fetches an rc-time changelog from the rc staging branch" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   # changelog-rc.yaml committed the changelog onto the rc staging branch
@@ -316,6 +323,7 @@ rc_branch=release-1.6.0-rc.2"
   # And it must be publishable — the generation core validates it next.
   "$VALIDATE" "$out" 1.6.0 >/dev/null 2>&1 || {
     echo "picked-up changelog does not pass the validator" >&2; exit 1; }
+  rm -rf "$tmp"
 }
 
 # hack/select-changelog-source.sh is the validate-then-fall-through the reusable
@@ -324,8 +332,6 @@ rc_branch=release-1.6.0-rc.2"
 # caught by outcome rather than by a grep that a dead block could satisfy.
 @test "select-source: a valid rc-tag-tree changelog wins over the staging branch" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   # A DIFFERENT valid changelog on the rc staging branch, to prove the tag tree wins.
@@ -348,12 +354,11 @@ rc_branch=release-1.6.0-rc.2"
     echo "expected source=rc-tag; got '$src'. Full output:" >&2; printf '%s\n' "$out" | sed 's/^/  /' >&2; exit 1; }
   grep -q 'TAG-TREE MARKER' "$tmp/work/docs/changelogs/v1.6.0.md" || {
     echo "the rc-tag-tree changelog was not the one selected" >&2; exit 1; }
+  rm -rf "$tmp"
 }
 
 @test "select-source: an invalid rc-tag-tree changelog falls through to a valid staging branch" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   # A VALID changelog on the rc staging branch.
@@ -379,12 +384,11 @@ rc_branch=release-1.6.0-rc.2"
     echo "no loud ::warning:: for the discarded invalid tag-tree changelog" >&2; exit 1; }
   grep -q 'BRANCH MARKER' "$tmp/work/docs/changelogs/v1.6.0.md" || {
     echo "the valid rc-staging-branch changelog was not copied into place" >&2; exit 1; }
+  rm -rf "$tmp"
 }
 
 @test "select-source: invalid in both the tag tree and the staging branch falls through to generate" {
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
   make_fixture "$tmp"
 
   # An INVALID changelog on the rc staging branch.
@@ -412,6 +416,7 @@ rc_branch=release-1.6.0-rc.2"
   # The invalid file must not be left behind to poison a later step.
   [ ! -f "$tmp/work/docs/changelogs/v1.6.0.md" ] || {
     echo "an invalid changelog was left on disk instead of being discarded" >&2; exit 1; }
+  rm -rf "$tmp"
 }
 
 # promote-rc.yaml's rc-tag parse is github-script (JS), so mirror its exact policy
@@ -420,8 +425,6 @@ rc_branch=release-1.6.0-rc.2"
 @test "promote-rc parse: rejects whitespace-bearing rc tags (mirrors the workflow's github-script)" {
   command -v node >/dev/null || { echo "node unavailable; skipping"; return 0; }
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
 
   cat > "$tmp/parse.js" <<'JS'
 function parse(rc) {
@@ -467,6 +470,7 @@ v1.6.0=reject:format"
     echo "promote-rc.yaml's parse no longer rejects whitespace with /\\s/.test(rc)." >&2; exit 1; }
   printf '%s\n' "$parse_step" | code_lines | grep -qF '.trim()' && {
     echo "promote-rc.yaml's parse still trims the rc tag; policy diverges from the changelog job." >&2; exit 1; }
+  rm -rf "$tmp"
   return 0
 }
 
@@ -474,8 +478,6 @@ v1.6.0=reject:format"
   command -v node >/dev/null || { echo "node unavailable; skipping"; return 0; }
 
   tmp="$(mktemp -d)"
-  # shellcheck disable=SC2064
-  trap "rm -rf '$tmp'" EXIT
 
   # The same decision finalize makes, extracted verbatim in shape: read the file,
   # refuse whitespace-only, otherwise use it as the body.
@@ -541,6 +543,7 @@ nope.md=absent:false"
     echo "about the real workflow." >&2
     exit 1
   }
+  rm -rf "$tmp"
 }
 
 # The one assumption no amount of YAML reading can settle: that GitHub really
