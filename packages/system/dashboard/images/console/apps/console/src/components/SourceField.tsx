@@ -92,7 +92,9 @@ export function SourceField(props: FieldProps) {
           </p>
           {option === "upload" && (
             <p className="text-xs text-blue-600 mt-2">
-              After creating the disk, you can upload an image using the UI or virtctl command.
+              After creating the disk, upload the image with the virtctl command shown
+              on the disk's page. Browsers cannot reach the CDI upload proxy, so there
+              is no in-page upload.
             </p>
           )}
         </div>
