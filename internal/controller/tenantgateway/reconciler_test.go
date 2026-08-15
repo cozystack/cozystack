@@ -3342,6 +3342,62 @@ func TestReconcile_UnservableSectionDoesNotTakeTheHostnameFromAWorkingRoute(t *t
 	}
 }
 
+// TestReconcile_UnservableSectionDoesNotTakeAServiceHostname is the
+// port-443 half of the test above, and the half that actually exercises
+// the branch both are named for.
+//
+// On a native-port listener a foreign-namespace route is refused on the
+// namespace leg before its sectionName decides anything, so that test
+// stays green even if servableOn stops treating an unrendered section
+// as unservable. A tlsPassthroughServices listener admits every attached
+// namespace, so here the section is the only thing that can keep the
+// ghost out of the ownership race, and the working route's Accepted
+// condition is what says whether it did.
+func TestReconcile_UnservableSectionDoesNotTakeAServiceHostname(t *testing.T) {
+	const contested = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-x"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	// "cozy-x" sorts before "tenant-foo" and the listener admits it, so
+	// the only thing standing between this route and the hostname is
+	// that tls-absent names no rendered listener.
+	ghost := tlsRouteAttached("aaa", "cozy-x", contested, "tls-absent", "tenant-foo")
+	working := tlsRouteAttached("zzz", "tenant-foo", contested, "tls-api", "tenant-foo")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, ghost, working).
+		WithStatusSubresource(tgw, ghost, working).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "zzz", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get route: %v", err)
+	}
+	accepted := acceptedCondition2(got.Status.Parents)
+	if accepted == nil {
+		t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status != metav1.ConditionTrue {
+		t.Errorf("the only route that can attach reports Accepted=%s reason=%s: %q", accepted.Status, accepted.Reason, accepted.Message)
+	}
+}
+
 // acceptedCondition2 returns this controller's Accepted condition from a
 // route's parent statuses, or nil when it wrote none.
 func acceptedCondition2(parents []gatewayv1.RouteParentStatus) *metav1.Condition {
@@ -3848,11 +3904,19 @@ func TestReconcile_TwoRefusedRoutesHearTheRefusalNotEachOther(t *testing.T) {
 }
 
 // TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount pins
-// the namespace comparison in the TLS recount. Gateway API merges
-// same-namespace routes on one hostname rather than treating them as a
-// conflict, and resolveHostnameOwners honours that; the recount has to
-// honour it too, or the second route in the winner's namespace keeps a
-// loss recorded by a race whose winner has since been withdrawn.
+// the namespace comparison in the TLS recount. resolveHostnameOwners
+// records no loser between claimants sharing a namespace, and the
+// recount has to make the same comparison, or the second route in the
+// winner's namespace keeps a loss recorded by a race whose winner has
+// since been withdrawn.
+//
+// Not because two TLSRoutes on one hostname are merged. Gateway API
+// defines merging for HTTPRoute, by path and headers, and defines
+// nothing of the kind for TLSRoute: two TLSRoutes carrying one SNI
+// produce two filter chains with identical criteria and one of them is
+// served. That gap is older than the recount and is not what this pins;
+// what this pins is that the recount invents no conflict the base race
+// did not record.
 func TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount(t *testing.T) {
 	const apex = "foo.example.com"
 	const contested = "svc." + apex
@@ -3897,7 +3961,7 @@ func TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount(t *testing
 			t.Fatalf("%s: no Accepted condition under %s: %+v", name, testControllerName, got.Status.Parents)
 		}
 		if accepted.Status != metav1.ConditionTrue {
-			t.Errorf("%s reports Accepted=%s reason=%s: it shares a namespace with the winner, which Gateway API merges rather than conflicts: %q",
+			t.Errorf("%s reports Accepted=%s reason=%s: it shares a namespace with the winner, which the base race records no loss against: %q",
 				name, accepted.Status, accepted.Reason, accepted.Message)
 		}
 	}
@@ -4670,6 +4734,51 @@ func TestValidateTLSPassthroughListenersReportsApexBeforeOverlap(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "overlaps listener") {
 		t.Errorf("error reports the overlap instead of the apex violation: %v", err)
+	}
+}
+
+// TestValidateTLSPassthroughListenersNamesAnUnusableApex pins where an
+// apex that no listener hostname can sit inside is judged, and which
+// value the error names.
+//
+// A hostname must be a lowercase DNS name and must sit inside the apex,
+// so under an apex carrying upper case the two requirements have no
+// common solution and every entry is refused. The apex is what the
+// tenant has to change, and the containment error names the hostname —
+// a value that is not wrong — so the apex is checked first and reported
+// on its own terms.
+//
+// It is judged here rather than by a schema pattern because a pattern
+// refuses the TenantGateway write itself: the gateway HelmRelease then
+// cannot apply and goes NotReady, where a status error costs the one
+// Gateway. An apex is only judged when the field is in use, so a tenant
+// that never declares a listener keeps the behaviour it had.
+func TestValidateTLSPassthroughListenersNamesAnUnusableApex(t *testing.T) {
+	listeners := []gatewayv1alpha1.TLSPassthroughListener{
+		{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+	}
+
+	err := validateTLSPassthroughListeners(listeners, nil, "Foo.Example.com")
+	if err == nil {
+		t.Fatal("expected a mixed-case apex to be refused, got nil")
+	}
+	if !strings.Contains(err.Error(), "Foo.Example.com") {
+		t.Errorf("error does not name the apex the tenant has to change: %v", err)
+	}
+	// The hostname is well-formed and inside the apex once case is set
+	// aside, so an error naming it sends the reader to edit the one
+	// value that is correct.
+	if strings.Contains(err.Error(), "outside the tenant apex") {
+		t.Errorf("error blames the hostname for the apex: %v", err)
+	}
+
+	// Declaring no listener leaves the apex unjudged. tlsPassthroughServices
+	// is populated here because that list is validated in the same
+	// function, so a check placed at the top rather than behind the
+	// listener count would reach a tenant that never opted into this
+	// field.
+	if err := validateTLSPassthroughListeners(nil, []string{"api"}, "Foo.Example.com"); err != nil {
+		t.Errorf("apex judged with no listener declared: %v", err)
 	}
 }
 
