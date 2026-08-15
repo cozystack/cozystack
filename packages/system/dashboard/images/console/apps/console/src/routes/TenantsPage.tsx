@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react"
-import { useNavigate } from "react-router"
+import { Link, useNavigate } from "react-router"
 import { Plus, Edit, Info, ChevronDown, ChevronRight, CornerDownRight } from "lucide-react"
 import { Spinner, Section, Button } from "@cozystack/ui"
 import { useK8sList } from "@cozystack/k8s-client"
@@ -125,8 +125,8 @@ export function TenantsPage() {
   // A node's Tenant CR lives in its REAL parent's namespace, which is not
   // necessarily the parent it hangs under: a node whose real parent is
   // inaccessible is bridged onto the nearest visible ancestor. Deriving the CR
-  // from that bridged ancestor names a CR that does not exist, so the edit
-  // target comes from realParentNamespace instead — and is offered only when
+  // from that bridged ancestor names a CR that does not exist, so Tenant CR
+  // routes come from realParentNamespace instead — and are offered only when
   // that namespace is actually readable, since otherwise there is no CR the
   // user could open. The hierarchy root (no ancestor labels at all) is
   // self-referential: its CR (`root`) lives in its own namespace.
@@ -137,12 +137,20 @@ export function TenantsPage() {
     const real = realParentNamespace(node.tn)
     return real && visibleNs.has(real) ? real : undefined
   }
-  const canEdit = (node: TreeNode) => !!editParentNs(node)
-  const editNode = (node: TreeNode) => {
+  const tenantRoute = (node: TreeNode) => {
     const parentNs = editParentNs(node)
-    if (!parentNs) return
-    selectTenant(parentNs.slice(TENANT_NAMESPACE_PREFIX.length))
-    navigate(`${basePath}/tenants/${tenantCrName(node.tn.metadata.name, parentNs)}/edit`)
+    if (!parentNs) return undefined
+    return {
+      parentTenant: parentNs.slice(TENANT_NAMESPACE_PREFIX.length),
+      path: `${basePath}/tenants/${tenantCrName(node.tn.metadata.name, parentNs)}`,
+    }
+  }
+  const canEdit = (node: TreeNode) => !!tenantRoute(node)
+  const editNode = (node: TreeNode) => {
+    const route = tenantRoute(node)
+    if (!route) return
+    selectTenant(route.parentTenant)
+    navigate(`${route.path}/edit`)
   }
 
   return (
@@ -183,6 +191,7 @@ export function TenantsPage() {
                 const modules = modulesByNamespace.get(ns) ?? []
                 const tenantQuotas = quotasByNamespace.get(ns) ?? []
                 const host = node.tn.metadata.labels?.[HOST_LABEL]
+                const route = tenantRoute(node)
                 return (
                   <tr key={ns} className="hover:bg-slate-50">
                     <td className="px-4 py-3">
@@ -207,9 +216,19 @@ export function TenantsPage() {
                           <CornerDownRight className="size-3.5 shrink-0 text-slate-300" />
                         ) : null}
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-medium text-slate-900">
-                            {relativeTenantName(node)}
-                          </p>
+                          {route ? (
+                            <Link
+                              to={route.path}
+                              onClick={() => selectTenant(route.parentTenant)}
+                              className="block truncate text-sm font-medium text-slate-900 hover:underline"
+                            >
+                              {relativeTenantName(node)}
+                            </Link>
+                          ) : (
+                            <p className="truncate text-sm font-medium text-slate-900">
+                              {relativeTenantName(node)}
+                            </p>
+                          )}
                           <p className="truncate font-mono text-[11px] text-slate-400">
                             {ns}
                           </p>
