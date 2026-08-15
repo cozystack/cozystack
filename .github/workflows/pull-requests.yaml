@@ -311,11 +311,34 @@ jobs:
       # Ephemeral runners don't carry the helm-unittest plugin the persistent
       # self-hosted runner accreted. Install if absent (idempotent).
       - name: Set up test toolchain
+        env:
+          BATS_VERSION: v1.14.0
         run: |
+          set -euo pipefail
           helm plugin list 2>/dev/null | grep -q unittest \
             || helm plugin install https://github.com/helm-unittest/helm-unittest
+          # The hack/*.bats unit suite moved from hack/cozytest.sh (pure bash,
+          # no dependency) to bats(1) in #3453, so the runner image now needs
+          # bats. Installed from a pinned tag rather than the distro package,
+          # whose version varies by base image, and pinned to the version the
+          # suite was verified against rather than to whatever is newest. GNU
+          # parallel is optional -- the Makefile falls back to a serial run
+          # when it is absent.
+          if ! command -v bats >/dev/null 2>&1; then
+            git clone --depth 1 --branch "$BATS_VERSION" \
+              https://github.com/bats-core/bats-core.git /tmp/bats-core
+            sudo /tmp/bats-core/install.sh /usr/local
+          fi
+          bats --version
       - name: Run unit tests
         run: make unit-tests
+      - name: Upload unit test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: bats-unit-report
+          path: _out/test-reports/
+          if-no-files-found: ignore
       - name: Run controller Go tests
         run: make test-controllers
 
