@@ -144,3 +144,16 @@ tests:
     asserts:
       - failedTemplate:
           errorMessage: "alerta.alerts.email.secretName is required when authUsername is set"
+
+  - it: fails the render when secretName is set without authUsername
+    set:
+      alerta:
+        alerts:
+          email:
+            to: "oncall@example.org"
+            from: "alerts@example.org"
+            smarthost: "smtp.example.org:465"
+            secretName: "alertmanager-smtp"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email.authUsername is required when secretName is set"

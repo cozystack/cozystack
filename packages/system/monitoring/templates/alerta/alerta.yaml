@@ -15,6 +15,9 @@
 {{- if and $email.authUsername (not $email.secretName) }}
 {{- fail "alerta.alerts.email.secretName is required when authUsername is set" }}
 {{- end }}
+{{- if and $email.secretName (not $email.authUsername) }}
+{{- fail "alerta.alerts.email.authUsername is required when secretName is set" }}
+{{- end }}
 {{- end }}
 
 {{- $apiKey := randAlphaNum 32 }}
