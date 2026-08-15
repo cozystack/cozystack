@@ -174,7 +174,11 @@ function overlayPath(
   const sourceVal = sourceObj ? sourceObj[seg] : undefined
   const targetObj = isPlainObject(target)
     ? (target as Record<string, unknown>)
-    : null
+    : // A YAML edit can drop the whole intermediate object; materialise it so
+      // the immutable leaf underneath is still restored from source.
+      sourceVal !== undefined && (target === undefined || target === null)
+      ? {}
+      : null
   if (!targetObj) return target
   if (
     sourceVal === undefined &&
