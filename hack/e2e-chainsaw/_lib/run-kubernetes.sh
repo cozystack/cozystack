@@ -2545,7 +2545,32 @@ EOF
   # bring-up; 18m restores margin and still sits well inside the 50m step
   # timeout (the downstream LB/NFS/ouroboros checks add ~10-15m on the happy
   # path).
-  if ! timeout 18m bash -c '
+  # ###########################################################################
+  # ##  TEMPORARY — MUST NEVER MERGE.  DELETE THIS COMMIT BEFORE ANYTHING    ##
+  # ##  ELSE ON THIS BRANCH IS TAKEN SERIOUSLY.                              ##
+  # ###########################################################################
+  #
+  # The budget below is deliberately cut from 18m to 6m so that this suite
+  # FAILS ON PURPOSE. It is not a fix, a tuning change or an experiment about
+  # the right budget — it is a switch that forces the node-join diagnostics to
+  # run, so the CPU-usage capture added on the commit before this one produces
+  # its numbers on every run instead of only on the ~1 red run in 3 that
+  # happens to hit the flake, at ~3h a run (cozystack/cozystack#3513).
+  #
+  # Every node-join failure this produces is manufactured by this line. Do not
+  # read a red run on this branch as evidence about node-join at all; read only
+  # the CPU-usage figures in
+  # snapshots/<test>/tenant-cpu-throttle/<node>.txt.
+  #
+  # Deliberately a hardcoded literal and not a knob, an env var or a
+  # conditional: it has to be impossible to miss in review and a one-line
+  # delete to remove. The diagnostics headline downstream still says "within
+  # 18m" and is left alone on purpose — that wording is quoted verbatim in two
+  # other comments, and this commit is meant to be deleted whole rather than
+  # spread across the files that would then need deleting too.
+  #
+  # RESTORE: `timeout 18m`. The reasoning for that number is directly above.
+  if ! timeout 6m bash -c '
     until [ "$(kubectl --kubeconfig tenantkubeconfig-'"${test_name}"' get nodes --no-headers 2>/dev/null | grep -cw Ready)" -ge 2 ]; do
       sleep 5
     done
