@@ -34,6 +34,8 @@
 # Run with: hack/cozytest.sh hack/etcd-probe_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HACK_DIR/e2e-chainsaw/_lib/etcd-probe.sh"

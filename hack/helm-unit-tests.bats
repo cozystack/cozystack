@@ -35,6 +35,8 @@
 # Run with: hack/cozytest.sh hack/helm-unit-tests.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # Build a throwaway tree with one package whose `make test` prints $1 and exits
 # $2. Echoes the tree root.
 _tree() {

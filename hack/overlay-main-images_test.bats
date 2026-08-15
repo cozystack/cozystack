@@ -23,6 +23,8 @@
 # process of its own. See hack/bats-no-exit-trap.bats and
 # docs/agents/e2e-testing.md.
 
+load test_helper
+
 @test "overlays an unbuilt unit (.tag) to current-main and reports it" {
   root=$(pwd)
   w=$(mktemp -d)

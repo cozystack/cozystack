@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests print-bats-unit-files rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -159,6 +159,13 @@ test-check-readiness:
 # introduces whitespace-bearing filenames this recipe must be rewritten
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
+
+# The same list, one file per line, for hack/bats-strict-setup.bats. Every unit
+# file has to load hack/test_helper.bash to get `set -u` back, and that audit is
+# only worth anything if the set it walks is the set that actually runs -- so it
+# asks here rather than keeping a second copy of the filter above.
+print-bats-unit-files:
+	@printf '%s\n' $(BATS_UNIT_FILES)
 
 bats-unit-tests:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \

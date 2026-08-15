@@ -24,6 +24,8 @@
 #
 # Run with: hack/cozytest.sh hack/nightly-mirror_test.bats
 
+load test_helper
+
 # Build a synthetic baked tree exercising all four image-ref shapes plus the
 # refs that MUST be filtered (third-party host, cozystack-packages artifact).
 _make_tree() {

@@ -39,6 +39,8 @@
 # from its own guard; the plan step in .github/workflows/pull-requests.yaml carves
 # out docs/agents/contributing.md so that editing the map alone still runs these.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 MAP_FILE="$REPO_ROOT/docs/agents/contributing.md"
 TEMPLATE_FILE="$REPO_ROOT/.github/PULL_REQUEST_TEMPLATE.md"

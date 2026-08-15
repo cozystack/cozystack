@@ -25,6 +25,8 @@
 # Run with: hack/cozytest.sh hack/migration-50-etcd-adopt.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/migration-50"
 MIG="$PWD/packages/core/platform/images/migrations/migrations/50"
 

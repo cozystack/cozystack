@@ -36,6 +36,8 @@
 # Run with: hack/cozytest.sh hack/check-gpu-recording-rules.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 RULES_FILE="$REPO_ROOT/packages/system/monitoring-agents/alerts/gpu-recording.rules.yaml"
 DASHBOARDS_LIST="$REPO_ROOT/packages/system/monitoring/dashboards-infra.list"

@@ -26,6 +26,8 @@
 # Run with: hack/cozytest.sh hack/seaweedfs-naming-audit.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 SEAWEEDFS_AUDIT_LIB=1
 export SEAWEEDFS_AUDIT_LIB
 # shellcheck source=seaweedfs-naming-audit.sh
