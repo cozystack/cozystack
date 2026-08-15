@@ -28,6 +28,14 @@ tests:
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "name: email"
+      - documentIndex: 5
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "receiver: email"
+      - documentIndex: 5
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "notify_email"
       - documentSelector:
           path: kind
           value: VMAlertmanager
@@ -48,15 +56,15 @@ tests:
       - documentIndex: 5
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: "auth_password_file: /etc/vm/secrets/alertmanager-smtp/password"
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:465"\n    auth_username: "mailer@example\.org"\n    auth_password_file: /etc/vm/secrets/alertmanager-smtp/password\n    send_resolved: true'
       - documentIndex: 5
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: "continue: true"
+          pattern: '  - receiver: alerta\n    continue: true\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
       - documentIndex: 5
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: "notify_email"
+          pattern: '  - receiver: email\n    group_by: \[alertname, cluster\]\n    repeat_interval: 12h\n    matchers:\n    - .severity=~"critical\|major".\n    - .notify_email="true".'
       - documentSelector:
           path: kind
           value: VMAlertmanager
@@ -75,9 +83,17 @@ tests:
             smarthost: "smtp.example.org:25"
     asserts:
       - documentIndex: 5
+        matchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: '- name: email\n  email_configs:\n  - to: "oncall@example\.org"\n    from: "alerts@example\.org"\n    smarthost: "smtp\.example\.org:25"\n    send_resolved: true'
+      - documentIndex: 5
         notMatchRegex:
           path: stringData["alertmanager.yaml"]
           pattern: "auth_username"
+      - documentIndex: 5
+        notMatchRegex:
+          path: stringData["alertmanager.yaml"]
+          pattern: "auth_password_file"
       - documentSelector:
           path: kind
           value: VMAlertmanager
@@ -98,11 +114,11 @@ tests:
       - documentIndex: 5
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: "Subject:"
+          pattern: '    headers:\n      Subject: "\[\{\{ \.Status \}\}\] \{\{ \.CommonLabels\.alertname \}\}"'
       - documentIndex: 5
         matchRegex:
           path: stringData["alertmanager.yaml"]
-          pattern: "html:"
+          pattern: 'html: "<b>\{\{ \.Status \}\}</b>"'
 
   - it: renders no custom subject or html by default
     set:
