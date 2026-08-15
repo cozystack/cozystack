@@ -36,6 +36,7 @@ import { VncTab } from "./VncTab.tsx"
 import { VMPowerControls } from "./VMPowerControls.tsx"
 import { useResourceBasePath } from "../../lib/portal.ts"
 import { useResourcePresence } from "./use-resource-presence.ts"
+import { DiskUploadPanel } from "./DiskUploadPanel.tsx"
 
 export function ApplicationDetailPage() {
   const { plural, name } = useParams<{ plural: string; name: string }>()
@@ -208,7 +209,17 @@ export function ApplicationDetailPage() {
 
       <div className="flex-1 overflow-auto">
         <Routes>
-          <Route index element={<OverviewTab ad={ad} instance={instance} />} />
+          <Route
+            index
+            element={
+              <>
+                {kind === "VMDisk" && (
+                  <DiskUploadPanel ad={ad} instance={instance} />
+                )}
+                <OverviewTab ad={ad} instance={instance} />
+              </>
+            }
+          />
           <Route
             path="workloads"
             element={<WorkloadsTab ad={ad} instance={instance} />}
