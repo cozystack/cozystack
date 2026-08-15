@@ -129,6 +129,23 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 // out from Reconcile keeps the error-handling/status-update wrapper
 // in one place.
 func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1.TenantGateway) error {
+	// Judged before anything reads the passthrough lists. The
+	// enumeration below keys listeners by hostname, so two entries
+	// answering one name would have one of them silently dropped by a
+	// spec that is rejected only afterwards. Nothing observable depends
+	// on that ordering today, because the render fails before any route
+	// status is written; the point is that it should not have to.
+	//
+	// The controller keeps its own copy of these rules because it and
+	// the CRD roll out separately, so it cannot assume CEL was applied
+	// to what it reads.
+	if err := validatePassthroughListenerCertMode(tgw.Spec.TLSPassthroughListeners, tgw.Spec.CertMode); err != nil {
+		return err
+	}
+	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
+		return err
+	}
+
 	claims, err := r.collectHostnameClaims(ctx, tgw)
 	if err != nil {
 		return fmt.Errorf("collect attached hostnames: %w", err)
@@ -168,6 +185,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// its hostname. An HTTPRoute claiming the same name puts a terminate
 	// listener there, which the TLSRoute still cannot attach to, and
 	// that gap predates this change.
+	//
 	// Two views of the listeners the spec renders, taken from one
 	// enumeration so a passthrough source added later reaches both or
 	// neither. Native-port listeners admit only the tenant's own
@@ -175,17 +193,17 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// namespace, so a route elsewhere can claim a name it could never
 	// attach to. The port-443 entries do not have this gap: their
 	// allowedRoutes select on the gateway label, which every attached
-	// namespace carries. tenantOnly is keyed by rendered hostname,
+	// namespace carries. byHostname is keyed by rendered hostname,
 	// sections by rendered listener name, because a route pins itself to
 	// a listener by name while a claim overlaps hostnames. Both are
 	// needed to answer whether one route can be served on one hostname.
-	// tenantOnly doubles as the reserved-hostname set: its keys are
+	// byHostname doubles as the reserved-hostname set: its keys are
 	// exactly the hostnames a passthrough listener answers.
 	rendered := passthroughListeners(tgw)
-	tenantOnly := make(map[string]bool, len(rendered))
+	byHostname := make(map[string]passthroughListener, len(rendered))
 	sections := make(map[string]string, len(rendered))
 	for _, l := range rendered {
-		tenantOnly[l.hostname] = l.tenantOnly
+		byHostname[l.hostname] = l
 		sections[l.section] = l.hostname
 	}
 	dynHostnames := make([]string, 0, len(claims))
@@ -220,7 +238,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// the tenant. So eligibility is read off the whole overlap set
 		// below, not off the name picked here.
 		var answeredBy string
-		for rh := range tenantOnly {
+		for rh := range byHostname {
 			if !hostnamesOverlap(rh, h) {
 				continue
 			}
@@ -270,7 +288,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 			// is then told it lost to it.
 			eligible := tls[:0:0]
 			for _, ref := range tls {
-				servable, cause, refusedBy := servableOn(ref, h, tgw.Namespace, tenantOnly, sections)
+				servable, cause, refusedBy := servableOn(ref, h, tgw.Namespace, byHostname, sections)
 				if servable {
 					eligible = append(eligible, ref)
 					continue
@@ -297,6 +315,8 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 				case withdrawnSectionMismatch:
 					w.section = string(*ref.parentRef.SectionName)
 					w.answeredBy = sections[w.section]
+				case withdrawnPortMismatch:
+					w.port = int32(*ref.parentRef.Port)
 				case withdrawnForeignNamespace:
 					w.answeredBy = refusedBy
 				}
@@ -963,10 +983,18 @@ func (r *Reconciler) reconcileWildcardCertificate(ctx context.Context, tgw *gate
 // Layer 1 of the security model documented in
 // packages/extra/gateway/README.md.
 func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostnames []string, childApexes []string) (*gatewayv1.Gateway, error) {
-	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
+	// This function does not render from a spec it has not judged, which
+	// is a property of the function rather than of any one caller: the
+	// object it produces is refused wholesale by the apiserver when a
+	// single composed value is malformed, so returning a Gateway built
+	// from an unchecked spec has no safe reading. The reconcile path
+	// judges the same spec earlier, for a different reason given there.
+	// Cert mode first, because it refuses the field outright and a
+	// hostname or port error inside it then decides nothing.
+	if err := validatePassthroughListenerCertMode(tgw.Spec.TLSPassthroughListeners, tgw.Spec.CertMode); err != nil {
 		return nil, err
 	}
-	if err := validatePassthroughListenerCertMode(tgw.Spec.TLSPassthroughListeners, tgw.Spec.CertMode); err != nil {
+	if err := validateTLSPassthroughListeners(tgw.Spec.TLSPassthroughListeners, tgw.Spec.TLSPassthroughServices, tgw.Spec.Apex); err != nil {
 		return nil, err
 	}
 	allowedRoutes := buildAllowedRoutes(tgw)
@@ -988,12 +1016,19 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	// GRPCRoute / TCPRoute / UDPRoute are still excluded, so Layer 7
 	// (cozystack-route-hostname-policy VAP) continues to gate only the
 	// two expected route types.
-	port443Kinds := []gatewayv1.RouteGroupKind{
-		{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
-		{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
+	// Built per listener rather than cloned from one value. A clone
+	// gives each listener its own slice header while the elements go on
+	// sharing one *Group each, so narrowing a single listener's kinds
+	// later would still reach across all of them — the same hazard the
+	// clone was added to remove, one level down.
+	port443Kinds := func() []gatewayv1.RouteGroupKind {
+		return []gatewayv1.RouteGroupKind{
+			{Group: ptrGroup(gatewayv1.GroupName), Kind: "HTTPRoute"},
+			{Group: ptrGroup(gatewayv1.GroupName), Kind: "TLSRoute"},
+		}
 	}
 	httpsAllowedRoutes := allowedRoutes.DeepCopy()
-	httpsAllowedRoutes.Kinds = slices.Clone(port443Kinds)
+	httpsAllowedRoutes.Kinds = port443Kinds()
 
 	if tgw.Spec.CertMode == gatewayv1alpha1.CertModeDNS01 || tgw.Spec.CertMode == gatewayv1alpha1.CertModeExistingSecret {
 		// Both modes serve the apex and every subdomain off a single
@@ -1108,7 +1143,7 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 	for _, svc := range tgw.Spec.TLSPassthroughServices {
 		host := gatewayv1.Hostname(svc + "." + tgw.Spec.Apex)
 		passthroughAllowed := allowedRoutes.DeepCopy()
-		passthroughAllowed.Kinds = slices.Clone(port443Kinds)
+		passthroughAllowed.Kinds = port443Kinds()
 		listeners = append(listeners, gatewayv1.Listener{
 			Name:     gatewayv1.SectionName(passthroughListenerPrefix + svc),
 			Port:     443,
@@ -1152,9 +1187,15 @@ func (r *Reconciler) renderGateway(tgw *gatewayv1alpha1.TenantGateway, dynHostna
 		// each of the rest, last one winning. A listener declaring
 		// TLSRoute alone would therefore reject every HTTPRoute on the
 		// Gateway, whatever port it sits on. Declaring nothing keeps
-		// this listener out of that loop, and closes nothing: Gateway
-		// API derives the allowed kinds from the listener protocol
-		// when the field is absent, and for TLS that is TLSRoute.
+		// this listener out of that loop. What it opens is bounded by
+		// the implementation rather than by the spec: Gateway API says
+		// only that an absent Kinds derives the set from the listener
+		// protocol and leaves the mapping to the implementation, and
+		// the conventional table pairs TLS with TCPRoute as well as
+		// TLSRoute. Cilium implements neither TCPRoute nor UDPRoute, so
+		// on the pinned version TLSRoute is what a TLS listener admits,
+		// and the listener pins kubernetes.io/metadata.name to the
+		// publishing tenant regardless.
 		//
 		// This one lifts on a patch bump rather than with the rest of
 		// the pin: v1.19.6 skips listeners the parentRef's sectionName
