@@ -105,6 +105,14 @@ func specValidator(t *testing.T) *admissionCheck {
 	if len(specProps.XValidations) == 0 {
 		t.Fatal("spec schema carries no x-kubernetes-validations; the XValidation markers did not generate")
 	}
+	return checkFromProps(t, specProps)
+}
+
+// checkFromProps compiles one spec schema into the validators admission
+// runs. Split out from specValidator so a test can compile a modified
+// copy of the shipped schema and compare the two behaviours.
+func checkFromProps(t *testing.T, specProps *apiextensionsv1.JSONSchemaProps) *admissionCheck {
+	t.Helper()
 
 	var internal apiextensions.JSONSchemaProps
 	if err := apiextensionsv1.Convert_v1_JSONSchemaProps_To_apiextensions_JSONSchemaProps(specProps, &internal, nil); err != nil {
@@ -381,13 +389,18 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 // in prose alone is how a claim drifts from the schema it describes.
 //
 // Ratcheting is on by default from Kubernetes 1.30 and the management
-// cluster requires 1.33, so this holds on every supported cluster. It
-// covers ordinary schema validations only: a list-type error is never
-// ratcheted, which is why the duplicate case below must stay admissible.
-// Declaring this list a set would refuse every write to an object that
-// already carries a duplicate, including a write that changes something
-// else — the controller reports the duplicate on status instead. That
-// case is the guard: it reddens if the marker comes back.
+// cluster requires 1.33, so this holds on every supported cluster.
+//
+// It reaches list-type errors too, and at a coarser grain than the
+// per-field ratchet: ValidateUpdate checks the incoming object's
+// list-type semantics only when the stored object passes them, for the
+// object as a whole. That is read from
+// pkg/registry/customresource/strategy.go in apiextensions-apiserver
+// v0.35.0, the version go.mod pins. So a stored duplicate does not block writes, it
+// stops every list on the resource from being checked. The duplicate
+// row below therefore stays admissible whether or not the field carries
+// a marker, which is why the marker's absence is pinned by the schema
+// assertion rather than by that row.
 //
 // The run pairs each field with the listtype validator as well, because
 // the schema validator does not implement list semantics and would call
@@ -400,6 +413,12 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	// the field carries no format pattern to fail on instead, and
 	// pinning ratcheting is not the place to discover that.
 	overLongApex := strings.Repeat("a", 254)
+	// One past the count bound, so the row fails on maxItems and on
+	// nothing else: every entry is a well-formed DNS-1123 subdomain.
+	overCapServices := make([]string, 0, 63)
+	for i := 0; i < 63; i++ {
+		overCapServices = append(overCapServices, fmt.Sprintf("svc%d", i))
+	}
 
 	spec := func(apex string, services ...string) map[string]interface{} {
 		svcs := make([]interface{}, 0, len(services))
@@ -416,14 +435,23 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 
 	// rejectsUpdate answers what the apiserver does to a write of new
 	// over old: the schema layer with ratcheting on, then the list-type
-	// layer, which has no old value to correlate against and so cannot
-	// ratchet anything.
+	// layer. The list-type ratchet lives in the caller rather than in
+	// the validator: customresource.ValidateUpdate runs the check on the
+	// incoming object only when the stored one already passes it, so the
+	// guard is reproduced here rather than exercised. Dropping it would
+	// model an apiserver that refuses writes it accepts. Reproduced
+	// means it does not track upstream, so a bump of
+	// apiextensions-apiserver past the pinned v0.35.0 is where to
+	// re-read strategy.go and confirm the shape still holds.
 	rejectsUpdate := func(newSpec, oldSpec map[string]interface{}) bool {
 		if errs := apiservervalidation.ValidateCustomResourceUpdate(
 			field.NewPath("spec"), newSpec, oldSpec, a.schema,
 			apiservervalidation.WithRatcheting(nil),
 		); len(errs) > 0 {
 			return true
+		}
+		if oldErrs := listtype.ValidateListSetsAndMaps(field.NewPath("spec"), a.structural, oldSpec); len(oldErrs) > 0 {
+			return false
 		}
 		return len(listtype.ValidateListSetsAndMaps(field.NewPath("spec"), a.structural, newSpec)) > 0
 	}
@@ -440,6 +468,16 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	}, {
 		name:         "over-long apex introduced by this write",
 		newSpec:      spec(overLongApex, "api"),
+		old:          spec("foo.example.com", "api"),
+		wantRejected: true,
+	}, {
+		name:         "over-long service list left untouched",
+		newSpec:      spec("foo.example.com", overCapServices...),
+		old:          spec("foo.example.com", overCapServices...),
+		wantRejected: false,
+	}, {
+		name:         "over-long service list introduced by this write",
+		newSpec:      spec("foo.example.com", overCapServices...),
 		old:          spec("foo.example.com", "api"),
 		wantRejected: true,
 	}, {
@@ -468,6 +506,71 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 				t.Errorf("update rejected = %v, want %v", got, tc.wantRejected)
 			}
 		})
+	}
+}
+
+// TestListTypeSetWouldNotRefuseAStoredDuplicate pins why
+// tlsPassthroughServices carries no listType marker, by compiling a copy
+// of the shipped schema that does and showing what the apiserver would
+// then do.
+//
+// The reason is not that a stored duplicate would be refused on every
+// write. It would not: customresource.ValidateUpdate validates the
+// incoming object's list-type semantics only when the stored object
+// passes them, so a duplicate already in etcd is ratcheted through.
+// Byte-identical across apiextensions-apiserver v0.31.1, the pinned
+// v0.35.0 and v0.36.3, so it is settled behaviour rather than a version
+// quirk, but it is upstream's to change. The
+// reason is the grain of that ratchet. It is taken over the whole
+// object, not per field, so one stored duplicate stops list-type
+// validation for every list on the resource, silently and with nothing
+// on status to say so, while the controller reports the duplicate by
+// name.
+//
+// Compiled from a copy rather than asserted in prose because the claim
+// is about apiserver behaviour under a marker this repo deliberately
+// does not ship, which no other test can reach.
+func TestListTypeSetWouldNotRefuseAStoredDuplicate(t *testing.T) {
+	shipped := v1alpha1SpecSchema(t)
+	if lt := shipped.Properties["tlsPassthroughServices"].XListType; lt != nil {
+		t.Fatalf("tlsPassthroughServices ships x-kubernetes-list-type=%q; the field is meant to stay unmarked", *lt)
+	}
+
+	withSet := shipped.DeepCopy()
+	svc := withSet.Properties["tlsPassthroughServices"]
+	setType := "set"
+	svc.XListType = &setType
+	withSet.Properties["tlsPassthroughServices"] = svc
+	a := checkFromProps(t, withSet)
+
+	spec := func(certMode string, services ...string) map[string]interface{} {
+		svcs := make([]interface{}, 0, len(services))
+		for _, e := range services {
+			svcs = append(svcs, e)
+		}
+		return map[string]interface{}{
+			"apex":                   "foo.example.com",
+			"certMode":               certMode,
+			"tlsPassthroughServices": svcs,
+		}
+	}
+	// The guard customresource.ValidateUpdate puts around the list-type
+	// check: the incoming object is checked only when the stored one
+	// passes. Reproduced rather than called, because the guard lives in
+	// the registry strategy and the validator it wraps is what this
+	// package can reach.
+	rejects := func(newSpec, oldSpec map[string]interface{}) bool {
+		if errs := listtype.ValidateListSetsAndMaps(field.NewPath("spec"), a.structural, oldSpec); len(errs) > 0 {
+			return false
+		}
+		return len(listtype.ValidateListSetsAndMaps(field.NewPath("spec"), a.structural, newSpec)) > 0
+	}
+
+	if !rejects(spec("http01", "api", "api"), spec("http01", "api")) {
+		t.Error("a set marker accepted a write introducing a duplicate; the copy did not compile the marker")
+	}
+	if rejects(spec("dns01", "api", "api"), spec("http01", "api", "api")) {
+		t.Error("a stored duplicate blocked an unrelated write; the marker does not work the way the field comment used to say")
 	}
 }
 

@@ -3342,6 +3342,62 @@ func TestReconcile_UnservableSectionDoesNotTakeTheHostnameFromAWorkingRoute(t *t
 	}
 }
 
+// TestReconcile_UnservableSectionDoesNotTakeAServiceHostname is the
+// port-443 half of the test above, and the half that actually exercises
+// the branch both are named for.
+//
+// On a native-port listener a foreign-namespace route is refused on the
+// namespace leg before its sectionName decides anything, so that test
+// stays green even if servableOn stops treating an unrendered section
+// as unservable. A tlsPassthroughServices listener admits every attached
+// namespace, so here the section is the only thing that can keep the
+// ghost out of the ownership race, and the working route's Accepted
+// condition is what says whether it did.
+func TestReconcile_UnservableSectionDoesNotTakeAServiceHostname(t *testing.T) {
+	const contested = "api.foo.example.com"
+	s := newScheme(t)
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			AttachedNamespaces:     []string{"cozy-x"},
+			TLSPassthroughServices: []string{"api"},
+		},
+	}
+	// "cozy-x" sorts before "tenant-foo" and the listener admits it, so
+	// the only thing standing between this route and the hostname is
+	// that tls-absent names no rendered listener.
+	ghost := tlsRouteAttached("aaa", "cozy-x", contested, "tls-absent", "tenant-foo")
+	working := tlsRouteAttached("zzz", "tenant-foo", contested, "tls-api", "tenant-foo")
+
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(tgw, ghost, working).
+		WithStatusSubresource(tgw, ghost, working).
+		Build()
+
+	r := &Reconciler{Client: c, Scheme: s}
+	if _, err := r.Reconcile(context.TODO(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "cozystack", Namespace: "tenant-foo"},
+	}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := &gatewayv1alpha2.TLSRoute{}
+	if err := c.Get(context.TODO(), types.NamespacedName{Name: "zzz", Namespace: "tenant-foo"}, got); err != nil {
+		t.Fatalf("get route: %v", err)
+	}
+	accepted := acceptedCondition2(got.Status.Parents)
+	if accepted == nil {
+		t.Fatalf("no Accepted condition under %s: %+v", testControllerName, got.Status.Parents)
+	}
+	if accepted.Status != metav1.ConditionTrue {
+		t.Errorf("the only route that can attach reports Accepted=%s reason=%s: %q", accepted.Status, accepted.Reason, accepted.Message)
+	}
+}
+
 // acceptedCondition2 returns this controller's Accepted condition from a
 // route's parent statuses, or nil when it wrote none.
 func acceptedCondition2(parents []gatewayv1.RouteParentStatus) *metav1.Condition {
@@ -3848,11 +3904,19 @@ func TestReconcile_TwoRefusedRoutesHearTheRefusalNotEachOther(t *testing.T) {
 }
 
 // TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount pins
-// the namespace comparison in the TLS recount. Gateway API merges
-// same-namespace routes on one hostname rather than treating them as a
-// conflict, and resolveHostnameOwners honours that; the recount has to
-// honour it too, or the second route in the winner's namespace keeps a
-// loss recorded by a race whose winner has since been withdrawn.
+// the namespace comparison in the TLS recount. resolveHostnameOwners
+// records no loser between claimants sharing a namespace, and the
+// recount has to make the same comparison, or the second route in the
+// winner's namespace keeps a loss recorded by a race whose winner has
+// since been withdrawn.
+//
+// Not because two TLSRoutes on one hostname are merged. Gateway API
+// defines merging for HTTPRoute, by path and headers, and defines
+// nothing of the kind for TLSRoute: two TLSRoutes carrying one SNI
+// produce two filter chains with identical criteria and one of them is
+// served. That gap is older than the recount and is not what this pins;
+// what this pins is that the recount invents no conflict the base race
+// did not record.
 func TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount(t *testing.T) {
 	const apex = "foo.example.com"
 	const contested = "svc." + apex
@@ -3897,7 +3961,7 @@ func TestReconcile_SameNamespaceTLSRoutesDoNotConflictAfterTheRecount(t *testing
 			t.Fatalf("%s: no Accepted condition under %s: %+v", name, testControllerName, got.Status.Parents)
 		}
 		if accepted.Status != metav1.ConditionTrue {
-			t.Errorf("%s reports Accepted=%s reason=%s: it shares a namespace with the winner, which Gateway API merges rather than conflicts: %q",
+			t.Errorf("%s reports Accepted=%s reason=%s: it shares a namespace with the winner, which the base race records no loss against: %q",
 				name, accepted.Status, accepted.Reason, accepted.Message)
 		}
 	}

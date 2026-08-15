@@ -557,15 +557,10 @@ func hostnameCovers(w, x string) bool {
 	if !ok {
 		return false
 	}
-	// A wildcard covers another wildcard when it covers everything that
-	// one could match, i.e. when the other's suffix sits under ours.
-	// The equality leg is unreachable through hostnamesOverlap, which
-	// answers identical hostnames before it calls here; it stays so the
-	// predicate is right read on its own, since a wildcard does cover
-	// itself.
-	if inner, isWildcard := strings.CutPrefix(x, "*."); isWildcard {
-		return inner == suffix || strings.HasSuffix(inner, "."+suffix)
-	}
+	// One suffix test answers x whether or not x is itself a wildcard:
+	// "*.<inner>" ends with ".<suffix>" exactly when <inner> equals or
+	// sits under <suffix>, the "*." prefix being inert to the test. A
+	// separate wildcard branch computed the same answer twice.
 	return strings.HasSuffix(x, "."+suffix)
 }
 

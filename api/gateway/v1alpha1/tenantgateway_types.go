@@ -232,8 +232,9 @@ type TLSPassthroughListener struct {
 // stated rather than the members listed, because what belongs in that
 // set moves whenever a marker is added.
 // A tlsPassthroughServices entry that slipped past its pattern is
-// outside it, caught instead by Gateway API refusing the rendered
-// listener.
+// inside it, for that reason: the entry becomes a listener name, and
+// one the apiserver refuses takes the whole Gateway rather than the one
+// listener it names.
 //
 // One rule is deliberately absent. Name uniqueness is carried by the
 // listType=map/listMapKey=name markers on the field, enforced by the
@@ -246,9 +247,11 @@ type TLSPassthroughListener struct {
 //
 // A repeated tlsPassthroughServices entry is one, by choice
 // rather than by cost: a listType=set marker would express it at
-// admission, but list-type errors are the one kind the apiserver never
-// ratchets, so it would refuse every write to an object that already
-// carries a duplicate. See that field for the rest of it.
+// admission, but the apiserver ratchets a list-type error across the
+// whole object rather than per field, so one stored duplicate would
+// switch list-type checking off for every list on the resource. See
+// that field for the rest of it, and for the version that behaviour
+// was read from.
 //
 // An apex no listener hostname can sit inside is another, and by the
 // same kind of choice. A hostname must be lowercase and must fall
@@ -385,18 +388,25 @@ type TenantGatewaySpec struct {
 	// not in a cluster.
 	//
 	// A repeated entry is rejected by the controller, not by a listType
-	// marker, and the difference matters on a field that already has
-	// users. The apiserver ratchets the bounds and the pattern above, so
-	// an object that violates one keeps accepting writes that leave the
-	// value alone; it never ratchets a list-type error, so declaring
-	// this list a set would refuse every write to an object that already
-	// carries a duplicate. Declaring it would also change how the field
-	// merges — an unmarked list is atomic and one applier owns the whole
-	// value, while a set is owned per entry, so an entry added by
-	// another field manager would survive the chart's next apply instead
-	// of losing to a conflict. The controller reports the duplicate on
-	// TenantGateway status, which is where this API puts the rest of
-	// these failures.
+	// marker, and the difference is in how the two failures are
+	// ratcheted rather than in whether they are. The bounds and the
+	// pattern above are ratcheted per field: an object violating one
+	// keeps accepting writes that leave that value alone, and nothing
+	// else on the object is affected. A list-type error is ratcheted
+	// across the whole resource: ValidateUpdate skips list-type
+	// validation of the incoming object entirely when the stored one
+	// already fails it, so a single stored duplicate would silently
+	// stop every list on this CR from being checked, and the tenant
+	// gets no signal that it happened. Read from
+	// pkg/registry/customresource/strategy.go in the
+	// k8s.io/apiextensions-apiserver this repo pins, v0.35.0 in go.mod;
+	// it is upstream behaviour rather than a contract, so a bump is the
+	// moment to re-read it. TestListTypeSetWouldNotRefuseAStoredDuplicate
+	// pins what this paragraph claims. What the marker buys against
+	// that is refusing a duplicate on create and on a write into a
+	// clean object, which the controller already reports precisely, on
+	// TenantGateway status, where this API puts the rest of these
+	// failures.
 	//
 	// A pattern on the items below and no pattern on apex is not a
 	// contradiction, though the two sit close enough to read as one.
