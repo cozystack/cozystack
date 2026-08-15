@@ -54,7 +54,7 @@ on:
 # surviving run rather than a hundred queued ones, and the feature only shipped
 # 2026-05-07, on a path that delivers fixes to release lines.
 concurrency:
-  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous') && '-label' || '' }}
+  group: backport-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'backport' && github.event.label.name != 'backport-previous' && github.event.label.name != 'kind/backport' && github.event.label.name != 'kind/backport-previous') && '-label' || '' }}
   # Stated positively, matching the group key above. `!= 'labeled'` is equivalent
   # only while `types:` holds exactly these two, and that form fails open: adding
   # `unlabeled` or `reopened` there would hand those events cancellation in the
