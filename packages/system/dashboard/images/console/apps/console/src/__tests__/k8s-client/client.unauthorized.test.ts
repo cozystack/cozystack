@@ -52,6 +52,31 @@ describe("K8sClient onUnauthorized (401) handling", () => {
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
   })
 
+  it("re-arms the latch after a success so a later 401 handles again", async () => {
+    const onUnauthorized = vi.fn()
+    const responses = [
+      unauthorized(),
+      fakeResponse({ body: JSON.stringify({ kind: "Pod" }) }),
+      unauthorized(),
+    ]
+    let call = 0
+    vi.stubGlobal("fetch", vi.fn(async () => responses[call++]))
+    const client = new K8sClient({ onUnauthorized })
+
+    // A 2xx in between means the session recovered, so the next expiry is a
+    // new episode. Without the re-arm a custom in-page handler would fire
+    // once for the client's whole lifetime.
+    await expect(client.get("", "v1", "pods", "p", "ns")).rejects.toThrow(
+      K8sApiError,
+    )
+    await client.get("", "v1", "pods", "p", "ns")
+    await expect(client.get("", "v1", "pods", "p", "ns")).rejects.toThrow(
+      K8sApiError,
+    )
+
+    expect(onUnauthorized).toHaveBeenCalledTimes(2)
+  })
+
   it("does not invoke onUnauthorized on a non-401 error", async () => {
     const onUnauthorized = vi.fn()
     vi.stubGlobal(
