@@ -4,10 +4,13 @@ export interface K8sClientConfig {
   onUnauthorized?: () => void
 }
 
+// /oauth2/sign_in is the only sign-in entry both gatekeeper modes serve:
+// oauth2-proxy jumps straight to the provider there (--skip-provider-button)
+// and token-proxy renders its token form; /oauth2/start is oauth2-proxy-only.
 function defaultOnUnauthorized(): void {
   if (typeof window === "undefined") return
   const rd = window.location.pathname + window.location.search + window.location.hash
-  window.location.assign(`/oauth2/start?rd=${encodeURIComponent(rd)}`)
+  window.location.assign(`/oauth2/sign_in?rd=${encodeURIComponent(rd)}`)
 }
 
 export class K8sApiError extends Error {
