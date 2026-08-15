@@ -4673,6 +4673,51 @@ func TestValidateTLSPassthroughListenersReportsApexBeforeOverlap(t *testing.T) {
 	}
 }
 
+// TestValidateTLSPassthroughListenersNamesAnUnusableApex pins where an
+// apex that no listener hostname can sit inside is judged, and which
+// value the error names.
+//
+// A hostname must be a lowercase DNS name and must sit inside the apex,
+// so under an apex carrying upper case the two requirements have no
+// common solution and every entry is refused. The apex is what the
+// tenant has to change, and the containment error names the hostname —
+// a value that is not wrong — so the apex is checked first and reported
+// on its own terms.
+//
+// It is judged here rather than by a schema pattern because a pattern
+// refuses the TenantGateway write itself: the gateway HelmRelease then
+// cannot apply and goes NotReady, where a status error costs the one
+// Gateway. An apex is only judged when the field is in use, so a tenant
+// that never declares a listener keeps the behaviour it had.
+func TestValidateTLSPassthroughListenersNamesAnUnusableApex(t *testing.T) {
+	listeners := []gatewayv1alpha1.TLSPassthroughListener{
+		{Name: "postgres", Port: 5432, Hostname: "postgres.foo.example.com"},
+	}
+
+	err := validateTLSPassthroughListeners(listeners, nil, "Foo.Example.com")
+	if err == nil {
+		t.Fatal("expected a mixed-case apex to be refused, got nil")
+	}
+	if !strings.Contains(err.Error(), "Foo.Example.com") {
+		t.Errorf("error does not name the apex the tenant has to change: %v", err)
+	}
+	// The hostname is well-formed and inside the apex once case is set
+	// aside, so an error naming it sends the reader to edit the one
+	// value that is correct.
+	if strings.Contains(err.Error(), "outside the tenant apex") {
+		t.Errorf("error blames the hostname for the apex: %v", err)
+	}
+
+	// Declaring no listener leaves the apex unjudged. tlsPassthroughServices
+	// is populated here because that list is validated in the same
+	// function, so a check placed at the top rather than behind the
+	// listener count would reach a tenant that never opted into this
+	// field.
+	if err := validateTLSPassthroughListeners(nil, []string{"api"}, "Foo.Example.com"); err != nil {
+		t.Errorf("apex judged with no listener declared: %v", err)
+	}
+}
+
 // TestReconcile_ListenerAllowedRoutesNotAliased pins that every
 // rendered listener owns its AllowedRoutes.Namespaces rather than
 // sharing one struct with its siblings. The passthrough loops used to

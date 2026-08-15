@@ -371,6 +371,23 @@ func validateTLSPassthroughListeners(listeners []gatewayv1alpha1.TLSPassthroughL
 		}
 		serviceNames[svc] = struct{}{}
 	}
+	// Judged here rather than by a pattern on the field, and only once
+	// an entry exists to be judged by it. A hostname has to be a
+	// lowercase DNS name and has to fall within the apex, so an apex
+	// that is not itself one leaves every entry unsatisfiable — and the
+	// containment error would name the hostname, which is not the value
+	// the tenant can change. The apex reaches this CR verbatim from a
+	// namespace label that may carry upper case, and refusing it at
+	// admission would fail the whole gateway HelmRelease where this
+	// costs the one Gateway. Guarded on the count so a tenant that
+	// never declares a listener is unaffected: the entries above are
+	// validated in this same function.
+	if len(listeners) > 0 {
+		if errs := validation.IsDNS1123Subdomain(apex); len(errs) > 0 {
+			return fmt.Errorf("tlsPassthroughListeners: tenant apex %q is not a lowercase DNS name (%s), so no listener hostname can sit within it", apex, strings.Join(errs, "; "))
+		}
+	}
+
 	seenNames := make(map[string]struct{}, len(listeners))
 	seenPorts := make(map[int32]struct{}, len(listeners))
 	// Seeded with the hostnames the port-443 service listeners already

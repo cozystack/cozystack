@@ -395,6 +395,12 @@ func TestCRDPassesInstallTimeValidation(t *testing.T) {
 func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 	a := specValidator(t)
 
+	// One character past the apex bound. A bare run of letters rather
+	// than a plausible hostname, so the row can only fail on length —
+	// the field carries no format pattern to fail on instead, and
+	// pinning ratcheting is not the place to discover that.
+	overLongApex := strings.Repeat("a", 254)
+
 	spec := func(apex string, services ...string) map[string]interface{} {
 		svcs := make([]interface{}, 0, len(services))
 		for _, s := range services {
@@ -427,13 +433,13 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 		newSpec, old map[string]interface{}
 		wantRejected bool
 	}{{
-		name:         "upper-case apex left untouched",
-		newSpec:      spec("FOO.example.com", "api"),
-		old:          spec("FOO.example.com", "api"),
+		name:         "over-long apex left untouched",
+		newSpec:      spec(overLongApex, "api"),
+		old:          spec(overLongApex, "api"),
 		wantRejected: false,
 	}, {
-		name:         "upper-case apex introduced by this write",
-		newSpec:      spec("FOO.example.com", "api"),
+		name:         "over-long apex introduced by this write",
+		newSpec:      spec(overLongApex, "api"),
 		old:          spec("foo.example.com", "api"),
 		wantRejected: true,
 	}, {
@@ -462,6 +468,88 @@ func TestTightenedConstraintsOnExistingObjects(t *testing.T) {
 				t.Errorf("update rejected = %v, want %v", got, tc.wantRejected)
 			}
 		})
+	}
+}
+
+// TestApexAcceptsUpperCaseAtCreate pins that spec.apex carries no
+// format pattern, so a tenant whose host holds upper case can still
+// have its TenantGateway created.
+//
+// The value arrives verbatim. The gateway chart writes spec.apex from
+// the namespace.cozystack.io/host label, the tenant chart writes that
+// label from spec.host, and the tenant values schema bounds host with
+// nothing but its type, so an upper-case host reaches this field.
+//
+// Admitting it is not a claim that it works. renderGateway composes
+// listener hostnames from the apex and Gateway API refuses upper case
+// in them, so that tenant's Gateway does not render either way. What a
+// pattern would change is only where the failure lands: refused at the
+// write it fails the gateway HelmRelease, admitted it is Ready=False on
+// the one Gateway. The bound is length alone for that reason, and the
+// apex is judged by the controller when this field is in use.
+//
+// Create is the path that matters and the ratcheting test cannot reach
+// it: ratcheting compares against a stored value, so it says nothing
+// about the write that creates the object.
+func TestApexAcceptsUpperCaseAtCreate(t *testing.T) {
+	a := specValidator(t)
+
+	if pattern := v1alpha1SpecSchema(t).Properties["apex"].Pattern; pattern != "" {
+		t.Errorf("spec.apex carries pattern %q; a mixed-case tenant host is refused at the write", pattern)
+	}
+
+	for _, spec := range []map[string]interface{}{
+		{"apex": "Foo.Example.com"},
+		{"apex": "Case-Probe.foo.example.com", "tlsPassthroughServices": []interface{}{"api"}},
+	} {
+		if a.rejects(t, spec) {
+			t.Errorf("spec %v rejected at create, want admitted", spec)
+		}
+	}
+}
+
+// TestPassthroughServiceCapFitsGatewayAPI pins that a tlsPassthroughServices
+// list filled to the schema's maxItems is one the controller can render.
+//
+// The bound belongs to the same budget as the listener one and is read
+// off the generated CRD for the same reason, but it needs its own run:
+// the two fields are bounded by separate markers and only this one is
+// reachable from chart values today, so a list the apiserver accepts
+// and the renderer refuses is a shape an operator can actually reach.
+// The rendered total is the port-80 listener plus one per entry, so a
+// bound at the Gateway API cap itself is one over what a Gateway holds.
+func TestPassthroughServiceCapFitsGatewayAPI(t *testing.T) {
+	const gatewayAPIListenerCap = 64
+
+	servicesSchema := v1alpha1SpecSchema(t).Properties["tlsPassthroughServices"]
+	if servicesSchema.MaxItems == nil {
+		t.Fatal("tlsPassthroughServices has no maxItems; the cap is unbounded")
+	}
+	maxItems := *servicesSchema.MaxItems
+
+	services := make([]string, 0, maxItems)
+	for i := int64(0); i < maxItems; i++ {
+		services = append(services, fmt.Sprintf("svc%d", i))
+	}
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:                   "foo.example.com",
+			CertMode:               gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName:       "cilium",
+			TLSPassthroughServices: services,
+		},
+	}
+
+	r := &Reconciler{Scheme: newScheme(t)}
+	// One published app, matching the headroom the listener cap leaves,
+	// so the two fields are bounded against the same tenant.
+	gw, err := r.renderGateway(tgw, []string{"app.foo.example.com"}, nil)
+	if err != nil {
+		t.Fatalf("renderGateway at maxItems=%d: %v", maxItems, err)
+	}
+	if got := len(gw.Spec.Listeners); got > gatewayAPIListenerCap {
+		t.Errorf("maxItems=%d renders %d listeners, over the Gateway API cap of %d", maxItems, got, gatewayAPIListenerCap)
 	}
 }
 

@@ -68,7 +68,6 @@ spec:
                   Apex is the tenant's apex hostname. The Gateway listeners are
                   constrained to this apex and its subdomains.
                 maxLength: 253
-                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                 type: string
               attachedNamespaces:
                 description: |-
@@ -383,7 +382,7 @@ spec:
                   maxLength: 249
                   pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                   type: string
-                maxItems: 64
+                maxItems: 62
                 type: array
               wildcardSecretRef:
                 description: |-

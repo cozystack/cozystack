@@ -231,9 +231,9 @@ type TLSPassthroughListener struct {
 // ones whose violation the renderer cannot survive. The criterion is
 // stated rather than the members listed, because what belongs in that
 // set moves whenever a marker is added.
-// An apex or a tlsPassthroughServices entry that slipped past its
-// pattern is outside it, caught instead by Gateway API refusing the
-// rendered listener.
+// A tlsPassthroughServices entry that slipped past its pattern is
+// outside it, caught instead by Gateway API refusing the rendered
+// listener.
 //
 // One rule is deliberately absent. Name uniqueness is carried by the
 // listType=map/listMapKey=name markers on the field, enforced by the
@@ -249,6 +249,14 @@ type TLSPassthroughListener struct {
 // admission, but list-type errors are the one kind the apiserver never
 // ratchets, so it would refuse every write to an object that already
 // carries a duplicate. See that field for the rest of it.
+//
+// An apex no listener hostname can sit inside is another, and by the
+// same kind of choice. A hostname must be lowercase and must fall
+// within the apex, so an apex carrying upper case leaves every entry
+// unsatisfiable. Expressing that as a pattern on apex refuses the write
+// for a value the rest of the platform accepts, so it is the controller
+// that judges the apex, and only when the field is in use. See that
+// field for why the value can carry upper case at all.
 //
 // Hostname overlap is another, and that one is about cost.
 // Expressing it needs wildcard-aware matching across two lists, which
@@ -286,7 +294,7 @@ type TLSPassthroughListener struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || !has(self.tlsPassthroughServices) || self.tlsPassthroughListeners.all(l, !(l.name in self.tlsPassthroughServices))",message="tlsPassthroughListeners: name collides with a tlsPassthroughServices entry; both render a tls-<name> Gateway listener"
 // +kubebuilder:validation:XValidation:rule="!has(self.tlsPassthroughListeners) || size(self.tlsPassthroughListeners) == 0 || !has(self.certMode) || !(self.certMode in ['dns01', 'existingSecret'])",message="tlsPassthroughListeners: unsupported with certMode dns01 or existingSecret; those modes serve the tenant from one wildcard terminate listener that the pinned Cilium cannot keep apart from a passthrough listener under the same apex"
 type TenantGatewaySpec struct {
-	// Why apex is bounded and patterned.
+	// Why apex is bounded, and why it carries no format pattern.
 	//
 	// MaxLength is the DNS ceiling for a fully qualified name, so it
 	// rejects nothing that was ever resolvable. It is required rather
@@ -294,17 +302,27 @@ type TenantGatewaySpec struct {
 	// this value, and without a declared bound the apiserver's
 	// install-time cost estimator assumes the maximum string size and
 	// refuses the whole CRD.
-	// The pattern matches the one on listener hostnames. Without it an
-	// apex containing an upper-case letter is accepted while every
-	// tlsPassthroughListeners entry under it becomes unsatisfiable —
-	// the hostname pattern forbids upper case, so no value can be both
-	// well-formed and within the apex, and the error names the hostname
-	// rather than the apex that caused it.
+	//
+	// A format pattern would be the natural companion, and it is left
+	// off on purpose. The value arrives verbatim from a namespace label
+	// written from the tenant's spec.host, which nothing between here
+	// and there normalizes and nothing bounds beyond its type, and a
+	// label value may hold upper case. Such an apex does not work:
+	// renderGateway composes listener hostnames from it, "<svc>.<apex>"
+	// and "*.<apex>", and Gateway API refuses a hostname carrying upper
+	// case, so the Gateway never renders. That is so with or without a
+	// pattern here, which is the point. What a pattern changes is where
+	// the tenant meets it: refused at the write, the gateway
+	// HelmRelease cannot apply and goes NotReady, taking with it every
+	// object that release owns; left admitted, the same tenant gets
+	// Ready=False on the one Gateway that cannot render. So the field
+	// is bounded by length alone, and an apex no listener hostname can
+	// sit inside is judged by the controller, only when
+	// tlsPassthroughListeners is in use.
 
 	// Apex is the tenant's apex hostname. The Gateway listeners are
 	// constrained to this apex and its subdomains.
 	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +required
 	Apex string `json:"apex"`
 
@@ -355,10 +373,16 @@ type TenantGatewaySpec struct {
 	// name-collision rule scans this list, and an unbounded list of
 	// unbounded strings makes the estimate exceed the per-CRD budget.
 	// What the item length and the item pattern are, and why, is in the
-	// field's own comment below. The count is not chosen to fit the
-	// listener budget: it is the Gateway API cap itself, so a list at
-	// the bound plus the mandatory port-80 listener exceeds what a
-	// Gateway holds and the controller refuses it.
+	// field's own comment below. The count is the Gateway API listener
+	// cap less the mandatory port-80 listener and less one published
+	// hostname, matching how tlsPassthroughListeners is bounded: a list
+	// at the bound renders, and a tenant filling it can still publish
+	// one app. The cap itself would not — it is one listener over what
+	// a Gateway holds before a single app is published, so the
+	// apiserver would accept a value the renderer always refuses.
+	// TestPassthroughServiceCapFitsGatewayAPI renders that sum reading
+	// maxItems from the schema, so moving this number fails there and
+	// not in a cluster.
 	//
 	// A repeated entry is rejected by the controller, not by a listType
 	// marker, and the difference matters on a field that already has
@@ -373,6 +397,19 @@ type TenantGatewaySpec struct {
 	// of losing to a conflict. The controller reports the duplicate on
 	// TenantGateway status, which is where this API puts the rest of
 	// these failures.
+	//
+	// A pattern on the items below and no pattern on apex is not a
+	// contradiction, though the two sit close enough to read as one.
+	// Neither refusal surfaces where the value was typed: values.schema.json
+	// mirrors no bound from here, so both fail the TenantGateway write and
+	// take the gateway HelmRelease with it. Both also refuse only values
+	// whose Gateway was unrenderable anyway, so neither takes away a
+	// working configuration. What differs is whose release stops. This
+	// field is overridden by whoever is editing these chart values and its
+	// shipped default conforms, so the release that fails is carrying the
+	// value just written. The apex arrives from a namespace label written
+	// from the tenant's host, so refusing it stops the release of a tenant
+	// that never touched this chart, over a value set elsewhere.
 
 	// TLSPassthroughServices names services exposed via TLS-passthrough
 	// (mode: Passthrough listeners). Each service gets a dedicated
@@ -390,7 +427,7 @@ type TenantGatewaySpec struct {
 	// A value that overflows either bound renders a listener the
 	// apiserver refuses, and that refusal takes the whole Gateway with
 	// it rather than the one listener.
-	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:MaxItems=62
 	// +kubebuilder:validation:items:MaxLength=249
 	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
 	// +optional
