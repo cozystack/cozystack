@@ -124,7 +124,12 @@ export function TenantsPage() {
                 return (
                   <tr key={name} className="hover:bg-slate-50">
                     <td className="px-4 py-3 text-sm font-medium text-slate-900">
-                      {name}
+                      <Link
+                        to={`/console/tenants/${name}`}
+                        className="hover:underline"
+                      >
+                        {name}
+                      </Link>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-600">
                       {tenantNs || "—"}
