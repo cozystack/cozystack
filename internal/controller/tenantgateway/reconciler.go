@@ -168,26 +168,25 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 	// its hostname. An HTTPRoute claiming the same name puts a terminate
 	// listener there, which the TLSRoute still cannot attach to, and
 	// that gap predates this change.
-	reserved := passthroughHostnames(tgw)
-	// Native-port listeners admit only the tenant's own namespace,
-	// while claims are collected from every attached namespace, so a
-	// route elsewhere can claim a name it could never attach to. The
-	// port-443 entries do not have this gap: their allowedRoutes select
-	// on the gateway label, which every attached namespace carries.
-	// tenantOnly is keyed by rendered hostname, sections by rendered
-	// listener name, because a route pins itself to a listener by name
-	// while a claim overlaps hostnames. Both are needed to answer
-	// whether one route can be served on one hostname.
-	tenantOnly := make(map[string]bool, len(reserved))
-	sections := make(map[string]string, len(reserved))
-	for _, svc := range tgw.Spec.TLSPassthroughServices {
-		host := svc + "." + tgw.Spec.Apex
-		tenantOnly[host] = false
-		sections[passthroughListenerPrefix+svc] = host
-	}
-	for _, pl := range tgw.Spec.TLSPassthroughListeners {
-		tenantOnly[pl.Hostname] = true
-		sections[passthroughListenerPrefix+pl.Name] = pl.Hostname
+	// Two views of the listeners the spec renders, taken from one
+	// enumeration so a passthrough source added later reaches both or
+	// neither. Native-port listeners admit only the tenant's own
+	// namespace, while claims are collected from every attached
+	// namespace, so a route elsewhere can claim a name it could never
+	// attach to. The port-443 entries do not have this gap: their
+	// allowedRoutes select on the gateway label, which every attached
+	// namespace carries. tenantOnly is keyed by rendered hostname,
+	// sections by rendered listener name, because a route pins itself to
+	// a listener by name while a claim overlaps hostnames. Both are
+	// needed to answer whether one route can be served on one hostname.
+	// tenantOnly doubles as the reserved-hostname set: its keys are
+	// exactly the hostnames a passthrough listener answers.
+	rendered := passthroughListeners(tgw)
+	tenantOnly := make(map[string]bool, len(rendered))
+	sections := make(map[string]string, len(rendered))
+	for _, l := range rendered {
+		tenantOnly[l.hostname] = l.tenantOnly
+		sections[l.section] = l.hostname
 	}
 	dynHostnames := make([]string, 0, len(claims))
 	withdrawn := map[routeRef][]withdrawnHostname{}
@@ -221,7 +220,7 @@ func (r *Reconciler) runReconcileSteps(ctx context.Context, tgw *gatewayv1alpha1
 		// the tenant. So eligibility is read off the whole overlap set
 		// below, not off the name picked here.
 		var answeredBy string
-		for rh := range reserved {
+		for rh := range tenantOnly {
 			if !hostnamesOverlap(rh, h) {
 				continue
 			}
