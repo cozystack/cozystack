@@ -8,12 +8,19 @@ import { useApplicationDefinitions } from "../lib/app-definitions.ts"
 import { useCRDSchema } from "../lib/use-crd-schema.ts"
 import { SchemaForm, type SchemaFormHandle } from "../components/SchemaForm.tsx"
 import { enrichSchemaWithEnums } from "../lib/backup-utils.ts"
+import type { ApplicationInstance } from "@cozystack/types"
+
+/** The subset of the CRD-driven form data this page reads back. */
+interface RestoreJobFormData {
+  targetApplicationRef?: { apiGroup?: string; kind?: string; name?: string }
+  backupRef?: { name?: string }
+}
 
 export function BackupRestoreJobCreatePage() {
   const navigate = useNavigate()
   const { tenantNamespace } = useTenantContext()
   const { data: appDefs } = useApplicationDefinitions()
-  const [formData, setFormData] = useState<any>({})
+  const [formData, setFormData] = useState<RestoreJobFormData>({})
   const [name, setName] = useState("")
   const schemaFormRef = useRef<SchemaFormHandle>(null)
 
@@ -39,7 +46,7 @@ export function BackupRestoreJobCreatePage() {
     [appDefs, selectedKind]
   )
 
-  const { data: instancesData } = useK8sList<any>({
+  const { data: instancesData } = useK8sList<ApplicationInstance>({
     apiGroup: "apps.cozystack.io",
     apiVersion: "v1alpha1",
     plural: selectedAppDef?.spec?.application.plural ?? "",
@@ -63,7 +70,7 @@ export function BackupRestoreJobCreatePage() {
       console.error("Failed to parse RestoreJob schema:", e)
       return null
     }
-    const instances = instancesData?.items.map((inst: any) => inst.metadata.name) ?? []
+    const instances = instancesData?.items.map((inst) => inst.metadata.name) ?? []
 
     const enumMap: Record<string, string[]> = {}
 
@@ -219,7 +226,7 @@ export function BackupRestoreJobCreatePage() {
                 ref={schemaFormRef}
                 openAPISchema={schema}
                 formData={formData}
-                onChange={setFormData}
+                onChange={(data) => setFormData(data as RestoreJobFormData)}
               >
                 <div className="hidden" />
               </SchemaForm>

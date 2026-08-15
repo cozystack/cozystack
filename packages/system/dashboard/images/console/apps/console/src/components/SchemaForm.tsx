@@ -27,7 +27,7 @@ import "./schema-form.css"
 function addAdditionalPropertiesWidgets(schema: RJSFSchema, uiSchema: UiSchema = {}): UiSchema {
   if (!schema || typeof schema !== "object") return uiSchema
 
-  const properties = (schema as any).properties
+  const properties = (schema as SchemaNode).properties
   if (!properties || typeof properties !== "object") return uiSchema
 
   const result = { ...uiSchema }
@@ -43,7 +43,7 @@ function addAdditionalPropertiesWidgets(schema: RJSFSchema, uiSchema: UiSchema =
 }
 
 /**
- * Minimal structural view of a JSON-schema node used by the walk below.
+ * Minimal structural view of a JSON-schema node used by the walks in this file.
  * RJSFSchema is intersected with an `any` index signature, so reading fields
  * straight off it yields `any`; routing through this interface keeps the walk
  * typed without an `as any` cast.
@@ -299,8 +299,15 @@ export const SchemaForm = forwardRef<SchemaFormHandle, SchemaFormProps>(function
     // Override resourceQuotas field with structured quota editor.
     // Scoped to schemas where resourceQuotas has additionalProperties: {type: "string"}
     // (the cozystack-tenants chart shape) to avoid activating on unrelated CRDs.
-    const rqSchema = (schema as any).properties?.resourceQuotas
-    if (rqSchema && rqSchema.additionalProperties?.type === "string") {
+    const rqSchema = (schema as SchemaNode).properties?.resourceQuotas as
+      | SchemaNode
+      | undefined
+    const rqValueSchema = rqSchema?.additionalProperties
+    if (
+      rqValueSchema &&
+      typeof rqValueSchema === "object" &&
+      (rqValueSchema as SchemaNode).type === "string"
+    ) {
       withSensitive.resourceQuotas = {
         ...withSensitive.resourceQuotas,
         "ui:field": "ResourceQuotasField",
