@@ -50,6 +50,8 @@
 # Run with: hack/cozytest.sh hack/talos-image-cache_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "manifest documents partition into pre-Cilium apply plus the Cilium policy" {
     manifest=hack/e2e-talos-image-cache.yaml
     total=$(yq '.kind' "$manifest" | grep -vc '^---$')

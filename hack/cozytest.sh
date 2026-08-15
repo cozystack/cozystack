@@ -264,6 +264,29 @@ awk '
 ' "$TEST_FILE" > "$TMP_SH"
 
 [ -f "$TMP_SH" ] || { echo "Failed to generate test functions" >&2; exit 1; }
+
+# `load <name>` is bats(1)'s helper-sourcing builtin, and every hack/*.bats unit
+# file calls it at top level to pull in hack/test_helper.bash. Without a
+# definition here the sourced file dies on `load: not found` under `set -e`, so
+# the unit suite would run under exactly one of the two runners.
+#
+# The helper it loads restores `set -u`, which THIS runner already applies --
+# run_one executes each body under `set -eu -x`. So the load is a no-op for
+# strictness here and the point of defining it is compatibility: the same file
+# runs under both runners, and the choice of runner stays the Makefile's rather
+# than something each test file has to be written for.
+#
+# Deliberately not bats' full resolution order (absolute paths, BATS_LIB_PATH,
+# a bare file with no .bash suffix). It resolves the one shape the suite uses --
+# a helper next to the test file -- and fails loudly on anything else rather
+# than guessing.
+load() {
+  _lib="$(dirname "$TEST_FILE")/$1.bash"
+  [ -f "$_lib" ] || { echo "load: no such helper: $_lib" >&2; return 1; }
+  # shellcheck disable=SC1090
+  . "$_lib"
+}
+
 # shellcheck disable=SC1090
 . "$TMP_SH"
 

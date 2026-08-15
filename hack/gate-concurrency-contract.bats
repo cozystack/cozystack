@@ -28,6 +28,8 @@
 # `plan`, and the extraction below, which matches on `CONCLUSION === '…'`,
 # will not notice. Whoever adds such a job owns that.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 FORK="$REPO_ROOT/.github/workflows/e2e-fork.yaml"
 PULL_REQUESTS="$REPO_ROOT/.github/workflows/pull-requests.yaml"

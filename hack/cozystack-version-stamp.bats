@@ -19,6 +19,8 @@
 # Run with: hack/cozytest.sh hack/cozystack-version-stamp.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "renders parseable YAML for a version" {
     . packages/core/platform/images/migrations/migrations/lib/cozystack-version.sh
     render_cozystack_version_manifest 45 | yq . >/dev/null

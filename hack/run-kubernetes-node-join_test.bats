@@ -34,6 +34,8 @@
 # Run with: hack/cozytest.sh hack/run-kubernetes-node-join_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 kubectl_calls=/dev/null
 unbounded_calls=/dev/null
 timeout_calls=/dev/null

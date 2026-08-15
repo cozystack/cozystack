@@ -49,6 +49,8 @@
 #
 # Run with: hack/cozytest.sh hack/sandbox-cidr-disjoint.bats
 
+load test_helper
+
 @test "sandbox cluster CIDR overlaps no platform range" {
   talos_file=hack/e2e-prepare-cluster.bats
   install_file=hack/e2e-install-cozystack.bats
