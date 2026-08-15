@@ -44,7 +44,7 @@ function Shell({ username }: { username?: string }) {
     <AppShell
       tabs={tabs}
       sections={sections}
-      subtitle={<Breadcrumb />}
+      subtitle={inAdmin ? undefined : <Breadcrumb />}
       onSearchClick={toggle}
       version={config.version || import.meta.env.VITE_APP_VERSION}
       logoSvg={config.logoSvg}
