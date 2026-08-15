@@ -86,6 +86,10 @@ export class K8sClient {
       throw new K8sApiError(res.status, body)
     }
 
+    // A 2xx means the session is alive again, so re-arm the latch: the default
+    // handler navigates away, but a custom one may re-auth in place.
+    this.unauthorizedHandled = false
+
     if (res.status === 204) return undefined as T
     // Some endpoints (e.g. KubeVirt action subresources like
     // virtualmachines/{name}/restart) return 2xx with an empty body;
@@ -282,6 +286,7 @@ export class K8sClient {
             await res.json().catch(() => res.statusText),
           )
         }
+        this.unauthorizedHandled = false
         if (!res.body) throw new Error("No response body for watch")
 
         const reader = res.body.getReader()
