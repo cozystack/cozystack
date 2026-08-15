@@ -37,7 +37,10 @@ export function useCommandItems(
   const { tenantNamespace } = useTenantContext()
   const { data: adList } = useApplicationDefinitions()
 
-  const ads = adList?.items || []
+  // Memoised on the query result: `adList?.items || []` allocates a fresh
+  // array while the query is pending, which would re-run every item memo below
+  // on every render.
+  const ads = useMemo(() => adList?.items || [], [adList])
 
   // For resource-level drill-down: fetch instances of one type
   const resourcePlural = level.type === "resource" ? level.plural : ""
