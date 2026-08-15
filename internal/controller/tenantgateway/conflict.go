@@ -70,9 +70,14 @@ type routeRef struct {
 // sectionName pins the route to one listener, and then only that
 // listener's own hostname and attach set decide.
 //
-// tenantOnly maps each rendered passthrough hostname to whether its
-// listener admits the publishing tenant alone, which the native-port
-// ones do. sections maps a rendered passthrough listener name to the
+// byHostname maps each rendered passthrough hostname to the listener
+// answering it, which carries the port it is published on and whether
+// it admits the publishing tenant alone, as the native-port ones do.
+// The caller is expected to have found at least one entry overlapping
+// h before asking; a hostname nothing answers is a different shape,
+// built by the caller with its own cause.
+//
+// sections maps a rendered passthrough listener name to the
 // hostname it answers, and holds nothing else: a sectionName absent
 // from it names no passthrough listener, which covers both a name
 // nothing renders and the name of an HTTPS-terminate listener. Either
@@ -88,7 +93,7 @@ type routeRef struct {
 // send an operator to different places and one of them can fire on a
 // route inside the tenant, where a namespace refusal would contradict
 // the object it is written on.
-func servableOn(ref routeRef, h, tenantNamespace string, tenantOnly map[string]bool, sections map[string]string) (bool, withdrawalCause, string) {
+func servableOn(ref routeRef, h, tenantNamespace string, byHostname map[string]passthroughListener, sections map[string]string) (bool, withdrawalCause, string) {
 	pinned := ""
 	if ref.parentRef.SectionName != nil {
 		named, exists := sections[string(*ref.parentRef.SectionName)]
@@ -107,7 +112,8 @@ func servableOn(ref routeRef, h, tenantNamespace string, tenantOnly map[string]b
 	// could name two different refusers and rewrite the condition.
 	refusedBy := ""
 	sectionAnswers := false
-	for rh, only := range tenantOnly {
+	portAnswers := ref.parentRef.Port == nil
+	for rh, l := range byHostname {
 		if !hostnamesOverlap(rh, h) {
 			continue
 		}
@@ -115,7 +121,15 @@ func servableOn(ref routeRef, h, tenantNamespace string, tenantOnly map[string]b
 			continue
 		}
 		sectionAnswers = true
-		if only && ref.namespace != tenantNamespace {
+		// A parentRef may pin the listener by port as well as by name,
+		// and Gateway API requires both to match when both are given.
+		// Without this a route naming port 443 attaches to nothing on a
+		// native-port listener and is still told it is fine.
+		if ref.parentRef.Port != nil && int32(*ref.parentRef.Port) != l.port {
+			continue
+		}
+		portAnswers = true
+		if l.tenantOnly && ref.namespace != tenantNamespace {
 			if refusedBy == "" || rh < refusedBy {
 				refusedBy = rh
 			}
@@ -127,6 +141,13 @@ func servableOn(ref routeRef, h, tenantNamespace string, tenantOnly map[string]b
 	// means the sectionName is the reason, whatever the namespace is.
 	if pinned != "" && !sectionAnswers {
 		return false, withdrawnSectionMismatch, ""
+	}
+	// The name matched and the port did not. Reported apart from the
+	// sectionName case because the field the route's owner edits is a
+	// different one, and apart from the namespace case because the
+	// route may well be inside the tenant.
+	if !portAnswers {
+		return false, withdrawnPortMismatch, ""
 	}
 	return false, withdrawnForeignNamespace, refusedBy
 }
@@ -225,6 +246,11 @@ const (
 	// routes inside the tenant too, where blaming the namespace states
 	// something the object itself contradicts.
 	withdrawnSectionMismatch
+	// withdrawnPortMismatch: the route pinned itself to a listener by
+	// parentRef.port, a listener answers its hostname, and it is
+	// published on another port. Gateway API requires a pinned port to
+	// match the selected listener, so the route attaches to nothing.
+	withdrawnPortMismatch
 )
 
 // withdrawnHostname pairs a hostname the controller declined to serve
@@ -242,6 +268,10 @@ type withdrawnHostname struct {
 	// because it is the field the route's owner edits, and answeredBy
 	// then carries what the named listener does answer.
 	section string
+	// port carries the parentRef port that missed, for
+	// withdrawnPortMismatch only, with answeredBy naming the listener
+	// that does answer the hostname on a port of its own.
+	port int32
 }
 
 // describeWithdrawn renders the pairs in a stable order, dropping
@@ -252,12 +282,14 @@ type withdrawnHostname struct {
 //
 // Each cause is rendered separately, because a route hit by more than
 // one of them has to be told about each.
-func describeWithdrawn(hostnames []withdrawnHostname) (answered, unserved, foreign, mismatched string) {
-	var withListener, without, elsewhere, wrongSection []string
+func describeWithdrawn(hostnames []withdrawnHostname) (answered, unserved, foreign, mismatched, wrongPort string) {
+	var withListener, without, elsewhere, wrongSection, onAnotherPort []string
 	for _, h := range hostnames {
 		switch h.cause {
 		case withdrawnSectionMismatch:
 			wrongSection = append(wrongSection, fmt.Sprintf("%s (sectionName %s answers %s)", h.hostname, h.section, h.answeredBy))
+		case withdrawnPortMismatch:
+			onAnotherPort = append(onAnotherPort, fmt.Sprintf("%s (port %d, answered on another port)", h.hostname, h.port))
 		case withdrawnUnanswered:
 			without = append(without, h.hostname)
 		case withdrawnForeignNamespace:
@@ -277,10 +309,12 @@ func describeWithdrawn(hostnames []withdrawnHostname) (answered, unserved, forei
 	sort.Strings(without)
 	sort.Strings(elsewhere)
 	sort.Strings(wrongSection)
+	sort.Strings(onAnotherPort)
 	return strings.Join(slices.Compact(withListener), ", "),
 		strings.Join(slices.Compact(without), ", "),
 		strings.Join(slices.Compact(elsewhere), ", "),
-		strings.Join(slices.Compact(wrongSection), ", ")
+		strings.Join(slices.Compact(wrongSection), ", "),
+		strings.Join(slices.Compact(onAnotherPort), ", ")
 }
 
 // updateRouteStatuses writes RouteParentStatus entries under our
@@ -362,9 +396,12 @@ func (r *Reconciler) updateRouteStatuses(
 				reason = "HostnameConflict"
 			}
 			if isWithdrawn {
-				answered, unserved, foreign, mismatched := describeWithdrawn(gone)
+				answered, unserved, foreign, mismatched, wrongPort := describeWithdrawn(gone)
 				if mismatched != "" {
 					causes = append(causes, fmt.Sprintf("hostname(s) %s not served through the sectionName this route names, which answers a different hostname", mismatched))
+				}
+				if wrongPort != "" {
+					causes = append(causes, fmt.Sprintf("hostname(s) %s not served through the parentRef port this route names, which no listener answering them is published on", wrongPort))
 				}
 				if answered != "" {
 					causes = append(causes, fmt.Sprintf("hostname(s) %s answered by a TLS-passthrough listener, so no HTTPS listener is rendered for them", answered))

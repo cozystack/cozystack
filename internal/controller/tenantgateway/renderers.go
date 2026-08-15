@@ -333,6 +333,11 @@ type passthroughListener struct {
 	section string
 	// hostname is the SNI the listener answers.
 	hostname string
+	// port is the Gateway port the listener is published on: 443 for a
+	// TLSPassthroughServices entry, the declared native port otherwise.
+	// A route may pin itself to a listener by port as well as by name,
+	// so the eligibility check needs it.
+	port int32
 	// tenantOnly reports whether the listener admits the publishing
 	// tenant's namespace alone. The native-port listeners do; the
 	// port-443 ones select on the gateway label, which every attached
@@ -355,12 +360,14 @@ func passthroughListeners(tgw *gatewayv1alpha1.TenantGateway) []passthroughListe
 		out = append(out, passthroughListener{
 			section:  passthroughListenerPrefix + svc,
 			hostname: svc + "." + tgw.Spec.Apex,
+			port:     443,
 		})
 	}
 	for _, pl := range tgw.Spec.TLSPassthroughListeners {
 		out = append(out, passthroughListener{
 			section:    passthroughListenerPrefix + pl.Name,
 			hostname:   pl.Hostname,
+			port:       pl.Port,
 			tenantOnly: true,
 		})
 	}

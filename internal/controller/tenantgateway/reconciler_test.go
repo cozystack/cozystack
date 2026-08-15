@@ -2926,7 +2926,11 @@ func TestReconcile_TLSRouteVerdictTable(t *testing.T) {
 		services  []string
 		listeners []gatewayv1alpha1.TLSPassthroughListener
 		section   string
-		accepted  bool
+		// port pins the route by parentRef.port when non-zero, the way
+		// section pins it by name. Gateway API requires both to match
+		// the selected listener when both are given.
+		port     int32
+		accepted bool
 		// msgHas and msgLacks are checked only when set. They exist
 		// because the status alone cannot tell a refusal apart from a
 		// refusal blamed on the wrong listener: both are Accepted=False.
@@ -2934,19 +2938,19 @@ func TestReconcile_TLSRouteVerdictTable(t *testing.T) {
 		msgLacks string
 	}{
 		{"service entry, tenant namespace", "svc." + apex, "tenant-foo",
-			[]string{"svc"}, nil, "tls-svc", true, "", ""},
+			[]string{"svc"}, nil, "tls-svc", 0, true, "", ""},
 		{"service entry, attached namespace", "svc." + apex, "default",
-			[]string{"svc"}, nil, "tls-svc", true, "", ""},
+			[]string{"svc"}, nil, "tls-svc", 0, true, "", ""},
 		{"native-port entry, tenant namespace", "pg." + apex, "tenant-foo",
-			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", true, "", ""},
+			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", 0, true, "", ""},
 		{"native-port entry, attached namespace", "pg." + apex, "default",
-			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", false, "", ""},
+			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", 0, false, "", ""},
 		{"wildcard over both, tenant namespace", "*." + apex, "tenant-foo",
-			[]string{"svc"}, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-svc", true, "", ""},
+			[]string{"svc"}, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-svc", 0, true, "", ""},
 		{"wildcard over both, attached namespace", "*." + apex, "default",
-			[]string{"svc"}, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-svc", true, "", ""},
+			[]string{"svc"}, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-svc", 0, true, "", ""},
 		{"wildcard over native-port only, attached namespace", "*." + apex, "default",
-			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", false, "", ""},
+			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", 0, false, "", ""},
 		// Same claim as the row above it, differing only in the listener
 		// the route names. Eligibility is decided over every reserved
 		// hostname the claim overlaps, so the service entry makes the
@@ -2958,21 +2962,32 @@ func TestReconcile_TLSRouteVerdictTable(t *testing.T) {
 		// refusing listener cannot tell a correct message from a wrong
 		// one.
 		{"wildcard over both, attached namespace, naming the native-port listener", "*." + apex, "default",
-			[]string{"api"}, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", false,
+			[]string{"api"}, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", 0, false,
 			// The listener that refused is tls-pg. Naming svc.<apex>
 			// sends the reader to a listener that would have taken this
 			// route, which is the misattribution the separate causes
 			// exist to prevent.
 			"pg." + apex, "api." + apex},
 		{"no entry answers it, tenant namespace", "gone." + apex, "tenant-foo",
-			nil, nil, "tls-gone", false, "", ""},
+			nil, nil, "tls-gone", 0, false, "", ""},
+		// A parentRef port is the second key a route can pin itself
+		// with, and it is checked the same way the sectionName is: the
+		// listener answering the hostname has to be published on it.
+		{"native-port entry, tenant namespace, matching port", "pg." + apex, "tenant-foo",
+			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "tls-pg", 5432, true, "", ""},
+		{"native-port entry, tenant namespace, port 443 names nothing", "pg." + apex, "tenant-foo",
+			nil, []gatewayv1alpha1.TLSPassthroughListener{{Name: "pg", Port: 5432, Hostname: "pg." + apex}}, "", 443, false, "port 443", ""},
+		{"service entry, tenant namespace, native port names nothing", "svc." + apex, "tenant-foo",
+			[]string{"svc"}, nil, "", 5432, false, "port 5432", ""},
+		{"service entry, tenant namespace, port 443 matches", "svc." + apex, "tenant-foo",
+			[]string{"svc"}, nil, "", 443, true, "", ""},
 		// FIXME(#3764): pins a known gap rather than a behaviour worth
 		// keeping: the section names no rendered listener, so the route
 		// cannot attach to anything, and the controller still says
 		// Accepted=True because eligibility only asks which listener
 		// answers the hostname. Closing it means flipping this row.
 		{"section names no listener, attached namespace", "svc." + apex, "default",
-			[]string{"svc"}, nil, "tls-absent", true, "", ""},
+			[]string{"svc"}, nil, "tls-absent", 0, true, "", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := newScheme(t)
@@ -2988,6 +3003,16 @@ func TestReconcile_TLSRouteVerdictTable(t *testing.T) {
 				},
 			}
 			route := tlsRouteAttached("r", tc.namespace, tc.hostname, tc.section, "tenant-foo")
+			// An empty section means the row pins by port alone, so the
+			// parentRef must carry no sectionName rather than an empty
+			// one, which names no listener and is a different case.
+			if tc.section == "" {
+				route.Spec.ParentRefs[0].SectionName = nil
+			}
+			if tc.port != 0 {
+				port := gatewayv1.PortNumber(tc.port)
+				route.Spec.ParentRefs[0].Port = &port
+			}
 			c := fake.NewClientBuilder().
 				WithScheme(s).
 				WithObjects(tgw, route).
@@ -4737,6 +4762,80 @@ func TestValidateTLSPassthroughListenersReportsApexBeforeOverlap(t *testing.T) {
 	}
 }
 
+// TestRenderGatewayReportsCertModeBeforeTheFieldRules pins the order of
+// two refusals that can both fire on one spec.
+//
+// Under dns01 the field is refused whole, so a bad hostname inside it
+// decides nothing and naming it sends the reader to edit a value that is
+// not the reason the spec was rejected. Asserting only that the render
+// fails would pass either way, so this asserts which error comes back.
+//
+// The state is reachable only when the controller and the CRD are
+// skewed, since the CEL rule refuses the same spec at admission. That is
+// the state this copy of the rules exists for.
+func TestRenderGatewayReportsCertModeBeforeTheFieldRules(t *testing.T) {
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeDNS01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "pg", Port: 5432, Hostname: "pg.other.example.com"},
+			},
+		},
+	}
+
+	r := &Reconciler{Scheme: newScheme(t)}
+	_, err := r.renderGateway(tgw, nil, nil)
+	if err == nil {
+		t.Fatal("expected the render to fail, got nil")
+	}
+	if !strings.Contains(err.Error(), "certMode") {
+		t.Errorf("error should name the cert mode, got: %v", err)
+	}
+	if strings.Contains(err.Error(), "outside the tenant apex") {
+		t.Errorf("error reports the hostname rule instead of the cert mode: %v", err)
+	}
+}
+
+// TestRenderGatewayRefusesAnUnjudgedSpec pins the field-rule guard at
+// the top of renderGateway, which the reconcile path makes redundant and
+// nothing else was checking.
+//
+// The function claims not to render from a spec it has not judged, and
+// that claim is what keeps a Gateway built from a malformed spec out of
+// the apiserver, which refuses the whole object over one bad composed
+// value. Its sibling call is pinned by the ordering test; this one had
+// no test at all, so removing it left the suite green and the claim
+// standing.
+//
+// certMode is http01 so the cert-mode rule cannot be what refuses this,
+// which is the only way the assertion says something about the call it
+// is here for.
+func TestRenderGatewayRefusesAnUnjudgedSpec(t *testing.T) {
+	tgw := &gatewayv1alpha1.TenantGateway{
+		ObjectMeta: metav1.ObjectMeta{Name: "cozystack", Namespace: "tenant-foo"},
+		Spec: gatewayv1alpha1.TenantGatewaySpec{
+			Apex:             "foo.example.com",
+			CertMode:         gatewayv1alpha1.CertModeHTTP01,
+			GatewayClassName: "cilium",
+			TLSPassthroughListeners: []gatewayv1alpha1.TLSPassthroughListener{
+				{Name: "pg", Port: 5432, Hostname: "pg.other.example.com"},
+			},
+		},
+	}
+
+	r := &Reconciler{Scheme: newScheme(t)}
+	_, err := r.renderGateway(tgw, nil, nil)
+	if err == nil {
+		t.Fatal("expected renderGateway to refuse an out-of-apex hostname, got nil")
+	}
+	if !strings.Contains(err.Error(), "outside the tenant apex") {
+		t.Errorf("error does not name the rule that refused the spec: %v", err)
+	}
+}
+
 // TestValidateTLSPassthroughListenersNamesAnUnusableApex pins where an
 // apex that no listener hostname can sit inside is judged, and which
 // value the error names.
@@ -4784,6 +4883,24 @@ func TestValidateTLSPassthroughListenersNamesAnUnusableApex(t *testing.T) {
 	}
 }
 
+// selectsByNamespaceName reports whether an allowedRoutes block admits
+// namespaces by their own name, which is how the native-port listeners
+// are narrowed to the publishing tenant. The shared port-443 listeners
+// select on the gateway label instead, so the two are told apart by
+// which selector shape they carry rather than by a value repeated here.
+func selectsByNamespaceName(t *testing.T, ar *gatewayv1.AllowedRoutes) bool {
+	t.Helper()
+	if ar == nil || ar.Namespaces == nil || ar.Namespaces.Selector == nil {
+		t.Fatal("passthrough listener renders no allowedRoutes selector")
+	}
+	for _, e := range ar.Namespaces.Selector.MatchExpressions {
+		if e.Key == "kubernetes.io/metadata.name" {
+			return true
+		}
+	}
+	return false
+}
+
 // TestPassthroughListenersMatchTheRenderedGateway pins that the
 // enumeration the reconciler reads its reserved hostnames, listener
 // sections and attach sets from lists exactly the passthrough listeners
@@ -4820,8 +4937,12 @@ func TestPassthroughListenersMatchTheRenderedGateway(t *testing.T) {
 	// Compared as ordered slices, not as maps: the enumeration's doc
 	// says it lists the entries in the order renderGateway emits them,
 	// and an order-blind comparison would let that sentence rot.
-	type entry struct{ section, hostname string }
-	rendered := []entry{}
+	//
+	// Every field is compared, not just the two that name the listener.
+	// port and tenantOnly are what eligibility decides on, so a test
+	// that pinned the pair and skipped them would pass on exactly the
+	// drift that matters most.
+	rendered := []passthroughListener{}
 	for _, l := range gw.Spec.Listeners {
 		if l.Protocol != gatewayv1.TLSProtocolType || l.TLS == nil || l.TLS.Mode == nil || *l.TLS.Mode != gatewayv1.TLSModePassthrough {
 			continue
@@ -4829,7 +4950,16 @@ func TestPassthroughListenersMatchTheRenderedGateway(t *testing.T) {
 		if l.Hostname == nil {
 			t.Fatalf("passthrough listener %q renders no hostname", l.Name)
 		}
-		rendered = append(rendered, entry{string(l.Name), string(*l.Hostname)})
+		rendered = append(rendered, passthroughListener{
+			section:  string(l.Name),
+			hostname: string(*l.Hostname),
+			port:     int32(l.Port),
+			// Read off the rendered selector rather than restated: a
+			// listener admits the tenant alone exactly when it selects
+			// by kubernetes.io/metadata.name, where the shared ones
+			// select on the gateway label.
+			tenantOnly: selectsByNamespaceName(t, l.AllowedRoutes),
+		})
 	}
 	// Both spec fields must be represented, or the comparison below
 	// holds for a set that never exercised one of the two walks.
@@ -4837,10 +4967,7 @@ func TestPassthroughListenersMatchTheRenderedGateway(t *testing.T) {
 		t.Fatalf("rendered %d passthrough listeners, want one per spec entry: %v", len(rendered), rendered)
 	}
 
-	enumerated := []entry{}
-	for _, l := range passthroughListeners(tgw) {
-		enumerated = append(enumerated, entry{l.section, l.hostname})
-	}
+	enumerated := passthroughListeners(tgw)
 	if !reflect.DeepEqual(enumerated, rendered) {
 		t.Errorf("enumeration and rendered Gateway disagree:\n enumerated %v\n rendered   %v", enumerated, rendered)
 	}
@@ -4917,6 +5044,7 @@ func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
 			// storage and an append or index-assign on one rewrites the
 			// other. Same invariant as Namespaces, different mechanism.
 			seenKinds := map[*gatewayv1.RouteGroupKind]string{}
+			seenGroups := map[*gatewayv1.Group]string{}
 			for _, l := range gw.Spec.Listeners {
 				if l.AllowedRoutes == nil || l.AllowedRoutes.Namespaces == nil {
 					t.Fatalf("listener %s has no AllowedRoutes.Namespaces", l.Name)
@@ -4937,6 +5065,22 @@ func TestReconcile_ListenerAllowedRoutesNotAliased(t *testing.T) {
 					continue
 				}
 				seenKinds[k] = string(l.Name)
+
+				// One level further down: distinct backing arrays whose
+				// elements still point at one Group leave the same
+				// hazard for anything that writes through the pointer,
+				// so the entry has to be distinct too, not just the
+				// slice holding it.
+				for i := range l.AllowedRoutes.Kinds {
+					g := l.AllowedRoutes.Kinds[i].Group
+					if g == nil {
+						continue
+					}
+					if other, dup := seenGroups[g]; dup {
+						t.Errorf("listener %s shares the *Group of kind %s with %s", l.Name, l.AllowedRoutes.Kinds[i].Kind, other)
+					}
+					seenGroups[g] = string(l.Name)
+				}
 			}
 		})
 	}
