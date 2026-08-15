@@ -2,6 +2,28 @@ global:
   target: cozy-monitoring
 
 kube-state-metrics:
+  # Sized from a measured 14d peak of 307Mi working set on a 3-node cluster with
+  # 322 pods and roughly 25.6k series, which is the smallest cluster we run. The
+  # request sits above the 176Mi mean rather than at the peak, and the limit
+  # carries wide headroom on purpose: this component's memory scales with the
+  # number of objects in the cluster, and --metric-labels-allowlist below widens
+  # every pod and deployment series further, so a cluster larger than the one
+  # measured will land well above the peak seen here.
+  #
+  # A memory limit is what sets memory.max on the pod cgroup, and the Talos
+  # userspace OOM handler only ever selects cgroups that lack one, so running
+  # this without a limit leaves it an eviction candidate on every node. See
+  # docs/operations/system-memory-limits.md.
+  #
+  # No CPU limit: it is irrelevant to that OOM ranking, and a ceiling that binds
+  # only buys CFS throttling, which for a metrics scraper turns into scrape
+  # timeouts rather than backpressure.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 192Mi
+    limits:
+      memory: 2Gi
   extraArgs:
     - --metric-labels-allowlist=pods=[*],deployments=[*]
   rbac:
