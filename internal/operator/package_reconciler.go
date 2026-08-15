@@ -1027,13 +1027,31 @@ type memoryRequestBlocker struct {
 // because LimitRanger never touches it.
 //
 // A VerticalPodAutoscaler is not how that happens, though an earlier version of this
-// comment said it was. LimitRanger is position 6 of AllOrderedPlugins and
-// MutatingAdmissionWebhook is 35, so the LimitRange has already defaulted the container's
-// memory limit before VPA's webhook is called; VPA then rescales the limit in proportion to
-// the request it writes (GetProportionalLimit, under the default controlledValues:
-// RequestsAndLimits), so request and limit stay consistent and the pod is admitted. The
-// monitoring VPAs cap at maxAllowed anyway — 8Gi for vmselect and vmstorage, 6G for
-// vmagent — and VPA never recommends above that cap.
+// comment said it was. Every plugin that can rewrite a container's resources runs after
+// LimitRanger has defaulted them, so by the time VPA's webhook is called the container
+// already carries a memory limit, and VPA rescales that limit in proportion to the request
+// it writes (GetProportionalLimit, under the default controlledValues: RequestsAndLimits).
+// Request and limit stay consistent and the pod is admitted. The monitoring VPAs cap at
+// maxAllowed anyway — 8Gi for vmselect and vmstorage, 6G for vmagent — and VPA never
+// recommends above that cap.
+//
+// That ordering is structural, and this comment used to pin it the wrong way round, by
+// quoting each plugin's numeric position in AllOrderedPlugins. Those positions shift every
+// release as plugins are added and removed, and they had already shifted out from under the
+// numbers written here; a number nobody rechecks is worse than no number at all. What
+// actually holds is the rule the list states about itself — webhook, resourcequota and deny
+// plugins must go at the end. LimitRanger is compiled in above that marker, while both
+// plugins that can rewrite resources, MutatingAdmissionWebhook and MutatingAdmissionPolicy,
+// sit below it. That survives a release bump where an index does not.
+//
+// Run the other way round the order would matter a great deal, which is the reason to write
+// it down rather than leave it implied. A plugin mutating before LimitRanger would write a
+// request into a container that has no limit yet; LimitRanger would then default the limit
+// to the configured ceiling, and the request-not-above-limit check that core validation
+// applies to the fully mutated object would reject the pod. This scan would see none of it:
+// the request appears in no template, and the pod that would have carried it is never
+// admitted. That is the blind spot recorded below for controlledValues: RequestsOnly,
+// generalised from one opt-in setting to every VPA in cozy-monitoring.
 //
 // What does happen is a request that is already in the spec when it reaches admission, with
 // no limit beside it. Most realistically that is an operator lowering

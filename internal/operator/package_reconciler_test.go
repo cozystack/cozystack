@@ -1119,10 +1119,14 @@ func TestFindRequestAboveDefaultLimit(t *testing.T) {
 			},
 		},
 		{
-			// The mirror case, and why live pods are still scanned: the VPA
-			// admission webhook writes a recommendation into the pod's requests
-			// after the template has been rendered, so the pod can ask for more
-			// than any template in the namespace admits to.
+			// The mirror case, and why live pods are still scanned. Not because
+			// a webhook raised the request after the template was rendered:
+			// LimitRanger defaults the limit before any webhook or policy plugin
+			// runs, so a pod one of them touched arrives here already carrying a
+			// limit and is skipped. What is left is a pod admitted before the
+			// LimitRange existed, or one its controller built from a custom
+			// resource no template in this scan can show — either can ask for
+			// more than any template in the namespace admits to.
 			name: "a request raised on the live pod outranks its template",
 			objects: []client.Object{
 				systemDeployment("vmselect", 2, "5Gi", ""),
