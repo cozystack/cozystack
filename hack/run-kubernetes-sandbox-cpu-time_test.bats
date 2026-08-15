@@ -14,6 +14,8 @@
 # empty directory, which reads as a sandbox that lost no time while nothing was
 # ever asked.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_rows='srv1|192.0.2.11'
 kubectl_list_rc=0

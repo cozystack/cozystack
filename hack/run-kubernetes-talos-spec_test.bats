@@ -27,6 +27,8 @@
 # Run with: hack/cozytest.sh hack/run-kubernetes-talos-spec_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # Splice a talos_spec_block result under `spec:` of a minimal CR and print the
 # document, so yq can be asked what the tenant apiserver would see.
 spec_doc() {

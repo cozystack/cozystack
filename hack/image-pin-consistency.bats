@@ -28,6 +28,8 @@
 #
 # Run with: hack/cozytest.sh hack/image-pin-consistency.bats
 
+load test_helper
+
 @test "no image repository is pinned at more than one digest" {
   tmp=$(mktemp -d)
 

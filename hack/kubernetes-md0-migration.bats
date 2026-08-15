@@ -32,6 +32,8 @@
 #           (or `bats hack/kubernetes-md0-migration.bats`)
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 REPO_ROOT="$(cd "$HACK_DIR/.." && pwd)"
 MIGRATION="$REPO_ROOT/packages/core/platform/images/migrations/migrations/47"

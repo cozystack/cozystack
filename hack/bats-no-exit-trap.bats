@@ -85,6 +85,8 @@
 # check that catches whatever the pattern missed.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # The directory to audit. Under the bats binary that is this file's own
 # location; under cozytest.sh, which does not set BATS_TEST_FILENAME, `$0` is
 # the runner itself -- and the answer comes out the same only because the runner

@@ -12,6 +12,8 @@
 # inspection, which is what a failed test wants anyway. See
 # docs/agents/e2e-testing.md and hack/bats-no-exit-trap.bats.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_manifest=/dev/null
 kubectl_exec_rc=0

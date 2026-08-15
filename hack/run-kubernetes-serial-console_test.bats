@@ -10,6 +10,8 @@
 # property, because a capture that grew an in-guest dependency would still look
 # healthy while being blind to exactly the runs it was written for.
 
+load test_helper
+
 kubectl_calls=/dev/null
 kubectl_pod_names=
 kubectl_list_rc=0

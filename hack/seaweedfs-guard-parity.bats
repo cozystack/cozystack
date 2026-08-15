@@ -28,6 +28,8 @@
 # Run with: hack/cozytest.sh hack/seaweedfs-guard-parity.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 SYS="$PWD/packages/system/seaweedfs/templates/naming-guard.yaml"
 EXTRA="$PWD/packages/extra/seaweedfs/templates/seaweedfs.yaml"
 

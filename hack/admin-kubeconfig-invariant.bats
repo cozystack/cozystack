@@ -18,6 +18,8 @@
 # project's CI runners and on the maintainer workstation.
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "every Deployment mounting admin-kubeconfig has optional:true and wait-for-kubeconfig init" {
   values_file="packages/apps/kubernetes/tests/values-ci.yaml"
   [ -f "$values_file" ]

@@ -3,6 +3,8 @@
 # The full report needs a cluster; this test sources only the focused helper and
 # replaces talosctl with a shell function that records the exact argument vector.
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/cozyreport.sh"
 

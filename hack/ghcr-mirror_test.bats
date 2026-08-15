@@ -24,6 +24,8 @@
 # Run with: hack/cozytest.sh hack/ghcr-mirror_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # kubectl stub for the resolve_ghcr_mirror_endpoint cases. Each test sets the three
 # globals below to pick a branch; every path returns explicitly, because cozytest.sh
 # rewrites a bare `}` at column 0 into `return 0; }` and would otherwise force this

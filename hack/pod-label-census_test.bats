@@ -33,6 +33,8 @@
 # Run with: hack/cozytest.sh hack/pod-label-census_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 # shellcheck source=/dev/null
 . "$HACK_DIR/e2e-chainsaw/_lib/pod-label-census.sh"

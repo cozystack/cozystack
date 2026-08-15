@@ -25,6 +25,8 @@
 # trap: docs/agents/e2e-testing.md bans them in hack/*.bats, and under the bats
 # binary a test that installs one and then fails prints no TAP line at all.
 
+load test_helper
+
 QDRANT_CHART=packages/apps/qdrant
 HARBOR_CHART=packages/apps/harbor
 

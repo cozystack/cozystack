@@ -17,6 +17,8 @@
 # Run with: hack/cozytest.sh hack/select-install_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "single app selects its forward dependency closure" {
     output=$(hack/select-install.sh "postgres")
     echo "$output" | grep -wq cozystack.postgres-application

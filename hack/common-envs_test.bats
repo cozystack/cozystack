@@ -20,6 +20,8 @@
 # negation idiom (cozytest runs each @test under `set -e`, which suppresses a
 # bare `!`-negated pipeline, so a regression would silently pass a `! grep`).
 
+load test_helper
+
 @test "cozystack-controller exports one OCI archive and never pushes under OCI_EXPORT_DIR" {
   out=$(make -n -C packages/system/cozystack-controller image OCI_EXPORT_DIR=/tmp/ocitest IMAGE_TAG=pr-1-abc BUILDER=b)
   # Exactly one per-image OCI archive export for the single built image.

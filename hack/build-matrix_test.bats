@@ -15,6 +15,8 @@
 # the body, so the scratch file survives for inspection on failure. See
 # hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 
+load test_helper
+
 @test "no argument emits the full matrix" {
   out=$(hack/build-matrix.sh)
   # The parallel units; assert known members are present.

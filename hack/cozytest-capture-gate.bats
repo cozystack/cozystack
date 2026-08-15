@@ -40,6 +40,8 @@
 # Run with: hack/cozytest.sh hack/cozytest-capture-gate.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 RUNNER="$HACK_DIR/cozytest.sh"
 

@@ -19,6 +19,8 @@
 # Run with: hack/cozytest.sh hack/remediation-guard.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "empty history returns not-detected" {
     . hack/e2e-chainsaw/_lib/remediation-guard.sh
     if helmrelease_has_remediation_cycle ""; then

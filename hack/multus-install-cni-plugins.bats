@@ -18,6 +18,8 @@
 # EXIT traps the tests below talk about are the ones inside the script UNDER
 # TEST, which is a different shell entirely.
 
+load test_helper
+
 CHART=packages/system/multus
 
 # Extract the init container's script from the rendered chart into $1 and rebind

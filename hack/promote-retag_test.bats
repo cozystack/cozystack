@@ -21,6 +21,8 @@
 #           (or `bats hack/promote-retag_test.bats` if the bats binary is
 #           installed; cozytest.sh is the CI path.)
 
+load test_helper
+
 _make_registry_mocks() {
   t="$1"
   mkdir -p "$t/bin"

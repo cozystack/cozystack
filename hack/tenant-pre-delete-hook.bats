@@ -18,6 +18,8 @@
 # the suite reads green. A failing test therefore leaves its temp directory
 # behind, which is what you want when reading the rendered script afterwards.
 
+load test_helper
+
 CHART=packages/apps/tenant
 
 # The two waves, told apart by their label selector. `*tenantmodule=true*` does

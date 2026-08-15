@@ -27,6 +27,8 @@
 # Run with: hack/cozytest.sh hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "kubernetes-nodes worker TalosConfigTemplate heredoc keeps the Talos image coordinates literal" {
     work=$(mktemp -d)
     cat > "$work/vals.yaml" <<'VALS'

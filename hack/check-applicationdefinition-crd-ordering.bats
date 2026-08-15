@@ -16,6 +16,8 @@
 # Requires: yq (mikefarah v4+), jq. Both are available on the project's CI
 # runners and on the maintainer workstation.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 SOURCES_DIR="$REPO_ROOT/packages/core/platform/sources"
 

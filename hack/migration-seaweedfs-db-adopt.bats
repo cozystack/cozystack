@@ -62,6 +62,8 @@
 # Run with: hack/cozytest.sh hack/migration-seaweedfs-db-adopt.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 FAKEBIN="$PWD/hack/testdata/migration-seaweedfs-db"
 MIG_DIR="$PWD/packages/core/platform/images/migrations/migrations"
 

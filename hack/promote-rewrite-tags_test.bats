@@ -28,6 +28,8 @@
 #
 # Run with: hack/cozytest.sh hack/promote-rewrite-tags_test.bats
 
+load test_helper
+
 @test "rewrite leaves no rc reference anywhere in the tree" {
   tmp=$(mktemp -d)
   RC=9.9.9-rc.9

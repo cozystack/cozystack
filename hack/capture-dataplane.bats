@@ -57,6 +57,8 @@
 #           installed; cozytest.sh is the CI path.)
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-capture-dataplane.sh"
 

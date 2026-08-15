@@ -41,6 +41,8 @@
 # replacing it would change the test's verdict. See
 # hack/bats-no-exit-trap.bats and docs/agents/e2e-testing.md.
 
+load test_helper
+
 REPO_ROOT="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")/.." && pwd)"
 PRESERVE="$REPO_ROOT/hack/changelog-preserve.sh"
 VALIDATE="$REPO_ROOT/hack/validate-changelog.sh"

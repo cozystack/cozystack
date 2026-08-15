@@ -23,6 +23,8 @@
 # Run with: hack/cozytest.sh hack/run-kubernetes-schedulable_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "a Ready node with no taints accepts pods" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if ! cozy_node_accepts_pods True '<none>' '<none>'; then
