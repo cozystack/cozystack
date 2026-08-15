@@ -198,6 +198,16 @@ describe("SchemaForm validate handle", () => {
     expect(validate(ref)).toBe(false)
   })
 
+  it("focuses the first offending field so a blocked submit is not silent", () => {
+    const ref = createRef<SchemaFormHandle>()
+    render(
+      <SchemaForm ref={ref} openAPISchema={requiredSchema} formData={{}} onChange={noop} />,
+    )
+
+    validate(ref)
+    expect(document.activeElement).toBe(document.getElementById("root_name"))
+  })
+
   it("reports valid through the ref once the required field is populated", () => {
     const ref = createRef<SchemaFormHandle>()
     render(
