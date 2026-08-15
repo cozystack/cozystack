@@ -12,24 +12,37 @@ suite: satellite pod resource limits
 # — images/piraeus-server/Dockerfile installs default-jre-headless and starts this
 # container with `startSatellite`, the same distribution the controller runs with
 # `startController` — and it matters because the sizing this replaced was chosen on
-# the premise that the satellite is a Go binary with a bounded working set. A
-# memory.max is what a container-aware JVM reads to size its heap, so a limit
-# shrinks the heap rather than only capping RSS, and the 368Mi peak behind the
-# request grows with DRBD resource count and was measured on three nodes.
+# the premise that the satellite is a Go binary with a bounded working set. The
+# 368Mi peak behind the request grows with DRBD resource count and was measured on
+# three nodes.
+#
+# The heap is not sized from the limit. linstor-server's build.gradle bakes
+# `-Xms32M -Xmx2G -XX:+CrashOnOutOfMemoryError` into the Satellite start script it
+# generates (jvmSatelliteOpts, handed to defaultJvmOpts; the controller gets -Xmx8G
+# by the same route), and an explicit -Xmx means the JVM never reads memory.max to
+# size its heap — container awareness only chooses a default maximum when -Xmx is
+# absent. Makefile's LINSTOR_VERSION pins which linstor-server that is, and
+# images/piraeus-server/Dockerfile is what checks it out and builds it.
+#
+# So a limit here caps RSS and nothing else, and the 2Gi limit this replaced was the
+# wrong number for that job: 2Gi is exactly -Xmx2G, leaving nothing for metaspace,
+# thread stacks, code cache, GC structures and direct buffers. A satellite growing
+# into its own heap ceiling would be OOM-killed by the kernel before the JVM got
+# there — and getting there is meant to be a deliberate, diagnosable crash
+# (-XX:+CrashOnOutOfMemoryError), not a silent kill.
 #
 # The exemption moves the ceiling, it does not remove it, and the distinction is
 # what makes it safe. With the LimitRange the operator maintains in every system
 # namespace (#3494, which must merge with or before this) admission defaults this
-# container to --system-namespace-memory-limit, 4Gi by default, so the pod does get
-# memory.max and the JVM derives its heap from one operator-facing knob instead of a
-# 2Gi per-chart guess. Without that LimitRange, or with the knob cleared, the
+# container to --system-namespace-memory-limit, 4Gi by default, which clears the 2G
+# heap with room left over for non-heap, set once as an operator-facing knob instead
+# of guessed per chart. Without that LimitRange, or with the knob cleared, the
 # container really is limit-free and the pod stays in the OOM handler's victim set —
 # which is what it does today, so this is not a regression, just not yet the fix.
 #
-# 4Gi still derives a capped heap, so this mitigates the heap-shrinking concern
-# rather than settling it. Settling it needs a peak measured on a high-resource-count
-# cluster plus an explicit heap share, and that is also what reverting the exemption
-# to a fitted per-chart limit would need first.
+# What a fitted per-chart limit would need is therefore not an explicit heap share,
+# which already exists, but a peak measured on a high-resource-count cluster: that
+# is what says how much non-heap to add on top of the 2G ceiling.
 #
 # The plunger limits below therefore do real work, but not the work of taking the pod
 # out of the victim set: they bound a runaway sidecar at 128Mi rather than at whatever

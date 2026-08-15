@@ -15,8 +15,11 @@ spec:
       - name: linstor-satellite
         image: {{ .Values.piraeusServer.image.repository }}:{{ .Values.piraeusServer.image.tag }}
         # Deliberately no memory limit: this is the same JVM as linstor-controller,
-        # which values.yaml exempts for the same reason. Full account, and what
-        # would settle the sizing: packages/system/linstor/tests/satellites_test.yaml.
+        # which values.yaml exempts for the same reason. Its heap ceiling is an
+        # explicit -Xmx2G from linstor-server, not derived from the cgroup, so a
+        # limit only caps RSS — and the 2Gi limit this replaces was exactly that
+        # ceiling, leaving nothing for non-heap. Full account, and what would settle
+        # the sizing: packages/system/linstor/tests/satellites_test.yaml.
         # 14d peak 368Mi on a 3-node dev cluster; grows with resource count.
         resources:
           requests:
