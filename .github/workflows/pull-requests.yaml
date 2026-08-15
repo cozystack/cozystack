@@ -15,26 +15,28 @@ on:
 #
 # A `labeled` event that `plan` discards gets its OWN group, so labelling an
 # open PR cannot cancel a live opened/synchronize run. Any label other than
-# full-e2e/release makes `plan` skip, and `e2e-report` skips with it, so without the
-# split the pair "cancel the real run, then skip" left the head SHA with no
-# "E2E Tests" status at all — and an unposted required status stays "Expected",
-# blocking the merge until someone pushes again or re-runs the cancelled run.
+# full-e2e/release/upgrade-e2e makes `plan` skip, and `e2e-report` skips with it,
+# so without the split the pair "cancel the real run, then skip" left the head
+# SHA with no "E2E Tests" status at all — and an unposted required status stays
+# "Expected", blocking the merge until someone pushes again or re-runs the
+# cancelled run.
 # Observed on live CI: run 30614258694 (cancelled) followed by 30614280603
 # (skipped) on the same SHA, 24s apart, from a maintainer adding kind/* labels
 # just after a push. (`pr-labeler` cannot cause this — it labels with the
 # default GITHUB_TOKEN, which by design triggers no further workflow runs.)
 #
 # The condition is the exact complement of `plan`'s guard, so only a run that
-# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e or
-# release does publish, so it stays in the main group and supersedes the head
-# run the way a push does. That keeps exactly one publisher of the `E2E Tests`
-# context alive per head SHA, which the status depends on: two live publishers are latest-wins
-# per context, and the full suite is the superset, so a full-e2e run that fails
-# early — a build flake, a suite failing at minute twenty — would finish before
-# the narrower head run it was meant to widen, and that run's later green would
-# erase the failure. Cancelling also means opting into the full suite costs one
-# suite rather than two, and a second label landing afterwards cannot cancel the
-# full-e2e run, because it is no longer in the same group as it.
+# will publish NOTHING is moved aside. A `labeled` run carrying full-e2e,
+# release or upgrade-e2e does publish, so it stays in the main group and
+# supersedes the head run the way a push does. That keeps exactly one publisher
+# of the `E2E Tests` context alive per head SHA, which the status depends on:
+# two live publishers are latest-wins per context, and the full suite is the
+# superset, so a full-e2e run that fails early — a build flake, a suite failing
+# at minute twenty — would finish before the narrower head run it was meant to
+# widen, and that run's later green would erase the failure. Cancelling also
+# means opting into the full suite costs one suite rather than two, and a second
+# label landing afterwards cannot cancel the full-e2e run, because it is no
+# longer in the same group as it.
 #
 # `release` publishes on the SAME-REPO lane only, hence the fork term. A promote
 # PR is opened same-repo by the release bot, so the label on a fork PR is always
@@ -49,7 +51,7 @@ on:
 # F)) is (NOT A) AND (NOT B) AND (NOT C OR F), and for a same-repo PR F is false
 # and both sides reduce to exactly what they were.
 concurrency:
-  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && github.event.label.name != 'full-e2e' && (github.event.label.name != 'release' || github.event.pull_request.head.repo.fork)) && '-label' || '' }}
+  group: pr-${{ github.workflow }}-${{ github.event.pull_request.number }}${{ (github.event.action == 'labeled' && !contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name) && (github.event.label.name != 'release' || github.event.pull_request.head.repo.fork)) && '-label' || '' }}
   cancel-in-progress: true
 
 # Top-level token defaults to read-only. A job-level block replaces this one
@@ -219,7 +221,7 @@ jobs:
     if: |
       contains(github.event.pull_request.labels.*.name, 'release')
       && github.event.pull_request.user.login == 'cozystack-ci[bot]'
-      && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release')
+      && (github.event.action != 'labeled' || contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name) || github.event.label.name == 'release')
     permissions:
       contents: read
       packages: read
@@ -1350,10 +1352,21 @@ jobs:
   # see docs/agents/e2e-testing.md §10.
   #
   # The `labeled` guard must stay in lockstep with `plan`'s: this job runs if and
-  # only if `plan` runs. `labeled` events other than full-e2e/release are
-  # discarded there, so without the same guard this job would run with plan *skipped*, read
-  # PLAN_RESULT != 'success', and post "E2E Tests" = failure — clobbering an
-  # already-green required status every time anyone labels an open PR.
+  # only if `plan` runs. `labeled` events other than full-e2e/release/upgrade-e2e
+  # are discarded there, so without the same guard this job would run with plan
+  # *skipped*, read PLAN_RESULT != 'success', and post "E2E Tests" = failure —
+  # clobbering an already-green required status every time anyone labels an open
+  # PR.
+  #
+  # The reverse gap is why upgrade-e2e is named here too. `plan` overwrites the
+  # "E2E Tests" status with `pending` at the start of every run it does execute,
+  # and only this job concludes it. Admitting upgrade-e2e to `plan`'s allowlist
+  # without admitting it here would open that pending status on an upgrade-e2e
+  # label and never close it, leaving the PR unmergeable until someone pushed
+  # again — the same "Expected" trap the split concurrency group above exists to
+  # avoid, arrived at from the other direction. The upgrade lane itself stays
+  # advisory: it is not in `needs`, so its result never moves the verdict, and on
+  # an upgrade-e2e-labelled run the sibling `e2e` job supplies the real one.
   e2e-report:
     name: "Report E2E status"
     needs: ["plan", "e2e", "verify-release-candidate"]
@@ -1369,7 +1382,7 @@ jobs:
     # reaches it from a label the workflow discards: those run in their own
     # concurrency group (see the key at the top of this file) precisely so they
     # cannot cancel a live run.
-    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || github.event.label.name == 'full-e2e' || github.event.label.name == 'release') }}
+    if: ${{ !cancelled() && !github.event.pull_request.head.repo.fork && (github.event.action != 'labeled' || contains(fromJSON('["full-e2e","upgrade-e2e"]'), github.event.label.name) || github.event.label.name == 'release') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
