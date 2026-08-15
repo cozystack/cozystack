@@ -20,16 +20,25 @@ kubectl_list_stderr=
 kubectl_raw_rc=0
 kubectl_raw_stderr=
 # Two of the fixtures in this file claim to be wire shapes, and the rest do not.
-# This one and the uncapped test's single line are the two cAdvisor can actually
-# produce -- all five families for a capped container, the period alone for one
-# with no limit, the two sides of the same Quota != 0 gate. Every other fixture
-# below stages only the lines its own assertion needs, so a missing sibling
-# series there means "not relevant here" rather than "absent on the wire".
-kubectl_raw_output='container_cpu_cfs_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 51200
-container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 4211
-container_cpu_cfs_throttled_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 12.5
-container_spec_cpu_quota{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000
-container_spec_cpu_period{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000'
+# This one and the uncapped test's are the two cAdvisor can actually produce --
+# the capped shape and the uncapped one, the two sides of the same Quota != 0
+# gate. What that gate covers is the quota and the three CFS counters; the usage
+# total and the start time sit outside it and are published for every container,
+# which is why both fixtures carry them. Every other fixture below stages only
+# the lines its own assertion needs, so a missing sibling series there means
+# "not relevant here" rather than "absent on the wire".
+#
+# The trailing millisecond field on each row is cAdvisor's own sample time,
+# which the kubelet publishes on every row it serves. It is what the capture
+# divides the usage total by, so a fixture without it would exercise the
+# fallback clock on every test rather than the path production takes.
+kubectl_raw_output='container_cpu_cfs_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 51200 1755200000000
+container_cpu_cfs_throttled_periods_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 4211 1755200000000
+container_cpu_cfs_throttled_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 12.5 1755200000000
+container_spec_cpu_quota{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000 1755200000000
+container_spec_cpu_period{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000 1755200000000
+container_cpu_usage_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 145.2 1755200000000
+container_start_time_seconds{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 1755198920 1755200000000'
 timeout_calls=/dev/null
 timeout_fail_node=
 
@@ -240,6 +249,23 @@ run_capture() {
   # says whether a small ratio was a long stall.
   assert_file_contains 'container_cpu_cfs_periods_total' "$capture"
   assert_file_contains 'container_cpu_cfs_throttled_seconds_total' "$capture"
+  # The pair that answers cozystack/cozystack#3513. The CFS counters fire only
+  # AT the ceiling, so on their own they say the guest reached its limit
+  # sometimes and nothing about what it got the rest of the time -- which is the
+  # half that separates a guest held at its ceiling from one losing contended
+  # host CPU. Dropped from the filter, the capture goes on looking complete.
+  #
+  # Pinned as a series ROW, with its opening brace and a label, not as a bare
+  # metric name: both names also appear in the sentences this capture writes
+  # when the row is missing ("no container_cpu_usage_seconds_total row ...
+  # reached this file"), so a name-only assertion is satisfied by the note
+  # reporting the series absent -- it was, before this line was written this
+  # way, and it passed the red-phase check for exactly that reason.
+  assert_file_contains 'container_cpu_usage_seconds_total{container="compute"' "$capture"
+  # And its denominator. A cumulative total with nothing to divide it by is a
+  # number the reader cannot use, so losing this alternative costs the answer
+  # just as surely as losing the total itself.
+  assert_file_contains 'container_start_time_seconds{container="compute"' "$capture"
   # The negative half of the labels. A complete capture that tells the reader
   # its answer is missing, while the answer sits in the same file, is the same
   # "capture misreads itself" harm as silence reported as an answer -- just
@@ -649,14 +675,17 @@ run_capture() {
   kubectl_calls="$tmp/kubectl.calls"
   timeout_calls="$tmp/timeout.calls"
   kubectl_node_names="srv1"
-  # One line, and it is the whole shape: cAdvisor gates the quota series and all
-  # three CFS counters on the same non-zero quota, so an uncapped container puts
-  # the period on the wire and nothing else. Staging a CFS counter beside it
-  # would be a shape the endpoint cannot produce, and the test would then pass
-  # on a fixture rather than on the contract. It is an answer, not a short read:
-  # filed as "nothing was collected" it would send the reader looking for a
-  # ceiling that does not exist.
-  kubectl_raw_output='container_spec_cpu_period{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000'
+  # The whole uncapped shape: cAdvisor gates the quota series and all three CFS
+  # counters on the same non-zero quota, so an uncapped container puts the period
+  # on the wire and no CFS counter at all. Staging one beside it would be a shape
+  # the endpoint cannot produce, and the test would then pass on a fixture rather
+  # than on the contract. The usage total and the start time are outside that
+  # gate and are published for an uncapped container like any other, so they
+  # belong here. It is an answer, not a short read: filed as "nothing was
+  # collected" it would send the reader looking for a ceiling that does not exist.
+  kubectl_raw_output='container_spec_cpu_period{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 100000 1755200000000
+container_cpu_usage_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 145.2 1755200000000
+container_start_time_seconds{container="compute",namespace="tenant-test",pod="virt-launcher-a"} 1755198920 1755200000000'
   COZY_REPORT_DIR="$tmp/report"
   COZY_SNAPSHOT_NAME=throttle-smoke
 
@@ -671,6 +700,79 @@ run_capture() {
   # sentence -- so the one answer it was built to deliver cannot be the one that
   # gets none.
   assert_file_contains 'running uncapped' "$capture"
+  rm -rf "$tmp"
+}
+
+@test "the file says how much CPU each container got, per container and without arithmetic" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  # Both containers of one virt-launcher Pod, which is what the filter returns:
+  # it narrows by namespace and by the Pod-name prefix and never by container.
+  # `compute` runs the guest at a one-core ceiling; guest-console-log is the
+  # sidecar at 15m. Their rows are interleaved on the wire exactly like this,
+  # and reading the sidecar's numbers as the guest's is how the counters in this
+  # capture were misread before the usage total was added to it.
+  kubectl_raw_output='container_cpu_usage_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 145.2 1755200000000
+container_start_time_seconds{container="compute",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 1755198920 1755200000000
+container_spec_cpu_quota{container="compute",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 100000 1755200000000
+container_spec_cpu_period{container="compute",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 100000 1755200000000
+container_cpu_usage_seconds_total{container="guest-console-log",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 3.6 1755200000000
+container_start_time_seconds{container="guest-console-log",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 1755198920 1755200000000
+container_spec_cpu_quota{container="guest-console-log",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 15000 1755200000000
+container_spec_cpu_period{container="guest-console-log",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 100000 1755200000000'
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-usage
+
+  run_capture
+
+  capture="$COZY_REPORT_DIR/snapshots/throttle-usage/tenant-cpu-throttle/srv1.txt"
+  # 145.2 CPU-seconds over 1080s of uptime is 0.134 of a CPU against a ceiling of
+  # one, which is the share-starved reading. A raw cumulative total leaves that
+  # division to whoever opens the artifact, and the division not being done is
+  # what this whole addition is for -- so it is the quotient that is pinned, not
+  # the presence of the series it comes from.
+  assert_file_contains 'container="compute": 145.2 CPU-seconds used over 1080s of uptime = 0.134 CPU-seconds per second' "$capture"
+  # The ceiling on the same line as the rate. Read against a different ceiling
+  # the same rate says the opposite thing, and a reader who has to carry the
+  # quota down from the rows above is the reader who picks up the wrong one.
+  assert_file_contains 'ceiling 1.000 CPU' "$capture"
+  # The sidecar gets its own line at its own ceiling rather than being averaged
+  # into the guest's or silently dropped. This is the ambiguity that produced
+  # the earlier misreading, and one line per container is what removes it.
+  assert_file_contains 'container="guest-console-log": 3.6 CPU-seconds used over 1080s of uptime = 0.003 CPU-seconds per second' "$capture"
+  assert_file_contains 'ceiling 0.150 CPU' "$capture"
+  # And the sentence that turns the two numbers into a verdict. Without it the
+  # file states a rate and leaves the reading to be reconstructed from the
+  # issue, which is where the ambiguity came from in the first place.
+  assert_file_contains 'held AT its limit' "$capture"
+  assert_file_contains 'losing contended host CPU' "$capture"
+  rm -rf "$tmp"
+}
+
+@test "a usage total with nothing to divide it by is not presented as a rate" {
+  . hack/e2e-chainsaw/_lib/run-kubernetes.sh
+  tmp=$(mktemp -d)
+  kubectl_calls="$tmp/kubectl.calls"
+  timeout_calls="$tmp/timeout.calls"
+  kubectl_node_names="srv1"
+  # The total arrived and its denominator did not -- the shape a read cut off
+  # between the two families leaves. A cumulative total printed as though it
+  # were a rate is the one output here that would be read as an answer while
+  # being none, and it is the direction that matters: a fabricated 145 CPU-
+  # seconds per second reads as a guest pinned at its ceiling.
+  kubectl_raw_output='container_cpu_usage_seconds_total{container="compute",namespace="tenant-test",pod="virt-launcher-worker-a-11111"} 145.2 1755200000000'
+  COZY_REPORT_DIR="$tmp/report"
+  COZY_SNAPSHOT_NAME=throttle-usage
+
+  run_capture
+
+  capture="$COZY_REPORT_DIR/snapshots/throttle-usage/tenant-cpu-throttle/srv1.txt"
+  assert_file_contains 'not yet a rate' "$capture"
+  assert_file_contains 'no container_start_time_seconds row came with it' "$capture"
+  assert_file_lacks_pattern 'CPU-seconds per second' "$capture"
   rm -rf "$tmp"
 }
 

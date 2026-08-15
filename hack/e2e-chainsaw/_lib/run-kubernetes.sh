@@ -1318,6 +1318,7 @@ _cozy_cadvisor_worker_nodes() {
 _cozy_cpu_throttle_tail_note() {
   local raw="$1" rc="$2" filter_rc="$3" had_series="$4"
   local quota_rc=0
+  local derived derived_rc=0
 
   grep -q '^container_spec_cpu_quota{' "${raw}" || quota_rc=$?
   if [ "${had_series}" -eq 1 ] && [ "${rc}" -eq 0 ] && [ "${filter_rc}" -lt 2 ] \
@@ -1325,6 +1326,117 @@ _cozy_cpu_throttle_tail_note() {
     printf '%s\n' \
       'these workers are running uncapped: cAdvisor publishes the quota and the CFS counters only for a container whose quota is non-zero, so a period with neither beside it is a container with no CPU limit rather than a short read' \
       >>"${raw}"
+  fi
+
+  # The usage total is the one family here a reader cannot use as it stands:
+  # it is CPU-seconds accumulated since the container started, so a single
+  # scrape of it is a number with no denominator. The denominator arrives in
+  # the same scrape -- container_start_time_seconds -- and the division is done
+  # here rather than left to the reader, because the reading this whole
+  # collector exists to produce IS that quotient and an artifact that stops one
+  # step short of it is what produced the last misreading.
+  #
+  # Per container, and that is the second thing being fixed. The filter narrows
+  # by namespace and by the virt-launcher Pod-name prefix and never by
+  # container, so every container of the Pod lands in this file -- the
+  # guest-console-log sidecar, whose own limit is a small fraction of a core,
+  # beside the `compute` container that runs the guest. Rows carrying different
+  # subjects under one heading is how the counters above were read wrong. No
+  # container predicate is added to the filter instead: the three-stage filter
+  # belongs to the body this capture shares with the network counters, whose
+  # rows all carry container="" and would be emptied by one, and narrowing here
+  # would also drop the throttling counters of the other containers that this
+  # capture returns today and that its own tests pin.
+  #
+  # Gated on had_series alone, unlike the note above. A truncated capture still
+  # says whatever the rows that did arrive support, and the sentences above
+  # already say the file is short; suppressing the reading there would lose it
+  # on exactly the runs where the read was slow.
+  if [ "${had_series}" -eq 1 ]; then
+    # `now` is the fallback denominator and nothing more. Every row from the
+    # kubelet's cAdvisor endpoint carries its own sample time as a third field,
+    # which is the timestamp used when it is there; this runner's clock stands
+    # in when it is not, at the cost of the housekeeping lag between the sample
+    # and the read -- tens of seconds against an uptime of tens of minutes.
+    # Which of the two produced a line is printed on the line.
+    derived=$(awk -v now="$(date +%s 2>/dev/null || true)" '
+      /^container_(cpu_usage_seconds_total|start_time_seconds|spec_cpu_(quota|period))[{]/ {
+        metric = substr($0, 1, index($0, "{") - 1)
+        ctr = ""
+        pod = ""
+        if (match($0, /[,{]container="[^"]*"/))
+          ctr = substr($0, RSTART + 12, RLENGTH - 13)
+        if (match($0, /[,{]pod="[^"]*"/))
+          pod = substr($0, RSTART + 6, RLENGTH - 7)
+        # Value and sample time are whatever follows the LAST closing brace on
+        # the line. Splitting the whole line on whitespace picks the wrong
+        # field on any row whose label set carries a space, and the image label
+        # is where that happens.
+        close_at = 0
+        for (i = length($0); i > 0; i--)
+          if (substr($0, i, 1) == "}") { close_at = i; break }
+        if (close_at == 0) next
+        n = split(substr($0, close_at + 1), fld, " ")
+        if (n < 1) next
+        key = pod "\t" ctr
+        if (metric == "container_cpu_usage_seconds_total") {
+          if (!(key in usage)) order[++keys] = key
+          usage[key] = fld[1] + 0
+          stamp[key] = (n >= 2 ? fld[2] + 0 : 0)
+          kpod[key] = pod
+          kctr[key] = ctr
+        } else if (metric == "container_start_time_seconds") {
+          started[key] = fld[1] + 0
+        } else if (metric == "container_spec_cpu_quota") {
+          quota[key] = fld[1] + 0
+        } else if (metric == "container_spec_cpu_period") {
+          period[key] = fld[1] + 0
+        }
+      }
+      END {
+        if (keys == 0) {
+          print "how much CPU these workers actually got is not answered here: no container_cpu_usage_seconds_total row for them reached this file, and without it a container held at its ceiling and a container losing contended host CPU look the same"
+          exit
+        }
+        print "how much CPU each container actually got, worked out here so nobody has to divide, and one line per container so no two are read as one:"
+        for (i = 1; i <= keys; i++) {
+          key = order[i]
+          ceiling = ""
+          if ((key in quota) && (key in period) && quota[key] > 0 && period[key] > 0)
+            ceiling = sprintf("ceiling %.3f CPU", quota[key] / period[key])
+          else
+            ceiling = "no CPU limit of its own"
+          if (!(key in started)) {
+            printf "  pod=%s container=\"%s\": %.1f CPU-seconds since it started, but no container_start_time_seconds row came with it, so this total is not yet a rate (%s)\n", kpod[key], kctr[key], usage[key], ceiling
+            continue
+          }
+          if (stamp[key] > 0) {
+            nowsec = stamp[key] / 1000
+            src = "the sample time on the row"
+          } else {
+            nowsec = now + 0
+            src = "this runner clock at capture"
+          }
+          up = nowsec - started[key]
+          if (up <= 0) {
+            printf "  pod=%s container=\"%s\": %.1f CPU-seconds since it started, but %s is not later than its start time, so this total is not yet a rate (%s)\n", kpod[key], kctr[key], usage[key], src, ceiling
+            continue
+          }
+          printf "  pod=%s container=\"%s\": %.1f CPU-seconds used over %.0fs of uptime = %.3f CPU-seconds per second (%s; uptime from %s)\n", kpod[key], kctr[key], usage[key], up, usage[key] / up, ceiling, src
+        }
+        print "read each line against the ceiling on it: a rate at or near the ceiling is a container held AT its limit, where the vCPU count is the lever; a rate far below the ceiling while the guest made no progress is a container losing contended host CPU to its neighbours, where the CPU request is the lever"
+      }
+    ' "${raw}") || derived_rc=$?
+    if [ "${derived_rc}" -ne 0 ]; then
+      # Same rule as every other outcome in this collector: a reading that was
+      # never computed is said out loud rather than left as an absence, which
+      # in this file reads as a question nobody asked.
+      printf '%s\n' \
+        'how much CPU each container actually got was not worked out here: awk did not run on this runner, so the file carries the raw usage counters and nothing derived from them' \
+        >>"${raw}"
+    else
+      printf '%s\n' "${derived}" >>"${raw}"
+    fi
   fi
 }
 
@@ -1366,33 +1478,60 @@ _cozy_network_counters_tail_note() {
 # without the ceiling it was measured against, and a reader should not have to
 # carry a figure back from an earlier section to divide by it.
 #
-# Five families carry the answer, and cAdvisor publishes them ready to read, so
-# no arithmetic is done here and none is needed:
+# Seven families carry the answer, five of them read as published and two of
+# them divided into each other at the end of the capture:
 #
 #   container_cpu_cfs_periods_total            periods the group was scheduled
 #   container_cpu_cfs_throttled_periods_total  of those, periods it was stopped
 #   container_cpu_cfs_throttled_seconds_total  how long it was stopped for
 #   container_spec_cpu_period                  the ceiling's period
 #   container_spec_cpu_quota                   the ceiling itself
+#   container_cpu_usage_seconds_total          CPU it actually got, cumulative
+#   container_start_time_seconds               what that total is cumulative over
 #
 # The throttled counters alone say a container hit some ceiling, not which one,
 # and a VM capped at one core and a VM capped at eight are the same number
 # without the quota beside them.
 #
-# Four of those five are gated, and on the same condition. cAdvisor emits the
-# quota series and all three CFS counters only for a container whose quota is
+# The last two are here because the CFS counters cannot separate the two live
+# explanations of a worker that misses the node-Ready deadline, and were read as
+# though they could (cozystack/cozystack#3513). Throttling fires only AT the
+# ceiling, so it says the guest reached its limit sometimes and says nothing
+# about what it got the rest of the time -- and a container held far below its
+# ceiling by competition for host CPU is throttled barely at all. Usage over
+# wall-clock is the series that decides it: near one CPU-second per second is a
+# guest at its ceiling, where the vCPU count is the lever, and far below that
+# while the guest makes no progress is a guest losing contended host CPU, where
+# the CPU request is. The reading is derived in the tail note rather than left
+# to whoever opens the file, and the reasoning for doing it there is beside it.
+#
+# The start time is captured rather than a second scrape taken, and that is a
+# cost decision with a correctness half. Cost: both new families arrive in the
+# scrape the other five already come in, so the collector's ceiling is the same
+# four bounded reads it was before -- one Pod listing plus up to three node
+# reads -- and the phase budget sees no change at all; a second scrape would add
+# three more node reads and the interval between them, out of a 420s budget this
+# collector is deliberately first in. Correctness: this capture runs only after
+# the node-Ready deadline has already failed, so the container's whole lifetime
+# IS the window under investigation, and a mean over its uptime is a mean over
+# the stall rather than a sample of some interval inside it.
+#
+# Four of the first five are gated, and on the same condition. cAdvisor emits
+# the quota series and all three CFS counters only for a container whose quota is
 # non-zero; container_spec_cpu_period is the one it emits for any container with
 # a CPU spec at all. So a container that reports one puts two shapes on the
 # wire and no third: all five when it is capped, the period alone when it is
 # not. (A container with no CPU spec contributes none of the five, and reaches
 # this capture as the same silence as a node with no worker on it.) The second
 # is a reading rather than a gap -- it is the question this collector was added
-# to answer, and it arrives without being computed.
+# to answer, and it arrives without being computed. The usage and start-time
+# families are outside that gate: cAdvisor publishes both for every container it
+# sees, capped or not, so they are present in both shapes.
 #
 # Worth stating because a one-line capture is also what a truncated read looks
 # like, and this function spends its whole length making that difference legible.
-# A reader who expected five families and found one would reach for the wrong
-# conclusion with the artifact agreeing.
+# A reader who expected the whole set and found one line would reach for the
+# wrong conclusion with the artifact agreeing.
 #
 # Read from the kubelet rather than from inside the container on purpose. A
 # reader that runs inside the container shares the cgroup it is measuring, so
@@ -1432,7 +1571,7 @@ cozy_capture_tenant_worker_cpu_throttle() {
     CPU \
     cozy-cpu-throttle \
     _cozy_cpu_throttle_tail_note \
-    '^container_(cpu_cfs_(periods_total|throttled_periods_total|throttled_seconds_total)|spec_cpu_(period|quota))\{'
+    '^container_(cpu_cfs_(periods_total|throttled_periods_total|throttled_seconds_total)|cpu_usage_seconds_total|spec_cpu_(period|quota)|start_time_seconds)\{'
 }
 
 # Two properties of the network family are invisible to anyone writing this
