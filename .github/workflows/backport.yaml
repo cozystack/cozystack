@@ -144,10 +144,13 @@ jobs:
           script: |
             const pr = context.payload.pull_request;
             const labels = pr.labels.map(l => l.name);
-            // Both spellings are accepted on purpose. The namespaced names are
-            // the convention this repo declares, but the org-level dosubot still
-            // applies the legacy ones and it is the dominant applier on real
-            // backports, so dropping them would silently stop the bot for those.
+            // TRANSITIONAL: both spellings are accepted so the rename can land
+            // in any order relative to the org-level dosubot, which still
+            // applies the legacy names and is today the dominant applier on
+            // real backports. Once dosubot's PR labelling is switched off and
+            // the in-repo labeler is the only applier, the legacy arms here,
+            // in the `if:` gate above and in the concurrency group can all be
+            // deleted in one pass.
             const isBackport = labels.includes('kind/backport') || labels.includes('backport');
             const isBackportPrevious = labels.includes('kind/backport-previous') || labels.includes('backport-previous');
             
