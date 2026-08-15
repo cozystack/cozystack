@@ -11,7 +11,7 @@ import { cn } from "@cozystack/ui"
 import { useIsMac } from "../../hooks/use-is-mac"
 import { useKeyboardNav } from "./use-keyboard-nav"
 import { useCommandItems } from "./use-command-items"
-import { useCommandPalette } from "./command-palette-provider"
+import { useCommandPalette } from "./command-palette-context.ts"
 import type { NavigationLevel } from "./types"
 
 export function CommandPalette() {
