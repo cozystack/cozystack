@@ -1,0 +1,89 @@
+# Upgrade lane — Phase 2 (seed): Redis — the PVC-backed stateful-app survivor.
+#
+# Reuses the app suite's Redis manifest verbatim (DRY). The "canary" here is the
+# PERSISTENT VOLUME identity, not a key round-trip: Redis auth + RDB/AOF flush
+# timing make a key survive-across-upgrade check flaky, whereas "the same PVCs
+# stay Bound and the failover topology stays healthy across the upgrade" is a
+# deterministic signal that a PVC-backed app is not disrupted. skipDelete keeps
+# the CR + its PVCs for verify/redis to re-observe the same volumes.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-seed-redis
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: redis-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=redis-test
+      tail: 50
+  steps:
+  - name: create-redis
+    try:
+    - apply:
+        file: ../../../e2e-chainsaw/redis/redis.yaml
+
+  - name: wait-helmrelease-ready
+    try:
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: redis-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-storage-and-topology
+    try:
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-redis-test-0
+          status:
+            phase: Bound
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: redisfailover-persistent-data-rfr-redis-test-1
+          status:
+            phase: Bound
+    - assert:
+        timeout: 3m
+        resource:
+          apiVersion: apps/v1
+          kind: StatefulSet
+          metadata:
+            name: rfr-redis-test
+          status:
+            readyReplicas: 2
+
+  - name: record-pv-identity
+    try:
+    # Record which PVs back the Redis PVCs so verify/redis can assert the SAME
+    # volumes are still bound after the upgrade (data continuity), not merely
+    # that some PVCs named the same happen to be Bound.
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          mkdir -p /workspace/_out/upgrade-baseline
+          kubectl -n "$NAMESPACE" get pvc \
+            redisfailover-persistent-data-rfr-redis-test-0 \
+            redisfailover-persistent-data-rfr-redis-test-1 \
+            -o jsonpath='{range .items[*]}{.metadata.name}={.spec.volumeName}{"\n"}{end}' \
+            | sort > /workspace/_out/upgrade-baseline/redis-pv.txt
+          echo "recorded Redis PV bindings:"; cat /workspace/_out/upgrade-baseline/redis-pv.txt
+        check:
+          ($error == null): true

@@ -1,0 +1,41 @@
+# Upgrade lane — Phase 4 (verify): MariaDB survived + canary intact.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-verify-mariadb
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: mariadb-test
+  - podLogs:
+      selector: app.kubernetes.io/instance=mariadb-test
+      tail: 50
+  steps:
+  - name: helmrelease-still-ready
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: mariadb-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: canary-intact
+    try:
+    - script:
+        timeout: 2m
+        content: |
+          set -eu
+          count=$(kubectl -n "$NAMESPACE" exec mariadb-test-0 -c mariadb -- env MYSQL_PWD=xai7Wepo \
+            mariadb -h mariadb-test-primary -u testuser -N -B testdb -e "SELECT count(*) FROM upgrade_canary;")
+          echo "mariadb canary rows after upgrade: $count"
+          [ "$count" = "3" ] || { echo "FAIL: expected 3 canary rows, got '$count'" >&2; exit 1; }
+        check:
+          ($error == null): true

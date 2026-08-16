@@ -1,0 +1,97 @@
+# Upgrade lane — Phase 2 (seed): a running VirtualMachine.
+#
+# Reuses the app suite's VMDisk + VMInstance manifests verbatim (DRY). The
+# survival signal is: the VM stays Ready and its backing disk PV stays Bound
+# across the platform upgrade (KubeVirt/CDI + storage continuity). skipDelete
+# keeps the CRs + disk PVC for verify/vm.
+apiVersion: chainsaw.kyverno.io/v1alpha1
+kind: Test
+metadata:
+  name: upgrade-seed-vm
+spec:
+  catch:
+  - events: {}
+  - describe:
+      apiVersion: helm.toolkit.fluxcd.io/v2
+      kind: HelmRelease
+      name: vm-instance-test
+  - describe:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachineInstance
+      name: vm-instance-test
+  steps:
+  - name: create-vmdisk
+    try:
+    - apply:
+        file: ../../../e2e-chainsaw/vminstance/vmdisk-vmi.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+    - assert:
+        timeout: 2m
+        resource:
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata:
+            name: vm-disk-vmi-test
+          status:
+            phase: Bound
+
+  - name: create-vminstance
+    try:
+    - apply:
+        file: ../../../e2e-chainsaw/vminstance/vminstance.yaml
+    - assert:
+        timeout: 6m
+        resource:
+          apiVersion: helm.toolkit.fluxcd.io/v2
+          kind: HelmRelease
+          metadata:
+            name: vm-instance-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: wait-vm-running
+    try:
+    - assert:
+        timeout: 5m
+        resource:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: vm-instance-test
+          status:
+            (conditions[?type == 'Ready']):
+            - status: "True"
+
+  - name: record-pv-identity
+    try:
+    - script:
+        timeout: 1m
+        content: |
+          set -eu
+          mkdir -p /workspace/_out/upgrade-baseline
+          kubectl -n "$NAMESPACE" get pvc vm-disk-vmi-test \
+            -o jsonpath='{.metadata.name}={.spec.volumeName}{"\n"}' \
+            > /workspace/_out/upgrade-baseline/vm-pv.txt
+          echo "recorded VM disk PV binding:"; cat /workspace/_out/upgrade-baseline/vm-pv.txt
+        check:
+          ($error == null): true
