@@ -1,4 +1,4 @@
-.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests rd-presets-check migrations-target-check test test-controllers preflight
+.PHONY: manifests assets unit-tests helm-unit-tests bats-unit-tests print-bats-unit-files rd-presets-check migrations-target-check test test-controllers preflight
 
 include hack/common-envs.mk
 
@@ -149,9 +149,16 @@ test-controllers:
 test-check-readiness:
 	go test ./test/check-readiness/ -count=1
 
-# Discover every hack/*.bats file that is NOT an e2e test and run it
-# through cozytest.sh. Drop a new *.bats file in hack/ and it is picked
-# up automatically on the next `make unit-tests` run.
+# Discover every hack/*.bats file that is NOT an e2e test and run it under
+# bats(1). Drop a new *.bats file in hack/ and it is picked up automatically
+# on the next `make unit-tests` run.
+#
+# These are hermetic unit tests of hack/*.sh, and they run under real bats
+# rather than hack/cozytest.sh (#3453). The live-cluster suite
+# (hack/e2e-*.bats) stays on cozytest, whose streaming trace and snapshot
+# behaviour earn their place over a 15-minute test; bats buffers a test's
+# output until it completes. Filtering by the e2e- prefix is what keeps the
+# two runners apart.
 #
 # Caveat: $(wildcard ...) returns space-separated names, so a filename
 # containing a literal space would split into multiple tokens here. All
@@ -160,15 +167,32 @@ test-check-readiness:
 # (e.g. to use `find ... -print0 | xargs -0`).
 BATS_UNIT_FILES := $(filter-out hack/e2e-%.bats,$(wildcard hack/*.bats))
 
+# The same list, one file per line, for hack/bats-strict-setup.bats. Every unit
+# file has to load hack/test_helper.bash to get `set -u` back, and that audit is
+# only worth anything if the set it walks is the set that actually runs -- so it
+# asks here rather than keeping a second copy of the filter above.
+print-bats-unit-files:
+	@printf '%s\n' $(BATS_UNIT_FILES)
+
+# `bats -j` needs GNU parallel and exits non-zero rather than degrading when
+# it is missing, so resolve the job count to 1 unless parallel is present.
+BATS_JOBS ?= $(shell command -v parallel >/dev/null 2>&1 && nproc 2>/dev/null || echo 1)
+
+# JUnit XML so CI annotates the failing test instead of requiring a log read.
+# _out is gitignored.
+BATS_REPORT_DIR ?= _out/test-reports
+
 bats-unit-tests:
 	@if [ -z "$(BATS_UNIT_FILES)" ]; then \
 		echo "ERROR: no hack/*.bats unit test files found"; \
 		exit 1; \
 	fi
-	@for f in $(BATS_UNIT_FILES); do \
-		echo "--- running $$f ---"; \
-		hack/cozytest.sh "$$f" || exit 1; \
-	done
+	@command -v bats >/dev/null 2>&1 || { \
+		echo "ERROR: bats not found. Install bats-core >= 1.5 — https://bats-core.readthedocs.io"; \
+		exit 1; \
+	}
+	@mkdir -p $(BATS_REPORT_DIR)
+	bats -j $(BATS_JOBS) --report-formatter junit -o $(BATS_REPORT_DIR) $(BATS_UNIT_FILES)
 
 # Operator-facing host preflight check. Warns about a standalone
 # containerd.service or docker.service running alongside the embedded

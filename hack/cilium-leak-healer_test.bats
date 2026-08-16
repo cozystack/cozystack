@@ -24,6 +24,8 @@
 # Run with: hack/cozytest.sh hack/cilium-leak-healer_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 HACK_DIR="$(cd "$(dirname "${BATS_TEST_FILENAME:-$0}")" && pwd)"
 SCRIPT="$HACK_DIR/e2e-cilium-endpoint-leak-healer.sh"
 

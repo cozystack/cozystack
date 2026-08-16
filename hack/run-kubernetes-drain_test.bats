@@ -16,6 +16,8 @@
 # Run with: hack/cozytest.sh hack/run-kubernetes-drain_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "all-empty captures report drained" {
     . hack/e2e-chainsaw/_lib/run-kubernetes.sh
     if ! cozy_tenant_drained "" "" ""; then

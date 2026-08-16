@@ -35,6 +35,8 @@
 #           installed; cozytest.sh is the CI path.)
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "clean host with no runtime services exits silently" {
   STUB_DIR=$(mktemp -d)
 

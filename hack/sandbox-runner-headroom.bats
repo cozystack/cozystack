@@ -113,6 +113,8 @@
 #
 # Run with: hack/cozytest.sh hack/sandbox-runner-headroom.bats
 
+load test_helper
+
 # The guest-side derivation, held in one place so the check that runs against
 # the live tree and the fixtures that pin its refusals cannot drift apart.
 # Prints the vCPU total then the MiB total on success, one ERROR line

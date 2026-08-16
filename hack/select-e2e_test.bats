@@ -19,6 +19,8 @@
 # Run with: hack/cozytest.sh hack/select-e2e_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # Assert that a selection is the WHOLE suite list, not merely a long one.
 #
 # These asserts used to read `[ "$(echo "$output" | wc -w)" -gt 5 ]`, which is

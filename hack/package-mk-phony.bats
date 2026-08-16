@@ -55,6 +55,8 @@
 # Run with: hack/cozytest.sh hack/package-mk-phony.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 @test "every target hack/package.mk declares phony still runs when a file of that name exists" {
     repo=$(pwd)
     targets=$(sed -n 's/^\.PHONY:[[:space:]]*//p' "$repo/hack/package.mk")

@@ -14,6 +14,8 @@
 # a failing one leaves its temp directory behind, which is what you want when
 # reading the rendered script and the captured output afterwards.
 
+load test_helper
+
 CHART=packages/apps/kubernetes
 
 # The stub is driven by two independent lists of globs, matched against the

@@ -24,6 +24,8 @@
 # Run with: hack/cozytest.sh hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 CHART=packages/apps/kubernetes
 
 @test "worker TalosConfigTemplate heredoc emits with a hostile registryMirrors value (no shell break, value stays literal)" {

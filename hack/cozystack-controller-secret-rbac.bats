@@ -65,6 +65,8 @@
 # Run with: hack/cozytest.sh hack/cozystack-controller-secret-rbac.bats
 # -----------------------------------------------------------------------------
 
+load test_helper
+
 # What "*" in a rule's verbs means for a namespaced resource such as Secret.
 VERB_UNIVERSE='["create","delete","deletecollection","get","list","patch","update","watch"]'
 
