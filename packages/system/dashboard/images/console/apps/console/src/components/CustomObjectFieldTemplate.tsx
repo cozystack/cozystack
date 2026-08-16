@@ -53,6 +53,38 @@ export function CustomObjectFieldTemplate<
   const hasOtherFields = props.properties.some((p) => p.name !== "enabled")
   const isAddon = hasEnabledField && hasOtherFields
 
+  // An addon carrying only overrides and no 'enabled' has no switch of its own:
+  // cilium and coredns are always installed, verticalPodAutoscaler follows
+  // monitoringAgents. Rendered as a plain group it reads as a toggleable addon
+  // whose switch failed to appear, which is how users end up adding
+  // `<addon>.enabled: true` in YAML — the schema sets no additionalProperties,
+  // so the API stores that field, echoes it back, and nothing reads it. State
+  // the absence here; the per-addon schema description says why.
+  const hasNoToggle =
+    !hasEnabledField &&
+    props.properties.length > 0 &&
+    props.properties.every((p) => p.name === "valuesOverride")
+
+  if (hasNoToggle) {
+    return (
+      <fieldset id={props.idSchema.$id} className="border border-slate-200 rounded-lg p-3 mb-3">
+        {props.title && (
+          <legend className="text-xs font-semibold text-slate-700 px-1">{props.title}</legend>
+        )}
+        <p className="text-xs text-slate-500 mb-2">
+          No enable switch. This section only overrides Helm values — adding an enabled field in
+          YAML has no effect.
+        </p>
+        {props.description && (
+          <p className="field-description text-xs text-slate-400 mb-2">{props.description}</p>
+        )}
+        {props.properties.map((prop) => (
+          <div key={prop.name}>{prop.content}</div>
+        ))}
+      </fieldset>
+    )
+  }
+
   if (isAddon) {
     const isEnabled = (formData as any)?.enabled === true
     const enabledProp = props.properties.find((p) => p.name === "enabled")
