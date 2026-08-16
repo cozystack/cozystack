@@ -1,0 +1,97 @@
+{{- if and .Values.hostnameOwnershipPolicy.enabled .Values.hostnameOwnershipPolicy.admissionPolicy }}
+# Per-namespace hostname-ownership policy (admission layer). A namespace is
+# bound to ONE allowed hostname suffix via the configured label; HTTPRoute /
+# GRPCRoute writes whose hostnames fall outside that suffix are denied at
+# admission. Fail-closed inside the policed scope: a policed namespace without
+# the label and a route without explicit hostnames (which would inherit the
+# listener hostname — the capture vector) are both denied.
+#
+# This is the FAIL-FAST layer only. The authoritative layer is the
+# controller-side enforcement (--hostname-ownership-enforce, wired by the same
+# hostnameOwnershipPolicy.enabled value): a route that bypasses admission is
+# still never programmed into the data plane. Defence in depth — the two
+# layers share one semantic contract (internal/hostnameownership vectors).
+#
+# Requires Kubernetes 1.30+ (ValidatingAdmissionPolicy GA). On older clusters
+# set hostnameOwnershipPolicy.admissionPolicy=false to keep only the
+# controller-side layer.
+#
+# Policy and binding deliberately ship in ONE template, policy first: a
+# binding without its policy under failurePolicy=Fail denies every matched
+# write.
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicy
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.fullname" . }}-hostname-ownership
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+spec:
+  failurePolicy: Fail
+  matchConstraints:
+    resourceRules:
+      - apiGroups: ["gateway.networking.k8s.io"]
+        # Wildcard on purpose: the route CRDs serve multiple versions (v1 AND
+        # v1beta1 for httproutes in gateway-api v1.6.0). Pinning a version
+        # list would let a write through any unlisted served version bypass
+        # this policy entirely.
+        apiVersions: ["*"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["httproutes", "grpcroutes"]
+  variables:
+    # The namespace's allowed hostname suffix, lowercased ('' = label absent).
+    - name: suffix
+      expression: >-
+        has(namespaceObject.metadata.labels) &&
+        {{ .Values.hostnameOwnershipPolicy.labelKey | quote }} in namespaceObject.metadata.labels
+        ? namespaceObject.metadata.labels[{{ .Values.hostnameOwnershipPolicy.labelKey | quote }}].lowerAscii()
+        : ''
+  validations:
+    # Fail closed 1: a policed namespace MUST carry the ownership label.
+    - expression: "variables.suffix != ''"
+      message: >-
+        Namespace is policed by the hostname-ownership policy but carries no
+        {{ .Values.hostnameOwnershipPolicy.labelKey }} label; label the namespace with its allowed
+        hostname suffix or exclude it via the policy binding's namespaceSelector.
+      reason: Forbidden
+    # Fail closed 2: routes MUST declare explicit hostnames — an empty list
+    # inherits the listener hostname, which is the capture vector.
+    - expression: "has(object.spec.hostnames) && object.spec.hostnames.size() > 0"
+      message: >-
+        Routes in hostname-ownership-policed namespaces must declare
+        spec.hostnames explicitly (an empty list would capture the listener
+        hostname).
+      reason: Forbidden
+    # Ownership: every hostname (after stripping a leading "*.") must equal
+    # the namespace suffix or be a subdomain of it. The "." boundary in
+    # endsWith prevents "evil<suffix>" from passing. Guarded on the earlier
+    # validations so a missing label or empty list reports its own message.
+    # Each hostname is lowercased with lowerAscii() to match the controller's
+    # case-insensitive comparison exactly — the Gateway API CRD already
+    # enforces lowercase hostnames, but this control must not depend on that
+    # external invariant for its security decision.
+    - expression: >-
+        variables.suffix == '' ||
+        !has(object.spec.hostnames) ||
+        object.spec.hostnames.all(h,
+          (h.lowerAscii().startsWith('*.') ? h.lowerAscii().substring(2) : h.lowerAscii()) == variables.suffix ||
+          (h.lowerAscii().startsWith('*.') ? h.lowerAscii().substring(2) : h.lowerAscii()).endsWith('.' + variables.suffix))
+      messageExpression: >-
+        'All route hostnames must equal or be subdomains of the namespace allowed suffix "' + variables.suffix + '"'
+      reason: Forbidden
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingAdmissionPolicyBinding
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.fullname" . }}-hostname-ownership
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+spec:
+  policyName: {{ include "cf-tunnel-gw-ctrl.fullname" . }}-hostname-ownership
+  validationActions:
+    - Deny
+  {{- with .Values.hostnameOwnershipPolicy.namespaceSelector }}
+  matchResources:
+    namespaceSelector:
+      {{- toYaml . | nindent 6 }}
+  {{- end }}
+{{- end }}

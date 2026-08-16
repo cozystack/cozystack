@@ -1,0 +1,207 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.fullname" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "cf-tunnel-gw-ctrl.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "cf-tunnel-gw-ctrl.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if .Values.priorityClassName }}
+      priorityClassName: {{ .Values.priorityClassName }}
+      {{- end }}
+      serviceAccountName: {{ include "cf-tunnel-gw-ctrl.serviceAccountName" . }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds | default 30 }}
+      {{- with .Values.dnsPolicy }}
+      dnsPolicy: {{ . }}
+      {{- end }}
+      {{- with .Values.dnsConfig }}
+      dnsConfig:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            - "--controller-name={{ .Values.controller.controllerName }}"
+            {{- if .Values.controller.clusterDomain }}
+            - "--cluster-domain={{ .Values.controller.clusterDomain }}"
+            {{- end }}
+            - "--metrics-addr=:{{ .Values.service.metricsPort }}"
+            - "--health-addr=:{{ .Values.service.healthPort }}"
+            - "--log-level={{ .Values.controller.logLevel }}"
+            - "--log-format={{ .Values.controller.logFormat }}"
+            - "--proxy-endpoints=http://{{ include "cf-tunnel-gw-ctrl.proxyHeadlessName" . }}.{{ .Release.Namespace }}.svc.{{ .Values.controller.clusterDomain | default "cluster.local" }}:{{ .Values.proxy.configAPIPort }}/config"
+            # Image for per-Gateway rendered proxy Deployments (GatewayConfig
+            # data planes); always the release's proxy image.
+            - "--proxy-image={{ .Values.proxy.image.repository }}:{{ .Values.proxy.image.tag | default .Chart.AppVersion }}"
+            # The config API is always authenticated, resolved by the
+            # controller directly via the API (a live call, not a
+            # template-time lookup, so it works the same under `helm
+            # install`/`upgrade` and under GitOps controllers that render
+            # client-side, e.g. ArgoCD's default helm template) -- NEVER a
+            # pod-level secretKeyRef on the controller's own pod, because a
+            # secretKeyRef the controller is itself responsible for creating
+            # would deadlock its own pod. This is the ONE mechanism for
+            # both the bring-your-own and generated cases: --proxy-auth-secret-generate
+            # is the only thing that differs between them, so a Secret name
+            # collision or a scenario where the BYO Secret happens not to
+            # exist yet fails the same way regardless of which case it is.
+            - "--proxy-auth-secret-ref={{ .Release.Namespace }}/{{ include "cf-tunnel-gw-ctrl.proxyAuthTokenSecretName" . }}"
+            - "--proxy-auth-secret-key={{ .Values.proxy.authTokenSecretRef.key | default "auth-token" }}"
+            {{- if not .Values.proxy.authTokenSecretRef.name }}
+            - "--proxy-auth-secret-generate=true"
+            {{- end }}
+            {{- if .Values.proxy.tunnelTokenSecretRef.name }}
+            - "--proxy-token-secret={{ .Release.Namespace }}/{{ .Values.proxy.tunnelTokenSecretRef.name }}"
+            {{- end }}
+            {{- with .Values.proxy.tunnel.protocol }}
+            - "--tunnel-protocol={{ . }}"
+            {{- end }}
+            {{- if .Values.hostnameOwnershipPolicy.enabled }}
+            # Controller-side hostname-ownership layer; the admission policy
+            # (separate template) is the fail-fast layer of the same rule.
+            - "--hostname-ownership-enforce=true"
+            - "--hostname-ownership-label-key={{ .Values.hostnameOwnershipPolicy.labelKey }}"
+            {{- $ownershipSelector := include "cf-tunnel-gw-ctrl.labelSelectorString" .Values.hostnameOwnershipPolicy.namespaceSelector }}
+            {{- if $ownershipSelector }}
+            - "--hostname-ownership-namespace-selector={{ $ownershipSelector }}"
+            {{- end }}
+            {{- end }}
+            {{- $monitoringSelector := include "cf-tunnel-gw-ctrl.labelSelectorString" .Values.proxy.networkPolicy.monitoringNamespaceSelector }}
+            {{- if $monitoringSelector }}
+            # Namespaces allowed to scrape /metrics on the per-Gateway proxies'
+            # config-API port in the rendered NetworkPolicy.
+            - "--monitoring-namespace-selector={{ $monitoringSelector }}"
+            {{- end }}
+            # proxy.networkPolicy.enabled gates BOTH the chart's shared-proxy
+            # NetworkPolicy AND the per-Gateway policies the controller renders,
+            # so disabling it is the real escape hatch on strict CNIs that block
+            # node-sourced kubelet probes.
+            - "--render-network-policy={{ .Values.proxy.networkPolicy.enabled }}"
+            {{- if .Values.leaderElection.enabled }}
+            - "--leader-elect=true"
+            - "--leader-election-name={{ .Values.leaderElection.leaseName }}"
+            {{- if .Values.leaderElection.namespace }}
+            - "--leader-election-namespace={{ .Values.leaderElection.namespace }}"
+            {{- else }}
+            - "--leader-election-namespace={{ .Release.Namespace }}"
+            {{- end }}
+            {{- end }}
+            {{- if .Values.controller.tracing.enabled }}
+            - "--tracing-enabled=true"
+            {{- with .Values.controller.tracing.endpoint }}
+            - "--tracing-endpoint={{ . }}"
+            {{- end }}
+            - "--tracing-sample-rate={{ .Values.controller.tracing.sampleRate }}"
+            {{- end }}
+          env:
+            # The controller derives its own namespace to scope per-Gateway
+            # NetworkPolicies (config-API ingress is admitted from THIS
+            # namespace). Inject it via the downward API rather than relying on
+            # the SA-token namespace file, which is absent when
+            # automountServiceAccountToken is false — without this the
+            # controller would silently fall back to "default" and every
+            # rendered NetworkPolicy would admit the wrong namespace.
+            - name: CONTROLLER_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.service.metricsPort }}
+              protocol: TCP
+            - name: health
+              containerPort: {{ .Values.service.healthPort }}
+              protocol: TCP
+          {{- if .Values.healthProbes.startupProbe.enabled }}
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.healthPort }}
+            initialDelaySeconds: {{ .Values.healthProbes.startupProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthProbes.startupProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthProbes.startupProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthProbes.startupProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.healthProbes.livenessProbe.enabled }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ .Values.service.healthPort }}
+            initialDelaySeconds: {{ .Values.healthProbes.livenessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthProbes.livenessProbe.periodSeconds }}
+            timeoutSeconds: {{ .Values.healthProbes.livenessProbe.timeoutSeconds }}
+            failureThreshold: {{ .Values.healthProbes.livenessProbe.failureThreshold }}
+          {{- end }}
+          {{- if .Values.healthProbes.readinessProbe.enabled }}
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: {{ .Values.service.healthPort }}
+            initialDelaySeconds: {{ .Values.healthProbes.readinessProbe.initialDelaySeconds }}
+            periodSeconds: {{ .Values.healthProbes.readinessProbe.periodSeconds }}
+            {{- if .Values.healthProbes.readinessProbe.timeoutSeconds }}
+            timeoutSeconds: {{ .Values.healthProbes.readinessProbe.timeoutSeconds }}
+            {{- end }}
+            {{- if .Values.healthProbes.readinessProbe.failureThreshold }}
+            failureThreshold: {{ .Values.healthProbes.readinessProbe.failureThreshold }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- if .Values.resources }}
+            {{- toYaml .Values.resources | nindent 12 }}
+            {{- else }}
+            # Recommended defaults for production
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            {{- end }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
