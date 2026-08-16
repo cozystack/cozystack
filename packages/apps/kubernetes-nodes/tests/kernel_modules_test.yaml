@@ -1,0 +1,222 @@
+suite: worker kernel modules (machine.kernel.modules) tests
+
+# Mirror of packages/apps/kubernetes/tests/kernel_modules_test.yaml. Both charts
+# emit the worker machine config, so both need the field and both need it pinned;
+# tests/render-parity.sh additionally compares the two rendered machine configs
+# against each other, which is what catches the two charts drifting apart rather
+# than either one drifting from its own expectations.
+#
+# A Talos system extension installs a kernel module but does not load it. Loading
+# is `machine.kernel.modules`' job, and until this field existed the chart emitted
+# no such block and no values key could add one — a GPU pool came up with the
+# NVIDIA extension present, the module never loaded, and nothing reported it: the
+# VM held the PCI device, the node advertised no GPU, no component logged an error.
+# Found in production on Cozystack 1.6.0 (cozystack/cozystack#3563).
+#
+# The TalosConfigTemplate is not a rendered object — the chart emits a Job whose
+# container command carries the TCT as a string literal that the Job applies at
+# runtime, so the machine config is reached through matchRegex on that literal.
+#
+# The patterns below pin absolute indentation (`\n {10}kernel:` and so on) rather
+# than `\s+`, because indentation is the failure mode worth guarding: `modules:` one
+# level out is still valid YAML, is still accepted by the apiserver, and silently
+# loads nothing. If the Job's shell script is ever reindented as a whole, these
+# counts move with it — read them off the rendered `data: |` block, do not relax
+# them to `\s+`.
+
+templates:
+  - templates/talos-reconcile-job.yaml
+release:
+  name: kubernetes-nodes-myk8s-md0
+  namespace: tenant-test
+set:
+  cluster: myk8s
+  _cluster:
+    cluster-domain: cozy.local
+  version: "v1.35"
+  minReplicas: 0
+  maxReplicas: 3
+  instanceType: ""
+  diskSize: 20Gi
+  storageClass: replicated
+  roles: []
+  resources:
+    cpu: "4"
+    memory: 8Gi
+
+tests:
+  - it: emits the NVIDIA module set, in dependency order, for an nvidia.com GPU pool
+    set:
+      gpus:
+        - name: nvidia.com/GB202_RTX_PRO_6000
+    asserts:
+      # `nvidia` must come first (the other three depend on it) and `nvidia_uvm`
+      # must be present or any CUDA workload fails on unified memory. Talos loads
+      # the list in order, so this pins the order, not just the set.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n {14}  parameters:\n {14}  - NVreg_NvLinkDisable=1\n {14}- name: nvidia_uvm\n {14}- name: nvidia_drm\n {14}- name: nvidia_modeset\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: emits no kernel block for a pool with neither GPUs nor kernelModules
+    set:
+      gpus: []
+    asserts:
+      # The machine config of an ordinary pool must be exactly what it was before
+      # this field existed. Anything emitted here changes the config every existing
+      # worker would be reconciled to, for no reason. `kernel` appears nowhere else
+      # in the machine config, so the bare token is a sound guard.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kernel:'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: takes an explicit kernelModules list verbatim, including parameters
+    set:
+      gpus: []
+      kernelModules:
+        - name: br_netfilter
+          parameters:
+            - nf_conntrack_helper=0
+        - name: dummy
+    asserts:
+      # Nothing about the field is NVIDIA-specific, and `parameters` has to survive
+      # the round trip through the machine config.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: br_netfilter\n {14}  parameters:\n {14}  - nf_conntrack_helper=0\n {14}- name: dummy\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: lets an explicit list replace the NVIDIA default on a GPU pool
+    set:
+      gpus:
+        - name: nvidia.com/GB202_RTX_PRO_6000
+      kernelModules:
+        - name: nvidia
+        - name: nvidia_uvm
+    asserts:
+      # Replaces, does not merge: an operator who lists a subset gets the subset.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: nvidia\n {14}- name: nvidia_uvm\n {10}kubelet:\n'
+        documentSelector:
+          path: kind
+          value: Job
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nvidia_drm'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: treats an explicit empty kernelModules list as an opt-out on a GPU pool
+    set:
+      gpus:
+        - name: nvidia.com/GB202_RTX_PRO_6000
+      kernelModules: []
+    asserts:
+      # `[]` is distinguishable from unset and means "emit nothing". This is why the
+      # field is undefaulted in values.yaml — a `[]` default there would turn every
+      # pool into an opt-out and make the NVIDIA default dead code.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kernel:'
+        documentSelector:
+          path: kind
+          value: Job
+      # The gpu=on label is independent of the modules and must survive the opt-out.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'nodeLabels:\s*\n\s+gpu: "on"'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: does not assume NVIDIA for a GPU pool from another vendor
+    set:
+      gpus:
+        - name: amd.com/gpu
+    asserts:
+      # The automatic set is keyed on the `nvidia.com/` resource prefix, not on the
+      # mere presence of `gpus`. Loading nvidia modules on an AMD node would be a
+      # guess with no basis; such a pool declares its own list.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'kernel:'
+        documentSelector:
+          path: kind
+          value: Job
+
+  # These values reach an unquoted `cat <<EOF | kubectl apply -f -`
+  # heredoc in the Job's shell script, so a `$(...)` in them would execute inside the
+  # talos-reconcile pod, whose ServiceAccount can write TalosConfigTemplates and read
+  # Talos secrets. They come from a tenant-facing CR, and cozyvalues-gen has no
+  # `pattern` vocabulary, so the render is the only place left to stop them.
+  - it: rejects a module name that could inject shell into the reconcile Job
+    set:
+      gpus: []
+      kernelModules:
+        - name: nvidia$(id)
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid kernelModules name "nvidia\$\(id\)"'
+
+  - it: rejects a module parameter that could inject shell into the reconcile Job
+    set:
+      gpus: []
+      kernelModules:
+        - name: nvidia
+          parameters:
+            - "opt=$(cat /etc/passwd)"
+    asserts:
+      - failedTemplate:
+          errorPattern: 'invalid kernelModules parameter'
+
+  - it: drops an unvalidated extra key on a kernelModules item
+    set:
+      gpus: []
+      kernelModules:
+        - name: dummy
+          evil: "$(touch /tmp/pwned)"
+    asserts:
+      # The emitted list is rebuilt from validated fields, so an unknown key cannot
+      # reach the shell even though nothing prunes it upstream: `items` in
+      # values.schema.json has no `additionalProperties: false`, and the aggregated
+      # apiserver wires that schema into defaulting only, with no validation on write.
+      - notMatchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: 'evil|touch /tmp/pwned'
+        documentSelector:
+          path: kind
+          value: Job
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {10}kernel:\n {12}modules:\n {14}- name: dummy\n'
+        documentSelector:
+          path: kind
+          value: Job
+
+  - it: accepts a semicolon-separated module parameter
+    set:
+      gpus: []
+      kernelModules:
+        - name: nvidia
+          parameters:
+            - NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222
+    asserts:
+      # NVIDIA's documented multi-value form is semicolon-separated, and `;` is inert
+      # inside an unquoted heredoc. An allowlist that omitted it rejected a legitimate
+      # parameter, so this class denies what the shell expands rather than permitting
+      # a fixed set.
+      - matchRegex:
+          path: spec.template.spec.containers[0].command[2]
+          pattern: '\n {14}  - NVreg_RegistryDwords=PowerMizerEnable=0x1;PerfLevelSrc=0x2222\n'
+        documentSelector:
+          path: kind
+          value: Job

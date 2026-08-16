@@ -392,6 +392,19 @@ spec:
                         nodeLabels:
                           gpu: "on"
                         {{- end }}
+                        {{- /* Kernel modules to load at boot. A Talos system extension
+                               installs a module but never loads it, so a GPU node group
+                               whose schematic carries the NVIDIA extension still comes up
+                               with no working driver until these are declared. Emitted
+                               only when the group resolves to a non-empty list, so a
+                               group without modules renders the machine config it
+                               rendered before this field existed — no worker roll. */}}
+                        {{- $kernelModules := include "kubernetes.kernelModules" . }}
+                        {{- if $kernelModules }}
+                        kernel:
+                          modules:
+                            {{- $kernelModules | nindent 28 }}
+                        {{- end }}
                         kubelet:
                           image: ghcr.io/siderolabs/kubelet:{{ .kubeletVersion }}
                           extraConfig:
@@ -418,7 +431,11 @@ spec:
                               memory.available: "256Mi"
                         install:
                           disk: /dev/vda
-                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ $.Values.talos.schematicID | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
+                          {{- /* Must resolve to the same schematic as the boot disk image in
+                                 cluster.yaml: this installer is what an in-place Talos upgrade
+                                 runs, so a mismatch would swap the node's extension set out
+                                 from under it. Both call kubernetes.schematicID. */}}
+                          image: {{ $.Values.talos.installerRepository | trimSuffix "/" | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}/{{ include "kubernetes.schematicID" . | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}:{{ .talosVersion | replace "\\" "\\\\" | replace "$" "\\$" | replace "`" "\\`" }}
                           wipe: false
                         features:
                           rbac: true

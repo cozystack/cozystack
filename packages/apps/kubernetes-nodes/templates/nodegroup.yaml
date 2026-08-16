@@ -42,6 +42,7 @@
       "gpus" .Values.gpus
       "kubelet" .Values.kubelet
       "logSerialConsole" .Values.logSerialConsole
+      "schematicID" .Values.schematicID
 }}
 {{- define "kubevirtmachinetemplate" -}}
 spec:
@@ -83,7 +84,7 @@ spec:
                 ignores configdrive and never applies the machineconfig. */}}
           source:
             http:
-              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ $.Values.talos.schematicID }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
+              url: {{ $.Values.talos.imageFactoryURL | trimSuffix "/" }}/image/{{ include "kubernetes.schematicID" . }}/{{ $.Values.talos.version }}/openstack-amd64.raw.xz
           storage:
             resources:
               requests:

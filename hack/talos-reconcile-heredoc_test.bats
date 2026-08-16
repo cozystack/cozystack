@@ -20,6 +20,16 @@
 # backticks) the heredoc dies with "bad substitution: no closing backtick" and
 # `cat` emits zero bytes, which this test catches; a `matchRegex` did not.
 #
+#
+# The INVARIANT recorded above the data block admits two protections, escaping or
+# render-time validation, and both are exercised here. talos.version and
+# talos.installerRepository have only the escaping, so for them the assertion is
+# that the heredoc emits and the value survives verbatim. talos.schematicID is
+# guarded at render time as well, so for it the assertion is the opposite: the
+# render is refused and no heredoc is produced. Its escape chain stays in the
+# template as a second line of defence, unreachable for hostile input while the
+# guard holds.
+#
 # Needs `helm` + `yq`; cozytest.sh runs from the repo root.
 # Run with: hack/cozytest.sh hack/talos-reconcile-heredoc_test.bats
 # -----------------------------------------------------------------------------
@@ -64,11 +74,15 @@ CHART=packages/apps/kubernetes
 
 @test "worker TalosConfigTemplate heredoc keeps the Talos image coordinates literal" {
     work=$(mktemp -d)
-    # installerRepository and schematicID reach the same unquoted heredoc as the
-    # mirror endpoint, one block above it, and are free-form strings in the schema.
+    # installerRepository reaches the same unquoted heredoc as the mirror endpoint,
+    # one block above it, and is a free-form string in the schema. schematicID is
+    # deliberately left at its default here: the INVARIANT above the data block
+    # admits escaping OR render-time validation, and that field now takes the
+    # second route, so a hostile value is rejected before the heredoc exists at
+    # all. The escape chain on it stays as a second line of defence and the
+    # rejection is pinned by its own test below.
     helm template t "$CHART" -n tenant-test -f "$CHART/tests/values/common.yaml" \
         --set 'talos.installerRepository=reg$(id)`x`y/installer' \
-        --set 'talos.schematicID=sch$(id)`q`z' \
         --set 'talos.version=v1.13.6$(id)`v`w' \
         --show-only templates/talos/talos-reconcile-job.yaml \
         | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
@@ -83,10 +97,10 @@ CHART=packages/apps/kubernetes
     out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     [ -n "$out" ] || { echo "heredoc emitted no output" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF 'reg$(id)`x`y/installer' || { echo "installerRepository was not preserved literally" >&2; printf '%s\n' "$out" | grep -i installer >&2; rm -rf "$work"; exit 1; }
-    printf '%s' "$out" | grep -qF 'sch$(id)`q`z' || { echo "schematicID was not preserved literally" >&2; printf '%s\n' "$out" | grep -i image >&2; rm -rf "$work"; exit 1; }
     # talos.version reaches this heredoc twice -- as talosVersion and as the
-    # installer image tag -- and no chart validator constrains its shape, so it is
-    # the one free-form value here that only the escaping protects.
+    # installer image tag -- and neither it nor installerRepository is constrained
+    # by any chart validator, so they are the free-form values here that only the
+    # escaping protects.
     [ "$(printf '%s' "$out" | grep -cF 'v1.13.6$(id)`v`w')" -eq 2 ] || { echo "talos.version was not preserved literally at both sites" >&2; printf '%s\n' "$out" | grep -iE 'talosVersion|image:' >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }
@@ -108,7 +122,6 @@ resources: {cpu: "2", memory: 4Gi}
 VALS
     helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
         --set 'talos.installerRepository=reg$(id)`x`y/installer' \
-        --set 'talos.schematicID=sch$(id)`q`z' \
         --set 'talos.version=v1.13.6$(id)`v`w' \
         --show-only templates/talos-reconcile-job.yaml \
         | yq 'select(.kind == "Job") | .spec.template.spec.containers[0].command[2]' \
@@ -123,8 +136,47 @@ VALS
     out=$(sh "$work/heredoc.sh" 2>"$work/err") || { echo "kubernetes-nodes heredoc shell exited non-zero" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     [ -n "$out" ] || { echo "kubernetes-nodes heredoc emitted no output" >&2; rm -rf "$work"; exit 1; }
     printf '%s' "$out" | grep -qF 'reg$(id)`x`y/installer' || { echo "kubernetes-nodes installerRepository was not preserved literally" >&2; rm -rf "$work"; exit 1; }
-    printf '%s' "$out" | grep -qF 'sch$(id)`q`z' || { echo "kubernetes-nodes schematicID was not preserved literally" >&2; rm -rf "$work"; exit 1; }
     [ "$(printf '%s' "$out" | grep -cF 'v1.13.6$(id)`v`w')" -eq 2 ] || { echo "kubernetes-nodes talos.version was not preserved literally at both sites" >&2; printf '%s\n' "$out" | grep -iE 'talosVersion|image:' >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+# The other half of the INVARIANT above the data block: a field may be protected
+# by escaping OR by render-time validation. schematicID takes the second route,
+# so the execution-level check for it is that no heredoc is produced at all. Both
+# charts guard the effective value, so both are pinned here.
+
+@test "worker TalosConfigTemplate render rejects a hostile schematicID before any heredoc exists" {
+    work=$(mktemp -d)
+    if helm template t "$CHART" -n tenant-test -f "$CHART/tests/values/common.yaml" \
+        --set 'talos.schematicID=sch$(id)`q`z' \
+        --show-only templates/talos/talos-reconcile-job.yaml >"$work/out" 2>"$work/err"; then
+        echo "hostile schematicID rendered instead of being rejected" >&2; cat "$work/out" >&2; rm -rf "$work"; exit 1
+    fi
+    grep -q 'invalid schematicID' "$work/err" || { echo "render failed for a reason other than the schematicID guard" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
+    rm -rf "$work"
+}
+
+@test "kubernetes-nodes TalosConfigTemplate render rejects a hostile schematicID before any heredoc exists" {
+    work=$(mktemp -d)
+    cat > "$work/vals.yaml" <<'VALS'
+cluster: myk8s
+_cluster:
+  cluster-domain: cozy.local
+version: "v1.35"
+minReplicas: 0
+maxReplicas: 3
+instanceType: ""
+diskSize: 20Gi
+storageClass: replicated
+roles: [ingress-nginx]
+resources: {cpu: "2", memory: 4Gi}
+VALS
+    if helm template kubernetes-nodes-myk8s-md0 packages/apps/kubernetes-nodes -n tenant-test -f "$work/vals.yaml" \
+        --set 'talos.schematicID=sch$(id)`q`z' \
+        --show-only templates/talos-reconcile-job.yaml >"$work/out" 2>"$work/err"; then
+        echo "kubernetes-nodes hostile schematicID rendered instead of being rejected" >&2; cat "$work/out" >&2; rm -rf "$work"; exit 1
+    fi
+    grep -q 'invalid schematicID' "$work/err" || { echo "kubernetes-nodes render failed for a reason other than the schematicID guard" >&2; cat "$work/err" >&2; rm -rf "$work"; exit 1; }
     rm -rf "$work"
 }
 

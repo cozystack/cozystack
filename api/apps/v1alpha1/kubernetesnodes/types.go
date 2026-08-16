@@ -45,6 +45,11 @@ type ConfigSpec struct {
 	// List of GPUs to attach (NVIDIA driver requires at least 4 GiB RAM).
 	// +kubebuilder:default:={}
 	Gpus []GPU `json:"gpus,omitempty"`
+	// Per-pool override for `talos.schematicID`, applied to both the worker boot disk image and the Talos installer image. When empty, the cluster-wide `talos.schematicID` applies. A schematic is a fixed set of Talos system extensions, and Talos refuses to finish booting when an extension service in it cannot start: `ext-nvidia-persistenced` and `ext-nvidia-cdi-gen` require an NVIDIA card, so a pool with no GPU that boots an NVIDIA schematic fails `startAllServices` and reboots roughly every 70 minutes, indefinitely, while still reporting `Ready` (kubelet starts before the failing phase). A cluster mixing GPU and non-GPU pools therefore has no correct cluster-wide value, and this field is what makes it expressible: set the NVIDIA schematic on the GPU pool only. Changing it replaces the pool's boot image and so rolls its workers.
+	// +kubebuilder:default:=""
+	SchematicID string `json:"schematicID,omitempty"`
+	// Kernel modules loaded on every worker in this pool, emitted as Talos `machine.kernel.modules`. A Talos system extension installs a module but does not load it, so an extension-provided driver needs its modules declared here. Leave unset to let the chart decide: a pool holding at least one `nvidia.com/*` GPU gets `nvidia` (with `NVreg_NvLinkDisable=1`, which the gpu-operator driver container applies on non-Talos workers; on Talos that container has to be turned off or it clashes with the system extension, and nothing then mounts the ConfigMap carrying the parameter), `nvidia_uvm`, `nvidia_drm`, `nvidia_modeset` (that order — Talos loads the list in sequence and the last three depend on the first), and any other pool gets nothing. Set a non-empty list to replace the chart's choice entirely, or `[]` to opt out and emit no modules even on a GPU pool. The module still has to be in the image: which extension supplies it is set by `talos.schematicID`, and on Blackwell (GB202) it must be the open-kernel-modules extension. Changing this on a pool that already has running workers does not reach them: the `TalosConfigTemplate` its MachineDeployment references has a fixed name, so rewriting the template leaves `spec.template` untouched, CAPI starts no rollout, and a running Machine keeps the machine config it booted with. Replace the pool's Machines to apply it. Unlike `schematicID`, which changes the boot image and therefore rolls the pool by itself. Note the automatic set keys on the `nvidia.com/` resource prefix alone: nothing cross-checks that the effective schematic actually carries those modules, so declaring a module the image does not ship is possible. On Talos v1.13 such a module leaves its controller retrying rather than failing the boot, so the symptom is a missing driver, not a dead node.
+	KernelModules []KernelModule `json:"kernelModules,omitempty"`
 	// Kubelet resource reservations for this pool.
 	// +kubebuilder:default:={}
 	Kubelet Kubelet `json:"kubelet,omitempty"`
@@ -77,6 +82,13 @@ type Images struct {
 	// Image used by the talos-reconcile Job (kubectl). Empty falls back to images/kubectl.tag.
 	// +kubebuilder:default:=""
 	Kubectl string `json:"kubectl,omitempty"`
+}
+
+type KernelModule struct {
+	// Module name as `modprobe` takes it, e.g. `nvidia_uvm`.
+	Name string `json:"name"`
+	// Module parameters, each as a bare `key=value` string.
+	Parameters []string `json:"parameters,omitempty"`
 }
 
 type Kubelet struct {
@@ -113,7 +125,7 @@ type Talos struct {
 	// Talos `machine.registries.mirrors` passthrough for worker nodes: a map of upstream registry host to `{ endpoints: [ ... ] }`. Empty by default, so workers pull container images (the Talos `kubelet` image included) directly from the upstream registry. Point a host such as `ghcr.io` at an in-cluster pull-through mirror for air-gapped, rate-limited, or flaky-egress environments so a worker's boot does not depend on live public egress. Talos still falls back to the upstream registry unless a host also sets `skipFallback: true`, so a mirror alone does not enforce air-gap. Keep in sync with the parent kubernetes chart.
 	// +kubebuilder:default:={}
 	RegistryMirrors k8sRuntime.RawExtension `json:"registryMirrors"`
-	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here.
+	// Talos image-factory schematic ID. Defaults to the cozystack-tested vanilla schematic. Operators using custom schematics (system extensions, kernel args) override here. This pool can override it for itself via the root-level `schematicID`. The effective value is rejected if it contains `$`, a backtick, a backslash, quotes or whitespace, because it is interpolated into a worker machine config applied through a shell heredoc; a 64-hex factory digest, a readable name and a multi-segment mirror path such as `gpu/nvidia-open` all pass. That guard covers this field only, not every value reaching that heredoc.
 	// +kubebuilder:default:="ce4c980550dd2ab1b17bbf2b08801c7eb59418eafe8f279833297925d67c7515"
 	SchematicID string `json:"schematicID"`
 	// Talos release used for worker OS image and installer. Must satisfy the chart's Talos<->Kubernetes support matrix against the chosen `version`.
