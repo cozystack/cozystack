@@ -74,7 +74,7 @@
           }
         },
         "cilium": {
-          "description": "Cilium CNI plugin.",
+          "description": "Cilium CNI plugin. Always installed: it is the tenant cluster's CNI and has no enable switch, so this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -90,7 +90,7 @@
           }
         },
         "coredns": {
-          "description": "CoreDNS addon.",
+          "description": "CoreDNS addon. Always installed: it is the tenant cluster's DNS and has no enable switch, so this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
@@ -271,7 +271,7 @@
           }
         },
         "verticalPodAutoscaler": {
-          "description": "Vertical Pod Autoscaler.",
+          "description": "Vertical Pod Autoscaler. Has no enable switch of its own: it is installed and removed together with addons.monitoringAgents.enabled, so this section only overrides its Helm values.",
           "type": "object",
           "default": {},
           "required": [
