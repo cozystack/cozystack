@@ -7,7 +7,7 @@
 {{- $wildcardSecret := (index .Values._cluster "wildcard-secret-name") | default "" }}
 
 {{- $email := ((.Values.alerta.alerts).email) | default dict }}
-{{- $emailEnabled := or $email.to $email.smarthost $email.from }}
+{{- $emailEnabled := or $email.to $email.smarthost $email.from $email.authUsername $email.secretName $email.subject $email.bodyHtml }}
 {{- if $emailEnabled }}
 {{- if not (and $email.to $email.smarthost $email.from) }}
 {{- fail "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts" }}
