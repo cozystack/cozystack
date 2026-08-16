@@ -885,8 +885,11 @@ assert_file_lacks_pattern() {
   # The grace is in this list because `timeout -k abc 20` exits 125 BEFORE running the
   # command, so a non-numeric grace makes every read in the block report exit 125 and
   # collects nothing -- the same total loss as the other three, by a different route.
+  # The report budget is in this list because the classification runs inside this
+  # block: rejected, it falls back to its default like the four above, and the
+  # collector keeps its walk.
   for knob in COZY_DIAG_PHASE_BUDGET COZY_DIAG_READ_TIMEOUT COZY_DIAG_MAX_IMPORTERS \
-    COZY_DIAG_READ_GRACE; do
+    COZY_DIAG_READ_GRACE COZY_GUARD_REPORT_BUDGET; do
    # Only values a `:-` default cannot absorb. An empty value set here is
    # indistinguishable from unset, so it takes the default silently and correctly;
    # the empty-string hazard lives on the post-source path and is checked there.
