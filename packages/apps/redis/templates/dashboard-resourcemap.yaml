@@ -1,3 +1,4 @@
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -19,6 +20,22 @@ rules:
   - secrets
   resourceNames:
   - "{{ .Release.Name }}-auth"
+  {{- if $tlsEnabled }}
+  # CA-only Secret, published by the operator holding just ca.crt. It is what a
+  # client needs to verify the Redis server, and it carries no private key.
+  #
+  # Two key-bearing Secrets of this release are deliberately NOT granted:
+  #   - {{ .Release.Name }}-ca-tls, the CA private key. Anyone holding it can
+  #     mint certificates that every client trusting this release's CA accepts.
+  #   - {{ .Release.Name }}-tls, the server leaf and its private key. Anyone
+  #     holding it can impersonate this release's Redis and Sentinel endpoints.
+  #
+  # This stays true regardless of tls.authClients. When authClients is optional
+  # or yes, Redis asks connecting clients for a certificate signed by the same
+  # CA, and the platform does not currently mint a client certificate for the
+  # tenant — see the TLS section of README.md.
+  - "{{ .Release.Name }}-ca-cert"
+  {{- end }}
   verbs: ["get", "list", "watch"]
 - apiGroups:
   - cozystack.io

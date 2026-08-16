@@ -1,4 +1,18 @@
 redis-operator:
   image:
     repository: ghcr.io/cozystack/cozystack/redis-operator
-    tag: v1.3.0-rc1@sha256:a4012e6a1b5daaedb57cc27edfdbff52124de4164b5ec0ee53c5ce5710ef4c25
+    # Do not "fix" the -rc1 suffix by reverting to v1.4.0. The v1.4.x line is
+    # the cozystack fork's own numbering, not an upstream release train —
+    # spotahome's latest tag is v1.3.0-rc1 — so rc1 here is how the fork tagged
+    # the build, not a statement about its readiness. The single commit between
+    # v1.4.0 and v1.4.1-rc1 guards a nil watcher before watch.Filter wraps it;
+    # dropping back to v1.4.0 reinstates that crash. A stable v1.4.1 retag of
+    # the same commit has been requested; repin to it when it exists.
+    #
+    # This digest is maintained by hand. The root Makefile does not run
+    # `make -C packages/system/redis-operator image`, so nothing in CI builds
+    # images/redis-operator/Dockerfile and nothing reproduces this artifact —
+    # editing that Dockerfile changes no shipped bits until the image is built
+    # and this line is updated. Whether to restore the build here is a
+    # release-engineering call, deliberately left alone by the TLS work.
+    tag: v1.4.1-rc1@sha256:404c84c23ef3df181a2eac974d5823f6664f75e9d6b4e4d944d0841ad0750edf

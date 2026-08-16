@@ -1,0 +1,124 @@
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
+{{- if $tlsEnabled }}
+{{- $clusterDomain := (index (.Values._cluster | default dict) "cluster-domain") | default "cozy.local" }}
+---
+# Self-signed bootstrap Issuer — used only to sign the CA Certificate below.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-selfsigned
+  namespace: {{ .Release.Namespace }}
+spec:
+  selfSigned: {}
+---
+# CA Certificate. rotationPolicy: Never keeps the CA stable so existing
+# client trust bundles remain valid across cert-manager renewals.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  isCA: true
+  commonName: {{ .Release.Name }}-ca
+  secretName: {{ .Release.Name }}-ca-tls
+  duration: 43800h
+  issuerRef:
+    name: {{ .Release.Name }}-selfsigned
+    kind: Issuer
+    group: cert-manager.io
+  privateKey:
+    rotationPolicy: Never
+    algorithm: ECDSA
+    size: 256
+  # CA usages: signing (OCSP/CRL signing) + cert sign (issuing leaf certs)
+  usages:
+    - signing
+    - cert sign
+---
+# CA Issuer — used to sign the leaf server certificate.
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ .Release.Name }}-ca
+  namespace: {{ .Release.Namespace }}
+spec:
+  ca:
+    secretName: {{ .Release.Name }}-ca-tls
+---
+# Leaf server TLS Certificate passed to redis-operator via spec.tls.certificateSecret.
+# The SAN list mirrors what the operator computes for its own Certificate
+# (operator/redisfailover/service/generator.go: redisCertificateDNSNames):
+#   - per-service short, namespace, .svc and .svc.<clusterDomain> forms for
+#     rfr-/rfrm-/rfrs-/rfs- services
+#   - wildcard covering per-pod headless DNS for the redis statefulset
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ .Release.Name }}-tls
+  namespace: {{ .Release.Namespace }}
+spec:
+  secretName: {{ .Release.Name }}-tls
+  duration: 8760h
+  renewBefore: 720h
+  isCA: false
+  usages:
+    - digital signature
+    - server auth
+    - client auth
+    - key encipherment
+  dnsNames:
+    {{- $ns := .Release.Namespace }}
+    {{- $rfName := .Release.Name }}
+    {{- $redisSvc := printf "rfr-%s" $rfName }}
+    {{- $masterSvc := printf "rfrm-%s" $rfName }}
+    {{- $slaveSvc := printf "rfrs-%s" $rfName }}
+    {{- $sentinelSvc := printf "rfs-%s" $rfName }}
+    - localhost
+    {{- range $svc := list $redisSvc $masterSvc $slaveSvc $sentinelSvc }}
+    - {{ $svc | quote }}
+    - {{ printf "%s.%s" $svc $ns | quote }}
+    - {{ printf "%s.%s.svc" $svc $ns | quote }}
+    - {{ printf "%s.%s.svc.%s" $svc $ns $clusterDomain | quote }}
+    {{- end }}
+    - {{ printf "*.%s" $redisSvc | quote }}
+    - {{ printf "*.%s.%s" $redisSvc $ns | quote }}
+    - {{ printf "*.%s.%s.svc" $redisSvc $ns | quote }}
+    - {{ printf "*.%s.%s.svc.%s" $redisSvc $ns $clusterDomain | quote }}
+    {{- if .Values.external | default false }}
+    {{- /* The external LoadBalancer Service this chart creates alongside the
+           operator's own services. It resolves in-cluster like any Service, so
+           a client dialing it by name has to find it in the SAN list or fail
+           hostname verification. */}}
+    {{- $extSvc := printf "%s-external-lb" .Release.Name }}
+    - {{ $extSvc | quote }}
+    - {{ printf "%s.%s" $extSvc $ns | quote }}
+    - {{ printf "%s.%s.svc" $extSvc $ns | quote }}
+    - {{ printf "%s.%s.svc.%s" $extSvc $ns $clusterDomain | quote }}
+    {{- /* A tenant without a host is a legitimate shape — packages/apps/tenant
+           leaves the computed host empty when neither the tenant nor its parent
+           sets one — and such a tenant has no external name to certify. Emit
+           the SAN when there is a host and skip it otherwise; requiring one
+           here would stop an already-running external release from rendering
+           at all. Reading through a defaulted dict keeps an absent _namespace
+           from being a nil dereference. */}}
+    {{- $extHost := index (.Values._namespace | default dict) "host" | default "" }}
+    {{- if $extHost }}
+    - {{ printf "%s.%s" .Release.Name $extHost | quote }}
+    {{- end }}
+    {{- end }}
+  ipAddresses:
+    # redis_exporter dials rediss://127.0.0.1 with CA verification; a DNS SAN
+    # for "localhost" does not match an IP literal, so the loopback IPs must be
+    # explicit SANs (mirrors the operator's own self-generated cert behavior).
+    - "127.0.0.1"
+    - "::1"
+  privateKey:
+    rotationPolicy: Always
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: {{ .Release.Name }}-ca
+    kind: Issuer
+    group: cert-manager.io
+{{- end }}

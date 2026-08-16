@@ -1,3 +1,4 @@
+{{- $tlsEnabled := (include "redis.tls.enabled" .) | eq "true" -}}
 {{- if .Values.authEnabled }}
   {{- $existingPassword := lookup "v1" "Secret" .Release.Namespace (printf "%s-auth" .Release.Name) }}
   {{- $password := randAlphaNum 32 | b64enc }}
@@ -19,10 +20,39 @@ apiVersion: databases.spotahome.com/v1
 kind: RedisFailover
 metadata:
   name: {{ .Release.Name }}
+  {{- if $tlsEnabled }}
+  annotations:
+    # Roll the Redis pods when cert-manager rewrites the leaf Secret. Redis
+    # reads tls-cert-file once at startup, so without this the pods keep
+    # serving the certificate they booted with until something restarts them,
+    # and the renewed one never takes effect before the old one expires.
+    #
+    # This has to sit on the RedisFailover rather than in spec.redis.podAnnotations:
+    # the operator copies the CR's own annotations onto the StatefulSet's
+    # metadata, which is where stakater reloader looks, while podAnnotations
+    # land on the pod template where it does not.
+    #
+    # Two limits, both spelled out in the TLS section of README.md: it covers
+    # Redis but not Sentinel, whose Deployment the operator builds without an
+    # annotations field, and it does nothing at all on the isp-hosted system
+    # variant, which permits the paas bundle but does not install reloader.
+    secret.reloader.stakater.com/reload: {{ .Release.Name }}-tls
+  {{- end }}
   labels:
     app.kubernetes.io/instance: {{ .Release.Name }}
     app.kubernetes.io/managed-by: {{ .Release.Service }}
 spec:
+  {{- if $tlsEnabled }}
+  tls:
+    enabled: true
+    authClients: {{ include "redis.tls.authClients" . | quote }}
+    # Operator publishes an Opaque secret with only ca.crt (no private key) so
+    # clients can verify the server under tightly scoped RBAC. See the secrets
+    # rule in dashboard-resourcemap.yaml.
+    caCertSecretName: {{ .Release.Name }}-ca-cert
+    certificateSecret:
+      secretName: {{ .Release.Name }}-tls
+  {{- end }}
   sentinel:
     replicas: 3
     resources: {{- include "cozy-lib.resources.defaultingSanitize" (list .Values.resourcesPreset .Values.resources $) | nindent 6 }}
