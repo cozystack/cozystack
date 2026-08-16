@@ -148,6 +148,46 @@ tests:
       - failedTemplate:
           errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
 
+  - it: fails the render when only authUsername is set
+    set:
+      alerta:
+        alerts:
+          email:
+            authUsername: "mailer@example.org"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only secretName is set
+    set:
+      alerta:
+        alerts:
+          email:
+            secretName: "alertmanager-smtp"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only subject is set
+    set:
+      alerta:
+        alerts:
+          email:
+            subject: "[{{ .Status }}] {{ .CommonLabels.alertname }}"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
+  - it: fails the render when only bodyHtml is set
+    set:
+      alerta:
+        alerts:
+          email:
+            bodyHtml: "<b>{{ .Status }}</b>"
+    asserts:
+      - failedTemplate:
+          errorMessage: "alerta.alerts.email: to, from and smarthost must all be set to enable email alerts"
+
   - it: fails the render when authUsername is set without secretName
     set:
       alerta:
