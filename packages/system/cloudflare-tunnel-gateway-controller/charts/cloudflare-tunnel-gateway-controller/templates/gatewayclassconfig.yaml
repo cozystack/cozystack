@@ -1,0 +1,21 @@
+{{- if .Values.gatewayClassConfig.create }}
+apiVersion: cf.k8s.lex.la/v1alpha1
+kind: GatewayClassConfig
+metadata:
+  name: {{ .Values.gatewayClassConfig.name | default (include "cf-tunnel-gw-ctrl.fullname" .) }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.labels" . | nindent 4 }}
+spec:
+  cloudflareCredentialsSecretRef:
+    name: {{ required "gatewayClassConfig.cloudflareCredentialsSecretRef.name is required" .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.name }}
+    {{- if .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.namespace }}
+    namespace: {{ .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.namespace }}
+    {{- end }}
+    {{- if .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.key }}
+    key: {{ .Values.gatewayClassConfig.cloudflareCredentialsSecretRef.key }}
+    {{- end }}
+  {{- if .Values.gatewayClassConfig.accountId }}
+  accountId: {{ .Values.gatewayClassConfig.accountId | quote }}
+  {{- end }}
+  tunnelID: {{ required "gatewayClassConfig.tunnelID is required" .Values.gatewayClassConfig.tunnelID | quote }}
+{{- end }}

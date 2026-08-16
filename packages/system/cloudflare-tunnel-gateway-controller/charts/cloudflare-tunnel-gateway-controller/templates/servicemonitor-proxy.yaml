@@ -1,0 +1,22 @@
+{{/* Gated on BOTH toggles: scraping a proxy with metrics disabled is a guaranteed 404. */}}
+{{- if and .Values.serviceMonitor.enabled .Values.proxy.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "cf-tunnel-gw-ctrl.proxyFullname" . }}
+  labels:
+    {{- include "cf-tunnel-gw-ctrl.proxyLabels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "cf-tunnel-gw-ctrl.proxySelectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: config-api
+      path: /metrics
+      {{- if .Values.serviceMonitor.interval }}
+      interval: {{ .Values.serviceMonitor.interval }}
+      {{- end }}
+{{- end }}

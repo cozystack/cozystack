@@ -1,0 +1,1040 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "gatewayClassConfig": {
+      "type": "object",
+      "description": "GatewayClassConfig CRD configuration",
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "description": "Create GatewayClassConfig resource",
+          "default": false
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the GatewayClassConfig (defaults to release fullname)"
+        },
+        "cloudflareCredentialsSecretRef": {
+          "type": "object",
+          "description": "Reference to Secret containing Cloudflare API credentials",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the Secret"
+            },
+            "namespace": {
+              "type": "string",
+              "description": "Namespace of the Secret (defaults to release namespace)"
+            },
+            "key": {
+              "type": "string",
+              "description": "Key in the Secret containing the API token"
+            }
+          }
+        },
+        "accountId": {
+          "type": "string",
+          "description": "Cloudflare account ID (optional, auto-detected when omitted)"
+        },
+        "tunnelID": {
+          "type": "string",
+          "pattern": "^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})?$",
+          "description": "Cloudflare Tunnel ID (UUID format, required when gatewayClassConfig.create is true)"
+        }
+      }
+    },
+    "controller": {
+      "type": "object",
+      "description": "Controller configuration",
+      "properties": {
+        "gatewayClassName": {
+          "type": "string",
+          "description": "Name of the GatewayClass resource to create",
+          "default": "cloudflare-tunnel"
+        },
+        "controllerName": {
+          "type": "string",
+          "description": "Controller name matching GatewayClass spec.controllerName",
+          "default": "cf.k8s.lex.la/tunnel-controller"
+        },
+        "clusterDomain": {
+          "type": "string",
+          "description": "Kubernetes cluster domain (auto-detected if empty)"
+        },
+        "logLevel": {
+          "type": "string",
+          "description": "Log level",
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
+          "default": "info"
+        },
+        "logFormat": {
+          "type": "string",
+          "description": "Log format",
+          "enum": [
+            "json",
+            "text"
+          ],
+          "default": "json"
+        },
+        "tracing": {
+          "type": "object",
+          "description": "Distributed tracing (OpenTelemetry) for the controller. Off by default. Instruments outbound Cloudflare API + proxy config-push clients and exports spans over OTLP/gRPC.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable distributed tracing on the controller.",
+              "default": false
+            },
+            "endpoint": {
+              "type": "string",
+              "description": "OTLP/gRPC collector endpoint. Bare host:port uses plaintext gRPC; an http:// or https:// prefix selects plaintext vs TLS. Empty defers to the standard OTEL_EXPORTER_OTLP_ENDPOINT environment variables."
+            },
+            "sampleRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Head-sampling probability in [0, 1], applied at the trace root via ParentBased(TraceIDRatioBased). 1.0 samples every trace.",
+              "default": 1.0
+            }
+          }
+        }
+      }
+    },
+    "leaderElection": {
+      "type": "object",
+      "description": "Leader election configuration",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable leader election",
+          "default": false
+        },
+        "namespace": {
+          "type": "string",
+          "description": "Namespace for leader election lease"
+        },
+        "leaseName": {
+          "type": "string",
+          "description": "Name of the leader election lease",
+          "default": "cloudflare-tunnel-gateway-controller-leader"
+        }
+      }
+    },
+    "image": {
+      "type": "object",
+      "description": "Container image configuration",
+      "properties": {
+        "repository": {
+          "type": "string",
+          "default": "ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": [
+            "Always",
+            "IfNotPresent",
+            "Never"
+          ],
+          "default": "IfNotPresent"
+        },
+        "tag": {
+          "type": "string",
+          "description": "Overrides appVersion"
+        }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "nameOverride": {
+      "type": "string"
+    },
+    "fullnameOverride": {
+      "type": "string"
+    },
+    "serviceAccount": {
+      "type": "object",
+      "properties": {
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "podAnnotations": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podLabels": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "podSecurityContext": {
+      "type": "object",
+      "description": "Pod security context",
+      "properties": {
+        "runAsNonRoot": {
+          "type": "boolean"
+        },
+        "runAsUser": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "fsGroup": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "seccompProfile": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "RuntimeDefault",
+                "Localhost"
+              ]
+            },
+            "localhostProfile": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "securityContext": {
+      "type": "object",
+      "description": "Container security context",
+      "properties": {
+        "allowPrivilegeEscalation": {
+          "type": "boolean"
+        },
+        "runAsUser": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "runAsGroup": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "readOnlyRootFilesystem": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "type": "object",
+          "properties": {
+            "drop": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "add": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "description": "Container resource requirements"
+    },
+    "nodeSelector": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "tolerations": {
+      "type": "array"
+    },
+    "affinity": {
+      "type": "object"
+    },
+    "topologySpreadConstraints": {
+      "type": "array"
+    },
+    "priorityClassName": {
+      "type": "string"
+    },
+    "dnsPolicy": {
+      "type": "string",
+      "enum": [
+        "",
+        "ClusterFirst",
+        "Default",
+        "ClusterFirstWithHostNet",
+        "None"
+      ],
+      "description": "DNS policy for pod"
+    },
+    "dnsConfig": {
+      "type": "object",
+      "description": "Custom DNS configuration for pod",
+      "properties": {
+        "nameservers": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "searches": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "podDisruptionBudget": {
+      "type": "object",
+      "description": "PodDisruptionBudget configuration for high availability",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "minAvailable": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9]+%$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Minimum number of available pods"
+        },
+        "maxUnavailable": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "pattern": "^[0-9]+%$"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Maximum number of unavailable pods"
+        },
+        "unhealthyPodEvictionPolicy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "IfHealthyBudget",
+            "AlwaysAllow",
+            null
+          ],
+          "description": "Policy for evicting unhealthy pods (requires Kubernetes 1.26+)"
+        }
+      }
+    },
+    "terminationGracePeriodSeconds": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 30,
+      "description": "Termination grace period in seconds"
+    },
+    "healthProbes": {
+      "type": "object",
+      "description": "Health probes configuration",
+      "properties": {
+        "startupProbe": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 5
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 12
+            }
+          }
+        },
+        "livenessProbe": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 15
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 20
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 5
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            }
+          }
+        },
+        "readinessProbe": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "initialDelaySeconds": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 5
+            },
+            "periodSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 10
+            },
+            "timeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            },
+            "failureThreshold": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 3
+            }
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "ClusterIP",
+            "NodePort",
+            "LoadBalancer"
+          ],
+          "default": "ClusterIP"
+        },
+        "metricsPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8080
+        },
+        "healthPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8081
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Service annotations (e.g., Prometheus scraping)"
+        }
+      }
+    },
+    "serviceMonitor": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "interval": {
+          "type": "string"
+        },
+        "labels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "networkPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "ingress": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "array",
+              "description": "Allow ingress from specific namespaces/pods"
+            }
+          }
+        },
+        "cloudflareIpRanges": {
+          "type": "object",
+          "description": "Cloudflare IP ranges for egress NetworkPolicy",
+          "properties": {
+            "ipv4": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^([0-9]{1,3}\\.){3}[0-9]{1,3}/[0-9]{1,2}$"
+              },
+              "description": "IPv4 CIDR ranges"
+            },
+            "ipv6": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F:]+/[0-9]{1,3}$"
+              },
+              "description": "IPv6 CIDR ranges"
+            }
+          }
+        }
+      }
+    },
+    "gatewayClass": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "type": "boolean",
+          "description": "Create GatewayClass resource",
+          "default": true
+        }
+      }
+    },
+    "hostnameOwnershipPolicy": {
+      "type": "object",
+      "description": "Per-namespace hostname-ownership policy: admission layer (ValidatingAdmissionPolicy, K8s 1.30+) plus controller-side enforcement, both driven by one namespace label.",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Master switch: install the admission policy and enable controller-side enforcement.",
+          "default": false
+        },
+        "labelKey": {
+          "type": "string",
+          "description": "Namespace label carrying the tenant's allowed hostname suffix.",
+          "default": "cf.k8s.lex.la/hostname-suffix",
+          "pattern": "^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?[a-zA-Z0-9]([-a-zA-Z0-9_.]*[a-zA-Z0-9])?$",
+          "maxLength": 317
+        },
+        "namespaceSelector": {
+          "type": "object",
+          "description": "LabelSelector scoping which namespaces are policed (applied to both layers). Empty polices every namespace.",
+          "properties": {
+            "matchLabels": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            },
+            "matchExpressions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "key",
+                  "operator"
+                ],
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "In",
+                      "NotIn",
+                      "Exists",
+                      "DoesNotExist"
+                    ]
+                  },
+                  "values": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "admissionPolicy": {
+          "type": "boolean",
+          "description": "Render the ValidatingAdmissionPolicy (requires Kubernetes 1.30+). False keeps only the controller-side layer.",
+          "default": true
+        }
+      }
+    },
+    "ruleNameUniquenessPolicy": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Install the rule-name uniqueness ValidatingAdmissionPolicy and its binding",
+          "default": false
+        }
+      }
+    },
+    "proxy": {
+      "type": "object",
+      "description": "L7 Proxy configuration (enhanced-cloudflared data plane). The chart always renders the proxy resources starting v3; the pre-v3 `proxy.enabled` toggle has been removed.",
+      "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of proxy replicas",
+          "default": 2
+        },
+        "image": {
+          "type": "object",
+          "description": "Proxy container image",
+          "properties": {
+            "repository": {
+              "type": "string",
+              "default": "ghcr.io/lexfrei/cloudflare-tunnel-gateway-controller-proxy"
+            },
+            "pullPolicy": {
+              "type": "string",
+              "enum": [
+                "Always",
+                "IfNotPresent",
+                "Never"
+              ],
+              "default": "IfNotPresent"
+            },
+            "tag": {
+              "type": "string",
+              "description": "Overrides appVersion"
+            }
+          }
+        },
+        "configAPIPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8081
+        },
+        "proxyPort": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "default": 8080
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Expose request-level Prometheus metrics at /metrics on the config API port (also surfaces embedded cloudflared connector metrics).",
+              "default": true
+            }
+          }
+        },
+        "gracePeriodSeconds": {
+          "type": "integer",
+          "description": "Connector drain window in seconds: on SIGTERM the proxy unregisters its tunnel connectors and gives in-flight requests this long to finish. Pod terminationGracePeriodSeconds is derived as this value + 15s. Capped at 180 (3m) by cloudflared.",
+          "minimum": 1,
+          "maximum": 180,
+          "default": 30
+        },
+        "tunnel": {
+          "type": "object",
+          "properties": {
+            "protocol": {
+              "type": "string",
+              "description": "Edge transport: 'auto' (QUIC with HTTP/2 fallback), 'http2', or 'quic'. Empty string is allowed and is equivalent to 'auto' (the template omits the env var, and the proxy treats unset as auto). GRPCRoute needs http2; auto/unset is upgraded to http2 by the proxy when a GRPCRoute is present.",
+              "enum": [
+                "",
+                "auto",
+                "http2",
+                "quic"
+              ],
+              "default": "auto"
+            }
+          }
+        },
+        "tunnelTokenSecretRef": {
+          "type": "object",
+          "description": "Reference to Secret containing tunnel token",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the Secret"
+            },
+            "key": {
+              "type": "string",
+              "description": "Key in the Secret containing the tunnel token",
+              "default": "tunnel-token"
+            }
+          }
+        },
+        "authTokenSecretRef": {
+          "type": "object",
+          "description": "Secret reference for the config API Bearer token (PROXY_AUTH_TOKEN); the config API is always authenticated -- when name is empty the controller generates and manages the Secret automatically",
+          "properties": {
+            "name": {
+              "type": "string",
+              "description": "Name of the Secret (leave empty to auto-generate a controller-managed Secret)"
+            },
+            "key": {
+              "type": "string",
+              "description": "Key in the Secret containing the auth token",
+              "default": "auth-token"
+            }
+          }
+        },
+        "websocket": {
+          "type": "object",
+          "description": "WebSocket upgrade-path tunables. Both bound only the pre-upgrade phase (TCP/TLS dial, 101-Switching-Protocols read). Empty string leaves the proxy binary's 30s default. The pattern accepts Go-duration compound forms (1h30m, 1m30s, etc.) matching time.ParseDuration. Negative durations are intentionally rejected here even though time.ParseDuration accepts them -- the proxy's downstream `> 0` gate would drop a negative value silently, so flagging it at chart-time is the discoverability win.",
+          "properties": {
+            "dialTimeout": {
+              "type": "string",
+              "pattern": "^(|[0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h))*)$",
+              "description": "Backend TCP/TLS dial timeout as a Go duration (e.g. \"10s\", \"1m\", \"1h30m\"). Empty preserves the 30s default."
+            },
+            "handshakeTimeout": {
+              "type": "string",
+              "pattern": "^(|[0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h)([0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h))*)$",
+              "description": "101-Switching-Protocols read deadline as a Go duration (e.g. \"45s\", \"2m30s\"). Empty preserves the 30s default."
+            }
+          }
+        },
+        "accessLog": {
+          "type": "object",
+          "description": "Structured per-request access logging on the in-process proxy. Off by default (zero allocation on the hot path).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable per-request access logging.",
+              "default": false
+            },
+            "samplingRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Fraction of non-5xx requests to log when enabled, in [0, 1]. 1.0 logs all; 0.0 logs only 5xx (always-log-errors carve-out is independent of this knob).",
+              "default": 1.0
+            },
+            "stripQuery": {
+              "type": "boolean",
+              "description": "Zero the `query` field in every emitted line. Source-level privacy mitigation for token-bearing query strings.",
+              "default": false
+            }
+          }
+        },
+        "tracing": {
+          "type": "object",
+          "description": "Distributed tracing (OpenTelemetry) on the in-process proxy. Off by default. Spans export over OTLP/gRPC; W3C trace context is propagated to backends.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "description": "Enable distributed tracing on the proxy.",
+              "default": false
+            },
+            "endpoint": {
+              "type": "string",
+              "description": "OTLP/gRPC collector endpoint. Bare host:port uses plaintext gRPC; an http:// or https:// prefix selects plaintext vs TLS. Empty defers to the standard OTEL_EXPORTER_OTLP_ENDPOINT environment variables."
+            },
+            "sampleRate": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Head-sampling probability in [0, 1], applied at the trace root via ParentBased(TraceIDRatioBased). 1.0 samples every trace.",
+              "default": 1.0
+            }
+          }
+        },
+        "resources": {
+          "type": "object",
+          "description": "Container resource requirements"
+        },
+        "podSecurityContext": {
+          "type": "object",
+          "description": "Pod security context"
+        },
+        "securityContext": {
+          "type": "object",
+          "description": "Container security context"
+        },
+        "healthProbes": {
+          "type": "object",
+          "description": "Health probes configuration",
+          "properties": {
+            "startupProbe": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "initialDelaySeconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "periodSeconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "failureThreshold": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "livenessProbe": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "initialDelaySeconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "periodSeconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "failureThreshold": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            },
+            "readinessProbe": {
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "initialDelaySeconds": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "periodSeconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "timeoutSeconds": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "failureThreshold": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          }
+        },
+        "service": {
+          "type": "object",
+          "properties": {
+            "annotations": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "networkPolicy": {
+          "type": "object",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "egressRestricted": {
+              "type": "boolean",
+              "default": false
+            },
+            "ingress": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "array"
+                }
+              }
+            },
+            "monitoringNamespaceSelector": {
+              "type": "object",
+              "properties": {
+                "matchLabels": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                },
+                "matchExpressions": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "required": [
+                      "key",
+                      "operator"
+                    ],
+                    "properties": {
+                      "key": {
+                        "type": "string"
+                      },
+                      "operator": {
+                        "type": "string",
+                        "enum": [
+                          "In",
+                          "NotIn",
+                          "Exists",
+                          "DoesNotExist"
+                        ]
+                      },
+                      "values": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                }
+              },
+              "additionalProperties": false,
+              "description": "LabelSelector for namespaces additionally allowed to reach the per-Gateway config-API/metrics port. Empty = controller namespace only."
+            }
+          },
+          "additionalProperties": false
+        },
+        "nodeSelector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "tolerations": {
+          "type": "array"
+        },
+        "affinity": {
+          "type": "object"
+        },
+        "topologySpreadConstraints": {
+          "type": "array"
+        },
+        "podAnnotations": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "podLabels": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

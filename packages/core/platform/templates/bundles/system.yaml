@@ -329,5 +329,17 @@ cozystack-platform HelmRelease never becomes Ready. */}}
 {{include "cozystack.platform.package.default" (list "cozystack.bootbox" $) }}
 {{- end }}
 {{include "cozystack.platform.package.optional.default" (list "cozystack.hetzner-robotlb" $) }}
+{{- /* The vendored chart bakes the cluster domain into the proxy config-endpoint
+       URL (its own fallback is cluster.local) and subchart values cannot read
+       _cluster.cluster-domain, so networking.clusterDomain is threaded in through
+       the Package's component values. The tunnel ID the operator sets on the
+       same Package (gatewayClassConfig.tunnelID) is a sibling key: helm-controller
+       applies Packages server-side (a release still on client-side apply patches
+       only the fields it renders) and the values block merges per key, so the two
+       owners do not overwrite each other. */ -}}
+{{- if has "cozystack.cloudflare-tunnel-gateway-controller" (default (list) .Values.bundles.enabledPackages) }}
+{{- $cfTunnelComponents := dict "cloudflare-tunnel-gateway-controller" (dict "values" (dict "cloudflare-tunnel-gateway-controller" (dict "controller" (dict "clusterDomain" .Values.networking.clusterDomain)))) -}}
+{{include "cozystack.platform.package" (list "cozystack.cloudflare-tunnel-gateway-controller" "default" $ $cfTunnelComponents) }}
+{{- end }}
 
 {{- end }}
