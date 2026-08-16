@@ -1,0 +1,26 @@
+# Patterns to ignore when building packages
+# This supports shell glob matching, relative path matching, and
+# negation (prefixed with !). Only one pattern per line.
+
+# Development and testing
+tests/
+examples/
+*.test.yaml
+*.md.gotmpl
+
+# Common VCS dirs
+.git/
+.gitignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+.travis.yml
+
+# Linting configuration
+.markdownlint.yaml
+.yamllint
+.golangci.yaml
+
+# Artifact Hub metadata (published separately)
+artifacthub-repo.yml

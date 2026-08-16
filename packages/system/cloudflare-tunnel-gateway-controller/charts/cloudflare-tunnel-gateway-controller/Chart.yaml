@@ -1,0 +1,41 @@
+annotations:
+  artifacthub.io/category: networking
+  artifacthub.io/changes: |-
+    - kind: fixed
+      description: 'deps: stop Renovate merging shadowed cloudflared/quic-go bumps (#613)'
+    - kind: fixed
+      description: 'helm: ship the shared config API secured by default (#603)'
+    - kind: fixed
+      description: 'proxy: retry the tunnel bootstrap dial instead of exiting (#607)'
+  artifacthub.io/license: BSD-3-Clause
+  artifacthub.io/links: |
+    - name: Chart Repository
+      url: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/
+    - name: Gateway API
+      url: https://gateway-api.sigs.k8s.io/
+  artifacthub.io/signKey: |
+    fingerprint: keyless
+    url: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/.github/workflows/release.yaml@refs/heads/master
+apiVersion: v2
+appVersion: 3.4.0
+description: Kubernetes Gateway API controller for Cloudflare Tunnel
+home: https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/
+icon: https://avatars.githubusercontent.com/u/314135
+keywords:
+- cloudflare
+- gateway-api
+- tunnel
+- kubernetes
+- controller
+- networking
+- zero-trust
+kubeVersion: '>=1.25.0-0'
+maintainers:
+- email: f@lex.la
+  name: lexfrei
+  url: https://github.com/lexfrei
+name: cloudflare-tunnel-gateway-controller
+sources:
+- https://github.com/lexfrei/cloudflare-tunnel-gateway-controller/
+type: application
+version: 3.4.0

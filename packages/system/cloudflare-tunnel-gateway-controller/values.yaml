@@ -1,0 +1,68 @@
+# Cloudflare Tunnel Gateway API controller: publishes HTTPRoutes/GRPCRoutes
+# through a Cloudflare Tunnel instead of a public LoadBalancer. Opt-in
+# (bundles.enabledPackages), and needs two operator-supplied inputs before
+# the release becomes Ready:
+#
+#   1. A Secret named `cloudflare-tunnel-credentials` in this namespace with
+#      the keys `api-token` (Cloudflare API token, Account > Cloudflare
+#      Tunnel > Edit) and `tunnel-token` (the tunnel's connector token).
+#   2. The tunnel UUID, set on the Package:
+#        spec.components.cloudflare-tunnel-gateway-controller.values
+#          .cloudflare-tunnel-gateway-controller.gatewayClassConfig.tunnelID
+#      Until it is set the HelmRelease shows a failed render naming that key
+#      (the Package exists only after enabling, so the first install always
+#      fails this way); setting it changes the values and the install retries.
+#
+# A tenant Gateway moves onto it with extra/gateway values
+# `gatewayClassName: cloudflare-tunnel` plus `tlsPassthroughServices: []`.
+# The tunnel carries HTTP only: a TLS-passthrough listener is marked
+# UnsupportedProtocol and keeps the TenantGateway from ever becoming Ready,
+# and the TLS-passthrough services are simply not published through that
+# Gateway. Cloudflare Universal SSL covers
+# one label below the zone apex, so `<svc>.<tenant>.<zone>` hostnames need
+# Advanced Certificate Manager or a zone per tenant apex.
+#
+# Every Gateway of the class shares one tunnel, so the proxy routes by
+# hostname alone across all tenants. cozystack-basics' route-hostname policy
+# binds HTTPRoute/TLSRoute hostnames in tenant namespaces to the tenant apex
+# at admission but does not see GRPCRoute and admits routes with no
+# hostnames; behind a per-tenant Cilium address both are inert, on the
+# shared tunnel either one would answer for other tenants' hosts. The
+# chart's controller-side ownership layer closes both: in every namespace
+# carrying namespace.cozystack.io/host it rejects a route whose hostnames
+# are missing or fall outside that label, on this class only. Its admission
+# layer stays off, since that one would also police routes bound to the
+# Cilium Gateway in the same namespaces.
+cloudflare-tunnel-gateway-controller:
+  # Both images are pulled straight from the upstream lexfrei registry and
+  # are not mirrored under ghcr.io/cozystack/*; air-gapped operators mirror
+  # them (the chart itself is vendored, nothing fetches it at runtime).
+  # Bump tag+digest together with CHART_VERSION/CHART_DIGEST in the Makefile.
+  image:
+    tag: 3.4.0@sha256:1f99e86cef2938eb34fdc957b71f61f0dce6f19050a613ecb2cb12f4611989e4
+  proxy:
+    image:
+      tag: 3.4.0@sha256:7b6a772faa89df17782511d4837ab53bcad85b50a3532f2b5af1d63f18b5c701
+    tunnelTokenSecretRef:
+      name: cloudflare-tunnel-credentials
+  gatewayClassConfig:
+    create: true
+    tunnelID: ""
+    cloudflareCredentialsSecretRef:
+      name: cloudflare-tunnel-credentials
+  hostnameOwnershipPolicy:
+    enabled: true
+    admissionPolicy: false
+    labelKey: namespace.cozystack.io/host
+    namespaceSelector:
+      matchExpressions:
+        - key: namespace.cozystack.io/host
+          operator: Exists
+  controller:
+    # The chart bakes this into the proxy config endpoint URL and falls back
+    # to cluster.local when it is empty, so it cannot be left to the
+    # controller's resolv.conf auto-detection. Subchart values never see the
+    # _cluster block, so the platform bundle threads networking.clusterDomain
+    # in through the Package's component values; this is the default for
+    # installs outside that path.
+    clusterDomain: cozy.local
